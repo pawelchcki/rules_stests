@@ -1,0 +1,13 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      APP_STATE_DIR: /data
+      SECRET_KEY: development-only-secret
+    volumes:
+      - aiohttp-data:/data
+
+volumes:
+  aiohttp-data:
