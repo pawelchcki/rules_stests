@@ -1,0 +1,7 @@
+package(default_visibility = ["//visibility:public"])
+
+# Consumers compose their tracer-specific build context from these shared sources.
+filegroup(
+    name = "sources",
+    srcs = glob(["**"], exclude = ["BUILD.bazel", "datadog/**"]),
+)

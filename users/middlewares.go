@@ -1,0 +1,110 @@
+package users
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/gothinkster/golang-gin-realworld-example-app/common"
+	"gorm.io/gorm"
+)
+
+// Extract the token only from the Authorization header. Query parameters are
+// exported as url.query by HTTP instrumentation and must not carry credentials.
+func extractToken(c *gin.Context) string {
+	bearerToken := c.GetHeader("Authorization")
+	if len(bearerToken) > 6 && strings.ToUpper(bearerToken[0:6]) == "TOKEN " {
+		return bearerToken[6:]
+	}
+	return ""
+}
+
+// A helper to write user_id and user_model to the context
+func UpdateContextUserModel(c *gin.Context, my_user_id uint) error {
+	var myUserModel UserModel
+	if my_user_id != 0 {
+		db := common.GetDB()
+		if err := db.First(&myUserModel, my_user_id).Error; err != nil {
+			c.Set("my_user_id", uint(0))
+			c.Set("my_user_model", UserModel{})
+			return err
+		}
+	}
+	c.Set("my_user_id", my_user_id)
+	c.Set("my_user_model", myUserModel)
+	return nil
+}
+
+// The RealWorld contract describes a rejected request with the same error
+// envelope as any other failure rather than with an empty body.
+func abortUnauthorized(c *gin.Context) {
+	c.AbortWithStatusJSON(http.StatusUnauthorized, common.NewError("token", errors.New("is missing")))
+}
+
+// You can custom middlewares yourself as the doc: https://github.com/gin-gonic/gin#custom-middleware
+//
+//	r.Use(AuthMiddleware(true))
+func AuthMiddleware(auto401 bool) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		_ = UpdateContextUserModel(c, 0)
+		tokenString := extractToken(c)
+
+		if tokenString == "" {
+			if auto401 {
+				abortUnauthorized(c)
+			}
+			return
+		}
+
+		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+			// Validate the signing method
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, jwt.ErrSignatureInvalid
+			}
+			return []byte(common.JWTSecret), nil
+		}, jwt.WithJSONNumber())
+
+		if err != nil {
+			if auto401 {
+				abortUnauthorized(c)
+			}
+			return
+		}
+
+		if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
+			myUserID, valid := claimUserID(claims)
+			if !valid {
+				if auto401 {
+					abortUnauthorized(c)
+				}
+				return
+			}
+			if err := UpdateContextUserModel(c, myUserID); err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					if auto401 {
+						abortUnauthorized(c)
+					}
+				} else {
+					c.AbortWithStatusJSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+				}
+				return
+			}
+		}
+	}
+}
+
+func claimUserID(claims jwt.MapClaims) (uint, bool) {
+	value, ok := claims["id"].(json.Number)
+	if !ok {
+		return 0, false
+	}
+	id, err := strconv.ParseUint(value.String(), 10, strconv.IntSize)
+	if err != nil || id == 0 {
+		return 0, false
+	}
+	return uint(id), true
+}
