@@ -1,0 +1,16 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      APP_ENV: dev
+      DATABASE_URL: sqlite:////data/realworld.db
+      MAX_CONNECTIONS_COUNT: 5
+      MIN_CONNECTIONS_COUNT: 1
+      SECRET_KEY: development-only-secret
+    volumes:
+      - fastapi-data:/data
+
+volumes:
+  fastapi-data:
