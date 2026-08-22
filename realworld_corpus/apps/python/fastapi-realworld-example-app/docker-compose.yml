@@ -1,0 +1,31 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      APP_ENV: dev
+      DATABASE_URL: postgresql://realworld:realworld@db:5432/realworld
+      MAX_CONNECTIONS_COUNT: 5
+      MIN_CONNECTIONS_COUNT: 1
+      SECRET_KEY: development-only-secret
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: realworld
+      POSTGRES_PASSWORD: realworld
+      POSTGRES_USER: realworld
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U realworld -d realworld"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - fastapi-postgres:/var/lib/postgresql/data
+
+volumes:
+  fastapi-postgres:
