@@ -2,10 +2,8 @@
 
 This repository contains portable, real-world application fixtures for
 [`rules_itest`](https://github.com/hermeticbuild/rules_itest). The fixtures are
-SQLite-backed Python APIs:
-
-- aiohttp RealWorld: `ghcr.io/pawelchcki/rules-stests-aiohttp`
-- Django Ninja RealWorld: `ghcr.io/pawelchcki/rules-stests-django-ninja`
+SQLite-backed Python APIs. Both are published in the shared
+`ghcr.io/pawelchcki/rules_stest_apps` package under app-prefixed tags.
 
 Each image is Linux/amd64, has a `FROM scratch` runtime, and contains exactly
 one non-empty, gzip-compressed OCI payload layer. The payload includes a
@@ -98,11 +96,12 @@ bazel run //bazel/itest:django_service
 
 ## Publication and source identity
 
-Each application has a path-filtered GitHub Actions workflow. It publishes two
-immutable tags without a `latest` tag:
+Each application has a path-filtered GitHub Actions workflow. Both workflows
+publish to `ghcr.io/pawelchcki/rules_stest_apps` with two app-prefixed,
+immutable tags and no `latest` tag:
 
-- `tree-<git-tree-oid>` identifies the exact application subtree.
-- `v0.<workflow-run-number>` is the human-facing release tag.
+- `<app>-tree-<git-tree-oid>` identifies the exact application subtree.
+- `<app>-v0.<workflow-run-number>` is the human-facing release tag.
 
 The workflow also pushes `oci/<app>/v0.<run>` as a lightweight Git tag. Its
 target is a deterministic, parentless synthetic commit whose tree is the
@@ -113,5 +112,5 @@ job reports a warning instead of a false test failure.
 
 The Dockerfiles pin their build images and `uv.lock` pins Python packages. The
 workflow disables attestations and rewrites build timestamps. Once a
-`tree-<git-tree-oid>` image exists, later releases reuse its exact manifest
-rather than rebuilding or overwriting that content identity.
+`<app>-tree-<git-tree-oid>` image exists, later releases reuse its exact
+manifest rather than rebuilding or overwriting that content identity.

@@ -8,13 +8,13 @@ HURL_TOOL = struct(
 
 OCI_IMAGES = {
     "django_ninja_realworld": struct(
-        repository = "ghcr.io/pawelchcki/rules-stests-django-ninja",
-        digest = "sha256:786e4361b6f91f4a1212671a588b8567972588bfcbe19bd90f2b137249ffb06e",
+        repository = "ghcr.io/pawelchcki/rules_stest_apps",
+        digest = "sha256:627096d6223dcdc8507213594a46df4960e4eadce80c3eb1de3920e0f02ddd14",
         tree = "948d532d56d8266a7fffd9feac8713d1bfbb728a",
     ),
     "aiohttp_realworld": struct(
-        repository = "ghcr.io/pawelchcki/rules-stests-aiohttp",
-        digest = "sha256:44d534b8e0c68adb4ec38c5d596373a5a4f43e24a1aef5bee4646360667000a4",
+        repository = "ghcr.io/pawelchcki/rules_stest_apps",
+        digest = "sha256:419592d322bda33e2df671d44fa47443f431e2d1d1ded34c1821b16f9448aa00",
         tree = "41bdcadbd7c0ae3f61321cf19c1e0b7a22940589",
     ),
 }

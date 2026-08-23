@@ -23,7 +23,7 @@ permissions:
 
 env:
   APP_PATH: realworld_corpus/apps/python/realworld-aiohttp
-  IMAGE: ghcr.io/pawelchcki/rules-stests-aiohttp
+  IMAGE: ghcr.io/pawelchcki/rules_stest_apps
   LOCK_NAME: aiohttp_realworld
   REF_NAME: aiohttp
 
@@ -47,8 +47,9 @@ jobs:
           tree_oid="$(git rev-parse "HEAD:${APP_PATH}")"
           version="v0.${GITHUB_RUN_NUMBER}"
           echo "tree=${tree_oid}" >>"${GITHUB_OUTPUT}"
-          echo "tree_tag=tree-${tree_oid}" >>"${GITHUB_OUTPUT}"
+          echo "tree_tag=${REF_NAME}-tree-${tree_oid}" >>"${GITHUB_OUTPUT}"
           echo "version=${version}" >>"${GITHUB_OUTPUT}"
+          echo "version_tag=${REF_NAME}-${version}" >>"${GITHUB_OUTPUT}"
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
@@ -84,21 +85,21 @@ jobs:
           outputs: type=image,push=true,rewrite-timestamp=true,oci-mediatypes=true,compression=gzip,force-compression=true
           tags: |
             ${{ env.IMAGE }}:${{ steps.identity.outputs.tree_tag }}
-            ${{ env.IMAGE }}:${{ steps.identity.outputs.version }}
+            ${{ env.IMAGE }}:${{ steps.identity.outputs.version_tag }}
 
       - name: Resolve the immutable digest and release tag
         id: release
         env:
           BUILD_DIGEST: ${{ steps.build.outputs.digest }}
           EXISTING_DIGEST: ${{ steps.existing.outputs.digest }}
-          VERSION: ${{ steps.identity.outputs.version }}
+          VERSION_TAG: ${{ steps.identity.outputs.version_tag }}
         shell: bash
         run: |
           set -euo pipefail
           digest="${EXISTING_DIGEST:-${BUILD_DIGEST}}"
           test "${digest#sha256:}" != "${digest}"
           if [[ -n "${EXISTING_DIGEST}" ]]; then
-            docker buildx imagetools create --tag "${IMAGE}:${VERSION}" "${IMAGE}@${digest}"
+            docker buildx imagetools create --tag "${IMAGE}:${VERSION_TAG}" "${IMAGE}@${digest}"
           fi
           echo "digest=${digest}" >>"${GITHUB_OUTPUT}"
 
