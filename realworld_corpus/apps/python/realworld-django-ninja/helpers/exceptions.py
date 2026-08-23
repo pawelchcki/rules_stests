@@ -3,7 +3,12 @@ from sqlite3 import IntegrityError as SQLiteIntegrityError
 from django.db.models import Model, QuerySet
 from django.http import Http404
 from django.shortcuts import get_object_or_404
-from psycopg2.errors import UniqueViolation
+
+try:
+    from psycopg2.errors import UniqueViolation
+except ImportError:
+    class UniqueViolation(Exception):
+        """Placeholder used when the optional PostgreSQL driver is absent."""
 
 
 class ResourceNotFound(Http404):

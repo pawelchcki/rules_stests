@@ -1,6 +1,5 @@
-from typing import List, Optional, Sequence, Union
+from typing import Any, List, Mapping, Optional, Sequence, Union
 
-from asyncpg import Connection, Record
 from pypika import Query
 
 from app.db.errors import EntityDoesNotExist
@@ -26,7 +25,7 @@ CAMEL_OR_SNAKE_CASE_TO_WORDS = r"^[a-z\d_\-]+|[A-Z\d_\-][^A-Z\d_\-]*"
 
 
 class ArticlesRepository(BaseRepository):  # noqa: WPS214
-    def __init__(self, conn: Connection) -> None:
+    def __init__(self, conn: Any) -> None:
         super().__init__(conn)
         self._profiles_repo = ProfilesRepository(conn)
         self._tags_repo = TagsRepository(conn)
@@ -294,7 +293,7 @@ class ArticlesRepository(BaseRepository):  # noqa: WPS214
     async def _get_article_from_db_record(
         self,
         *,
-        article_row: Record,
+        article_row: Mapping[str, Any],
         slug: str,
         author_username: str,
         requested_user: Optional[User],

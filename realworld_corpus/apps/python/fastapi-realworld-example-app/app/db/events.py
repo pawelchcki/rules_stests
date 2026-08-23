@@ -1,4 +1,3 @@
-import asyncpg
 from fastapi import FastAPI
 from loguru import logger
 
@@ -14,6 +13,13 @@ async def connect_to_db(app: FastAPI, settings: AppSettings) -> None:
         return
 
     logger.info("Connecting to PostgreSQL")
+
+    try:
+        import asyncpg
+    except ImportError as exc:
+        raise RuntimeError(
+            "PostgreSQL support is not installed in the SQLite-only portable bundle",
+        ) from exc
 
     app.state.pool = await asyncpg.create_pool(
         str(settings.database_url),

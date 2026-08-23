@@ -1,6 +1,4 @@
-from typing import Optional, Union
-
-from asyncpg import Connection
+from typing import Any, Optional, Union
 
 from app.db.queries.queries import queries
 from app.db.repositories.base import BaseRepository
@@ -12,7 +10,7 @@ UserLike = Union[User, Profile]
 
 
 class ProfilesRepository(BaseRepository):
-    def __init__(self, conn: Connection):
+    def __init__(self, conn: Any):
         super().__init__(conn)
         self._users_repo = UsersRepository(conn)
 

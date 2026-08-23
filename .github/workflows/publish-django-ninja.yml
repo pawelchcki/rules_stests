@@ -1,0 +1,121 @@
+name: Publish Django Ninja RealWorld fixture
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - realworld_corpus/apps/python/realworld-django-ninja/**
+      - tools/update_oci_lock.py
+      - .github/workflows/publish-django-ninja.yml
+  workflow_dispatch:
+
+concurrency:
+  group: publish-django-ninja
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+  pull-requests: write
+
+env:
+  APP_PATH: realworld_corpus/apps/python/realworld-django-ninja
+  IMAGE: ghcr.io/hannah-barbera/rules-stests-django-ninja
+  LOCK_NAME: django_ninja_realworld
+  REF_NAME: django-ninja
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - uses: bazel-contrib/setup-bazel@8cb04a772ab4c1eb984e9c1b493a182e96c5e425 # 0.19.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+
+      - name: Compute content identity
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          tree_oid="$(git rev-parse "HEAD:${APP_PATH}")"
+          version="v0.${GITHUB_RUN_NUMBER}"
+          echo "tree=${tree_oid}" >>"${GITHUB_OUTPUT}"
+          echo "tree_tag=tree-${tree_oid}" >>"${GITHUB_OUTPUT}"
+          echo "version=${version}" >>"${GITHUB_OUTPUT}"
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the single-layer image
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ${{ env.APP_PATH }}
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
+          push: true
+          build-args: SOURCE_DATE_EPOCH=0
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.identity.outputs.tree_tag }}
+            ${{ env.IMAGE }}:${{ steps.identity.outputs.version }}
+
+      - name: Publish the source-tree ref
+        env:
+          TREE_OID: ${{ steps.identity.outputs.tree }}
+          VERSION: ${{ steps.identity.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit_oid="$(printf 'OCI source tree %s\n' "${TREE_OID}" | env \
+            GIT_AUTHOR_NAME=rules-stests GIT_AUTHOR_EMAIL=rules-stests@users.noreply.github.com \
+            GIT_COMMITTER_NAME=rules-stests GIT_COMMITTER_EMAIL=rules-stests@users.noreply.github.com \
+            GIT_AUTHOR_DATE=1970-01-01T00:00:00Z GIT_COMMITTER_DATE=1970-01-01T00:00:00Z \
+            git commit-tree "${TREE_OID}")"
+          git update-ref "refs/tags/oci/${REF_NAME}/${VERSION}" "${commit_oid}"
+          git push origin "refs/tags/oci/${REF_NAME}/${VERSION}"
+
+      - name: Make package public and verify anonymous pull
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --method PATCH \
+            "/orgs/hannah-barbera/packages/container/rules-stests-django-ninja/visibility" \
+            -f visibility=public
+          docker logout ghcr.io
+          docker pull "${IMAGE}@${DIGEST}"
+          layer_count="$(docker image inspect "${IMAGE}@${DIGEST}" --format '{{json .RootFS.Layers}}' | jq length)"
+          test "${layer_count}" = 1
+
+      - name: Validate and propose the digest lock
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TREE_OID: ${{ steps.identity.outputs.tree }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/update_oci_lock.py --name "${LOCK_NAME}" --digest "${DIGEST}" --tree "${TREE_OID}"
+          bazel test //bazel/itest:django_test
+          branch="automation/oci-lock-${REF_NAME}-${TREE_OID:0:12}"
+          git switch -c "${branch}"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add MODULE.bazel.lock bazel/oci_images.lock.bzl
+          git commit -m "chore: lock ${REF_NAME} OCI digest"
+          git push origin "HEAD:refs/heads/${branch}"
+          gh pr create --base main --head "${branch}" \
+            --title "chore: lock ${REF_NAME} OCI digest" \
+            --body "Locks ${IMAGE}@${DIGEST} for app tree ${TREE_OID}. The workflow verified an anonymous pull and the rules_itest smoke test."

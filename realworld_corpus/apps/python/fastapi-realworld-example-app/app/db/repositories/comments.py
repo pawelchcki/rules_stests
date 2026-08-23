@@ -1,6 +1,4 @@
-from typing import List, Optional
-
-from asyncpg import Connection, Record
+from typing import Any, List, Mapping, Optional
 
 from app.db.errors import EntityDoesNotExist
 from app.db.queries.queries import queries
@@ -12,7 +10,7 @@ from app.models.domain.users import User
 
 
 class CommentsRepository(BaseRepository):
-    def __init__(self, conn: Connection) -> None:
+    def __init__(self, conn: Any) -> None:
         super().__init__(conn)
         self._profiles_repo = ProfilesRepository(conn)
 
@@ -87,7 +85,7 @@ class CommentsRepository(BaseRepository):
     async def _get_comment_from_db_record(
         self,
         *,
-        comment_row: Record,
+        comment_row: Mapping[str, Any],
         author_username: str,
         requested_user: Optional[User],
     ) -> Comment:

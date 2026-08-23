@@ -1,0 +1,4 @@
+exports_files([
+    "oci_deps.bzl",
+    "oci_images.lock.bzl",
+])

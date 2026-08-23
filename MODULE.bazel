@@ -1,0 +1,24 @@
+module(
+    name = "rules_stests_corpus",
+    version = "0.0.0",
+)
+
+bazel_dep(name = "rules_go", version = "0.63.0")
+bazel_dep(name = "rules_itest", version = "0.0.59")
+bazel_dep(name = "rules_oci", version = "2.3.0")
+
+go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
+go_sdk.download(
+    name = "go_sdk",
+    version = "1.25.0",
+)
+use_repo(go_sdk, "go_sdk")
+
+corpus_images = use_extension("//bazel:oci_deps.bzl", "oci_deps")
+use_repo(
+    corpus_images,
+    "django_ninja_realworld",
+    "django_ninja_realworld_linux_amd64",
+    "fastapi_realworld",
+    "fastapi_realworld_linux_amd64",
+)

@@ -1,0 +1,106 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_itest//:itest.bzl", "itest_service", "itest_task", "service_test")
+
+package(default_visibility = ["//visibility:public"])
+
+go_library(
+    name = "oci_bundle_lib",
+    srcs = ["oci_bundle.go"],
+    importpath = "github.com/hannah-barbera/rules_stests/bazel/itest/oci_bundle",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "oci_bundle",
+    embed = [":oci_bundle_lib"],
+)
+
+go_library(
+    name = "api_probe_lib",
+    srcs = ["api_probe.go"],
+    importpath = "github.com/hannah-barbera/rules_stests/bazel/itest/api_probe",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "api_probe",
+    embed = [":api_probe_lib"],
+)
+
+itest_task(
+    name = "fastapi_prepare",
+    args = [
+        "prepare",
+        "fastapi",
+        "$(rootpath @fastapi_realworld_linux_amd64)",
+    ],
+    data = ["@fastapi_realworld_linux_amd64"],
+    exe = ":oci_bundle",
+)
+
+itest_service(
+    name = "fastapi_service",
+    args = [
+        "serve",
+        "fastapi",
+        "$(rootpath @fastapi_realworld_linux_amd64)",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "$${PORT}",
+    ],
+    autoassign_port = True,
+    data = ["@fastapi_realworld_linux_amd64"],
+    deps = [":fastapi_prepare"],
+    exe = ":oci_bundle",
+    expected_start_duration = "3s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    shutdown_timeout = "10s",
+)
+
+service_test(
+    name = "fastapi_test",
+    args = ["--service-suffix=//bazel/itest:fastapi_service"],
+    services = [":fastapi_service"],
+    test = ":api_probe",
+    timeout = "moderate",
+)
+
+itest_task(
+    name = "django_prepare",
+    args = [
+        "prepare",
+        "django",
+        "$(rootpath @django_ninja_realworld_linux_amd64)",
+    ],
+    data = ["@django_ninja_realworld_linux_amd64"],
+    exe = ":oci_bundle",
+)
+
+itest_service(
+    name = "django_service",
+    args = [
+        "serve",
+        "django",
+        "$(rootpath @django_ninja_realworld_linux_amd64)",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "$${PORT}",
+    ],
+    autoassign_port = True,
+    data = ["@django_ninja_realworld_linux_amd64"],
+    deps = [":django_prepare"],
+    exe = ":oci_bundle",
+    expected_start_duration = "3s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    shutdown_timeout = "10s",
+)
+
+service_test(
+    name = "django_test",
+    args = ["--service-suffix=//bazel/itest:django_service"],
+    services = [":django_service"],
+    test = ":api_probe",
+    timeout = "moderate",
+)

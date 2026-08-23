@@ -26,6 +26,11 @@ dist/
 .eggs/
 wheels/
 pip-wheel-metadata/
+bazel-*
+.bazel-cache/
+oci-layout/
+*.oci.tar
+.config/go/
 
 # Test, coverage, lint, and type-check caches
 .cache/
@@ -60,3 +65,7 @@ postgres-data/
 *.log
 *.pid
 *.tmp
+
+# Container tooling
+.buildx-cache/
+.podman/
