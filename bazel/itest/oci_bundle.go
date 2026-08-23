@@ -37,22 +37,27 @@ func main() {
 }
 
 func run(args []string) error {
-	if len(args) < 3 {
-		return errors.New("usage: oci_bundle <prepare|serve|check|hurl> <instance> <oci-layout> [arguments...]")
+	if len(args) == 0 {
+		return errors.New("usage: oci_bundle extract <oci-layout> <rootfs> <single|multi> | app <instance> <rootfs> <command> [arguments...]")
 	}
-	mode, instance, layoutArg := args[0], args[1], args[2]
-	if mode != "prepare" && mode != "serve" && mode != "check" && mode != "hurl" {
-		return fmt.Errorf("unsupported mode %q", mode)
+	switch args[0] {
+	case "extract":
+		if len(args) != 4 || (args[3] != "single" && args[3] != "multi") {
+			return errors.New("usage: oci_bundle extract <oci-layout> <rootfs> <single|multi>")
+		}
+		return extractOCI(args[1], args[2], args[3] == "single")
+	case "app":
+		if len(args) < 4 {
+			return errors.New("usage: oci_bundle app <instance> <rootfs> <command> [arguments...]")
+		}
+		return runApp(args[1], args[2], args[3], args[4:])
+	default:
+		return fmt.Errorf("unsupported mode %q", args[0])
 	}
-	if !validInstance(instance) {
-		return fmt.Errorf("unsafe instance name %q", instance)
-	}
+}
 
-	testTmp := os.Getenv("TEST_TMPDIR")
-	if testTmp == "" {
-		return errors.New("TEST_TMPDIR is not set")
-	}
-	layout, err := resolveRunfile(layoutArg)
+func extractOCI(layoutArg, root string, singlePayload bool) error {
+	layout, err := resolveDirectory(layoutArg)
 	if err != nil {
 		return err
 	}
@@ -60,39 +65,57 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	if mode != "hurl" {
+	if singlePayload {
 		layers, err = singlePayloadLayer(layout, layers)
 		if err != nil {
 			return err
 		}
 	}
-
-	root := filepath.Join(testTmp, "rules_stests", instance, "rootfs")
+	if err := extractFresh(layout, layers, root); err != nil {
+		return err
+	}
+	if err := removeDanglingSymlinks(root); err != nil {
+		return err
+	}
 	marker := filepath.Join(root, ".rules-stests-manifest")
-	prepared, err := markerMatches(marker, manifestDigest)
+	if err := os.WriteFile(marker, []byte(manifestDigest+"\n"), 0o444); err != nil {
+		return fmt.Errorf("write extraction marker: %w", err)
+	}
+	return nil
+}
+
+func removeDanglingSymlinks(root string) error {
+	return filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink == 0 {
+			return nil
+		}
+		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+			if err := os.Remove(path); err != nil {
+				return fmt.Errorf("remove dangling OCI symlink %s: %w", path, err)
+			}
+			return nil
+		} else if err != nil {
+			return fmt.Errorf("inspect OCI symlink %s: %w", path, err)
+		}
+		return nil
+	})
+}
+
+func runApp(instance, rootArg, command string, args []string) error {
+	if !validInstance(instance) {
+		return fmt.Errorf("unsafe instance name %q", instance)
+	}
+	root, err := resolveDirectory(rootArg)
 	if err != nil {
 		return err
 	}
-	if !prepared {
-		if err := extractFresh(layout, layers, root); err != nil {
-			return err
-		}
-		if err := os.WriteFile(marker, []byte(manifestDigest+"\n"), 0o644); err != nil {
-			return fmt.Errorf("write extraction marker: %w", err)
-		}
+	if err := prepareAppState(root, instance); err != nil {
+		return err
 	}
-	if mode == "hurl" {
-		return execHurl(root, args[3:])
-	}
-
-	command := "check"
-	appArgs := args[3:]
-	if mode == "prepare" {
-		command = "migrate"
-	} else if mode == "serve" {
-		command = "serve"
-	}
-	return execApp(root, command, appArgs)
+	return execApp(root, command, args)
 }
 
 func validInstance(value string) bool {
@@ -107,7 +130,7 @@ func validInstance(value string) bool {
 	return true
 }
 
-func resolveRunfile(value string) (string, error) {
+func resolveDirectory(value string) (string, error) {
 	candidates := []string{value}
 	if runfiles := os.Getenv("RUNFILES_DIR"); runfiles != "" {
 		candidates = append(candidates, filepath.Join(runfiles, value))
@@ -120,7 +143,7 @@ func resolveRunfile(value string) (string, error) {
 			return filepath.Abs(candidate)
 		}
 	}
-	return "", fmt.Errorf("OCI layout %q is not present in runfiles", value)
+	return "", fmt.Errorf("directory %q is not present in runfiles", value)
 }
 
 func readJSON(path string, value any) error {
@@ -229,17 +252,6 @@ func verifyBlob(path, digest string) error {
 		return fmt.Errorf("blob digest mismatch: expected %s, got %s", digest, actual)
 	}
 	return nil
-}
-
-func markerMatches(path, digest string) (bool, error) {
-	contents, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("read extraction marker: %w", err)
-	}
-	return strings.TrimSpace(string(contents)) == digest, nil
 }
 
 func extractFresh(layout string, layers []descriptor, root string) error {
@@ -413,9 +425,13 @@ func applyWhiteout(root, name string) error {
 	base := filepath.Base(name)
 	directory := filepath.Dir(name)
 	if base == ".wh..wh..opq" {
-		target, err := safePath(root, directory)
-		if err != nil {
-			return err
+		target := root
+		if directory != "." {
+			var err error
+			target, err = safePath(root, directory)
+			if err != nil {
+				return err
+			}
 		}
 		entries, err := os.ReadDir(target)
 		if errors.Is(err, os.ErrNotExist) {
@@ -439,21 +455,115 @@ func applyWhiteout(root, name string) error {
 }
 
 func execApp(root, command string, args []string) error {
-	executable := filepath.Join(root, "opt", "app", "bin", "app")
-	arguments := append([]string{executable, command}, args...)
-	if err := syscall.Exec(executable, arguments, os.Environ()); err != nil {
-		return fmt.Errorf("execute extracted app: %w", err)
+	appRoot := filepath.Join(root, "opt", "app")
+	loader := filepath.Join(root, "lib64", "ld-linux-x86-64.so.2")
+	python := filepath.Join(appRoot, "python", "bin", "python3")
+	entrypoint := filepath.Join(appRoot, "entrypoint.py")
+	libraryPath := strings.Join([]string{
+		filepath.Join(root, "lib", "x86_64-linux-gnu"),
+		filepath.Join(appRoot, "python", "lib"),
+	}, ":")
+	environment := make([]string, 0, len(os.Environ())+3)
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if key != "PYTHONHOME" && key != "PYTHONPATH" && key != "REALWORLD_BUNDLE_ROOT" {
+			environment = append(environment, entry)
+		}
+	}
+	environment = append(environment,
+		"PYTHONHOME="+filepath.Join(appRoot, "python"),
+		"PYTHONPATH="+filepath.Join(appRoot, "site-packages")+":"+filepath.Join(appRoot, "src"),
+		"REALWORLD_BUNDLE_ROOT="+appRoot,
+	)
+	arguments := []string{loader, "--library-path", libraryPath, python, entrypoint, command}
+	arguments = append(arguments, args...)
+	if err := syscall.Exec(loader, arguments, environment); err != nil {
+		return fmt.Errorf("execute app with bundled glibc: %w", err)
 	}
 	return nil
 }
 
-func execHurl(root string, args []string) error {
-	loader := filepath.Join(root, "lib", "ld-musl-x86_64.so.1")
-	executable := filepath.Join(root, "usr", "bin", "hurl")
-	libraryPath := strings.Join([]string{filepath.Join(root, "lib"), filepath.Join(root, "usr", "lib")}, ":")
-	arguments := append([]string{loader, "--library-path", libraryPath, executable}, args...)
-	if err := syscall.Exec(loader, arguments, os.Environ()); err != nil {
-		return fmt.Errorf("execute extracted Hurl: %w", err)
+func prepareAppState(root, instance string) error {
+	state := os.Getenv("APP_STATE_DIR")
+	if state == "" {
+		testTmp := os.Getenv("TEST_TMPDIR")
+		if testTmp == "" {
+			return errors.New("TEST_TMPDIR or APP_STATE_DIR is required")
+		}
+		state = filepath.Join(testTmp, "rules_stests", instance, "state")
+		if err := os.Setenv("APP_STATE_DIR", state); err != nil {
+			return fmt.Errorf("set APP_STATE_DIR: %w", err)
+		}
 	}
+	if err := os.MkdirAll(state, 0o755); err != nil {
+		return fmt.Errorf("create app state: %w", err)
+	}
+	seed := filepath.Join(root, "opt", "app", "seed", "realworld.sqlite3")
+	if _, err := os.Stat(seed); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("inspect app seed: %w", err)
+	}
+	database := filepath.Join(state, "realworld.sqlite3")
+	if _, err := os.Stat(database); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect app database: %w", err)
+	}
+	method, err := cloneOrCopyFile(seed, database)
+	if err != nil {
+		return fmt.Errorf("materialize app database seed: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "oci_bundle: materialized writable state via %s: %s\n", method, database)
 	return nil
+}
+
+func cloneOrCopyFile(source, destination string) (string, error) {
+	input, err := os.Open(source)
+	if err != nil {
+		return "", err
+	}
+	defer input.Close()
+	temporary, err := os.CreateTemp(filepath.Dir(destination), ".realworld.sqlite3-")
+	if err != nil {
+		return "", err
+	}
+	temporaryPath := temporary.Name()
+	committed := false
+	defer func() {
+		temporary.Close()
+		if !committed {
+			os.Remove(temporaryPath)
+		}
+	}()
+
+	const ficlone = 0x40049409
+	_, _, cloneErr := syscall.Syscall(syscall.SYS_IOCTL, temporary.Fd(), uintptr(ficlone), input.Fd())
+	method := "reflink"
+	if cloneErr != 0 {
+		method = "copy fallback"
+		if err := temporary.Truncate(0); err != nil {
+			return "", err
+		}
+		if _, err := temporary.Seek(0, io.SeekStart); err != nil {
+			return "", err
+		}
+		if _, err := input.Seek(0, io.SeekStart); err != nil {
+			return "", err
+		}
+		if _, err := io.Copy(temporary, input); err != nil {
+			return "", err
+		}
+	}
+	if err := temporary.Chmod(0o600); err != nil {
+		return "", err
+	}
+	if err := temporary.Close(); err != nil {
+		return "", err
+	}
+	if err := os.Rename(temporaryPath, destination); err != nil {
+		return "", err
+	}
+	committed = true
+	return method, nil
 }

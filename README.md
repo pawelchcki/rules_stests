@@ -28,17 +28,57 @@ not need Python, uv, a virtual environment, or a container runtime.
 
 OCI manifest digests are recorded in `bazel/oci_images.lock.bzl` and pulled by
 `rules_oci`. A small Go executable verifies the manifest and layer digests,
-rejects unsafe tar entries, and extracts the layer below `TEST_TMPDIR`.
-Each payload contains a fully migrated SQLite template. `rules_itest` starts
-the service directly on an assigned port, waits for `/api/tags`, and executes
-an API probe; migrations are not on the test startup path.
+rejects unsafe tar entries, and materializes an immutable rootfs as a Bazel
+directory artifact. Extraction is a normal cacheable action keyed by the OCI
+layout and extractor: it runs once, can live in a local or remote action cache,
+and is shared by parallel tests. Local sandboxes reference the cached tree
+through runfiles instead of copying or unpacking it into every `TEST_TMPDIR`.
+
+Each app payload contains a fully migrated SQLite template. Only writable state
+is private per service. The launcher first asks the filesystem for a reflink
+copy-on-write clone of that template and falls back to copying the small seed
+when reflinks are unavailable; the application rootfs remains immutable and
+shared even when it is gigabytes large. `rules_itest` starts the service on an
+assigned port, waits for `/api/tags`, and executes an API probe; migrations and
+rootfs extraction are not on the test startup path. Bazel invokes Python
+through the rootfs's bundled glibc loader and library path rather than the host
+runtime.
 
 The contract tests pin the upstream RealWorld API specs at commit
 `5d510ce6ec41bb97723e92fbd8d3e3458a381c09`. They also pin the official Hurl
 8.0.1 Linux/amd64 image by manifest digest. Bazel downloads both artifacts,
-verifies their digests, overlays Hurl's OCI layers below `TEST_TMPDIR`, and
-launches Hurl through the extracted musl loader. The test host therefore needs
-no Hurl, Bruno, Node.js, Python, container runtime, or host shared libraries.
+verifies their digests, overlays Hurl's OCI layers once as `:hurl_rootfs`, and
+launches Hurl through the cached tree's musl loader. The test host therefore
+needs no Hurl, Bruno, Node.js, Python, container runtime, or host shared
+libraries.
+
+The Hurl package is independent of `rules_itest`: point it at any running
+RealWorld implementation by URL. It bundles the full upstream suite and runs
+four files concurrently by default; `--jobs` can tune that concurrency.
+
+```bash
+bazel run //bazel/itest:realworld_hurl -- \
+  --base-url=http://127.0.0.1:8000 \
+  --jobs=8
+
+# Equivalent host/port form:
+bazel run //bazel/itest:realworld_hurl -- --host=127.0.0.1 --port=8000
+```
+
+Pass one or more `.hurl` paths after the flags to run a selected subset. When
+used by `service_test`, the same executable discovers the assigned service port
+from `ASSIGNED_PORTS`; no endpoint-specific code is compiled into the package.
+Any `rules_itest` service can use the reusable macro:
+
+```starlark
+load("//bazel/itest:hurl_test.bzl", "realworld_hurl_test")
+
+realworld_hurl_test(
+    name = "my_app_contract_test",
+    service = ":my_app_service",
+    specs = "@realworld_api_specs//:hurl_all",
+)
+```
 
 Django Ninja runs all 13 upstream Hurl files (154 requests). The older FastAPI
 implementation currently passes the comments and tags files; that subset is

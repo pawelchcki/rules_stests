@@ -1,5 +1,7 @@
 load("@rules_go//go:def.bzl", "go_binary", "go_library")
 load("@rules_itest//:itest.bzl", "itest_service", "service_test")
+load(":hurl_test.bzl", "realworld_hurl_test")
+load(":oci_rootfs.bzl", "oci_rootfs")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -35,23 +37,45 @@ go_library(
 )
 
 go_binary(
-    name = "hurl_test_driver",
+    name = "realworld_hurl",
+    data = [
+        ":hurl_rootfs",
+        "@realworld_api_specs//:hurl_all",
+    ],
     embed = [":hurl_test_driver_lib"],
+)
+
+oci_rootfs(
+    name = "fastapi_rootfs",
+    image = "@fastapi_realworld_linux_amd64",
+    single_payload = True,
+)
+
+oci_rootfs(
+    name = "django_rootfs",
+    image = "@django_ninja_realworld_linux_amd64",
+    single_payload = True,
+)
+
+oci_rootfs(
+    name = "hurl_rootfs",
+    image = "@hurl_tool_linux_amd64",
 )
 
 itest_service(
     name = "fastapi_service",
     args = [
-        "serve",
+        "app",
         "fastapi",
-        "$(rootpath @fastapi_realworld_linux_amd64)",
+        "$(rootpath :fastapi_rootfs)",
+        "serve",
         "--host",
         "127.0.0.1",
         "--port",
         "$${PORT}",
     ],
     autoassign_port = True,
-    data = ["@fastapi_realworld_linux_amd64"],
+    data = [":fastapi_rootfs"],
     exe = ":oci_bundle",
     expected_start_duration = "3s",
     http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
@@ -66,56 +90,35 @@ service_test(
     timeout = "moderate",
 )
 
-service_test(
+realworld_hurl_test(
     name = "fastapi_hurl_test",
-    args = ["--service-suffix=//bazel/itest:fastapi_service"],
-    data = [
-        ":oci_bundle",
-        "@hurl_tool_linux_amd64",
-        "@realworld_api_specs//:hurl_fastapi_compatible",
-    ],
-    env = {
-        "HURL_LAYOUT": "$(rootpath @hurl_tool_linux_amd64)",
-        "HURL_RUNNER": "$(rootpath :oci_bundle)",
-        "HURL_SPECS": "$(rootpaths @realworld_api_specs//:hurl_fastapi_compatible)",
-    },
-    services = [":fastapi_service"],
-    test = ":hurl_test_driver",
+    service = ":fastapi_service",
+    specs = "@realworld_api_specs//:hurl_fastapi_compatible",
     timeout = "moderate",
 )
 
-service_test(
+realworld_hurl_test(
     name = "fastapi_hurl_full_test",
-    args = ["--service-suffix=//bazel/itest:fastapi_service"],
-    data = [
-        ":oci_bundle",
-        "@hurl_tool_linux_amd64",
-        "@realworld_api_specs//:hurl_all",
-    ],
-    env = {
-        "HURL_LAYOUT": "$(rootpath @hurl_tool_linux_amd64)",
-        "HURL_RUNNER": "$(rootpath :oci_bundle)",
-        "HURL_SPECS": "$(rootpaths @realworld_api_specs//:hurl_all)",
-    },
-    services = [":fastapi_service"],
+    service = ":fastapi_service",
+    specs = "@realworld_api_specs//:hurl_all",
     tags = ["manual"],
-    test = ":hurl_test_driver",
     timeout = "moderate",
 )
 
 itest_service(
     name = "django_service",
     args = [
-        "serve",
+        "app",
         "django",
-        "$(rootpath @django_ninja_realworld_linux_amd64)",
+        "$(rootpath :django_rootfs)",
+        "serve",
         "--host",
         "127.0.0.1",
         "--port",
         "$${PORT}",
     ],
     autoassign_port = True,
-    data = ["@django_ninja_realworld_linux_amd64"],
+    data = [":django_rootfs"],
     exe = ":oci_bundle",
     expected_start_duration = "3s",
     http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
@@ -130,20 +133,9 @@ service_test(
     timeout = "moderate",
 )
 
-service_test(
+realworld_hurl_test(
     name = "django_hurl_test",
-    args = ["--service-suffix=//bazel/itest:django_service"],
-    data = [
-        ":oci_bundle",
-        "@hurl_tool_linux_amd64",
-        "@realworld_api_specs//:hurl_all",
-    ],
-    env = {
-        "HURL_LAYOUT": "$(rootpath @hurl_tool_linux_amd64)",
-        "HURL_RUNNER": "$(rootpath :oci_bundle)",
-        "HURL_SPECS": "$(rootpaths @realworld_api_specs//:hurl_all)",
-    },
-    services = [":django_service"],
-    test = ":hurl_test_driver",
+    service = ":django_service",
+    specs = "@realworld_api_specs//:hurl_all",
     timeout = "moderate",
 )
