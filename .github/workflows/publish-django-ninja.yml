@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - realworld_corpus/apps/python/realworld-django-ninja/**
+      - bazel/**
+      - MODULE.bazel
+      - MODULE.bazel.lock
       - tools/update_oci_lock.py
       - .github/workflows/publish-django-ninja.yml
   workflow_dispatch:
@@ -117,6 +120,10 @@ jobs:
           set -euo pipefail
           python3 tools/update_oci_lock.py --name "${LOCK_NAME}" --digest "${DIGEST}" --tree "${TREE_OID}"
           bazel test //bazel/itest:django_test
+          if git diff --quiet -- MODULE.bazel.lock bazel/oci_images.lock.bzl; then
+            echo "Digest lock is already current."
+            exit 0
+          fi
           branch="automation/oci-lock-${REF_NAME}-${TREE_OID:0:12}"
           git switch -c "${branch}"
           git config user.name github-actions[bot]

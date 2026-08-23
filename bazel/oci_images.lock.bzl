@@ -3,12 +3,12 @@
 OCI_IMAGES = {
     "django_ninja_realworld": struct(
         repository = "ghcr.io/hannah-barbera/rules-stests-django-ninja",
-        digest = "sha256:cd7539892d8847145c3fcc0a8c0894cb290d56cf5248da45c55d63e2eea6d1d3",
-        tree = "d1b79c7c760c757661221477071e3582561c280a",
+        digest = "sha256:0bdb08ba2c8b55e53d31c1b384430f1b7064c3e5a18d7e7dc8dea7d4bdcb0be3",
+        tree = "3bae9d337d95dd6f576d23de93000abb9451cb15",
     ),
     "fastapi_realworld": struct(
         repository = "ghcr.io/hannah-barbera/rules-stests-fastapi-realworld",
-        digest = "sha256:79963a9c183e536c26d4834d02b54c7ae8e027a680677e163ee21302d05d08fb",
-        tree = "3a464e50be8778d5463e99ad599614f25f0599a3",
+        digest = "sha256:9eecccedf1b0800c02659d8c22140bc7a3a46bdf2573b296afb578d7b8a89aa9",
+        tree = "2487f52943eba94198073dd0cdc5d99a554b5e08",
     ),
 }
