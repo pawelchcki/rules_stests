@@ -149,7 +149,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 tools/update_oci_lock.py --name "${LOCK_NAME}" --digest "${DIGEST}" --tree "${TREE_OID}"
-          bazel test //bazel/itest:django_test
+          bazel test //bazel/itest:django_test //bazel/itest:django_hurl_test
           if git diff --quiet -- MODULE.bazel.lock bazel/oci_images.lock.bzl; then
             echo "Digest lock is already current."
             exit 0

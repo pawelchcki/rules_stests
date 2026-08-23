@@ -33,9 +33,26 @@ Each payload contains a fully migrated SQLite template. `rules_itest` starts
 the service directly on an assigned port, waits for `/api/tags`, and executes
 an API probe; migrations are not on the test startup path.
 
+The contract tests pin the upstream RealWorld API specs at commit
+`5d510ce6ec41bb97723e92fbd8d3e3458a381c09`. They also pin the official Hurl
+8.0.1 Linux/amd64 image by manifest digest. Bazel downloads both artifacts,
+verifies their digests, overlays Hurl's OCI layers below `TEST_TMPDIR`, and
+launches Hurl through the extracted musl loader. The test host therefore needs
+no Hurl, Bruno, Node.js, Python, container runtime, or host shared libraries.
+
+Django Ninja runs all 13 upstream Hurl files (154 requests). The older FastAPI
+implementation currently passes the comments and tags files; that subset is
+mandatory while the deliberately manual full-suite target records the
+remaining compatibility work.
+
 ```bash
 bazel test //bazel/itest:fastapi_test
+bazel test //bazel/itest:fastapi_hurl_test
 bazel test //bazel/itest:django_test
+bazel test //bazel/itest:django_hurl_test
+
+# Expected to expose the legacy FastAPI implementation's spec gaps:
+bazel test //bazel/itest:fastapi_hurl_full_test
 ```
 
 Run a fixture and keep it available for manual development with:

@@ -27,6 +27,18 @@ go_binary(
     embed = [":api_probe_lib"],
 )
 
+go_library(
+    name = "hurl_test_driver_lib",
+    srcs = ["hurl_test_driver.go"],
+    importpath = "github.com/hannah-barbera/rules_stests/bazel/itest/hurl_test_driver",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "hurl_test_driver",
+    embed = [":hurl_test_driver_lib"],
+)
+
 itest_service(
     name = "fastapi_service",
     args = [
@@ -54,6 +66,43 @@ service_test(
     timeout = "moderate",
 )
 
+service_test(
+    name = "fastapi_hurl_test",
+    args = ["--service-suffix=//bazel/itest:fastapi_service"],
+    data = [
+        ":oci_bundle",
+        "@hurl_tool_linux_amd64",
+        "@realworld_api_specs//:hurl_fastapi_compatible",
+    ],
+    env = {
+        "HURL_LAYOUT": "$(rootpath @hurl_tool_linux_amd64)",
+        "HURL_RUNNER": "$(rootpath :oci_bundle)",
+        "HURL_SPECS": "$(locations @realworld_api_specs//:hurl_fastapi_compatible)",
+    },
+    services = [":fastapi_service"],
+    test = ":hurl_test_driver",
+    timeout = "moderate",
+)
+
+service_test(
+    name = "fastapi_hurl_full_test",
+    args = ["--service-suffix=//bazel/itest:fastapi_service"],
+    data = [
+        ":oci_bundle",
+        "@hurl_tool_linux_amd64",
+        "@realworld_api_specs//:hurl_all",
+    ],
+    env = {
+        "HURL_LAYOUT": "$(rootpath @hurl_tool_linux_amd64)",
+        "HURL_RUNNER": "$(rootpath :oci_bundle)",
+        "HURL_SPECS": "$(locations @realworld_api_specs//:hurl_all)",
+    },
+    services = [":fastapi_service"],
+    tags = ["manual"],
+    test = ":hurl_test_driver",
+    timeout = "moderate",
+)
+
 itest_service(
     name = "django_service",
     args = [
@@ -78,5 +127,23 @@ service_test(
     args = ["--service-suffix=//bazel/itest:django_service"],
     services = [":django_service"],
     test = ":api_probe",
+    timeout = "moderate",
+)
+
+service_test(
+    name = "django_hurl_test",
+    args = ["--service-suffix=//bazel/itest:django_service"],
+    data = [
+        ":oci_bundle",
+        "@hurl_tool_linux_amd64",
+        "@realworld_api_specs//:hurl_all",
+    ],
+    env = {
+        "HURL_LAYOUT": "$(rootpath @hurl_tool_linux_amd64)",
+        "HURL_RUNNER": "$(rootpath :oci_bundle)",
+        "HURL_SPECS": "$(locations @realworld_api_specs//:hurl_all)",
+    },
+    services = [":django_service"],
+    test = ":hurl_test_driver",
     timeout = "moderate",
 )

@@ -38,10 +38,10 @@ func main() {
 
 func run(args []string) error {
 	if len(args) < 3 {
-		return errors.New("usage: oci_bundle <prepare|serve|check> <instance> <oci-layout> [app arguments...]")
+		return errors.New("usage: oci_bundle <prepare|serve|check|hurl> <instance> <oci-layout> [arguments...]")
 	}
 	mode, instance, layoutArg := args[0], args[1], args[2]
-	if mode != "prepare" && mode != "serve" && mode != "check" {
+	if mode != "prepare" && mode != "serve" && mode != "check" && mode != "hurl" {
 		return fmt.Errorf("unsupported mode %q", mode)
 	}
 	if !validInstance(instance) {
@@ -56,9 +56,15 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	manifestDigest, layer, err := readSingleLayer(layout)
+	manifestDigest, layers, err := readLayers(layout)
 	if err != nil {
 		return err
+	}
+	if mode != "hurl" {
+		layers, err = singlePayloadLayer(layout, layers)
+		if err != nil {
+			return err
+		}
 	}
 
 	root := filepath.Join(testTmp, "rules_stests", instance, "rootfs")
@@ -68,12 +74,15 @@ func run(args []string) error {
 		return err
 	}
 	if !prepared {
-		if err := extractFresh(layout, layer, root); err != nil {
+		if err := extractFresh(layout, layers, root); err != nil {
 			return err
 		}
 		if err := os.WriteFile(marker, []byte(manifestDigest+"\n"), 0o644); err != nil {
 			return fmt.Errorf("write extraction marker: %w", err)
 		}
+	}
+	if mode == "hurl" {
+		return execHurl(root, args[3:])
 	}
 
 	command := "check"
@@ -125,39 +134,46 @@ func readJSON(path string, value any) error {
 	return nil
 }
 
-func readSingleLayer(layout string) (string, descriptor, error) {
+func readLayers(layout string) (string, []descriptor, error) {
 	var idx index
 	if err := readJSON(filepath.Join(layout, "index.json"), &idx); err != nil {
-		return "", descriptor{}, fmt.Errorf("read OCI index: %w", err)
+		return "", nil, fmt.Errorf("read OCI index: %w", err)
 	}
 	if len(idx.Manifests) != 1 {
-		return "", descriptor{}, fmt.Errorf("expected one OCI manifest, got %d", len(idx.Manifests))
+		return "", nil, fmt.Errorf("expected one OCI manifest, got %d", len(idx.Manifests))
 	}
 	manifestPath, err := blobPath(layout, idx.Manifests[0].Digest)
 	if err != nil {
-		return "", descriptor{}, err
+		return "", nil, err
 	}
 	if err := verifyBlob(manifestPath, idx.Manifests[0].Digest); err != nil {
-		return "", descriptor{}, err
+		return "", nil, err
 	}
 	var imageManifest manifest
 	if err := readJSON(manifestPath, &imageManifest); err != nil {
-		return "", descriptor{}, fmt.Errorf("read OCI manifest: %w", err)
+		return "", nil, fmt.Errorf("read OCI manifest: %w", err)
 	}
+	if len(imageManifest.Layers) == 0 {
+		return "", nil, errors.New("OCI manifest has no layers")
+	}
+	return idx.Manifests[0].Digest, imageManifest.Layers, nil
+}
+
+func singlePayloadLayer(layout string, layers []descriptor) ([]descriptor, error) {
 	payloadLayers := make([]descriptor, 0, 1)
-	for _, layer := range imageManifest.Layers {
+	for _, layer := range layers {
 		if layer.Size > 1024 {
 			payloadLayers = append(payloadLayers, layer)
 			continue
 		}
 		if err := verifyEmptyLayer(layout, layer); err != nil {
-			return "", descriptor{}, err
+			return nil, err
 		}
 	}
 	if len(payloadLayers) != 1 {
-		return "", descriptor{}, fmt.Errorf("portable app images must contain exactly one non-empty payload layer, got %d", len(payloadLayers))
+		return nil, fmt.Errorf("portable app images must contain exactly one non-empty payload layer, got %d", len(payloadLayers))
 	}
-	return idx.Manifests[0].Digest, payloadLayers[0], nil
+	return payloadLayers, nil
 }
 
 func verifyEmptyLayer(layout string, layer descriptor) error {
@@ -226,19 +242,28 @@ func markerMatches(path, digest string) (bool, error) {
 	return strings.TrimSpace(string(contents)) == digest, nil
 }
 
-func extractFresh(layout string, layer descriptor, root string) error {
+func extractFresh(layout string, layers []descriptor, root string) error {
+	if err := os.RemoveAll(root); err != nil {
+		return fmt.Errorf("clear old bundle root: %w", err)
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return fmt.Errorf("create bundle root: %w", err)
+	}
+	for _, layer := range layers {
+		if err := extractLayer(layout, layer, root); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func extractLayer(layout string, layer descriptor, root string) error {
 	blob, err := blobPath(layout, layer.Digest)
 	if err != nil {
 		return err
 	}
 	if err := verifyBlob(blob, layer.Digest); err != nil {
 		return err
-	}
-	if err := os.RemoveAll(root); err != nil {
-		return fmt.Errorf("clear old bundle root: %w", err)
-	}
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return fmt.Errorf("create bundle root: %w", err)
 	}
 
 	file, err := os.Open(blob)
@@ -302,8 +327,9 @@ func extractEntry(root string, header *tar.Header, reader io.Reader) error {
 	if name == "" || name == "." {
 		return nil
 	}
-	if strings.HasPrefix(filepath.Base(name), ".wh.") {
-		return fmt.Errorf("whiteouts are not supported in single-layer bundles: %q", name)
+	base := filepath.Base(name)
+	if strings.HasPrefix(base, ".wh.") {
+		return applyWhiteout(root, name)
 	}
 	destination, err := safePath(root, name)
 	if err != nil {
@@ -312,11 +338,19 @@ func extractEntry(root string, header *tar.Header, reader io.Reader) error {
 
 	switch header.Typeflag {
 	case tar.TypeDir:
+		if info, statErr := os.Lstat(destination); statErr == nil && !info.IsDir() {
+			if err := os.RemoveAll(destination); err != nil {
+				return err
+			}
+		}
 		if err := os.MkdirAll(destination, os.FileMode(header.Mode)&0o777); err != nil {
 			return err
 		}
 		return os.Chmod(destination, os.FileMode(header.Mode)&0o777)
 	case tar.TypeReg, tar.TypeRegA:
+		if err := os.RemoveAll(destination); err != nil {
+			return err
+		}
 		if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
 			return err
 		}
@@ -334,23 +368,37 @@ func extractEntry(root string, header *tar.Header, reader io.Reader) error {
 		}
 		return os.Chmod(destination, os.FileMode(header.Mode)&0o777)
 	case tar.TypeSymlink:
+		linkName := filepath.FromSlash(header.Linkname)
 		if filepath.IsAbs(header.Linkname) {
-			return fmt.Errorf("absolute symlink is not portable: %q -> %q", name, header.Linkname)
+			rootTarget := strings.TrimPrefix(filepath.Clean(linkName), string(filepath.Separator))
+			if _, err := safePath(root, rootTarget); err != nil {
+				return fmt.Errorf("unsafe absolute symlink %q -> %q: %w", name, header.Linkname, err)
+			}
+			linkName, err = filepath.Rel(filepath.Dir(filepath.FromSlash(name)), rootTarget)
+			if err != nil {
+				return fmt.Errorf("rewrite absolute symlink %q -> %q: %w", name, header.Linkname, err)
+			}
 		}
-		linkTarget := filepath.Clean(filepath.Join(filepath.Dir(name), filepath.FromSlash(header.Linkname)))
+		linkTarget := filepath.Clean(filepath.Join(filepath.Dir(name), linkName))
 		if _, err := safePath(root, linkTarget); err != nil {
 			return fmt.Errorf("unsafe symlink %q -> %q: %w", name, header.Linkname, err)
+		}
+		if err := os.RemoveAll(destination); err != nil {
+			return err
 		}
 		if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
 			return err
 		}
-		return os.Symlink(header.Linkname, destination)
+		return os.Symlink(linkName, destination)
 	case tar.TypeLink:
 		target, err := safePath(root, strings.TrimPrefix(header.Linkname, "./"))
 		if err != nil {
 			return fmt.Errorf("unsafe hardlink %q -> %q: %w", name, header.Linkname, err)
 		}
 		if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+			return err
+		}
+		if err := os.RemoveAll(destination); err != nil {
 			return err
 		}
 		return os.Link(target, destination)
@@ -361,11 +409,51 @@ func extractEntry(root string, header *tar.Header, reader io.Reader) error {
 	}
 }
 
+func applyWhiteout(root, name string) error {
+	base := filepath.Base(name)
+	directory := filepath.Dir(name)
+	if base == ".wh..wh..opq" {
+		target, err := safePath(root, directory)
+		if err != nil {
+			return err
+		}
+		entries, err := os.ReadDir(target)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if err := os.RemoveAll(filepath.Join(target, entry.Name())); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	target, err := safePath(root, filepath.Join(directory, strings.TrimPrefix(base, ".wh.")))
+	if err != nil {
+		return err
+	}
+	return os.RemoveAll(target)
+}
+
 func execApp(root, command string, args []string) error {
 	executable := filepath.Join(root, "opt", "app", "bin", "app")
 	arguments := append([]string{executable, command}, args...)
 	if err := syscall.Exec(executable, arguments, os.Environ()); err != nil {
 		return fmt.Errorf("execute extracted app: %w", err)
+	}
+	return nil
+}
+
+func execHurl(root string, args []string) error {
+	loader := filepath.Join(root, "lib", "ld-musl-x86_64.so.1")
+	executable := filepath.Join(root, "usr", "bin", "hurl")
+	libraryPath := strings.Join([]string{filepath.Join(root, "lib"), filepath.Join(root, "usr", "lib")}, ":")
+	arguments := append([]string{loader, "--library-path", libraryPath, executable}, args...)
+	if err := syscall.Exec(loader, arguments, os.Environ()); err != nil {
+		return fmt.Errorf("execute extracted Hurl: %w", err)
 	}
 	return nil
 }

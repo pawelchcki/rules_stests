@@ -1,5 +1,11 @@
 """Machine-updated OCI manifest locks for the RealWorld fixtures."""
 
+HURL_TOOL = struct(
+    repository = "ghcr.io/orange-opensource/hurl",
+    digest = "sha256:0c153999ee81f11d842bd0afb9f209673f944007aec93d6cf100122f4f606769",
+    version = "8.0.1",
+)
+
 OCI_IMAGES = {
     "django_ninja_realworld": struct(
         repository = "ghcr.io/hannah-barbera/rules-stests-django-ninja",

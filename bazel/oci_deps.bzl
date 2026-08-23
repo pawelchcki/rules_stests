@@ -1,7 +1,7 @@
 """Creates repositories for the digest-locked RealWorld app images."""
 
 load("@rules_oci//oci:pull.bzl", "oci_pull")
-load("//bazel:oci_images.lock.bzl", "OCI_IMAGES")
+load("//bazel:oci_images.lock.bzl", "HURL_TOOL", "OCI_IMAGES")
 
 def _oci_deps_impl(module_ctx):
     direct_deps = []
@@ -14,6 +14,15 @@ def _oci_deps_impl(module_ctx):
             is_bzlmod = True,
         )
         direct_deps.extend([name, name + "_linux_amd64"])
+
+    oci_pull(
+        name = "hurl_tool",
+        image = HURL_TOOL.repository,
+        digest = HURL_TOOL.digest,
+        platforms = ["linux/amd64"],
+        is_bzlmod = True,
+    )
+    direct_deps.extend(["hurl_tool", "hurl_tool_linux_amd64"])
 
     return module_ctx.extension_metadata(
         root_module_direct_deps = direct_deps,
