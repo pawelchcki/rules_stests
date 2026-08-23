@@ -3,7 +3,7 @@
 OCI_IMAGES = {
     "django_ninja_realworld": struct(
         repository = "ghcr.io/hannah-barbera/rules-stests-django-ninja",
-        digest = "sha256:834043d50b3cf629df546928e038614e4bee86160f072dfd34c7832eb1edf042",
+        digest = "sha256:0b08de467aab53150be0a7b8e74a69518de0fc1e3aa041d90c7f066b8f933f7e",
         tree = "8d610bdbda2e5ec860e099f47073c18bb4ff75dd",
     ),
     "fastapi_realworld": struct(
