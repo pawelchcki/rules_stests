@@ -70,6 +70,11 @@ jobs:
             ${{ env.IMAGE }}:${{ steps.identity.outputs.version }}
 
       - name: Publish the source-tree ref
+        # Vendored app trees may themselves contain .github/workflows. GitHub's
+        # installation token can reject such refs; image verification and the
+        # digest lock must still proceed, and a workflow-scoped user token can
+        # push the deterministic ref without changing its object ID.
+        continue-on-error: true
         env:
           TREE_OID: ${{ steps.identity.outputs.tree }}
           VERSION: ${{ steps.identity.outputs.version }}
