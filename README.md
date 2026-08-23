@@ -29,8 +29,9 @@ not need Python, uv, a virtual environment, or a container runtime.
 OCI manifest digests are recorded in `bazel/oci_images.lock.bzl` and pulled by
 `rules_oci`. A small Go executable verifies the manifest and layer digests,
 rejects unsafe tar entries, and extracts the layer below `TEST_TMPDIR`.
-`rules_itest` runs database migrations as an `itest_task`, starts the service
-on an assigned port, waits for `/api/tags`, and executes an API probe.
+Each payload contains a fully migrated SQLite template. `rules_itest` starts
+the service directly on an assigned port, waits for `/api/tags`, and executes
+an API probe; migrations are not on the test startup path.
 
 ```bash
 bazel test //bazel/itest:fastapi_test

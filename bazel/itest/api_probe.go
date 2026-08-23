@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -19,15 +20,26 @@ func main() {
 		os.Exit(2)
 	}
 
-	var ports map[string]int
+	var ports map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(os.Getenv("ASSIGNED_PORTS")), &ports); err != nil {
 		fmt.Fprintln(os.Stderr, "decode ASSIGNED_PORTS:", err)
 		os.Exit(1)
 	}
 	port := 0
-	for label, candidate := range ports {
+	for label, encoded := range ports {
 		if strings.HasSuffix(label, *serviceSuffix) {
-			port = candidate
+			if err := json.Unmarshal(encoded, &port); err != nil {
+				var text string
+				if stringErr := json.Unmarshal(encoded, &text); stringErr != nil {
+					fmt.Fprintf(os.Stderr, "decode assigned port for %s: %v\n", label, err)
+					os.Exit(1)
+				}
+				port, err = strconv.Atoi(text)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "decode assigned port for %s: %v\n", label, err)
+					os.Exit(1)
+				}
+			}
 			break
 		}
 	}

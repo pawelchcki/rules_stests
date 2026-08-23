@@ -16,9 +16,10 @@ single-payload-layer `FROM scratch` image.
 Run the command from the application's directory. Both applications publish
 port `8000`, so run them one at a time unless you change the host-side port.
 
-The FastAPI application applies Alembic migrations to a persisted SQLite file
-and then starts Uvicorn. The Django Ninja application applies Django migrations
-and starts Django's development server. Both default to `/data/realworld.sqlite3`.
+Both images contain a fully migrated SQLite template. On first launch they copy
+it to `/data/realworld.sqlite3` and start serving immediately; later launches
+preserve the writable database. FastAPI uses Uvicorn and Django Ninja uses
+Django's development server.
 These defaults are intended for corpus validation and local execution, not
 production deployment.
 

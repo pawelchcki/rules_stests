@@ -1,9 +1,10 @@
 import argparse
 import os
+import shutil
 from pathlib import Path
 
 
-def configure_environment() -> Path:
+def configure_environment(materialize_seed: bool) -> Path:
     root = Path(os.environ["REALWORLD_BUNDLE_ROOT"])
     state_dir = Path(
         os.environ.get("APP_STATE_DIR")
@@ -11,7 +12,11 @@ def configure_environment() -> Path:
     )
     state_dir.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("APP_ENV", "dev")
-    os.environ.setdefault("DATABASE_URL", f"sqlite:///{state_dir / 'realworld.sqlite3'}")
+    if "DATABASE_URL" not in os.environ:
+        database = state_dir / "realworld.sqlite3"
+        if materialize_seed and not database.exists():
+            shutil.copyfile(root / "seed" / "realworld.sqlite3", database)
+        os.environ["DATABASE_URL"] = f"sqlite:///{database}"
     os.environ.setdefault("SECRET_KEY", "rules-stests-development-only-secret")
     os.environ.setdefault("MAX_CONNECTIONS_COUNT", "1")
     os.environ.setdefault("MIN_CONNECTIONS_COUNT", "1")
@@ -41,8 +46,8 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
 
-    root = configure_environment()
-    if args.command in ("run", "migrate"):
+    root = configure_environment(args.command != "migrate")
+    if args.command == "migrate":
         migrate(root)
     if args.command in ("run", "serve"):
         serve(args.host, args.port)

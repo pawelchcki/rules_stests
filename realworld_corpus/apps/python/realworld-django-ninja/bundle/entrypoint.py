@@ -1,9 +1,10 @@
 import argparse
 import os
+import shutil
 from pathlib import Path
 
 
-def configure_environment() -> Path:
+def configure_environment(materialize_seed: bool) -> Path:
     root = Path(os.environ["REALWORLD_BUNDLE_ROOT"])
     state_dir = Path(
         os.environ.get("APP_STATE_DIR")
@@ -11,7 +12,11 @@ def configure_environment() -> Path:
     )
     state_dir.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("DEBUG", "True")
-    os.environ.setdefault("DATABASE_URL", f"file:{state_dir / 'realworld.sqlite3'}")
+    if "DATABASE_URL" not in os.environ:
+        database = state_dir / "realworld.sqlite3"
+        if materialize_seed and not database.exists():
+            shutil.copyfile(root / "seed" / "realworld.sqlite3", database)
+        os.environ["DATABASE_URL"] = f"file:{database}"
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
     os.chdir(root / "src")
     return root
@@ -38,8 +43,8 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
 
-    configure_environment()
-    if args.command in ("run", "migrate"):
+    configure_environment(args.command != "migrate")
+    if args.command == "migrate":
         migrate()
     if args.command in ("run", "serve"):
         serve(args.host, args.port)

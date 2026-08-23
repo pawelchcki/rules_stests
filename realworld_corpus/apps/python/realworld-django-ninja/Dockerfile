@@ -1,12 +1,14 @@
 # syntax=docker/dockerfile:1.7
 ARG SOURCE_DATE_EPOCH=0
 FROM golang:1.25-alpine@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS launcher
+ARG SOURCE_DATE_EPOCH
 WORKDIR /src
 COPY bundle/launcher.go ./launcher.go
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build -trimpath -ldflags="-s -w -buildid=" -o /out/app ./launcher.go
 
 FROM ghcr.io/astral-sh/uv:0.12.5-debian-slim@sha256:53476714c941e4fe1ec3d7c24c405681752365d882d165a848bc22d84f19106a AS builder
+ARG SOURCE_DATE_EPOCH
 ENV UV_CACHE_DIR=/tmp/uv-cache \
     UV_LINK_MODE=copy \
     UV_PYTHON_INSTALL_DIR=/opt/uv-python \
@@ -31,16 +33,23 @@ COPY bundle/entrypoint.py /rootfs/opt/app/entrypoint.py
 COPY LICENSE /rootfs/opt/app/licenses/application-LICENSE
 COPY --from=launcher /out/app /rootfs/opt/app/bin/app
 
-RUN mkdir -p /rootfs/data /rootfs/lib /rootfs/lib64 /rootfs/etc/ssl/certs /rootfs/usr/share/doc/libc6 \
+RUN mkdir -p /rootfs/data /rootfs/lib /rootfs/lib64 /rootfs/etc/ssl/certs /rootfs/usr/share/doc/libc6 /rootfs/opt/app/seed \
     && cp -a /lib/x86_64-linux-gnu /rootfs/lib/ \
     && cp -L /lib64/ld-linux-x86-64.so.2 /rootfs/lib64/ld-linux-x86-64.so.2 \
     && if [ -f /etc/ssl/certs/ca-certificates.crt ]; then cp -L /etc/ssl/certs/ca-certificates.crt /rootfs/etc/ssl/certs/ca-certificates.crt; fi \
     && if [ -f /usr/share/doc/libc6/copyright ]; then cp -a /usr/share/doc/libc6/copyright /rootfs/usr/share/doc/libc6/copyright; fi \
     && /rootfs/opt/app/python/bin/python3 -m compileall \
         --invalidation-mode checked-hash -q -f /rootfs/opt/app/src /rootfs/opt/app/entrypoint.py \
+    && REALWORLD_BUNDLE_ROOT=/rootfs/opt/app \
+        APP_STATE_DIR=/rootfs/opt/app/seed \
+        PYTHONPATH=/rootfs/opt/app/site-packages:/rootfs/opt/app/src \
+        /rootfs/opt/app/python/bin/python3 /rootfs/opt/app/entrypoint.py migrate \
+    && /rootfs/opt/app/python/bin/python3 -c \
+        'import sqlite3; p="/rootfs/opt/app/seed/realworld.sqlite3"; c=sqlite3.connect(p); c.execute("UPDATE django_migrations SET applied = ?", ("1970-01-01 00:00:00",)); c.commit(); c.execute("VACUUM"); c.close()' \
     && chown -R 65532:65532 /rootfs/data
 
 FROM scratch
+ARG SOURCE_DATE_EPOCH
 COPY --from=builder /rootfs/ /
 ENV APP_STATE_DIR=/data \
     DEBUG=True \
