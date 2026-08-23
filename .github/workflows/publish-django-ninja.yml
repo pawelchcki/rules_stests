@@ -124,13 +124,15 @@ jobs:
             echo "Digest lock is already current."
             exit 0
           fi
-          branch="automation/oci-lock-${REF_NAME}-${TREE_OID:0:12}"
+          branch="automation/oci-lock-${REF_NAME}-${TREE_OID:0:12}-${DIGEST:7:12}"
           git switch -c "${branch}"
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add MODULE.bazel.lock bazel/oci_images.lock.bzl
           git commit -m "chore: lock ${REF_NAME} OCI digest"
           git push origin "HEAD:refs/heads/${branch}"
-          gh pr create --base main --head "${branch}" \
-            --title "chore: lock ${REF_NAME} OCI digest" \
-            --body "Locks ${IMAGE}@${DIGEST} for app tree ${TREE_OID}. The workflow verified an anonymous pull and the rules_itest smoke test."
+          if ! gh pr create --base main --head "${branch}" \
+              --title "chore: lock ${REF_NAME} OCI digest" \
+              --body "Locks ${IMAGE}@${DIGEST} for app tree ${TREE_OID}. The workflow verified an anonymous pull and the rules_itest smoke test."; then
+            echo "::warning::The validated lock branch ${branch} was pushed, but repository settings prevent Actions from creating its pull request."
+          fi
