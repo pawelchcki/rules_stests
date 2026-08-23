@@ -3,9 +3,16 @@ from fastapi import FastAPI
 from loguru import logger
 
 from app.core.settings.app import AppSettings
+from app.db.sqlite import SQLitePool
 
 
 async def connect_to_db(app: FastAPI, settings: AppSettings) -> None:
+    if settings.database_url.startswith("sqlite:"):
+        logger.info("Connecting to SQLite")
+        app.state.pool = SQLitePool.from_url(settings.database_url)
+        logger.info("Connection established")
+        return
+
     logger.info("Connecting to PostgreSQL")
 
     app.state.pool = await asyncpg.create_pool(

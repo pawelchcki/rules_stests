@@ -10,14 +10,14 @@ image.
 
 | Application | Framework | Runtime database | Start command |
 | --- | --- | --- | --- |
-| `fastapi-realworld-example-app` | FastAPI | PostgreSQL | `docker compose up --build` |
+| `fastapi-realworld-example-app` | FastAPI | SQLite | `docker compose up --build` |
 | `realworld-django-ninja` | Django Ninja | SQLite | `docker compose up --build` |
 
 Run the command from the application's directory. Both applications publish
 port `8000`, so run them one at a time unless you change the host-side port.
 
-The FastAPI application starts PostgreSQL, applies Alembic migrations, and then
-starts Uvicorn. The Django Ninja application uses an image-local SQLite
-database, applies Django migrations, and then starts Django's development
-server. These defaults are intended for corpus validation and local execution,
-not production deployment.
+The FastAPI application applies Alembic migrations to a persisted SQLite file
+and then starts Uvicorn. The Django Ninja application uses an image-local
+SQLite database, applies Django migrations, and then starts Django's
+development server. These defaults are intended for corpus validation and
+local execution, not production deployment.

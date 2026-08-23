@@ -18,6 +18,9 @@ depends_on = None
 
 
 def create_updated_at_trigger() -> None:
+    if op.get_bind().dialect.name != "postgresql":
+        return
+
     op.execute(
         """
     CREATE FUNCTION update_updated_at_column()
@@ -62,15 +65,16 @@ def create_users_table() -> None:
         sa.Column("image", sa.Text),
         *timestamps(),
     )
-    op.execute(
-        """
-        CREATE TRIGGER update_user_modtime
-            BEFORE UPDATE
-            ON users
-            FOR EACH ROW
-        EXECUTE PROCEDURE update_updated_at_column();
-        """
-    )
+    if op.get_bind().dialect.name == "postgresql":
+        op.execute(
+            """
+            CREATE TRIGGER update_user_modtime
+                BEFORE UPDATE
+                ON users
+                FOR EACH ROW
+            EXECUTE PROCEDURE update_updated_at_column();
+            """
+        )
 
 
 def create_followers_to_followings_table() -> None:
@@ -88,11 +92,11 @@ def create_followers_to_followings_table() -> None:
             sa.ForeignKey("users.id", ondelete="CASCADE"),
             nullable=False,
         ),
-    )
-    op.create_primary_key(
-        "pk_followers_to_followings",
-        "followers_to_followings",
-        ["follower_id", "following_id"],
+        sa.PrimaryKeyConstraint(
+            "follower_id",
+            "following_id",
+            name="pk_followers_to_followings",
+        ),
     )
 
 
@@ -109,15 +113,16 @@ def create_articles_table() -> None:
         ),
         *timestamps(),
     )
-    op.execute(
-        """
-        CREATE TRIGGER update_article_modtime
-            BEFORE UPDATE
-            ON articles
-            FOR EACH ROW
-        EXECUTE PROCEDURE update_updated_at_column();
-        """
-    )
+    if op.get_bind().dialect.name == "postgresql":
+        op.execute(
+            """
+            CREATE TRIGGER update_article_modtime
+                BEFORE UPDATE
+                ON articles
+                FOR EACH ROW
+            EXECUTE PROCEDURE update_updated_at_column();
+            """
+        )
 
 
 def create_tags_table() -> None:
@@ -139,9 +144,11 @@ def create_articles_to_tags_table() -> None:
             sa.ForeignKey("tags.tag", ondelete="CASCADE"),
             nullable=False,
         ),
-    )
-    op.create_primary_key(
-        "pk_articles_to_tags", "articles_to_tags", ["article_id", "tag"]
+        sa.PrimaryKeyConstraint(
+            "article_id",
+            "tag",
+            name="pk_articles_to_tags",
+        ),
     )
 
 
@@ -160,8 +167,12 @@ def create_favorites_table() -> None:
             sa.ForeignKey("articles.id", ondelete="CASCADE"),
             nullable=False,
         ),
+        sa.PrimaryKeyConstraint(
+            "user_id",
+            "article_id",
+            name="pk_favorites",
+        ),
     )
-    op.create_primary_key("pk_favorites", "favorites", ["user_id", "article_id"])
 
 
 def create_commentaries_table() -> None:
@@ -183,15 +194,16 @@ def create_commentaries_table() -> None:
         ),
         *timestamps(),
     )
-    op.execute(
-        """
-        CREATE TRIGGER update_comment_modtime
-            BEFORE UPDATE
-            ON commentaries
-            FOR EACH ROW
-        EXECUTE PROCEDURE update_updated_at_column();
-        """
-    )
+    if op.get_bind().dialect.name == "postgresql":
+        op.execute(
+            """
+            CREATE TRIGGER update_comment_modtime
+                BEFORE UPDATE
+                ON commentaries
+                FOR EACH ROW
+            EXECUTE PROCEDURE update_updated_at_column();
+            """
+        )
 
 
 def upgrade() -> None:
@@ -213,4 +225,5 @@ def downgrade() -> None:
     op.drop_table("articles")
     op.drop_table("followers_to_followings")
     op.drop_table("users")
-    op.execute("DROP FUNCTION update_updated_at_column")
+    if op.get_bind().dialect.name == "postgresql":
+        op.execute("DROP FUNCTION update_updated_at_column")

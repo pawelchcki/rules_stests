@@ -5,6 +5,7 @@
 - Imported: 2026-08-23
 - License: MIT (`LICENSE`)
 
-Corpus-specific changes are limited to the Dockerfile and Compose definition.
-The image now byte-compiles the `app` package during its build, and Compose
-provides a self-contained PostgreSQL service with development-only credentials.
+Corpus-specific changes add a small SQLite compatibility layer, make the
+initial Alembic migration portable, and adapt the Docker/Compose setup. The
+image byte-compiles the `app` package during its build, and Compose persists a
+self-contained SQLite database volume. PostgreSQL URLs remain supported.

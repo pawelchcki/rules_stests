@@ -14,6 +14,7 @@ RUN pip install "poetry==1.8.5" \
 
 COPY alembic.ini ./
 COPY app ./app
+RUN mkdir -p /data
 
 # Fail the image build if any vendored Python source cannot be compiled.
 RUN python -m compileall -q -f app

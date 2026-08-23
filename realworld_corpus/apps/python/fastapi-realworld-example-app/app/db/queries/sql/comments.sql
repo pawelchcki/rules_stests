@@ -18,18 +18,15 @@ FROM commentaries c
 WHERE c.id = :comment_id;
 
 -- name: create-new-comment<!
-WITH users_subquery AS (
-        (SELECT id, username FROM users WHERE username = :author_username)
-)
 INSERT
 INTO commentaries (body, author_id, article_id)
 VALUES (:body,
-        (SELECT id FROM users_subquery),
+        (SELECT id FROM users WHERE username = :author_username),
         (SELECT id FROM articles WHERE slug = :article_slug))
 RETURNING
     id,
     body,
-        (SELECT username FROM users_subquery) AS author_username,
+    (SELECT username FROM users WHERE id = author_id) AS author_username,
     created_at,
     updated_at;
 

@@ -49,21 +49,17 @@ LIMIT 1;
 
 
 -- name: create-new-article<!
-WITH author_subquery AS (
-    SELECT id, username
-    FROM users
-    WHERE username = :author_username
-)
 INSERT
 INTO articles (slug, title, description, body, author_id)
-VALUES (:slug, :title, :description, :body, (SELECT id FROM author_subquery))
+VALUES (:slug, :title, :description, :body,
+        (SELECT id FROM users WHERE username = :author_username))
 RETURNING
     id,
     slug,
     title,
     description,
     body,
-        (SELECT username FROM author_subquery) as author_username,
+    (SELECT username FROM users WHERE id = author_id) AS author_username,
     created_at,
     updated_at;
 
@@ -80,7 +76,8 @@ UPDATE articles
 SET slug        = :new_slug,
     title       = :new_title,
     body        = :new_body,
-    description = :new_description
+    description = :new_description,
+    updated_at  = CURRENT_TIMESTAMP
 WHERE slug = :slug
   AND author_id = (SELECT id FROM users WHERE username = :author_username)
 RETURNING updated_at;
