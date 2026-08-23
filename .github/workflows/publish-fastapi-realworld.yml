@@ -57,8 +57,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Find an existing content-addressed image
+        id: existing
+        env:
+          TREE_TAG: ${{ steps.identity.outputs.tree_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if inspection="$(docker buildx imagetools inspect "${IMAGE}:${TREE_TAG}" 2>/dev/null)"; then
+            digest="$(printf '%s\n' "${inspection}" | awk '$1 == "Digest:" { print $2; exit }')"
+            test "${digest#sha256:}" != "${digest}"
+            echo "digest=${digest}" >>"${GITHUB_OUTPUT}"
+          fi
+
       - name: Build and push the single-layer image
         id: build
+        if: steps.existing.outputs.digest == ''
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: ${{ env.APP_PATH }}
@@ -71,6 +85,22 @@ jobs:
           tags: |
             ${{ env.IMAGE }}:${{ steps.identity.outputs.tree_tag }}
             ${{ env.IMAGE }}:${{ steps.identity.outputs.version }}
+
+      - name: Resolve the immutable digest and release tag
+        id: release
+        env:
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+          EXISTING_DIGEST: ${{ steps.existing.outputs.digest }}
+          VERSION: ${{ steps.identity.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          digest="${EXISTING_DIGEST:-${BUILD_DIGEST}}"
+          test "${digest#sha256:}" != "${digest}"
+          if [[ -n "${EXISTING_DIGEST}" ]]; then
+            docker buildx imagetools create --tag "${IMAGE}:${VERSION}" "${IMAGE}@${digest}"
+          fi
+          echo "digest=${digest}" >>"${GITHUB_OUTPUT}"
 
       - name: Publish the source-tree ref
         # Vendored app trees may themselves contain .github/workflows. GitHub's
@@ -94,7 +124,7 @@ jobs:
 
       - name: Make package public and verify anonymous pull
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.release.outputs.digest }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
@@ -112,7 +142,7 @@ jobs:
 
       - name: Validate and propose the digest lock
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.release.outputs.digest }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TREE_OID: ${{ steps.identity.outputs.tree }}
         shell: bash

@@ -56,8 +56,11 @@ immutable tags without a `latest` tag:
 The workflow also pushes `oci/<app>/v0.<run>` as a lightweight Git tag. Its
 target is a deterministic, parentless synthetic commit whose tree is the
 application subtree. After an anonymous pull and Bazel smoke test pass, the
-workflow opens a PR updating the manifest digest lock.
+workflow opens a PR updating the manifest digest lock. If repository policy
+blocks Actions-created PRs, the validated lock branch remains available and the
+job reports a warning instead of a false test failure.
 
 The Dockerfiles pin their build images and `uv.lock` pins Python packages. The
-workflow disables attestations and rewrites build timestamps so a given app
-tree produces the same single-payload-layer artifact.
+workflow disables attestations and rewrites build timestamps. Once a
+`tree-<git-tree-oid>` image exists, later releases reuse its exact manifest
+rather than rebuilding or overwriting that content identity.
