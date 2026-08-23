@@ -77,7 +77,7 @@ service_test(
     env = {
         "HURL_LAYOUT": "$(rootpath @hurl_tool_linux_amd64)",
         "HURL_RUNNER": "$(rootpath :oci_bundle)",
-        "HURL_SPECS": "$(locations @realworld_api_specs//:hurl_fastapi_compatible)",
+        "HURL_SPECS": "$(rootpaths @realworld_api_specs//:hurl_fastapi_compatible)",
     },
     services = [":fastapi_service"],
     test = ":hurl_test_driver",
@@ -95,7 +95,7 @@ service_test(
     env = {
         "HURL_LAYOUT": "$(rootpath @hurl_tool_linux_amd64)",
         "HURL_RUNNER": "$(rootpath :oci_bundle)",
-        "HURL_SPECS": "$(locations @realworld_api_specs//:hurl_all)",
+        "HURL_SPECS": "$(rootpaths @realworld_api_specs//:hurl_all)",
     },
     services = [":fastapi_service"],
     tags = ["manual"],
@@ -141,7 +141,7 @@ service_test(
     env = {
         "HURL_LAYOUT": "$(rootpath @hurl_tool_linux_amd64)",
         "HURL_RUNNER": "$(rootpath :oci_bundle)",
-        "HURL_SPECS": "$(locations @realworld_api_specs//:hurl_all)",
+        "HURL_SPECS": "$(rootpaths @realworld_api_specs//:hurl_all)",
     },
     services = [":django_service"],
     test = ":hurl_test_driver",
