@@ -4,8 +4,8 @@ This repository contains portable, real-world application fixtures for
 [`rules_itest`](https://github.com/hermeticbuild/rules_itest). The fixtures are
 SQLite-backed Python APIs:
 
-- aiohttp RealWorld: `ghcr.io/hannah-barbera/rules-stests-aiohttp`
-- Django Ninja RealWorld: `ghcr.io/hannah-barbera/rules-stests-django-ninja`
+- aiohttp RealWorld: `ghcr.io/pawelchcki/rules-stests-aiohttp`
+- Django Ninja RealWorld: `ghcr.io/pawelchcki/rules-stests-django-ninja`
 
 Each image is Linux/amd64, has a `FROM scratch` runtime, and contains exactly
 one non-empty, gzip-compressed OCI payload layer. The payload includes a

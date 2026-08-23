@@ -23,7 +23,7 @@ permissions:
 
 env:
   APP_PATH: realworld_corpus/apps/python/realworld-django-ninja
-  IMAGE: ghcr.io/hannah-barbera/rules-stests-django-ninja
+  IMAGE: ghcr.io/pawelchcki/rules-stests-django-ninja
   LOCK_NAME: django_ninja_realworld
   REF_NAME: django-ninja
 
@@ -122,20 +122,13 @@ jobs:
           git update-ref "refs/tags/oci/${REF_NAME}/${VERSION}" "${commit_oid}"
           git push origin "refs/tags/oci/${REF_NAME}/${VERSION}"
 
-      - name: Make package public and verify anonymous pull
+      - name: Verify anonymous pull
         env:
           DIGEST: ${{ steps.release.outputs.digest }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          if gh api --method PATCH \
-              "/orgs/hannah-barbera/packages/container/rules-stests-django-ninja/visibility" \
-              -f visibility=public; then
-            docker logout ghcr.io
-          else
-            echo "::warning::The workflow token cannot change package visibility; verifying with GHCR authentication."
-          fi
+          docker logout ghcr.io
           docker pull "${IMAGE}@${DIGEST}"
           payload_layers="$(docker buildx imagetools inspect "${IMAGE}@${DIGEST}" --raw | jq '[.layers[] | select(.size > 1024)] | length')"
           test "${payload_layers}" = 1
