@@ -8,7 +8,7 @@ OCI_IMAGES = {
     ),
     "fastapi_realworld": struct(
         repository = "ghcr.io/hannah-barbera/rules-stests-fastapi-realworld",
-        digest = "sha256:9eecccedf1b0800c02659d8c22140bc7a3a46bdf2573b296afb578d7b8a89aa9",
-        tree = "2487f52943eba94198073dd0cdc5d99a554b5e08",
+        digest = "sha256:e3b1519f328127eb3833c0a35b37a1b5b379872074540cd146e3c40d017e35ed",
+        tree = "bbfa33123514ec450ea128bd6f40470bb46ea846",
     ),
 }
