@@ -20,15 +20,16 @@ use_repo(go_sdk, "go_sdk")
 corpus_images = use_extension("//bazel:oci_deps.bzl", "oci_deps")
 use_repo(
     corpus_images,
+    "aiohttp_realworld",
+    "aiohttp_realworld_linux_amd64",
     "django_ninja_realworld",
     "django_ninja_realworld_linux_amd64",
-    "fastapi_realworld",
-    "fastapi_realworld_linux_amd64",
     "hurl_tool",
     "hurl_tool_linux_amd64",
 )
 
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
 http_archive(
     name = "realworld_api_specs",
     build_file_content = """
@@ -39,13 +40,6 @@ filegroup(
     srcs = glob(["hurl/*.hurl"]),
 )
 
-filegroup(
-    name = "hurl_fastapi_compatible",
-    srcs = [
-        "hurl/comments.hurl",
-        "hurl/tags.hurl",
-    ],
-)
 """,
     sha256 = "a020323e935d1185e8f8a6f64317e6346b44cb0b037d991ec45df89fb7a12adc",
     strip_prefix = "realworld-5d510ce6ec41bb97723e92fbd8d3e3458a381c09/specs/api",

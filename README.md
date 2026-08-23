@@ -1,10 +1,10 @@
 # rules_stests corpus
 
 This repository contains portable, real-world application fixtures for
-[`rules_itest`](https://github.com/hermeticbuild/rules_itest). The first two
-fixtures are SQLite-backed Python APIs:
+[`rules_itest`](https://github.com/hermeticbuild/rules_itest). The fixtures are
+SQLite-backed Python APIs:
 
-- FastAPI RealWorld: `ghcr.io/hannah-barbera/rules-stests-fastapi-realworld`
+- aiohttp RealWorld: `ghcr.io/hannah-barbera/rules-stests-aiohttp`
 - Django Ninja RealWorld: `ghcr.io/hannah-barbera/rules-stests-django-ninja`
 
 Each image is Linux/amd64, has a `FROM scratch` runtime, and contains exactly
@@ -34,8 +34,8 @@ layout and extractor: it runs once, can live in a local or remote action cache,
 and is shared by parallel tests. Local sandboxes reference the cached tree
 through runfiles instead of copying or unpacking it into every `TEST_TMPDIR`.
 
-Each app payload contains a fully migrated SQLite template. Only writable state
-is private per service. The launcher first asks the filesystem for a reflink
+Each app payload contains a ready, current-schema SQLite template. Only
+writable state is private per service. The launcher first asks the filesystem for a reflink
 copy-on-write clone of that template and falls back to copying the small seed
 when reflinks are unavailable; the application rootfs remains immutable and
 shared even when it is gigabytes large. `rules_itest` starts the service on an
@@ -80,25 +80,19 @@ realworld_hurl_test(
 )
 ```
 
-Django Ninja runs all 13 upstream Hurl files (154 requests). The older FastAPI
-implementation currently passes the comments and tags files; that subset is
-mandatory while the deliberately manual full-suite target records the
-remaining compatibility work.
+Both aiohttp and Django Ninja run all 13 upstream Hurl files (154 requests).
 
 ```bash
-bazel test //bazel/itest:fastapi_test
-bazel test //bazel/itest:fastapi_hurl_test
+bazel test //bazel/itest:aiohttp_test
+bazel test //bazel/itest:aiohttp_hurl_test
 bazel test //bazel/itest:django_test
 bazel test //bazel/itest:django_hurl_test
-
-# Expected to expose the legacy FastAPI implementation's spec gaps:
-bazel test //bazel/itest:fastapi_hurl_full_test
 ```
 
 Run a fixture and keep it available for manual development with:
 
 ```bash
-bazel run //bazel/itest:fastapi_service
+bazel run //bazel/itest:aiohttp_service
 bazel run //bazel/itest:django_service
 ```
 

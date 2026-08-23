@@ -46,8 +46,8 @@ go_binary(
 )
 
 oci_rootfs(
-    name = "fastapi_rootfs",
-    image = "@fastapi_realworld_linux_amd64",
+    name = "aiohttp_rootfs",
+    image = "@aiohttp_realworld_linux_amd64",
     single_payload = True,
 )
 
@@ -63,11 +63,11 @@ oci_rootfs(
 )
 
 itest_service(
-    name = "fastapi_service",
+    name = "aiohttp_service",
     args = [
         "app",
-        "fastapi",
-        "$(rootpath :fastapi_rootfs)",
+        "aiohttp",
+        "$(rootpath :aiohttp_rootfs)",
         "serve",
         "--host",
         "127.0.0.1",
@@ -75,7 +75,7 @@ itest_service(
         "$${PORT}",
     ],
     autoassign_port = True,
-    data = [":fastapi_rootfs"],
+    data = [":aiohttp_rootfs"],
     exe = ":oci_bundle",
     expected_start_duration = "3s",
     http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
@@ -83,25 +83,17 @@ itest_service(
 )
 
 service_test(
-    name = "fastapi_test",
-    args = ["--service-suffix=//bazel/itest:fastapi_service"],
-    services = [":fastapi_service"],
+    name = "aiohttp_test",
+    args = ["--service-suffix=//bazel/itest:aiohttp_service"],
+    services = [":aiohttp_service"],
     test = ":api_probe",
     timeout = "moderate",
 )
 
 realworld_hurl_test(
-    name = "fastapi_hurl_test",
-    service = ":fastapi_service",
-    specs = "@realworld_api_specs//:hurl_fastapi_compatible",
-    timeout = "moderate",
-)
-
-realworld_hurl_test(
-    name = "fastapi_hurl_full_test",
-    service = ":fastapi_service",
+    name = "aiohttp_hurl_test",
+    service = ":aiohttp_service",
     specs = "@realworld_api_specs//:hurl_all",
-    tags = ["manual"],
     timeout = "moderate",
 )
 
