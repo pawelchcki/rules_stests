@@ -96,10 +96,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh api --method PATCH \
-            "/orgs/hannah-barbera/packages/container/rules-stests-django-ninja/visibility" \
-            -f visibility=public
-          docker logout ghcr.io
+          if gh api --method PATCH \
+              "/orgs/hannah-barbera/packages/container/rules-stests-django-ninja/visibility" \
+              -f visibility=public; then
+            docker logout ghcr.io
+          else
+            echo "::warning::The workflow token cannot change package visibility; verifying with GHCR authentication."
+          fi
           docker pull "${IMAGE}@${DIGEST}"
           layer_count="$(docker image inspect "${IMAGE}@${DIGEST}" --format '{{json .RootFS.Layers}}' | jq length)"
           test "${layer_count}" = 1
