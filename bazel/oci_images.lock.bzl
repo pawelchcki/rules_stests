@@ -14,7 +14,7 @@ OCI_IMAGES = {
     ),
     "aiohttp_realworld": struct(
         repository = "ghcr.io/hannah-barbera/rules-stests-aiohttp",
-        digest = "sha256:2441abb0178c21b36d06c90b68e227b0f15f68d93590f57c284ad53de3db7bf5",
+        digest = "sha256:44d534b8e0c68adb4ec38c5d596373a5a4f43e24a1aef5bee4646360667000a4",
         tree = "41bdcadbd7c0ae3f61321cf19c1e0b7a22940589",
     ),
 }
