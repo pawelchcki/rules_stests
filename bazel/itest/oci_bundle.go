@@ -18,6 +18,7 @@ import (
 type descriptor struct {
 	Digest    string `json:"digest"`
 	MediaType string `json:"mediaType"`
+	Size      int64  `json:"size"`
 }
 
 type index struct {
@@ -143,10 +144,47 @@ func readSingleLayer(layout string) (string, descriptor, error) {
 	if err := readJSON(manifestPath, &imageManifest); err != nil {
 		return "", descriptor{}, fmt.Errorf("read OCI manifest: %w", err)
 	}
-	if len(imageManifest.Layers) != 1 {
-		return "", descriptor{}, fmt.Errorf("portable app images must contain exactly one layer, got %d", len(imageManifest.Layers))
+	payloadLayers := make([]descriptor, 0, 1)
+	for _, layer := range imageManifest.Layers {
+		if layer.Size > 1024 {
+			payloadLayers = append(payloadLayers, layer)
+			continue
+		}
+		if err := verifyEmptyLayer(layout, layer); err != nil {
+			return "", descriptor{}, err
+		}
 	}
-	return idx.Manifests[0].Digest, imageManifest.Layers[0], nil
+	if len(payloadLayers) != 1 {
+		return "", descriptor{}, fmt.Errorf("portable app images must contain exactly one non-empty payload layer, got %d", len(payloadLayers))
+	}
+	return idx.Manifests[0].Digest, payloadLayers[0], nil
+}
+
+func verifyEmptyLayer(layout string, layer descriptor) error {
+	blob, err := blobPath(layout, layer.Digest)
+	if err != nil {
+		return err
+	}
+	if err := verifyBlob(blob, layer.Digest); err != nil {
+		return err
+	}
+	file, err := os.Open(blob)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	reader, closeReader, err := layerReader(file, layer.MediaType)
+	if err != nil {
+		return err
+	}
+	defer closeReader()
+	if _, err := tar.NewReader(reader).Next(); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return fmt.Errorf("small OCI layer %s is not empty", layer.Digest)
+		}
+		return fmt.Errorf("read small OCI layer %s: %w", layer.Digest, err)
+	}
+	return nil
 }
 
 func blobPath(layout, digest string) (string, error) {
@@ -209,19 +247,11 @@ func extractFresh(layout string, layer descriptor, root string) error {
 	}
 	defer file.Close()
 
-	var reader io.Reader = file
-	switch layer.MediaType {
-	case "application/vnd.oci.image.layer.v1.tar+gzip", "application/vnd.docker.image.rootfs.diff.tar.gzip":
-		compressed, err := gzip.NewReader(file)
-		if err != nil {
-			return fmt.Errorf("open gzip layer: %w", err)
-		}
-		defer compressed.Close()
-		reader = compressed
-	case "application/vnd.oci.image.layer.v1.tar", "application/vnd.docker.image.rootfs.diff.tar":
-	default:
-		return fmt.Errorf("unsupported layer media type %q", layer.MediaType)
+	reader, closeReader, err := layerReader(file, layer.MediaType)
+	if err != nil {
+		return err
 	}
+	defer closeReader()
 
 	tarReader := tar.NewReader(reader)
 	for {
@@ -237,6 +267,21 @@ func extractFresh(layout string, layer descriptor, root string) error {
 		}
 	}
 	return nil
+}
+
+func layerReader(file *os.File, mediaType string) (io.Reader, func() error, error) {
+	switch mediaType {
+	case "application/vnd.oci.image.layer.v1.tar+gzip", "application/vnd.docker.image.rootfs.diff.tar.gzip":
+		compressed, err := gzip.NewReader(file)
+		if err != nil {
+			return nil, nil, fmt.Errorf("open gzip layer: %w", err)
+		}
+		return compressed, compressed.Close, nil
+	case "application/vnd.oci.image.layer.v1.tar", "application/vnd.docker.image.rootfs.diff.tar":
+		return file, func() error { return nil }, nil
+	default:
+		return nil, nil, fmt.Errorf("unsupported layer media type %q", mediaType)
+	}
 }
 
 func safePath(root, name string) (string, error) {

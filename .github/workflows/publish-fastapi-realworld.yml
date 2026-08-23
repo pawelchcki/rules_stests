@@ -35,7 +35,6 @@ jobs:
       - uses: bazel-contrib/setup-bazel@8cb04a772ab4c1eb984e9c1b493a182e96c5e425 # 0.19.0
         with:
           bazelisk-cache: true
-          repository-cache: true
 
       - name: Compute content identity
         id: identity
@@ -65,6 +64,7 @@ jobs:
           sbom: false
           push: true
           build-args: SOURCE_DATE_EPOCH=0
+          outputs: type=image,push=true,rewrite-timestamp=true,oci-mediatypes=true,compression=gzip,force-compression=true
           tags: |
             ${{ env.IMAGE }}:${{ steps.identity.outputs.tree_tag }}
             ${{ env.IMAGE }}:${{ steps.identity.outputs.version }}
@@ -104,8 +104,8 @@ jobs:
             echo "::warning::The workflow token cannot change package visibility; verifying with GHCR authentication."
           fi
           docker pull "${IMAGE}@${DIGEST}"
-          layer_count="$(docker image inspect "${IMAGE}@${DIGEST}" --format '{{json .RootFS.Layers}}' | jq length)"
-          test "${layer_count}" = 1
+          payload_layers="$(docker buildx imagetools inspect "${IMAGE}@${DIGEST}" --raw | jq '[.layers[] | select(.size > 1024)] | length')"
+          test "${payload_layers}" = 1
 
       - name: Validate and propose the digest lock
         env:

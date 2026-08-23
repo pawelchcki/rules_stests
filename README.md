@@ -8,10 +8,11 @@ fixtures are SQLite-backed Python APIs:
 - Django Ninja RealWorld: `ghcr.io/hannah-barbera/rules-stests-django-ninja`
 
 Each image is Linux/amd64, has a `FROM scratch` runtime, and contains exactly
-one gzip-compressed OCI layer. The layer includes a uv-managed Python runtime,
-all locked wheels, the application source, a static launcher, glibc for
-container execution, and an empty writable `/data` directory. `uv` itself is
-only used while building.
+one non-empty, gzip-compressed OCI payload layer. The payload includes a
+uv-managed Python runtime, all locked wheels, the application source, a static
+launcher, glibc for container execution, and an empty writable `/data`
+directory. `uv` itself is only used while building. Exporters may retain
+Docker's canonical empty layer; the extractor verifies and ignores it.
 
 The same artifact supports two execution modes:
 
@@ -57,5 +58,5 @@ application subtree. After an anonymous pull and Bazel smoke test pass, the
 workflow opens a PR updating the manifest digest lock.
 
 The Dockerfiles pin their build images and `uv.lock` pins Python packages. The
-workflow disables attestations and normalizes build timestamps so a given app
-tree produces the same single-layer payload.
+workflow disables attestations and rewrites build timestamps so a given app
+tree produces the same single-payload-layer artifact.

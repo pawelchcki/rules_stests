@@ -4,7 +4,7 @@ This corpus vendors Python backend implementations of the
 [RealWorld](https://github.com/realworld-apps/realworld) API. Each application
 is pinned to an upstream commit, retains its upstream license, and includes a
 Docker build that byte-compiles all Python sources before producing a runnable,
-single-layer `FROM scratch` image.
+single-payload-layer `FROM scratch` image.
 
 ## Applications
 
@@ -22,6 +22,6 @@ and starts Django's development server. Both default to `/data/realworld.sqlite3
 These defaults are intended for corpus validation and local execution, not
 production deployment.
 
-The images also work without a container runtime: extract their only OCI layer
-and execute `opt/app/bin/app`. See the repository-level README for the
+The images also work without a container runtime: extract their only non-empty
+OCI payload layer and execute `opt/app/bin/app`. See the repository-level README for the
 `rules_oci` and `rules_itest` integration.
