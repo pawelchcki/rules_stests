@@ -79,12 +79,39 @@ realworld_hurl_test(
 ```
 
 Both aiohttp and Django Ninja run all 13 upstream Hurl files (154 requests).
+The OpenTelemetry variants add the official, digest-locked Python
+auto-instrumentation OCI rootfs to `PYTHONPATH`; no package installation or
+image rebuild occurs. Its `sitecustomize.py` hook activates instrumentation at
+Python startup. Traces, metrics, and logs are sent over OTLP/HTTP protobuf to
+`:otel_sink_service`.
+
+The sink is a Linux `#![no_std]` Rust binary built with `rules_rs` 0.0.102 and
+Rust 1.97.1. It uses `alloc` with a bounded static `emballoc` heap and `rustix`
+for networking, files, time, and process syscalls; it has no Rust standard
+library or libc dependency. `POST /v1/traces`, `/v1/metrics`, and `/v1/logs`
+accept OTLP protobuf, and the same endpoints also preserve OTLP JSON. Each
+payload is written as decoded, pretty-printed JSON together with its signal,
+receive timestamp, remote address, HTTP request line, content metadata, and all
+incoming headers. `GET /dump` returns the current document and `GET /healthz`
+is the service health check. Each OTEL contract test proves that all three
+signals reached the sink with `service.name` resource metadata; it does not
+infer success from console logs.
+
+The Django contract variants use one Hurl job because concurrent writers can
+deadlock its SQLite fixture; aiohttp retains the four-job default.
 
 ```bash
 bazel test //bazel/itest:aiohttp_test
 bazel test //bazel/itest:aiohttp_hurl_test
 bazel test //bazel/itest:django_test
 bazel test //bazel/itest:django_hurl_test
+
+# The same probes and contracts with OpenTelemetry auto-instrumentation.
+bazel test //bazel/itest:otel_sink_test
+bazel test //bazel/itest:aiohttp_otel_test
+bazel test //bazel/itest:aiohttp_otel_hurl_test
+bazel test //bazel/itest:django_otel_test
+bazel test //bazel/itest:django_otel_hurl_test
 ```
 
 Run a fixture and keep it available for manual development with:
