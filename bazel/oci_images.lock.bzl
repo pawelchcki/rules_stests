@@ -6,6 +6,12 @@ HURL_TOOL = struct(
     version = "8.0.1",
 )
 
+OTEL_PYTHON = struct(
+    repository = "ghcr.io/open-telemetry/opentelemetry-operator/autoinstrumentation-python",
+    digest = "sha256:aa6af684df0d1b5aa9d4c26a1926ed136b5391c40ee35d5f0f4ce7547252a7cf",
+    version = "0.65b0-1",
+)
+
 OCI_IMAGES = {
     "django_ninja_realworld": struct(
         repository = "ghcr.io/pawelchcki/rules_stest_apps",

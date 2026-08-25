@@ -5,11 +5,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -17,6 +20,7 @@ func main() {
 	host := flag.String("host", "127.0.0.1", "API host when --port is used")
 	portFlag := flag.Int("port", 0, "API port (alternative to --base-url)")
 	serviceSuffix := flag.String("service-suffix", "", "rules_itest service label suffix used to discover an assigned port")
+	otelSinkSuffix := flag.String("otel-sink-suffix", "", "OTLP sink service suffix whose decoded trace, metric, and log dump must become non-empty")
 	jobs := flag.Int("jobs", 4, "number of Hurl files to execute concurrently")
 	uid := flag.String("uid", "", "unique suffix used for API objects")
 	flag.Parse()
@@ -96,7 +100,55 @@ func main() {
 	if err := command.Run(); err != nil {
 		fatal(fmt.Errorf("RealWorld Hurl suite failed: %w", err))
 	}
+	if *otelSinkSuffix != "" {
+		if err := requireExportedTelemetry(*otelSinkSuffix); err != nil {
+			fatal(err)
+		}
+	}
 	fmt.Printf("RealWorld Hurl suite passed against %s (%d files, %d jobs)\n", endpoint, len(specs), *jobs)
+}
+
+func requireExportedTelemetry(serviceSuffix string) error {
+	port, err := assignedPort(serviceSuffix)
+	if err != nil {
+		return fmt.Errorf("locate OTLP sink: %w", err)
+	}
+	url := fmt.Sprintf("http://127.0.0.1:%d/dump", port)
+	deadline := time.Now().Add(time.Minute)
+	for {
+		requestTimeout := time.Until(deadline)
+		if requestTimeout <= 0 {
+			return fmt.Errorf("OTLP sink at %s did not receive traces, metrics, and logs containing service.name", url)
+		}
+		client := http.Client{Timeout: requestTimeout}
+		response, requestErr := client.Get(url)
+		if requestErr == nil {
+			contents, readErr := io.ReadAll(response.Body)
+			response.Body.Close()
+			if readErr == nil && response.StatusCode == http.StatusOK {
+				var records []struct {
+					Signal  string          `json:"signal"`
+					Payload json.RawMessage `json:"payload"`
+				}
+				if json.Unmarshal(contents, &records) == nil {
+					seen := map[string]bool{}
+					for _, record := range records {
+						if strings.Contains(string(record.Payload), `"service.name"`) {
+							seen[record.Signal] = true
+						}
+					}
+					if seen["traces"] && seen["metrics"] && seen["logs"] {
+						fmt.Printf("Verified OTLP traces, metrics, and logs with resource metadata in %s\n", url)
+						return nil
+					}
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("OTLP sink at %s did not receive traces, metrics, and logs containing service.name", url)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func fatal(err error) {

@@ -38,7 +38,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: oci_bundle extract <oci-layout> <rootfs> <single|multi> | app <instance> <rootfs> <command> [arguments...]")
+		return errors.New("usage: oci_bundle extract <oci-layout> <rootfs> <single|multi> | app <instance> <rootfs> <command> [arguments...] | app-otel <instance> <rootfs> <otel-rootfs> <command> [arguments...]")
 	}
 	switch args[0] {
 	case "extract":
@@ -50,7 +50,12 @@ func run(args []string) error {
 		if len(args) < 4 {
 			return errors.New("usage: oci_bundle app <instance> <rootfs> <command> [arguments...]")
 		}
-		return runApp(args[1], args[2], args[3], args[4:])
+		return runApp(args[1], args[2], "", args[3], args[4:])
+	case "app-otel":
+		if len(args) < 5 {
+			return errors.New("usage: oci_bundle app-otel <instance> <rootfs> <otel-rootfs> <command> [arguments...]")
+		}
+		return runApp(args[1], args[2], args[3], args[4], args[5:])
 	default:
 		return fmt.Errorf("unsupported mode %q", args[0])
 	}
@@ -104,7 +109,7 @@ func removeDanglingSymlinks(root string) error {
 	})
 }
 
-func runApp(instance, rootArg, command string, args []string) error {
+func runApp(instance, rootArg, otelRootArg, command string, args []string) error {
 	if !validInstance(instance) {
 		return fmt.Errorf("unsafe instance name %q", instance)
 	}
@@ -115,7 +120,14 @@ func runApp(instance, rootArg, command string, args []string) error {
 	if err := prepareAppState(root, instance); err != nil {
 		return err
 	}
-	return execApp(root, command, args)
+	otelRoot := ""
+	if otelRootArg != "" {
+		otelRoot, err = resolveDirectory(otelRootArg)
+		if err != nil {
+			return fmt.Errorf("resolve OpenTelemetry rootfs: %w", err)
+		}
+	}
+	return execApp(root, otelRoot, instance, command, args)
 }
 
 func validInstance(value string) bool {
@@ -454,7 +466,7 @@ func applyWhiteout(root, name string) error {
 	return os.RemoveAll(target)
 }
 
-func execApp(root, command string, args []string) error {
+func execApp(root, otelRoot, instance, command string, args []string) error {
 	appRoot := filepath.Join(root, "opt", "app")
 	loader := filepath.Join(root, "lib64", "ld-linux-x86-64.so.2")
 	python := filepath.Join(appRoot, "python", "bin", "python3")
@@ -463,24 +475,60 @@ func execApp(root, command string, args []string) error {
 		filepath.Join(root, "lib", "x86_64-linux-gnu"),
 		filepath.Join(appRoot, "python", "lib"),
 	}, ":")
-	environment := make([]string, 0, len(os.Environ())+3)
+	pythonPath := []string{
+		filepath.Join(appRoot, "site-packages"),
+		filepath.Join(appRoot, "src"),
+	}
+	if otelRoot != "" {
+		instrumentation := filepath.Join(otelRoot, "autoinstrumentation")
+		autoInstrumentation := filepath.Join(instrumentation, "opentelemetry", "instrumentation", "auto_instrumentation")
+		if _, err := os.Stat(filepath.Join(autoInstrumentation, "sitecustomize.py")); err != nil {
+			return fmt.Errorf("OpenTelemetry OCI rootfs has no Python activation hook: %w", err)
+		}
+		pythonPath = append([]string{autoInstrumentation}, pythonPath...)
+		pythonPath = append(pythonPath, instrumentation)
+	}
+
+	environment := make([]string, 0, len(os.Environ())+7)
+	present := make(map[string]bool)
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
 		if key != "PYTHONHOME" && key != "PYTHONPATH" && key != "REALWORLD_BUNDLE_ROOT" {
 			environment = append(environment, entry)
+			present[key] = true
 		}
 	}
 	environment = append(environment,
 		"PYTHONHOME="+filepath.Join(appRoot, "python"),
-		"PYTHONPATH="+filepath.Join(appRoot, "site-packages")+":"+filepath.Join(appRoot, "src"),
+		"PYTHONPATH="+strings.Join(pythonPath, ":"),
 		"REALWORLD_BUNDLE_ROOT="+appRoot,
 	)
+	if otelRoot != "" {
+		environment = appendDefaultEnvironment(environment, present, "OTEL_SERVICE_NAME", instance)
+		environment = appendDefaultEnvironment(environment, present, "OTEL_TRACES_EXPORTER", "console")
+		environment = appendDefaultEnvironment(environment, present, "OTEL_METRICS_EXPORTER", "none")
+		environment = appendDefaultEnvironment(environment, present, "OTEL_LOGS_EXPORTER", "none")
+		if _, err := os.Stat(filepath.Join(appRoot, "src", "manage.py")); err == nil {
+			environment = appendDefaultEnvironment(environment, present, "DEBUG", "True")
+			environment = appendDefaultEnvironment(environment, present, "DJANGO_SETTINGS_MODULE", "config.settings")
+			database := filepath.Join(os.Getenv("APP_STATE_DIR"), "realworld.sqlite3")
+			environment = appendDefaultEnvironment(environment, present, "DATABASE_URL", "file:"+database)
+		}
+		fmt.Fprintf(os.Stderr, "oci_bundle: activating OpenTelemetry Python instrumentation for %s from %s\n", instance, otelRoot)
+	}
 	arguments := []string{loader, "--library-path", libraryPath, python, entrypoint, command}
 	arguments = append(arguments, args...)
 	if err := syscall.Exec(loader, arguments, environment); err != nil {
 		return fmt.Errorf("execute app with bundled glibc: %w", err)
 	}
 	return nil
+}
+
+func appendDefaultEnvironment(environment []string, present map[string]bool, key, value string) []string {
+	if present[key] {
+		return environment
+	}
+	return append(environment, key+"="+value)
 }
 
 func prepareAppState(root, instance string) error {
