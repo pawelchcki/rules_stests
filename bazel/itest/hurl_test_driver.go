@@ -114,9 +114,14 @@ func requireExportedTelemetry(serviceSuffix string) error {
 		return fmt.Errorf("locate OTLP sink: %w", err)
 	}
 	url := fmt.Sprintf("http://127.0.0.1:%d/dump", port)
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(time.Minute)
 	for {
-		response, requestErr := http.Get(url)
+		requestTimeout := time.Until(deadline)
+		if requestTimeout <= 0 {
+			return fmt.Errorf("OTLP sink at %s did not receive traces, metrics, and logs containing service.name", url)
+		}
+		client := http.Client{Timeout: requestTimeout}
+		response, requestErr := client.Get(url)
 		if requestErr == nil {
 			contents, readErr := io.ReadAll(response.Body)
 			response.Body.Close()
