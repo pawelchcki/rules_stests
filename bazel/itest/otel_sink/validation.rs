@@ -139,7 +139,13 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                 for group in &resource.scope_metrics {
                     let scope = group.scope.as_ref();
                     for metric in &group.metrics {
-                        let (data_type, data_points, data_points_valid) = typed_metric_data(metric);
+                        let (
+                            data_type,
+                            data_points,
+                            data_points_valid,
+                            aggregation_temporality,
+                            monotonic,
+                        ) = typed_metric_data(metric);
                         output.push_str("  ((scope ");
                         string(
                             &mut output,
@@ -169,7 +175,7 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                         typed_attributes(&mut output, &metric.metadata);
                         write!(
                             output,
-                            ") (scope-dropped-attributes {}) (data-type {data_type}) (data-points {data_points}) (data-points-valid {}))\n",
+                            ") (scope-dropped-attributes {}) (data-type {data_type}) (aggregation-temporality {aggregation_temporality}) (monotonic {monotonic}) (data-points {data_points}) (data-points-valid {}))\n",
                             scope
                                 .map(|scope| scope.dropped_attributes_count)
                                 .unwrap_or(0),
@@ -246,24 +252,32 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
     Ok(output.into_bytes())
 }
 
-fn typed_metric_data(metric: &proto::Metric) -> (&'static str, usize, bool) {
+fn typed_metric_data(
+    metric: &proto::Metric,
+) -> (&'static str, usize, bool, &'static str, &'static str) {
     match metric.data.as_ref() {
         Some(proto::metric::Data::Gauge(data)) => (
             "gauge",
             data.data_points.len(),
             data.data_points.iter().all(typed_number_point_valid),
+            "absent",
+            "absent",
         ),
         Some(proto::metric::Data::Sum(data)) => (
             "sum",
             data.data_points.len(),
             aggregation_temporality_valid(data.aggregation_temporality)
                 && data.data_points.iter().all(typed_number_point_valid),
+            aggregation_temporality_name(data.aggregation_temporality),
+            if data.is_monotonic { "#t" } else { "#f" },
         ),
         Some(proto::metric::Data::Histogram(data)) => (
             "histogram",
             data.data_points.len(),
             aggregation_temporality_valid(data.aggregation_temporality)
                 && data.data_points.iter().all(typed_histogram_point_valid),
+            aggregation_temporality_name(data.aggregation_temporality),
+            "absent",
         ),
         Some(proto::metric::Data::ExponentialHistogram(data)) => (
             "exponential-histogram",
@@ -273,18 +287,30 @@ fn typed_metric_data(metric: &proto::Metric) -> (&'static str, usize, bool) {
                     .data_points
                     .iter()
                     .all(typed_exponential_histogram_point_valid),
+            aggregation_temporality_name(data.aggregation_temporality),
+            "absent",
         ),
         Some(proto::metric::Data::Summary(data)) => (
             "summary",
             data.data_points.len(),
             data.data_points.iter().all(typed_summary_point_valid),
+            "absent",
+            "absent",
         ),
-        None => ("missing", 0, false),
+        None => ("missing", 0, false, "absent", "absent"),
     }
 }
 
 fn aggregation_temporality_valid(value: i32) -> bool {
     matches!(value, 1 | 2)
+}
+
+fn aggregation_temporality_name(value: i32) -> &'static str {
+    match value {
+        1 => "delta",
+        2 => "cumulative",
+        _ => "invalid",
+    }
 }
 
 fn typed_point_metadata_valid(
@@ -360,7 +386,10 @@ fn typed_extrema_valid(min: Option<f64>, max: Option<f64>) -> bool {
 fn typed_exemplars_valid(exemplars: &[proto::Exemplar]) -> bool {
     exemplars.iter().all(|exemplar| {
         let context_valid = (exemplar.trace_id.is_empty() && exemplar.span_id.is_empty())
-            || (exemplar.trace_id.len() == 16 && exemplar.span_id.len() == 8);
+            || (exemplar.trace_id.len() == 16
+                && exemplar.trace_id.iter().any(|byte| *byte != 0)
+                && exemplar.span_id.len() == 8
+                && exemplar.span_id.iter().any(|byte| *byte != 0));
         exemplar.time_unix_nano > 0
             && exemplar.value.is_some()
             && context_valid
@@ -843,7 +872,13 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
             for group in array(json_field(resource, "scope_metrics", "scopeMetrics")) {
                 let scope = group.get("scope").unwrap_or(&Value::Null);
                 for metric in array(group.get("metrics")) {
-                    let (data_type, data_points, data_points_valid) = json_metric_data(metric);
+                    let (
+                        data_type,
+                        data_points,
+                        data_points_valid,
+                        aggregation_temporality,
+                        monotonic,
+                    ) = json_metric_data(metric);
                     output.push_str("  ((scope ");
                     string(&mut output, text(scope.get("name")));
                     output.push_str(") (scope-version ");
@@ -865,7 +900,7 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                     attributes(&mut output, metric.get("metadata"));
                     write!(
                         output,
-                        ") (scope-dropped-attributes {}) (data-type {data_type}) (data-points {data_points}) (data-points-valid {}))\n",
+                        ") (scope-dropped-attributes {}) (data-type {data_type}) (aggregation-temporality {aggregation_temporality}) (monotonic {monotonic}) (data-points {data_points}) (data-points-valid {}))\n",
                         integer(json_field(
                             scope,
                             "dropped_attributes_count",
@@ -1030,7 +1065,7 @@ struct Bucket {
     status: &'static str,
     name_matcher: String,
     parent: &'static str,
-    http_status: Option<i64>,
+    http_status: Option<i128>,
 }
 
 pub fn golden_candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String> {
@@ -1189,7 +1224,7 @@ fn generic_scope_alias(scope: &str) -> String {
     alias
 }
 
-fn enum_name(value: i64, names: &[&'static str], label: &str) -> Result<&'static str, String> {
+fn enum_name(value: i128, names: &[&'static str], label: &str) -> Result<&'static str, String> {
     names
         .get(usize::try_from(value).unwrap_or(usize::MAX))
         .copied()
@@ -1216,7 +1251,7 @@ fn name_matcher(app: &str, scope: &str, name: &str) -> String {
 fn integer_attribute(
     attributes_value: Option<&Value>,
     wanted: &str,
-) -> Result<Option<i64>, String> {
+) -> Result<Option<i128>, String> {
     let mut result = None;
     for attribute in array(attributes_value) {
         if text(attribute.get("key")) != wanted {
@@ -1259,7 +1294,7 @@ fn resource_wrappers<'a>(payload: &'a Value, signal: &str) -> Vec<&'a Value> {
     array(json_field(payload, snake, camel)).iter().collect()
 }
 
-fn json_metric_data(metric: &Value) -> (&'static str, usize, bool) {
+fn json_metric_data(metric: &Value) -> (&'static str, usize, bool, &'static str, &'static str) {
     let data = metric.get("data").unwrap_or(metric);
     let mut selected = None;
     for (name, snake, camel, validator) in [
@@ -1286,26 +1321,46 @@ fn json_metric_data(metric: &Value) -> (&'static str, usize, bool) {
     ] {
         if let Some(value) = json_field(data, snake, camel) {
             if selected.is_some() {
-                return ("multiple", 0, false);
+                return ("multiple", 0, false, "absent", "absent");
             }
             selected = Some((name, value, validator));
         }
     }
     let Some((name, value, validator)) = selected else {
-        return ("missing", 0, false);
+        return ("missing", 0, false, "absent", "absent");
     };
     let points = array(json_field(value, "data_points", "dataPoints"));
-    let temporality_valid = !matches!(name, "sum" | "histogram" | "exponential-histogram")
-        || try_integer(json_field(
+    let temporality = if matches!(name, "sum" | "histogram" | "exponential-histogram") {
+        match try_integer(json_field(
             value,
             "aggregation_temporality",
             "aggregationTemporality",
-        ))
-        .is_ok_and(|value| matches!(value, 1 | 2));
+        )) {
+            Ok(1) => "delta",
+            Ok(2) => "cumulative",
+            _ => "invalid",
+        }
+    } else {
+        "absent"
+    };
+    let monotonic = if name == "sum" {
+        if json_field(value, "is_monotonic", "isMonotonic")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            "#t"
+        } else {
+            "#f"
+        }
+    } else {
+        "absent"
+    };
     (
         name,
         points.len(),
-        temporality_valid && points.iter().all(validator),
+        temporality != "invalid" && points.iter().all(validator),
+        temporality,
+        monotonic,
     )
 }
 
@@ -1434,15 +1489,15 @@ fn json_summary_point_valid(point: &Value) -> bool {
         })
 }
 
-fn json_bucket_total(value: Option<&Value>) -> Option<i64> {
+fn json_bucket_total(value: Option<&Value>) -> Option<i128> {
     let Some(value) = value else {
         return Some(0);
     };
     json_integer_sum(array(json_field(value, "bucket_counts", "bucketCounts")))
 }
 
-fn json_integer_sum(values: &[Value]) -> Option<i64> {
-    values.iter().try_fold(0_i64, |total, value| {
+fn json_integer_sum(values: &[Value]) -> Option<i128> {
+    values.iter().try_fold(0_i128, |total, value| {
         let value = try_integer(Some(value)).ok()?;
         (value >= 0).then_some(())?;
         total.checked_add(value)
@@ -1807,16 +1862,18 @@ fn text(value: Option<&Value>) -> &str {
     value.and_then(Value::as_str).unwrap_or("")
 }
 
-fn integer(value: Option<&Value>) -> i64 {
+fn integer(value: Option<&Value>) -> i128 {
     try_integer(value).unwrap_or(-1)
 }
 
-fn try_integer(value: Option<&Value>) -> Result<i64, ()> {
+fn try_integer(value: Option<&Value>) -> Result<i128, ()> {
     let Some(value) = value else {
         return Ok(0);
     };
     value
         .as_i64()
+        .map(i128::from)
+        .or_else(|| value.as_u64().map(i128::from))
         .or_else(|| value.as_str().and_then(|value| value.parse().ok()))
         .ok_or(())
 }

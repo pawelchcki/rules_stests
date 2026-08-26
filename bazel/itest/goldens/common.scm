@@ -399,7 +399,35 @@
         (check (= (attribute-count metadata (car entry)) 1) "metric metadata is duplicated")))
     metadata))
 
-(define (validate-metrics expected-scopes expected-descriptors metrics)
+(define (validate-metric-aggregation expected metric)
+  (let ((data-type (field 'data-type metric))
+        (temporality (field 'aggregation-temporality metric))
+        (monotonic (field 'monotonic metric)))
+    (cond
+      ((eq? data-type 'sum)
+       (begin
+         (check (member temporality '(delta cumulative)) "sum aggregation temporality is invalid")
+         (check (boolean? monotonic) "sum monotonicity is invalid")))
+      ((member data-type '(histogram exponential-histogram))
+       (begin
+         (check (member temporality '(delta cumulative)) "histogram aggregation temporality is invalid")
+         (check (eq? monotonic 'absent) "histogram monotonicity is present")))
+      (else
+       (begin
+         (check (eq? temporality 'absent) "aggregation temporality is present")
+         (check (eq? monotonic 'absent) "aggregation monotonicity is present"))))
+    (if expected
+        (begin
+          (if (member data-type '(sum histogram exponential-histogram))
+              (check (eq? temporality (car expected)) "metric aggregation temporality changed")
+              #t)
+          (if (eq? data-type 'sum)
+              (check (eq? monotonic (if (member (field 'name metric) (cadr expected)) #t #f))
+                     "metric monotonicity changed")
+              #t))
+        #t)))
+
+(define (validate-metrics expected-scopes expected-descriptors expected-aggregation metrics)
   (check (> (length metrics) 0) "capture contains no metrics")
   (validate-signal-scopes expected-scopes metrics)
   (for-each
@@ -409,6 +437,7 @@
       (check (string? (field 'description metric)) "metric description is malformed")
       (check (string? (field 'unit metric)) "metric unit is malformed")
       (validate-metric-metadata (field 'metadata metric))
+      (validate-metric-aggregation expected-aggregation metric)
       (check (member (field 'data-type metric)
                      '(gauge sum histogram exponential-histogram summary))
              "metric has no supported data type")
@@ -491,7 +520,7 @@
                "log trace context is incomplete")))
     logs))
 
-(define (validate-capture expected-resource-attributes expected-scopes expected-metric-scopes expected-metric-descriptors expected-log-scopes log-severity-required event-policy expected-span-flags expected-span-buckets bucket-validator capture)
+(define (validate-capture expected-resource-attributes expected-scopes expected-metric-scopes expected-metric-descriptors expected-metric-aggregation expected-log-scopes log-severity-required event-policy expected-span-flags expected-span-buckets bucket-validator capture)
   (let ((requests (field 'requests capture))
         (resources (field 'resources capture))
         (scopes (field 'scopes capture))
@@ -509,7 +538,7 @@
     (validate-scopes expected-scopes scopes)
     (validate-spans expected-scopes event-policy expected-span-flags spans)
     (bucket-validator expected-span-buckets expected-scopes spans)
-    (validate-metrics expected-metric-scopes expected-metric-descriptors metrics)
+    (validate-metrics expected-metric-scopes expected-metric-descriptors expected-metric-aggregation metrics)
     (validate-logs expected-log-scopes log-severity-required logs)
     (display "valid OTLP capture\n")))
 
@@ -517,6 +546,7 @@
   (validate-capture expected-resource-attributes
                     expected-scopes
                     expected-metric-scopes
+                    #f
                     #f
                     expected-log-scopes
                     #f
@@ -526,11 +556,12 @@
                     validate-contract-buckets
                     capture))
 
-(define (otel-validate-exact expected-resource-attributes expected-scopes expected-metric-scopes expected-metric-descriptors expected-log-scopes log-severity-required event-policy expected-span-flags expected-span-buckets capture)
+(define (otel-validate-exact expected-resource-attributes expected-scopes expected-metric-scopes expected-metric-descriptors expected-metric-aggregation expected-log-scopes log-severity-required event-policy expected-span-flags expected-span-buckets capture)
   (validate-capture expected-resource-attributes
                     expected-scopes
                     expected-metric-scopes
                     expected-metric-descriptors
+                    expected-metric-aggregation
                     expected-log-scopes
                     log-severity-required
                     event-policy

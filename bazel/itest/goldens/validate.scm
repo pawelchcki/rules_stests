@@ -8,6 +8,7 @@
                      expected-scopes
                      expected-metric-scopes
                      expected-metric-descriptors
+                     expected-metric-aggregation
                      expected-log-scopes
                      expected-log-severity-required
                      (event-policy-for scenario-name)

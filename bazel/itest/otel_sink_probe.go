@@ -112,6 +112,26 @@ func main() {
 		fatal(fmt.Errorf("duplicate content encoding: HTTP %d: %s: %v", duplicateEncodingResponse.StatusCode, duplicateEncodingBody, readErr))
 	}
 
+	partialConnection, err := net.Dial("tcp", strings.TrimPrefix(endpoint, "http://"))
+	if err != nil {
+		fatal(fmt.Errorf("connect partial request: %w", err))
+	}
+	if _, err := fmt.Fprint(partialConnection, "POST /v1/metrics HTTP/1.1\r\nHost: sink"); err != nil {
+		fatal(fmt.Errorf("send partial request: %w", err))
+	}
+	healthClient := http.Client{Timeout: 4 * time.Second}
+	timeoutStarted := time.Now()
+	healthResponse, err := healthClient.Get(endpoint + "/healthz")
+	partialConnection.Close()
+	if err != nil {
+		fatal(fmt.Errorf("health check behind partial request: %w", err))
+	}
+	healthBody, readErr := io.ReadAll(healthResponse.Body)
+	healthResponse.Body.Close()
+	if readErr != nil || healthResponse.StatusCode != http.StatusOK || time.Since(timeoutStarted) > 3*time.Second {
+		fatal(fmt.Errorf("partial request timeout: HTTP %d after %s: %s: %v", healthResponse.StatusCode, time.Since(timeoutStarted), healthBody, readErr))
+	}
+
 	requests := []struct {
 		signal      string
 		contentType string
@@ -432,10 +452,10 @@ func main() {
 		fatal(fmt.Errorf("malformed metric point was absent from Scheme capture: %s", malformedMetricDump))
 	}
 	resetSink(endpoint)
-	defaultedMetrics := []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"metric.probe"},"metrics":[{"name":"nullable-histogram","metadata":null,"histogram":{"dataPoints":[{"attributes":null,"timeUnixNano":"3","count":"1","sum":null,"bucketCounts":["1"],"explicitBounds":[],"min":null,"max":null}],"aggregationTemporality":2}},{"name":"defaulted-summary","summary":{"dataPoints":[{"timeUnixNano":"4","count":"0"}]}}]}]}]}`)
+	defaultedMetrics := []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"metric.probe"},"metrics":[{"name":"nullable-histogram","metadata":null,"histogram":{"dataPoints":[{"attributes":null,"timeUnixNano":"3","count":"1","sum":null,"bucketCounts":["1"],"explicitBounds":[],"min":null,"max":null}],"aggregationTemporality":2}},{"name":"defaulted-summary","summary":{"dataPoints":[{"timeUnixNano":"4","count":"0"}]}},{"name":"maximum-uint64-histogram","histogram":{"dataPoints":[{"timeUnixNano":"18446744073709551615","count":"18446744073709551615","bucketCounts":["18446744073709551615"],"explicitBounds":[]}],"aggregationTemporality":2}},{"name":"aggregation-semantics","sum":{"dataPoints":[{"timeUnixNano":"5","asInt":"1"}],"aggregationTemporality":2,"isMonotonic":true}}]}]}]}`)
 	postJSON(endpoint, "/v1/metrics", "defaulted metrics", defaultedMetrics)
 	defaultedMetricsDump := freezeCapture(endpoint, "/dump.scm", "defaulted-metrics Scheme capture")
-	if bytes.Count(defaultedMetricsDump, []byte("(data-points-valid #t)")) != 2 {
+	if bytes.Count(defaultedMetricsDump, []byte("(data-points-valid #t)")) != 4 || !bytes.Contains(defaultedMetricsDump, []byte("(aggregation-temporality cumulative) (monotonic #t)")) {
 		fatal(fmt.Errorf("defaulted metric fields were rejected by Scheme projection: %s", defaultedMetricsDump))
 	}
 	resetSink(endpoint)

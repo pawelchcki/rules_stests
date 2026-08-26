@@ -4,6 +4,7 @@
           expected-scopes
           expected-metric-scopes
           expected-metric-descriptors
+          expected-metric-aggregation
           expected-log-scopes
           expected-log-severity-required
           expected-span-flags
@@ -42,6 +43,8 @@
     '(("opentelemetry.instrumentation.django" "http.server.active_requests" "Number of active HTTP server requests." "{request}" sum ())
       ("opentelemetry.instrumentation.django" "http.server.duration" "Measures the duration of inbound HTTP requests." "ms" histogram ()))
     python-system-metric-descriptors))
+
+(define expected-metric-aggregation python-metric-aggregation)
 
 (define expected-log-scopes
   (list

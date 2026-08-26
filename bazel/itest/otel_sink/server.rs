@@ -7,8 +7,9 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::ffi::CStr;
+use core::time::Duration;
 use rustix::fd::OwnedFd;
-use rustix::net::sockopt::set_socket_reuseport;
+use rustix::net::sockopt::{Timeout, set_socket_reuseport, set_socket_timeout};
 use rustix::net::{
     AddressFamily, Ipv4Addr, SocketAddrAny, SocketAddrV4, SocketType, acceptfrom, bind, listen,
     socket,
@@ -36,6 +37,17 @@ pub(crate) fn serve(port: u16, output: &CStr) -> Result<(), String> {
     loop {
         let (connection, remote) =
             acceptfrom(&listener).map_err(|error| format!("accept: {error}"))?;
+        if let Err(error) =
+            set_socket_timeout(&connection, Timeout::Recv, Some(Duration::from_secs(2)))
+        {
+            respond(
+                &connection,
+                500,
+                "text/plain",
+                format!("set receive timeout: {error}\n").as_bytes(),
+            );
+            continue;
+        }
         handle_connection(
             &connection,
             remote.as_ref(),

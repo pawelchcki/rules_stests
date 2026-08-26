@@ -83,6 +83,7 @@ def realworld_hurl_test_suite(
         otel_runtime_libraries = None,
         otel_exact = True,
         otel_candidates = True,
+        otel_flaky_reason = "",
         otel_flaky_cases = {},
         otel_xfails = {},
         flaky = False,
@@ -124,7 +125,7 @@ def realworld_hurl_test_suite(
         xfail_reason = otel_xfails.get(case, "")
         if case in otel_xfails and not xfail_reason:
             fail("otel_xfails reason for {} must be non-empty".format(case))
-        flaky_reason = otel_flaky_cases.get(case, "")
+        flaky_reason = otel_flaky_cases.get(case, otel_flaky_reason)
         if case in otel_flaky_cases and not flaky_reason:
             fail("otel_flaky_cases reason for {} must be non-empty".format(case))
         case_tags = tags + (["otel-xfail"] if xfail_reason else []) + (["otel-flaky"] if flaky_reason else [])

@@ -4,6 +4,7 @@
           expected-scopes
           expected-metric-scopes
           expected-metric-descriptors
+          expected-metric-aggregation
           expected-log-scopes
           expected-log-severity-required
           expected-span-flags
@@ -48,6 +49,10 @@
       ("opentelemetry.instrumentation.asyncio" "asyncio.process.duration" "Duration of asyncio process" "s" histogram ())
       ("opentelemetry.instrumentation.sqlalchemy" "db.client.connections.usage" "The number of connections that are currently in state described by the state attribute." "connections" sum ()))
     python-system-metric-descriptors))
+
+(define expected-metric-aggregation
+  (list (car python-metric-aggregation)
+        (cons "asyncio.process.created" (cadr python-metric-aggregation))))
 
 (define expected-log-scopes (list python-logging-scope))
 

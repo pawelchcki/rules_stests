@@ -6,6 +6,7 @@
           python-logging-scope
           python-system-metrics-scope
           python-system-metric-descriptors
+          python-metric-aggregation
           python-http-scope
           python-database-bucket
           python-profile-shape
@@ -95,6 +96,28 @@
     ("opentelemetry.instrumentation.system_metrics" "system.swap.usage" "System swap usage" "pages" gauge ())
     ("opentelemetry.instrumentation.system_metrics" "system.swap.utilization" "System swap utilization" "1" gauge ())
     ("opentelemetry.instrumentation.system_metrics" "system.thread_count" "System active threads count" "" gauge ())))
+
+; Python instrumentation in this profile exports cumulative aggregations.
+; The second field pins the subset of sums whose monotonic bit is set.
+(define python-metric-aggregation
+  '(cumulative
+    ("cpython.gc.collected_objects"
+     "cpython.gc.collections"
+     "cpython.gc.uncollectable_objects"
+     "process.context_switches"
+     "process.cpu.time"
+     "process.disk.io"
+     "process.runtime.cpython.context_switches"
+     "process.runtime.cpython.cpu_time"
+     "process.runtime.cpython.gc_count"
+     "system.cpu.time"
+     "system.disk.io"
+     "system.disk.operations"
+     "system.disk.time"
+     "system.network.dropped_packets"
+     "system.network.errors"
+     "system.network.io"
+     "system.network.packets")))
 
 (define (python-http-scope alias instrumentation-name attributes string-rules integer-keys)
   (list alias
