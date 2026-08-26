@@ -6,6 +6,7 @@ use rustix::fd::OwnedFd;
 use rustix::net::{SendFlags, send};
 
 const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
+const MAX_VALIDATION_SOURCE_BYTES: usize = 256 * 1024;
 
 pub(crate) struct Request {
     pub(crate) method: String,
@@ -79,10 +80,25 @@ pub(crate) fn read_request(connection: &OwnedFd) -> Result<Request, String> {
         .transpose()
         .map_err(|_| "invalid Content-Length".to_string())?
         .unwrap_or(0);
-    if content_length > MAX_REQUEST_BYTES || header_end + content_length > MAX_REQUEST_BYTES {
+    let max_body_bytes = if method == "POST" && path == "/validate" {
+        MAX_VALIDATION_SOURCE_BYTES
+    } else {
+        MAX_REQUEST_BYTES
+    };
+    if content_length > max_body_bytes {
+        return Err(if max_body_bytes == MAX_VALIDATION_SOURCE_BYTES {
+            "Scheme validation source exceeds limit".to_string()
+        } else {
+            "request body exceeds limit".to_string()
+        });
+    }
+    let request_end = header_end
+        .checked_add(content_length)
+        .ok_or_else(|| "request body exceeds limit".to_string())?;
+    if request_end > MAX_REQUEST_BYTES {
         return Err("request body exceeds limit".to_string());
     }
-    while bytes.len() < header_end + content_length {
+    while bytes.len() < request_end {
         let mut chunk = [0u8; 8192];
         let count = rustix::io::read(connection, &mut chunk)
             .map_err(|error| format!("read request body: {error}"))?;
@@ -99,7 +115,7 @@ pub(crate) fn read_request(connection: &OwnedFd) -> Result<Request, String> {
         path,
         http_version,
         headers,
-        body: bytes[header_end..header_end + content_length].to_vec(),
+        body: bytes[header_end..request_end].to_vec(),
     })
 }
 

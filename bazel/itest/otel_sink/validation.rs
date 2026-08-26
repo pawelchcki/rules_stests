@@ -178,7 +178,7 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
             }
         }
     }
-    output.push_str(")))\n");
+    output.push_str("))\n(json-field-spellings-valid #t))\n");
     Ok(output.into_bytes())
 }
 
@@ -410,6 +410,9 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                 .map_err(|error| format!("serialize OTLP payload for Scheme: {error}"))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let field_spellings_valid = !payloads
+        .iter()
+        .any(has_duplicate_json_field_spellings);
     let span_index = span_index(&payloads);
     let mut output = String::from("((requests (\n");
     for record in records {
@@ -652,7 +655,12 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
             }
         }
     }
-    output.push_str(")))\n");
+    write!(
+        output,
+        "))\n(json-field-spellings-valid {}))\n",
+        if field_spellings_valid { "#t" } else { "#f" }
+    )
+    .unwrap();
     Ok(output.into_bytes())
 }
 
@@ -692,6 +700,9 @@ pub fn golden_candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String
                 .map_err(|error| format!("serialize trace payload for golden: {error}"))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    if payloads.iter().any(has_duplicate_json_field_spellings) {
+        return Err("duplicate OTLP JSON field spellings".into());
+    }
     let mut span_keys = BTreeMap::<(String, String), ()>::new();
     for payload in &payloads {
         for group in trace_groups(payload) {
@@ -1133,6 +1144,40 @@ fn try_integer(value: Option<&Value>) -> Result<i64, ()> {
 
 fn json_field<'a>(value: &'a Value, snake: &str, camel: &str) -> Option<&'a Value> {
     value.get(snake).or_else(|| value.get(camel))
+}
+
+fn has_duplicate_json_field_spellings(value: &Value) -> bool {
+    match value {
+        Value::Array(values) => values.iter().any(has_duplicate_json_field_spellings),
+        Value::Object(fields) => {
+            fields.iter().any(|(name, value)| {
+                let duplicate = if name.contains('_') {
+                    let camel = lower_camel_case(name);
+                    camel != *name && fields.contains_key(camel.as_str())
+                } else {
+                    false
+                };
+                duplicate || has_duplicate_json_field_spellings(value)
+            })
+        }
+        _ => false,
+    }
+}
+
+fn lower_camel_case(snake: &str) -> String {
+    let mut output = String::with_capacity(snake.len());
+    let mut uppercase = false;
+    for character in snake.chars() {
+        if character == '_' {
+            uppercase = true;
+        } else if uppercase {
+            output.push(character.to_ascii_uppercase());
+            uppercase = false;
+        } else {
+            output.push(character);
+        }
+    }
+    output
 }
 
 fn length(value: Option<&Value>) -> usize {

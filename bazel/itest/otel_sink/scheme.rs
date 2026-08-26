@@ -84,19 +84,23 @@ impl Device for MemoryDevice<'_> {
     }
 }
 
-pub fn evaluate(source: &[u8], input: &[u8]) -> Result<(Vec<u8>, usize), String> {
+pub fn evaluate(source: &[u8], input: &[u8]) -> Result<(Vec<u8>, usize), (String, usize)> {
     let (bytecode, compilation_calls) = compile(source)?;
-    let (output, validation_calls) = run(
+    match run(
         &bytecode,
         input,
         "validation",
         VALIDATOR_HEAP_CELLS,
         VALIDATOR_CALL_BUDGET,
-    )?;
-    Ok((output, compilation_calls + validation_calls))
+    ) {
+        Ok((output, validation_calls)) => Ok((output, compilation_calls + validation_calls)),
+        Err((error, validation_calls)) => {
+            Err((error, compilation_calls + validation_calls))
+        }
+    }
 }
 
-fn compile(source: &[u8]) -> Result<(Vec<u8>, usize), String> {
+fn compile(source: &[u8]) -> Result<(Vec<u8>, usize), (String, usize)> {
     let mut input = Vec::with_capacity(PRELUDE.len() + source.len() + 1);
     input.extend_from_slice(PRELUDE);
     input.push(b'\n');
@@ -116,7 +120,7 @@ fn run(
     phase: &str,
     heap_cells: usize,
     call_budget: usize,
-) -> Result<(Vec<u8>, usize), String> {
+) -> Result<(Vec<u8>, usize), (String, usize)> {
     let mut output = Vec::new();
     let mut error_output = Vec::new();
     let mut output_exhausted = false;
@@ -144,25 +148,33 @@ fn run(
                 VoidClock::new(),
             ),
         )
-        .map_err(|error| format!("Stak {phase} VM initialization failed: {error}"))?
+        .map_err(|error| {
+            (
+                format!("Stak {phase} VM initialization failed: {error}"),
+                0,
+            )
+        })?
         .with_profiler(&mut budget);
         vm.run(bytecode.iter().copied())
     };
+    let calls = call_budget - budget.remaining;
 
     if budget.exhausted {
-        return Err(format!(
-            "Stak {phase} exceeded the {call_budget}-call sandbox budget"
+        return Err((
+            format!("Stak {phase} exceeded the {call_budget}-call sandbox budget"),
+            calls,
         ));
     }
     if output_exhausted || error_exhausted {
-        return Err(format!(
-            "Stak {phase} exceeded the {VM_OUTPUT_BUDGET}-byte output sandbox limit"
+        return Err((
+            format!("Stak {phase} exceeded the {VM_OUTPUT_BUDGET}-byte output sandbox limit"),
+            calls,
         ));
     }
     if let Err(error) = result {
         let detail = String::from_utf8_lossy(&error_output);
         let partial = String::from_utf8_lossy(&output);
-        return Err(if detail.is_empty() {
+        let message = if detail.is_empty() {
             format!("Stak {phase} failed: {error}; stdout: {}", partial.trim())
         } else {
             format!(
@@ -170,13 +182,17 @@ fn run(
                 detail.trim(),
                 partial.trim()
             )
-        });
+        };
+        return Err((message, calls));
     }
     if !error_output.is_empty() {
-        return Err(format!(
-            "Stak {phase} wrote to stderr: {}",
-            String::from_utf8_lossy(&error_output).trim()
+        return Err((
+            format!(
+                "Stak {phase} wrote to stderr: {}",
+                String::from_utf8_lossy(&error_output).trim()
+            ),
+            calls,
         ));
     }
-    Ok((output, call_budget - budget.remaining))
+    Ok((output, calls))
 }

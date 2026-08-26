@@ -155,8 +155,9 @@ fn validate(
             validation_stats.last_calls = calls;
             respond(connection, 200, "text/plain", &output);
         }
-        Err(error) => {
+        Err((error, calls)) => {
             validation_stats.failures += 1;
+            validation_stats.last_calls = calls;
             let status = if error.contains(scheme::CONTRACT_ASSERTION_MARKER) {
                 409
             } else {

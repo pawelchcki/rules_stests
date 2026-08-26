@@ -108,6 +108,16 @@ func main() {
 			fatal(fmt.Errorf("JSON payload was not preserved: %s", record.Payload))
 		}
 	}
+	oversizedValidation := bytes.Repeat([]byte(" "), 256*1024+1)
+	oversizedResponse, err := http.Post(endpoint+"/validate", "text/x-scheme", bytes.NewReader(oversizedValidation))
+	if err != nil {
+		fatal(fmt.Errorf("send oversized validation source: %w", err))
+	}
+	oversizedBody, readErr := io.ReadAll(oversizedResponse.Body)
+	oversizedResponse.Body.Close()
+	if readErr != nil || oversizedResponse.StatusCode != http.StatusBadRequest || !bytes.Contains(oversizedBody, []byte("validation source exceeds limit")) {
+		fatal(fmt.Errorf("oversized validation source: HTTP %d: %s: %v", oversizedResponse.StatusCode, oversizedBody, readErr))
+	}
 	validRule := []byte(`(define-library (probe contract)
   (export validate-probe)
   (import (scheme base) (scheme write))
@@ -138,6 +148,18 @@ func main() {
 		fatal(err)
 	} else if status != http.StatusConflict || !bytes.Contains(output, []byte("intentional rejection")) {
 		fatal(fmt.Errorf("contract-rejecting Scheme rule returned HTTP %d: %s", status, output))
+	}
+	statsResponse, err := http.Get(endpoint + "/stats")
+	if err != nil {
+		fatal(fmt.Errorf("read stats after failed validation: %w", err))
+	}
+	var failedStats struct {
+		LastCalls int `json:"validation_last_calls"`
+	}
+	statsDecodeErr := json.NewDecoder(statsResponse.Body).Decode(&failedStats)
+	statsResponse.Body.Close()
+	if statsDecodeErr != nil || statsResponse.StatusCode != http.StatusOK || failedStats.LastCalls <= 0 {
+		fatal(fmt.Errorf("failed validation stats: HTTP %d calls=%d: %v", statsResponse.StatusCode, failedStats.LastCalls, statsDecodeErr))
 	}
 	if output, status, err := validateScheme(endpoint, []byte(`(import (scheme base)) (error "validator fault")`)); err != nil {
 		fatal(err)
@@ -214,6 +236,34 @@ func main() {
 	}
 	if readErr != nil || candidate.StatusCode != http.StatusOK || !aliasesPresent {
 		fatal(fmt.Errorf("custom candidate: HTTP %d: %s: %v", candidate.StatusCode, candidateBody, readErr))
+	}
+	duplicateSpellingsTrace := []byte(`{"resourceSpans":[{"resource":{"attributes":[]},"scopeSpans":[{"scope":{"name":"duplicate.probe"},"spans":[{"trace_id":"dddddddddddddddddddddddddddddddd","traceId":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","spanId":"5555555555555555","name":"SELECT","kind":3,"startTimeUnixNano":"1","endTimeUnixNano":"2","status":{"code":0}}]}]}]}`)
+	duplicateResponse, err := http.Post(endpoint+"/v1/traces", "application/json", bytes.NewReader(duplicateSpellingsTrace))
+	if err != nil {
+		fatal(fmt.Errorf("send duplicate-spelling trace: %w", err))
+	}
+	duplicateBody, readErr := io.ReadAll(duplicateResponse.Body)
+	duplicateResponse.Body.Close()
+	if readErr != nil || duplicateResponse.StatusCode != http.StatusOK {
+		fatal(fmt.Errorf("send duplicate-spelling trace: HTTP %d: %s: %v", duplicateResponse.StatusCode, duplicateBody, readErr))
+	}
+	duplicateDump, err := http.Get(endpoint + "/dump.scm")
+	if err != nil {
+		fatal(fmt.Errorf("read duplicate-spelling Scheme dump: %w", err))
+	}
+	duplicateDumpBody, readErr := io.ReadAll(duplicateDump.Body)
+	duplicateDump.Body.Close()
+	if readErr != nil || duplicateDump.StatusCode != http.StatusOK || !bytes.Contains(duplicateDumpBody, []byte("(json-field-spellings-valid #f)")) {
+		fatal(fmt.Errorf("duplicate-spelling Scheme dump: HTTP %d: %s: %v", duplicateDump.StatusCode, duplicateDumpBody, readErr))
+	}
+	duplicateCandidate, err := http.Get(endpoint + "/candidate?app=custom-app")
+	if err != nil {
+		fatal(fmt.Errorf("generate duplicate-spelling candidate: %w", err))
+	}
+	duplicateCandidateBody, readErr := io.ReadAll(duplicateCandidate.Body)
+	duplicateCandidate.Body.Close()
+	if readErr != nil || duplicateCandidate.StatusCode != http.StatusUnprocessableEntity || !bytes.Contains(duplicateCandidateBody, []byte("duplicate OTLP JSON field spellings")) {
+		fatal(fmt.Errorf("duplicate-spelling candidate: HTTP %d: %s: %v", duplicateCandidate.StatusCode, duplicateCandidateBody, readErr))
 	}
 	reset, err := http.Post(endpoint+"/reset", "application/json", nil)
 	if err != nil {

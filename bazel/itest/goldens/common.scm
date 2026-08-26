@@ -338,6 +338,8 @@
         (spans (field 'spans capture))
         (metrics (field 'metrics capture))
         (logs (field 'logs capture)))
+    (check (field 'json-field-spellings-valid capture)
+           "duplicate OTLP JSON field spellings")
     (validate-requests requests)
     (validate-resources expected-resource-attributes resources)
     (validate-scopes expected-scopes scopes)
