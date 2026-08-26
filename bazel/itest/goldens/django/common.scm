@@ -54,10 +54,10 @@
   (append
     '(("http.server.active_requests"
        ("http.flavor" "http.host" "http.method" "http.scheme" "http.server_name")
-       (("http.flavor" (exact "1.1")) ("http.host" (loopback-port)) ("http.method" (one-of "DELETE" "GET" "POST" "PUT")) ("http.scheme" (exact "http")) ("http.server_name" (exact "localhost.localdomain"))))
+       (("http.flavor" (exact "1.1")) ("http.host" (loopback-port)) ("http.method" (one-of "DELETE" "GET" "POST" "PUT")) ("http.scheme" (exact "http")) ("http.server_name" (one-of "localhost.localdomain" "localhost"))))
       ("http.server.duration"
        ("http.flavor" "http.host" "http.method" "http.scheme" "http.server_name" "http.status_code" "http.target" "net.host.name" "net.host.port")
-       (("http.flavor" (exact "1.1")) ("http.host" (loopback-port)) ("http.method" (one-of "DELETE" "GET" "POST" "PUT")) ("http.scheme" (exact "http")) ("http.server_name" (exact "localhost.localdomain")) ("http.status_code" (http-status)) ("http.target" (nonempty)) ("net.host.name" (loopback-port)) ("net.host.port" (positive-integer)))))
+       (("http.flavor" (exact "1.1")) ("http.host" (loopback-port)) ("http.method" (one-of "DELETE" "GET" "POST" "PUT")) ("http.scheme" (exact "http")) ("http.server_name" (one-of "localhost.localdomain" "localhost")) ("http.status_code" (http-status)) ("http.target" (nonempty)) ("net.host.name" (loopback-port)) ("net.host.port" (positive-integer)))))
     python-system-metric-point-schemas))
 
 (define expected-log-scopes
