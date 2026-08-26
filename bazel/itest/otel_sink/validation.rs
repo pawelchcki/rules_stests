@@ -178,7 +178,9 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
             }
         }
     }
-    output.push_str("))\n(json-field-spellings-valid #t))\n");
+    output.push_str(
+        "))\n(json-field-spellings-valid #t)\n(json-collections-valid #t))\n",
+    );
     Ok(output.into_bytes())
 }
 
@@ -265,11 +267,14 @@ fn write_typed_span(
     let trace_id = hex_text(&span.trace_id);
     let span_id = hex_text(&span.span_id);
     let parent_id = hex_text(&span.parent_span_id);
+    let parent_valid = parent_id.is_empty() || parent_id != span_id;
     let id_count = index
         .get(&(trace_id.clone(), span_id.clone()))
         .copied()
         .unwrap_or(0);
-    let parent_class = if parent_id.is_empty() {
+    let parent_class = if !parent_valid {
+        "invalid"
+    } else if parent_id.is_empty() {
         "root"
     } else if index.contains_key(&(trace_id.clone(), parent_id.clone())) {
         "child"
@@ -284,7 +289,7 @@ fn write_typed_span(
     string(output, &span_id);
     output.push_str(") (parent-span-id ");
     string(output, &parent_id);
-    write!(output, ") (id-count {id_count}) (parent-class {parent_class}) (parent-trace-matches #t) (trace-state ").unwrap();
+    write!(output, ") (id-count {id_count}) (parent-class {parent_class}) (parent-valid {}) (trace-state ", if parent_valid { "#t" } else { "#f" }).unwrap();
     string(output, &span.trace_state);
     output.push_str(") (name ");
     string(output, &span.name);
@@ -388,6 +393,25 @@ fn typed_any_value(output: &mut String, value: Option<&proto::AnyValue>) {
             }
             output.push_str("))");
         }
+        Some(proto::any_value::Value::ArrayValue(value)) => {
+            output.push_str("(array (");
+            for item in &value.values {
+                typed_any_value(output, Some(item));
+                output.push(' ');
+            }
+            output.push_str("))");
+        }
+        Some(proto::any_value::Value::KvlistValue(value)) => {
+            output.push_str("(kvlist (");
+            for item in &value.values {
+                output.push('(');
+                string(output, &item.key);
+                output.push(' ');
+                typed_any_value(output, item.value.as_ref());
+                output.push(')');
+            }
+            output.push_str("))");
+        }
         _ => output.push_str("(other)"),
     }
 }
@@ -413,6 +437,7 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
     let field_spellings_valid = !payloads
         .iter()
         .any(has_duplicate_json_field_spellings);
+    let collections_valid = !payloads.iter().any(has_malformed_json_collection);
     let span_index = span_index(&payloads);
     let mut output = String::from("((requests (\n");
     for record in records {
@@ -511,18 +536,21 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                 let span_id = text(json_field(span, "span_id", "spanId"));
                 let parent_id = text(json_field(span, "parent_span_id", "parentSpanId"));
                 let trace_id = text(json_field(span, "trace_id", "traceId"));
+                let parent_valid = parent_id.is_empty() || parent_id != span_id;
                 let id_count = span_index
                     .get(&(trace_id.into(), span_id.into()))
                     .copied()
                     .unwrap_or(0);
-                let parent_class = if parent_id.is_empty() {
+                let parent_class = if !parent_valid {
+                    "invalid"
+                } else if parent_id.is_empty() {
                     "root"
                 } else if span_index.contains_key(&(trace_id.into(), parent_id.into())) {
                     "child"
                 } else {
                     "external"
                 };
-                write!(output, ") (id-count {id_count}) (parent-class {parent_class}) (parent-trace-matches #t) (trace-state ").unwrap();
+                write!(output, ") (id-count {id_count}) (parent-class {parent_class}) (parent-valid {}) (trace-state ", if parent_valid { "#t" } else { "#f" }).unwrap();
                 string(
                     &mut output,
                     text(json_field(span, "trace_state", "traceState")),
@@ -657,8 +685,9 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
     }
     write!(
         output,
-        "))\n(json-field-spellings-valid {}))\n",
-        if field_spellings_valid { "#t" } else { "#f" }
+        "))\n(json-field-spellings-valid {})\n(json-collections-valid {}))\n",
+        if field_spellings_valid { "#t" } else { "#f" },
+        if collections_valid { "#t" } else { "#f" }
     )
     .unwrap();
     Ok(output.into_bytes())
@@ -702,6 +731,9 @@ pub fn golden_candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String
         .collect::<Result<Vec<_>, _>>()?;
     if payloads.iter().any(has_duplicate_json_field_spellings) {
         return Err("duplicate OTLP JSON field spellings".into());
+    }
+    if payloads.iter().any(has_malformed_json_collection) {
+        return Err("malformed OTLP JSON collection".into());
     }
     let mut span_keys = BTreeMap::<(String, String), ()>::new();
     for payload in &payloads {
@@ -755,6 +787,8 @@ pub fn golden_candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String
                 let trace_id = text(json_field(span, "trace_id", "traceId"));
                 let parent = if parent_id.is_empty() {
                     "root"
+                } else if parent_id == text(json_field(span, "span_id", "spanId")) {
+                    return Err("span is its own parent".into());
                 } else if span_keys.contains_key(&(trace_id.into(), parent_id.into())) {
                     "child"
                 } else {
@@ -994,6 +1028,35 @@ fn any_value(output: &mut String, value: Option<&Value>) {
         } else {
             output.push_str("(other)");
         }
+    } else if let Some(value) = json_field(value, "array_value", "arrayValue") {
+        if let Some(values) = value.get("values").and_then(Value::as_array) {
+            output.push_str("(array (");
+            for item in values {
+                any_value(output, Some(item));
+                output.push(' ');
+            }
+            output.push_str("))");
+        } else if value.get("values").is_none() {
+            output.push_str("(array ())");
+        } else {
+            output.push_str("(other)");
+        }
+    } else if let Some(value) = json_field(value, "kvlist_value", "kvlistValue") {
+        if let Some(values) = value.get("values").and_then(Value::as_array) {
+            output.push_str("(kvlist (");
+            for item in values {
+                output.push('(');
+                string(output, text(item.get("key")));
+                output.push(' ');
+                any_value(output, item.get("value"));
+                output.push(')');
+            }
+            output.push_str("))");
+        } else if value.get("values").is_none() {
+            output.push_str("(kvlist ())");
+        } else {
+            output.push_str("(other)");
+        }
     } else {
         output.push_str("(other)");
     }
@@ -1162,6 +1225,56 @@ fn has_duplicate_json_field_spellings(value: &Value) -> bool {
         }
         _ => false,
     }
+}
+
+fn has_malformed_json_collection(value: &Value) -> bool {
+    match value {
+        Value::Array(values) => values.iter().any(has_malformed_json_collection),
+        Value::Object(fields) => fields.iter().any(|(name, value)| {
+            (is_json_collection_field(name) && !value.is_array())
+                || has_malformed_json_collection(value)
+        }),
+        _ => false,
+    }
+}
+
+fn is_json_collection_field(name: &str) -> bool {
+    matches!(
+        name,
+        "attributes"
+            | "bucket_counts"
+            | "bucketCounts"
+            | "data_points"
+            | "dataPoints"
+            | "entity_refs"
+            | "entityRefs"
+            | "events"
+            | "exemplars"
+            | "explicit_bounds"
+            | "explicitBounds"
+            | "filtered_attributes"
+            | "filteredAttributes"
+            | "links"
+            | "log_records"
+            | "logRecords"
+            | "metrics"
+            | "quantile_values"
+            | "quantileValues"
+            | "resource_logs"
+            | "resourceLogs"
+            | "resource_metrics"
+            | "resourceMetrics"
+            | "resource_spans"
+            | "resourceSpans"
+            | "scope_logs"
+            | "scopeLogs"
+            | "scope_metrics"
+            | "scopeMetrics"
+            | "scope_spans"
+            | "scopeSpans"
+            | "spans"
+            | "values"
+    )
 }
 
 fn lower_camel_case(snake: &str) -> String {

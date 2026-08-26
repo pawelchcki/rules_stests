@@ -26,9 +26,13 @@ pub(crate) struct ValidationStats {
     pub(crate) last_calls: usize,
 }
 
-pub(crate) fn snapshot(records: &[Record], validation: &ValidationStats) -> Stats {
+pub(crate) fn snapshot(
+    frozen: Option<&[Record]>,
+    live: &[Record],
+    validation: &ValidationStats,
+) -> Stats {
     let mut result = Stats {
-        records: records.len(),
+        records: frozen.map(|records| records.len()).unwrap_or(0) + live.len(),
         trace_requests: 0,
         trace_spans: 0,
         metric_requests: 0,
@@ -39,7 +43,7 @@ pub(crate) fn snapshot(records: &[Record], validation: &ValidationStats) -> Stat
         validation_last_calls: validation.last_calls,
         peak_rss_kib: process_peak_rss_kib(),
     };
-    for record in records {
+    for record in frozen.into_iter().flatten().chain(live) {
         match record.signal.as_str() {
             "traces" => {
                 result.trace_requests += 1;

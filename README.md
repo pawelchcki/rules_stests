@@ -98,13 +98,16 @@ accept OTLP protobuf, and the same endpoints also preserve OTLP JSON. Each
 payload is retained with its signal, receive timestamp, remote address, HTTP
 request line, content metadata, and all incoming headers. `GET /stats` exposes
 request/span counters plus validator duration and process peak RSS. `GET /dump`
-is the JSON snapshot boundary: it writes the complete decoded document as
-pretty JSON and returns the same bytes. `GET /dump.scm` returns the capture as
-a canonical S-expression, while `POST /validate` evaluates a Scheme body
-against it with a 256 KiB source limit. Validation stats retain compiler and VM
-call usage on both success and failure. `POST /reset` clears every signal,
-while `POST /reset/traces` creates a trace-only boundary without discarding
-startup metrics and logs.
+is the JSON snapshot boundary: it atomically freezes the live records, writes
+the complete decoded document as pretty JSON, and returns the same bytes.
+Later telemetry remains live for the next snapshot; `/validate` and
+`/candidate` continue to consume the frozen records that produced the dump.
+`GET /dump.scm` freezes and returns the same capture model as a canonical
+S-expression, while `POST /validate` evaluates a Scheme body against it with a
+256 KiB source limit. Validation stats retain compiler and VM call usage on
+both success and failure. `POST /reset` clears every signal, while
+`POST /reset/traces` creates a trace-only boundary without discarding startup
+metrics and logs.
 `GET /healthz` is the service health check. Each OTEL contract test waits for
 startup traces to become quiescent, clears those traces, runs exactly one Hurl
 topic, waits for its trace counts to become quiescent, and validates the

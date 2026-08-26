@@ -24,6 +24,7 @@ pub(crate) fn serve(port: u16, output: &CStr) -> Result<(), String> {
     listen(&listener, 128).map_err(|error| format!("listen: {error}"))?;
 
     let mut records = Vec::<Record>::new();
+    let mut frozen_records = None::<Vec<Record>>;
     let mut validation_stats = ValidationStats::default();
     storage::persist(output, &records)?;
     let startup = format!(
@@ -40,6 +41,7 @@ pub(crate) fn serve(port: u16, output: &CStr) -> Result<(), String> {
             remote.as_ref(),
             output,
             &mut records,
+            &mut frozen_records,
             &mut validation_stats,
         );
     }
@@ -50,6 +52,7 @@ fn handle_connection(
     remote: Option<&SocketAddrAny>,
     output: &CStr,
     records: &mut Vec<Record>,
+    frozen_records: &mut Option<Vec<Record>>,
     validation_stats: &mut ValidationStats,
 ) {
     let request = match read_request(connection) {
@@ -70,7 +73,8 @@ fn handle_connection(
         return;
     }
     if request.method == "GET" && request.path == "/dump" {
-        match serde_json::to_vec_pretty(records) {
+        let snapshot = freeze_records(records, frozen_records);
+        match serde_json::to_vec_pretty(snapshot) {
             Ok(mut bytes) => {
                 bytes.push(b'\n');
                 match storage::persist_bytes(output, &bytes) {
@@ -83,14 +87,19 @@ fn handle_connection(
         return;
     }
     if request.method == "GET" && request.path == "/dump.scm" {
-        match validation::capture_to_scheme(records) {
+        let snapshot = freeze_records(records, frozen_records);
+        match validation::capture_to_scheme(snapshot) {
             Ok(input) => respond(connection, 200, "text/x-scheme", &input),
             Err(error) => respond(connection, 500, "text/plain", error.as_bytes()),
         }
         return;
     }
     if request.method == "GET" && request.path == "/stats" {
-        match serde_json::to_vec(&stats::snapshot(records, validation_stats)) {
+        match serde_json::to_vec(&stats::snapshot(
+            frozen_records.as_deref(),
+            records,
+            validation_stats,
+        )) {
             Ok(mut bytes) => {
                 bytes.push(b'\n');
                 respond(connection, 200, "application/json", &bytes);
@@ -102,11 +111,15 @@ fn handle_connection(
     if request.method == "POST" && (request.path == "/reset" || request.path == "/reset/traces") {
         if request.path == "/reset" {
             records.clear();
+            *frozen_records = None;
         } else {
             records.retain(|record| record.signal != "traces");
+            if let Some(snapshot) = frozen_records {
+                snapshot.retain(|record| record.signal != "traces");
+            }
         }
         *validation_stats = ValidationStats::default();
-        match storage::persist(output, records) {
+        match storage::persist_parts(output, frozen_records.as_deref(), records) {
             Ok(()) => respond(connection, 200, "application/json", b"{}\n"),
             Err(error) => respond(connection, 500, "text/plain", error.as_bytes()),
         }
@@ -114,14 +127,16 @@ fn handle_connection(
     }
     if request.method == "GET" && request.path.starts_with("/candidate?app=") {
         let app = &request.path["/candidate?app=".len()..];
-        match validation::golden_candidate(records, app) {
+        let snapshot = frozen_records.as_deref().unwrap_or(records);
+        match validation::golden_candidate(snapshot, app) {
             Ok(candidate) => respond(connection, 200, "text/x-scheme", &candidate),
             Err(error) => respond(connection, 422, "text/plain", error.as_bytes()),
         }
         return;
     }
     if request.method == "POST" && request.path == "/validate" {
-        validate(connection, &request.body, records, validation_stats);
+        let snapshot = frozen_records.as_deref().unwrap_or(records);
+        validate(connection, &request.body, snapshot, validation_stats);
         return;
     }
     if request.method != "POST" {
@@ -129,7 +144,23 @@ fn handle_connection(
         return;
     }
 
-    ingest(connection, remote, output, request, records);
+    ingest(
+        connection,
+        remote,
+        output,
+        request,
+        frozen_records.as_deref(),
+        records,
+    );
+}
+
+fn freeze_records<'a>(
+    live: &mut Vec<Record>,
+    frozen: &'a mut Option<Vec<Record>>,
+) -> &'a [Record] {
+    let snapshot = frozen.get_or_insert_with(Vec::new);
+    snapshot.append(live);
+    snapshot
 }
 
 fn validate(
@@ -173,6 +204,7 @@ fn ingest(
     remote: Option<&SocketAddrAny>,
     output: &CStr,
     request: crate::http::Request,
+    frozen_records: Option<&[Record]>,
     records: &mut Vec<Record>,
 ) {
     let signal = match request.path.as_str() {
@@ -235,7 +267,7 @@ fn ingest(
         encoding: encoding.to_string(),
         payload,
     });
-    if let Err(error) = storage::persist(output, records) {
+    if let Err(error) = storage::persist_parts(output, frozen_records, records) {
         records.pop();
         respond(connection, 500, "text/plain", error.as_bytes());
         return;

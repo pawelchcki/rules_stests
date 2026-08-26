@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -51,7 +53,7 @@ func main() {
 	}{
 		{"traces", "application/x-protobuf", []byte{0x0a, 0x00}, "trace-protobuf"},
 		{"metrics", "application/json", []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"probe"},"metrics":[{"name":"probe-metric","sum":{"dataPoints":[{"timeUnixNano":"2","asInt":"1"}],"aggregationTemporality":2,"isMonotonic":true}}]}]}]}`), "metric-json"},
-		{"logs", "application/json", []byte(`{"resourceLogs":[{"resource":{"attributes":[]},"scopeLogs":[{"scope":{"name":"probe-log"},"logRecords":[{"timeUnixNano":"1","observedTimeUnixNano":"2","severityNumber":9,"severityText":"INFO","body":{"bytesValue":"AQID/w=="},"attributes":[{"key":"probe.attribute","value":{"stringValue":"present"}}]}]}]}]}`), "log-json"},
+		{"logs", "application/json", []byte(`{"resourceLogs":[{"resource":{"attributes":[]},"scopeLogs":[{"scope":{"name":"probe-log"},"logRecords":[{"timeUnixNano":"1","observedTimeUnixNano":"2","severityNumber":9,"severityText":"INFO","body":{"arrayValue":{"values":[{"bytesValue":"AQID/w=="},{"kvlistValue":{"values":[{"key":"nested","value":{"stringValue":"present"}}]}}]}},"attributes":[{"key":"probe.attribute","value":{"stringValue":"present"}}]}]}]}]}`), "log-json"},
 	}
 	for _, item := range requests {
 		req, err := http.NewRequest(http.MethodPost, endpoint+"/v1/"+item.signal, bytes.NewReader(item.body))
@@ -108,13 +110,30 @@ func main() {
 			fatal(fmt.Errorf("JSON payload was not preserved: %s", record.Payload))
 		}
 	}
-	oversizedValidation := bytes.Repeat([]byte(" "), 256*1024+1)
-	oversizedResponse, err := http.Post(endpoint+"/validate", "text/x-scheme", bytes.NewReader(oversizedValidation))
+	lateLog := []byte(`{"resourceLogs":[{"resource":{"attributes":[]},"scopeLogs":[{"scope":{"name":"late-log"},"logRecords":[{"timeUnixNano":"3","observedTimeUnixNano":"4","severityNumber":9,"severityText":"INFO","body":{"stringValue":"arrived after dump"},"attributes":[{"key":"probe.attribute","value":{"stringValue":"present"}}]}]}]}]}`)
+	lateResponse, err := http.Post(endpoint+"/v1/logs", "application/json", bytes.NewReader(lateLog))
 	if err != nil {
-		fatal(fmt.Errorf("send oversized validation source: %w", err))
+		fatal(fmt.Errorf("send post-dump log: %w", err))
+	}
+	lateBody, readErr := io.ReadAll(lateResponse.Body)
+	lateResponse.Body.Close()
+	if readErr != nil || lateResponse.StatusCode != http.StatusOK {
+		fatal(fmt.Errorf("send post-dump log: HTTP %d: %s: %v", lateResponse.StatusCode, lateBody, readErr))
+	}
+	oversizedConnection, err := net.Dial("tcp", strings.TrimPrefix(endpoint, "http://"))
+	if err != nil {
+		fatal(fmt.Errorf("connect for oversized validation source: %w", err))
+	}
+	if _, err := fmt.Fprintf(oversizedConnection, "POST /validate HTTP/1.1\r\nHost: sink\r\nContent-Type: text/x-scheme\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", 256*1024+1); err != nil {
+		fatal(fmt.Errorf("send oversized validation headers: %w", err))
+	}
+	oversizedResponse, err := http.ReadResponse(bufio.NewReader(oversizedConnection), &http.Request{Method: http.MethodPost})
+	if err != nil {
+		fatal(fmt.Errorf("read oversized validation response: %w", err))
 	}
 	oversizedBody, readErr := io.ReadAll(oversizedResponse.Body)
 	oversizedResponse.Body.Close()
+	oversizedConnection.Close()
 	if readErr != nil || oversizedResponse.StatusCode != http.StatusBadRequest || !bytes.Contains(oversizedBody, []byte("validation source exceeds limit")) {
 		fatal(fmt.Errorf("oversized validation source: HTTP %d: %s: %v", oversizedResponse.StatusCode, oversizedBody, readErr))
 	}
@@ -133,7 +152,9 @@ func main() {
                  (= (cadr (assq 'data-points (car metrics))) 1)
                  (eq? (cadr (assq 'data-type (car metrics))) 'sum)
                  (= (length logs) 1)
-                 (equal? (cadr (assq 'body (car logs))) '(bytes (1 2 3 255)))
+                 (equal? (cadr (assq 'body (car logs)))
+                         '(array ((bytes (1 2 3 255))
+                                  (kvlist (("nested" (string "present")))))))
                  (= (length (cadr (assq 'attributes (car logs)))) 1))
             (display "standalone validation passed\n")
             (error "canonical OTLP JSON shape changed"))))))
@@ -186,6 +207,7 @@ func main() {
 	if readErr != nil || malformedResponse.StatusCode != http.StatusOK {
 		fatal(fmt.Errorf("send malformed numeric probe: HTTP %d: %s: %v", malformedResponse.StatusCode, malformedBody, readErr))
 	}
+	freezeCapture(endpoint, "/dump", "malformed numeric capture")
 	malformedRule := []byte(`(import (scheme base) (scheme read) (scheme write))
 (let* ((capture (read))
        (logs (cadr (assq 'logs capture)))
@@ -218,6 +240,7 @@ func main() {
 	if readErr != nil || collidingResponse.StatusCode != http.StatusOK {
 		fatal(fmt.Errorf("send colliding-scope candidate traces: HTTP %d: %s: %v", collidingResponse.StatusCode, collidingBody, readErr))
 	}
+	freezeCapture(endpoint, "/dump", "custom candidate capture")
 	candidate, err := http.Get(endpoint + "/candidate?app=custom-app")
 	if err != nil {
 		fatal(fmt.Errorf("generate custom candidate: %w", err))
@@ -237,24 +260,41 @@ func main() {
 	if readErr != nil || candidate.StatusCode != http.StatusOK || !aliasesPresent {
 		fatal(fmt.Errorf("custom candidate: HTTP %d: %s: %v", candidate.StatusCode, candidateBody, readErr))
 	}
+	resetSink(endpoint)
+	selfParentTrace := []byte(`{"resourceSpans":[{"resource":{"attributes":[]},"scopeSpans":[{"scope":{"name":"self-parent.probe"},"spans":[{"traceId":"dddddddddddddddddddddddddddddddd","spanId":"5555555555555555","parentSpanId":"5555555555555555","name":"SELECT","kind":3,"startTimeUnixNano":"1","endTimeUnixNano":"2","status":{"code":0}}]}]}]}`)
+	postJSON(endpoint, "/v1/traces", "self-parent trace", selfParentTrace)
+	freezeCapture(endpoint, "/dump", "self-parent capture")
+	selfParentCandidate, err := http.Get(endpoint + "/candidate?app=custom-app")
+	if err != nil {
+		fatal(fmt.Errorf("generate self-parent candidate: %w", err))
+	}
+	selfParentBody, readErr := io.ReadAll(selfParentCandidate.Body)
+	selfParentCandidate.Body.Close()
+	if readErr != nil || selfParentCandidate.StatusCode != http.StatusUnprocessableEntity || !bytes.Contains(selfParentBody, []byte("span is its own parent")) {
+		fatal(fmt.Errorf("self-parent candidate: HTTP %d: %s: %v", selfParentCandidate.StatusCode, selfParentBody, readErr))
+	}
+	resetSink(endpoint)
+	malformedCollectionTrace := []byte(`{"resourceSpans":[{"resource":{"attributes":[]},"scopeSpans":[{"scope":{"name":"collection.probe"},"spans":[{"traceId":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","spanId":"6666666666666666","name":"SELECT","kind":3,"startTimeUnixNano":"1","endTimeUnixNano":"2","links":"corrupt","status":{"code":0}}]}]}]}`)
+	postJSON(endpoint, "/v1/traces", "malformed-collection trace", malformedCollectionTrace)
+	malformedDumpBody := freezeCapture(endpoint, "/dump.scm", "malformed-collection Scheme capture")
+	if !bytes.Contains(malformedDumpBody, []byte("(json-collections-valid #f)")) {
+		fatal(fmt.Errorf("malformed collection was absent from Scheme capture: %s", malformedDumpBody))
+	}
+	malformedCandidate, err := http.Get(endpoint + "/candidate?app=custom-app")
+	if err != nil {
+		fatal(fmt.Errorf("generate malformed-collection candidate: %w", err))
+	}
+	malformedCandidateBody, readErr := io.ReadAll(malformedCandidate.Body)
+	malformedCandidate.Body.Close()
+	if readErr != nil || malformedCandidate.StatusCode != http.StatusUnprocessableEntity || !bytes.Contains(malformedCandidateBody, []byte("malformed OTLP JSON collection")) {
+		fatal(fmt.Errorf("malformed-collection candidate: HTTP %d: %s: %v", malformedCandidate.StatusCode, malformedCandidateBody, readErr))
+	}
+	resetSink(endpoint)
 	duplicateSpellingsTrace := []byte(`{"resourceSpans":[{"resource":{"attributes":[]},"scopeSpans":[{"scope":{"name":"duplicate.probe"},"spans":[{"trace_id":"dddddddddddddddddddddddddddddddd","traceId":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","spanId":"5555555555555555","name":"SELECT","kind":3,"startTimeUnixNano":"1","endTimeUnixNano":"2","status":{"code":0}}]}]}]}`)
-	duplicateResponse, err := http.Post(endpoint+"/v1/traces", "application/json", bytes.NewReader(duplicateSpellingsTrace))
-	if err != nil {
-		fatal(fmt.Errorf("send duplicate-spelling trace: %w", err))
-	}
-	duplicateBody, readErr := io.ReadAll(duplicateResponse.Body)
-	duplicateResponse.Body.Close()
-	if readErr != nil || duplicateResponse.StatusCode != http.StatusOK {
-		fatal(fmt.Errorf("send duplicate-spelling trace: HTTP %d: %s: %v", duplicateResponse.StatusCode, duplicateBody, readErr))
-	}
-	duplicateDump, err := http.Get(endpoint + "/dump.scm")
-	if err != nil {
-		fatal(fmt.Errorf("read duplicate-spelling Scheme dump: %w", err))
-	}
-	duplicateDumpBody, readErr := io.ReadAll(duplicateDump.Body)
-	duplicateDump.Body.Close()
-	if readErr != nil || duplicateDump.StatusCode != http.StatusOK || !bytes.Contains(duplicateDumpBody, []byte("(json-field-spellings-valid #f)")) {
-		fatal(fmt.Errorf("duplicate-spelling Scheme dump: HTTP %d: %s: %v", duplicateDump.StatusCode, duplicateDumpBody, readErr))
+	postJSON(endpoint, "/v1/traces", "duplicate-spelling trace", duplicateSpellingsTrace)
+	duplicateDumpBody := freezeCapture(endpoint, "/dump.scm", "duplicate-spelling Scheme capture")
+	if !bytes.Contains(duplicateDumpBody, []byte("(json-field-spellings-valid #f)")) {
+		fatal(fmt.Errorf("duplicate spelling was absent from Scheme capture: %s", duplicateDumpBody))
 	}
 	duplicateCandidate, err := http.Get(endpoint + "/candidate?app=custom-app")
 	if err != nil {
@@ -265,18 +305,7 @@ func main() {
 	if readErr != nil || duplicateCandidate.StatusCode != http.StatusUnprocessableEntity || !bytes.Contains(duplicateCandidateBody, []byte("duplicate OTLP JSON field spellings")) {
 		fatal(fmt.Errorf("duplicate-spelling candidate: HTTP %d: %s: %v", duplicateCandidate.StatusCode, duplicateCandidateBody, readErr))
 	}
-	reset, err := http.Post(endpoint+"/reset", "application/json", nil)
-	if err != nil {
-		fatal(fmt.Errorf("reset sink: %w", err))
-	}
-	resetBody, readErr := io.ReadAll(reset.Body)
-	reset.Body.Close()
-	if readErr != nil {
-		fatal(fmt.Errorf("read reset response: %w", readErr))
-	}
-	if reset.StatusCode != http.StatusOK {
-		fatal(fmt.Errorf("reset sink: HTTP %d: %s", reset.StatusCode, resetBody))
-	}
+	resetSink(endpoint)
 	resetDump, err := http.Get(endpoint + "/dump")
 	if err != nil {
 		fatal(fmt.Errorf("read reset dump: %w", err))
@@ -291,6 +320,43 @@ func main() {
 		fatal(fmt.Errorf("reset retained %d records", len(resetRecords)))
 	}
 	fmt.Printf("OTLP sink accepted and described traces, metrics, and logs at %s\n", endpoint)
+}
+
+func postJSON(endpoint, path, label string, body []byte) {
+	response, err := http.Post(endpoint+path, "application/json", bytes.NewReader(body))
+	if err != nil {
+		fatal(fmt.Errorf("send %s: %w", label, err))
+	}
+	contents, readErr := io.ReadAll(response.Body)
+	response.Body.Close()
+	if readErr != nil || response.StatusCode != http.StatusOK {
+		fatal(fmt.Errorf("send %s: HTTP %d: %s: %v", label, response.StatusCode, contents, readErr))
+	}
+}
+
+func freezeCapture(endpoint, path, label string) []byte {
+	response, err := http.Get(endpoint + path)
+	if err != nil {
+		fatal(fmt.Errorf("freeze %s: %w", label, err))
+	}
+	contents, readErr := io.ReadAll(response.Body)
+	response.Body.Close()
+	if readErr != nil || response.StatusCode != http.StatusOK {
+		fatal(fmt.Errorf("freeze %s: HTTP %d: %s: %v", label, response.StatusCode, contents, readErr))
+	}
+	return contents
+}
+
+func resetSink(endpoint string) {
+	response, err := http.Post(endpoint+"/reset", "application/json", nil)
+	if err != nil {
+		fatal(fmt.Errorf("reset sink: %w", err))
+	}
+	contents, readErr := io.ReadAll(response.Body)
+	response.Body.Close()
+	if readErr != nil || response.StatusCode != http.StatusOK {
+		fatal(fmt.Errorf("reset sink: HTTP %d: %s: %v", response.StatusCode, contents, readErr))
+	}
 }
 
 func validateScheme(endpoint string, source []byte) ([]byte, int, error) {

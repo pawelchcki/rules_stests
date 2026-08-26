@@ -1,12 +1,26 @@
 use crate::data::Record;
 use alloc::format;
 use alloc::string::String;
+use alloc::vec::Vec;
 use core::ffi::CStr;
 use rustix::fd::OwnedFd;
 use rustix::fs::{Mode, OFlags};
 
 pub(crate) fn persist(output: &CStr, records: &[Record]) -> Result<(), String> {
-    let mut bytes = serde_json::to_vec_pretty(records)
+    persist_parts(output, None, records)
+}
+
+pub(crate) fn persist_parts(
+    output: &CStr,
+    frozen: Option<&[Record]>,
+    live: &[Record],
+) -> Result<(), String> {
+    let records = frozen
+        .into_iter()
+        .flatten()
+        .chain(live)
+        .collect::<Vec<_>>();
+    let mut bytes = serde_json::to_vec_pretty(&records)
         .map_err(|error| format!("serialize output JSON: {error}"))?;
     bytes.push(b'\n');
     persist_bytes(output, &bytes)
