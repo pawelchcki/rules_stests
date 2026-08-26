@@ -126,14 +126,19 @@ func TestPayloadHasServiceName(t *testing.T) {
 		{
 			name:    "typed protobuf JSON",
 			signal:  "metrics",
-			payload: `{"resource_metrics":[{"resource":{"attributes":[{"key":"service.name","value":{"value":{"string_value":"service"}}}]}}]}`,
+			payload: `{"resource_metrics":[{"resource":{"attributes":[{"key":"service.name","value":{"value":{"string_value":"service"}}}]},"scope_metrics":[{"metrics":[{}]}]}]}`,
 			want:    true,
 		},
 		{
 			name:    "OTLP JSON",
 			signal:  "logs",
-			payload: `{"resourceLogs":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"service"}}]}}]}`,
+			payload: `{"resourceLogs":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"service"}}]},"scopeLogs":[{"logRecords":[{}]}]}]}`,
 			want:    true,
+		},
+		{
+			name:    "resource without signal items",
+			signal:  "metrics",
+			payload: `{"resourceMetrics":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"service"}}]},"scopeMetrics":[]}]}`,
 		},
 		{
 			name:    "ordinary payload string",

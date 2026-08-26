@@ -354,7 +354,7 @@ fn typed_point_metadata_valid(
     time: u64,
     flags: u32,
 ) -> bool {
-    time > 0 && start <= time && flags == 0 && typed_key_values_valid(attributes)
+    time > 0 && start <= time && matches!(flags, 0 | 1) && typed_key_values_valid(attributes)
 }
 
 fn typed_number_point_valid(point: &proto::NumberDataPoint) -> bool {
@@ -363,8 +363,8 @@ fn typed_number_point_valid(point: &proto::NumberDataPoint) -> bool {
         point.start_time_unix_nano,
         point.time_unix_nano,
         point.flags,
-    ) && point.value.is_some()
-        && typed_exemplars_valid(&point.exemplars)
+    ) && typed_exemplars_valid(&point.exemplars)
+        && (point.flags == 1 || point.value.is_some())
 }
 
 fn typed_histogram_point_valid(point: &proto::HistogramDataPoint) -> bool {
@@ -374,14 +374,15 @@ fn typed_histogram_point_valid(point: &proto::HistogramDataPoint) -> bool {
         point.time_unix_nano,
         point.flags,
     ) && typed_exemplars_valid(&point.exemplars)
-        && point.bucket_counts.len() == point.explicit_bounds.len().saturating_add(1)
-        && finite_strictly_increasing(&point.explicit_bounds)
-        && typed_extrema_valid(point.min, point.max)
-        && point
-            .bucket_counts
-            .iter()
-            .try_fold(0_u64, |total, value| total.checked_add(*value))
-            == Some(point.count)
+        && (point.flags == 1
+            || (point.bucket_counts.len() == point.explicit_bounds.len().saturating_add(1)
+                && finite_strictly_increasing(&point.explicit_bounds)
+                && typed_extrema_valid(point.min, point.max)
+                && point
+                    .bucket_counts
+                    .iter()
+                    .try_fold(0_u64, |total, value| total.checked_add(*value))
+                    == Some(point.count)))
 }
 
 fn finite_strictly_increasing(values: &[f64]) -> bool {
@@ -402,11 +403,13 @@ fn typed_exponential_histogram_point_valid(point: &proto::ExponentialHistogramDa
         point.time_unix_nano,
         point.flags,
     ) && typed_exemplars_valid(&point.exemplars)
-        && (-10..=20).contains(&point.scale)
-        && point.zero_threshold.is_finite()
-        && point.zero_threshold >= 0.0
-        && typed_extrema_valid(point.min, point.max)
-        && bucket_count.and_then(|count| count.checked_add(point.zero_count)) == Some(point.count)
+        && (point.flags == 1
+            || ((-10..=20).contains(&point.scale)
+                && point.zero_threshold.is_finite()
+                && point.zero_threshold >= 0.0
+                && typed_extrema_valid(point.min, point.max)
+                && bucket_count.and_then(|count| count.checked_add(point.zero_count))
+                    == Some(point.count)))
 }
 
 fn typed_extrema_valid(min: Option<f64>, max: Option<f64>) -> bool {
@@ -438,7 +441,8 @@ fn typed_summary_point_valid(point: &proto::SummaryDataPoint) -> bool {
         point.start_time_unix_nano,
         point.time_unix_nano,
         point.flags,
-    ) && quantiles_strictly_increasing(point.quantile_values.iter().map(|value| value.quantile))
+    ) && (point.flags == 1
+        || quantiles_strictly_increasing(point.quantile_values.iter().map(|value| value.quantile)))
 }
 
 fn quantiles_strictly_increasing(mut quantiles: impl Iterator<Item = f64>) -> bool {
@@ -1468,8 +1472,12 @@ fn json_point_metadata_valid(point: &Value) -> bool {
     time > 0
         && start >= 0
         && start <= time
-        && flags == 0
+        && matches!(flags, 0 | 1)
         && json_key_values_valid(point.get("attributes"))
+}
+
+fn json_no_recorded_value(point: &Value) -> bool {
+    try_integer(point.get("flags")).is_ok_and(|flags| flags == 1)
 }
 
 fn json_number_point_valid(point: &Value) -> bool {
@@ -1481,14 +1489,21 @@ fn json_number_point_valid(point: &Value) -> bool {
     let as_integer = json_field(number, "as_int", "asInt");
     json_point_metadata_valid(point)
         && json_exemplars_valid(point)
-        && match (as_double, as_integer) {
-            (Some(value), None) => json_double(value).is_some(),
-            (None, Some(value)) => try_integer(Some(value)).is_ok(),
-            _ => false,
-        }
+        && (json_no_recorded_value(point)
+            || match (as_double, as_integer) {
+                (Some(value), None) => json_double(value).is_some(),
+                (None, Some(value)) => try_integer(Some(value)).is_ok(),
+                _ => false,
+            })
 }
 
 fn json_histogram_point_valid(point: &Value) -> bool {
+    if json_point_metadata_valid(point)
+        && json_exemplars_valid(point)
+        && json_no_recorded_value(point)
+    {
+        return true;
+    }
     let counts = array(json_field(point, "bucket_counts", "bucketCounts"));
     let bounds = array(json_field(point, "explicit_bounds", "explicitBounds"));
     let Some(bucket_total) = json_integer_sum(counts) else {
@@ -1519,6 +1534,12 @@ fn json_bounds_valid(bounds: &[Value]) -> bool {
 }
 
 fn json_exponential_histogram_point_valid(point: &Value) -> bool {
+    if json_point_metadata_valid(point)
+        && json_exemplars_valid(point)
+        && json_no_recorded_value(point)
+    {
+        return true;
+    }
     let Some(positive) = json_bucket_total(point.get("positive")) else {
         return false;
     };
@@ -1560,6 +1581,9 @@ fn json_exponential_histogram_point_valid(point: &Value) -> bool {
 }
 
 fn json_summary_point_valid(point: &Value) -> bool {
+    if json_point_metadata_valid(point) && json_no_recorded_value(point) {
+        return true;
+    }
     let Ok(count) = try_integer(point.get("count")) else {
         return false;
     };

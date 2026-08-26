@@ -370,6 +370,9 @@ func payloadHasServiceName(payload json.RawMessage, signal string) bool {
 	wrappers, _ := mapValue(document, wrapperNames...).([]any)
 	for _, wrapperValue := range wrappers {
 		wrapper, _ := wrapperValue.(map[string]any)
+		if !wrapperHasSignalItems(wrapper, signal) {
+			continue
+		}
 		resource, _ := wrapper["resource"].(map[string]any)
 		attributes, _ := resource["attributes"].([]any)
 		for _, attributeValue := range attributes {
@@ -385,6 +388,32 @@ func payloadHasServiceName(payload json.RawMessage, signal string) bool {
 			if name != "" {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func wrapperHasSignalItems(wrapper map[string]any, signal string) bool {
+	var groupNames, itemNames []string
+	switch signal {
+	case "traces":
+		groupNames = []string{"scope_spans", "scopeSpans"}
+		itemNames = []string{"spans"}
+	case "metrics":
+		groupNames = []string{"scope_metrics", "scopeMetrics"}
+		itemNames = []string{"metrics"}
+	case "logs":
+		groupNames = []string{"scope_logs", "scopeLogs"}
+		itemNames = []string{"log_records", "logRecords"}
+	default:
+		return false
+	}
+	groups, _ := mapValue(wrapper, groupNames...).([]any)
+	for _, groupValue := range groups {
+		group, _ := groupValue.(map[string]any)
+		items, _ := mapValue(group, itemNames...).([]any)
+		if len(items) > 0 {
+			return true
 		}
 	}
 	return false

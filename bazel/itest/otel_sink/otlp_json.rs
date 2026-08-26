@@ -55,7 +55,7 @@ type ScalarValidator = fn(&Value) -> bool;
 
 fn reject_unknown(value: &Value, context: &str, allowed: &[&str]) -> Result<(), String> {
     let Some(fields) = value.as_object() else {
-        return Ok(());
+        return Err(format!("invalid OTLP {context}: expected object"));
     };
     if let Some(name) = fields.keys().find(|name| !allowed.contains(&name.as_str())) {
         return Err(format!("invalid OTLP {context} field {name:?}"));

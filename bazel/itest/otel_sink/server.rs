@@ -1,5 +1,5 @@
 use crate::data::{Record, RequestMetadata};
-use crate::http::{read_request, respond};
+use crate::http::{read_request, respond, valid_token};
 use crate::platform::write_stdout;
 use crate::stats::{self, ValidationStats};
 use crate::{otlp, scheme, storage, validation};
@@ -266,14 +266,17 @@ fn ingest(
         );
         return;
     }
-    let content_type = request
-        .header("content-type")
-        .unwrap_or("application/x-protobuf")
-        .split(';')
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase();
+    let content_type = match parse_content_type(
+        request
+            .header("content-type")
+            .unwrap_or("application/x-protobuf"),
+    ) {
+        Ok(content_type) => content_type,
+        Err(error) => {
+            respond(connection, 400, "text/plain", error.as_bytes());
+            return;
+        }
+    };
     if content_type != "application/json"
         && content_type != "application/x-protobuf"
         && content_type != "application/protobuf"
@@ -368,4 +371,80 @@ fn ingest(
     } else {
         respond(connection, 200, "application/x-protobuf", b"");
     }
+}
+
+fn parse_content_type(value: &str) -> Result<String, String> {
+    let parts = split_content_type(value)?;
+    let media_type = parts.first().copied().unwrap_or("").trim();
+    let (type_name, subtype) = media_type
+        .split_once('/')
+        .ok_or_else(|| "malformed Content-Type media type".to_string())?;
+    if !valid_token(type_name) || !valid_token(subtype) {
+        return Err("malformed Content-Type media type".to_string());
+    }
+    for parameter in parts.iter().skip(1) {
+        let (name, parameter_value) = parameter
+            .trim()
+            .split_once('=')
+            .ok_or_else(|| "malformed Content-Type parameter".to_string())?;
+        if !valid_token(name.trim()) || !valid_parameter_value(parameter_value.trim()) {
+            return Err("malformed Content-Type parameter".to_string());
+        }
+    }
+    Ok(media_type.to_ascii_lowercase())
+}
+
+fn split_content_type(value: &str) -> Result<Vec<&str>, String> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut quoted = false;
+    let mut escaped = false;
+    for (index, byte) in value.bytes().enumerate() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match byte {
+            b'\\' if quoted => escaped = true,
+            b'"' => quoted = !quoted,
+            b';' if !quoted => {
+                parts.push(&value[start..index]);
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    if quoted || escaped {
+        return Err("malformed Content-Type parameter".to_string());
+    }
+    parts.push(&value[start..]);
+    Ok(parts)
+}
+
+fn valid_parameter_value(value: &str) -> bool {
+    if valid_token(value) {
+        return true;
+    }
+    let bytes = value.as_bytes();
+    if bytes.len() < 2 || bytes[0] != b'"' || bytes[bytes.len() - 1] != b'"' {
+        return false;
+    }
+    let mut index = 1;
+    while index < bytes.len() - 1 {
+        let byte = bytes[index];
+        if byte == b'\\' {
+            index += 1;
+            if index >= bytes.len() - 1 {
+                return false;
+            }
+            let escaped = bytes[index];
+            if escaped != b'\t' && !(0x20..=0x7e).contains(&escaped) {
+                return false;
+            }
+        } else if byte == b'"' || (byte != b'\t' && !(0x20..=0x7e).contains(&byte)) {
+            return false;
+        }
+        index += 1;
+    }
+    true
 }

@@ -104,7 +104,7 @@ pub(crate) fn read_request(connection: &OwnedFd) -> Result<Request, RequestError
         let (name, value) = line
             .split_once(':')
             .ok_or_else(|| "malformed HTTP header".to_string())?;
-        if !valid_field_name(name) {
+        if !valid_token(name) {
             return Err("invalid HTTP field name".to_string().into());
         }
         headers.push(Header {
@@ -208,7 +208,7 @@ pub(crate) fn respond(connection: &OwnedFd, status: u16, content_type: &str, bod
     let _ = send_all(connection, body);
 }
 
-fn valid_field_name(name: &str) -> bool {
+pub(crate) fn valid_token(name: &str) -> bool {
     !name.is_empty()
         && name.bytes().all(|byte| {
             byte.is_ascii_alphanumeric()

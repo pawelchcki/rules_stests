@@ -75,6 +75,18 @@ func main() {
 	)
 	rejectJSON(
 		endpoint,
+		"/v1/metrics",
+		"non-object repeated message",
+		[]byte("expected object"),
+		[]byte(`{"resourceMetrics":[{"scopeMetrics":[null,{"metrics":[]}]}]}`),
+	)
+	rejectContentType(
+		endpoint,
+		"application/json; not-a-parameter",
+		[]byte("malformed Content-Type parameter"),
+	)
+	rejectJSON(
+		endpoint,
 		"/v1/logs",
 		"multiple AnyValue variants",
 		[]byte("expected exactly one variant"),
@@ -303,7 +315,7 @@ func main() {
 			0x00, 0x00, 0x00, 0x00, 0x00, 0x21, 0x00, 0x00,
 			0x00, 0x00, 0x00, 0x00, 0xf8, 0x7f,
 		}, "metric-protobuf"},
-		{"logs", "application/json", []byte(`{"resourceLogs":[{"resource":{"attributes":[]},"scopeLogs":[{"scope":{"name":"probe-log","version":"4.5.6","attributes":[],"droppedAttributesCount":0},"logRecords":[{"timeUnixNano":"1","observedTimeUnixNano":"2","severityNumber":9,"severityText":"INFO","body":{"arrayValue":{"values":[{"bytesValue":"AQID/w=="},{"kvlistValue":{"values":[{"key":"nested","value":{"stringValue":"present"}}]}},{"doubleValue":"NaN"}]}},"attributes":[{"key":"probe.attribute","value":{"stringValue":"present"}}]}]}]}]}`), "log-json"},
+		{"logs", "application/json; charset=utf-8", []byte(`{"resourceLogs":[{"resource":{"attributes":[]},"scopeLogs":[{"scope":{"name":"probe-log","version":"4.5.6","attributes":[],"droppedAttributesCount":0},"logRecords":[{"timeUnixNano":"1","observedTimeUnixNano":"2","severityNumber":9,"severityText":"INFO","body":{"arrayValue":{"values":[{"bytesValue":"AQID/w=="},{"kvlistValue":{"values":[{"key":"nested","value":{"stringValue":"present"}}]}},{"doubleValue":"NaN"}]}},"attributes":[{"key":"probe.attribute","value":{"stringValue":"present"}}]}]}]}]}`), "log-json"},
 	}
 	for _, item := range requests {
 		req, err := http.NewRequest(http.MethodPost, endpoint+"/v1/"+item.signal, bytes.NewReader(item.body))
@@ -628,17 +640,17 @@ func main() {
 		fatal(fmt.Errorf("malformed metric point was absent from Scheme capture: %s", malformedMetricDump))
 	}
 	resetSink(endpoint)
-	defaultedMetrics := []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"metric.probe"},"metrics":[{"name":"nullable-histogram","metadata":null,"histogram":{"dataPoints":[{"attributes":null,"startTimeUnixNano":null,"timeUnixNano":"3","count":"1","sum":null,"bucketCounts":["1"],"explicitBounds":[],"min":null,"max":null,"flags":null}],"aggregationTemporality":2}},{"name":"defaulted-summary","summary":{"dataPoints":[{"timeUnixNano":"4","count":"0"}]}},{"name":"maximum-uint64-histogram","histogram":{"dataPoints":[{"timeUnixNano":"18446744073709551615","count":"18446744073709551615","bucketCounts":["18446744073709551615"],"explicitBounds":[]}],"aggregationTemporality":2}},{"name":"aggregation-semantics","sum":{"dataPoints":[{"timeUnixNano":"5","asInt":"1"}],"aggregationTemporality":2,"isMonotonic":true}}]}]}]}`)
+	defaultedMetrics := []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"metric.probe"},"metrics":[{"name":"nullable-histogram","metadata":null,"histogram":{"dataPoints":[{"attributes":null,"startTimeUnixNano":null,"timeUnixNano":"3","count":"1","sum":null,"bucketCounts":["1"],"explicitBounds":[],"min":null,"max":null,"flags":null}],"aggregationTemporality":2}},{"name":"defaulted-summary","summary":{"dataPoints":[{"timeUnixNano":"4","count":"0"}]}},{"name":"maximum-uint64-histogram","histogram":{"dataPoints":[{"timeUnixNano":"18446744073709551615","count":"18446744073709551615","bucketCounts":["18446744073709551615"],"explicitBounds":[]}],"aggregationTemporality":2}},{"name":"aggregation-semantics","sum":{"dataPoints":[{"timeUnixNano":"5","asInt":"1"}],"aggregationTemporality":2,"isMonotonic":true}},{"name":"no-recorded-value","gauge":{"dataPoints":[{"timeUnixNano":"7","flags":1}]}}]}]}]}`)
 	postJSON(endpoint, "/v1/metrics", "defaulted metrics", defaultedMetrics)
 	defaultedMetricsDump := freezeCapture(endpoint, "/dump.scm", "defaulted-metrics Scheme capture")
-	if bytes.Count(defaultedMetricsDump, []byte("(data-points-valid #t)")) != 4 || !bytes.Contains(defaultedMetricsDump, []byte("(aggregation-temporality cumulative) (monotonic #t)")) {
+	if bytes.Count(defaultedMetricsDump, []byte("(data-points-valid #t)")) != 5 || !bytes.Contains(defaultedMetricsDump, []byte("(aggregation-temporality cumulative) (monotonic #t)")) {
 		fatal(fmt.Errorf("defaulted metric fields were rejected by Scheme projection: %s", defaultedMetricsDump))
 	}
 	resetSink(endpoint)
 	invalidMetricSemantics := []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"metric.probe"},"metrics":[{"name":"missing-temporality","sum":{"dataPoints":[{"timeUnixNano":"2","asInt":"1"}],"aggregationTemporality":0,"isMonotonic":true}},{"name":"descending-bounds","histogram":{"dataPoints":[{"timeUnixNano":"3","count":"3","bucketCounts":["1","1","1"],"explicitBounds":[10,1]}],"aggregationTemporality":2}},{"name":"invalid-exemplar","gauge":{"dataPoints":[{"timeUnixNano":"4","asInt":"1","exemplars":[{"timeUnixNano":"0"}]}]}},{"name":"invalid-exponential-mapping","exponentialHistogram":{"dataPoints":[{"timeUnixNano":"5","count":"0","scale":21,"zeroThreshold":-1}],"aggregationTemporality":2}},{"name":"inverted-extrema","histogram":{"dataPoints":[{"timeUnixNano":"6","count":"0","bucketCounts":["0"],"explicitBounds":[],"min":2,"max":1}],"aggregationTemporality":2}},{"name":"no-recorded-value","gauge":{"dataPoints":[{"timeUnixNano":"7","asInt":"1","flags":1}]}},{"name":"unsorted-summary","summary":{"dataPoints":[{"timeUnixNano":"8","count":"2","sum":3,"quantileValues":[{"quantile":0.9,"value":1},{"quantile":0.5,"value":2}]}]}}]}]}]}`)
 	postJSON(endpoint, "/v1/metrics", "invalid metric semantics", invalidMetricSemantics)
 	invalidMetricDump := freezeCapture(endpoint, "/dump.scm", "invalid-metric-semantics Scheme capture")
-	if bytes.Count(invalidMetricDump, []byte("(data-points-valid #f)")) != 7 {
+	if bytes.Count(invalidMetricDump, []byte("(data-points-valid #f)")) != 6 {
 		fatal(fmt.Errorf("invalid metric semantics were absent from Scheme capture: %s", invalidMetricDump))
 	}
 	resetSink(endpoint)
@@ -795,6 +807,23 @@ func rejectJSON(endpoint, path, label string, want []byte, body []byte) {
 	response.Body.Close()
 	if readErr != nil || response.StatusCode != http.StatusBadRequest || !bytes.Contains(contents, want) {
 		fatal(fmt.Errorf("send %s: HTTP %d: %s: %v", label, response.StatusCode, contents, readErr))
+	}
+}
+
+func rejectContentType(endpoint, contentType string, want []byte) {
+	request, err := http.NewRequest(http.MethodPost, endpoint+"/v1/metrics", bytes.NewReader([]byte(`{}`)))
+	if err != nil {
+		fatal(fmt.Errorf("create malformed Content-Type request: %w", err))
+	}
+	request.Header.Set("Content-Type", contentType)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		fatal(fmt.Errorf("send malformed Content-Type: %w", err))
+	}
+	contents, readErr := io.ReadAll(response.Body)
+	response.Body.Close()
+	if readErr != nil || response.StatusCode != http.StatusBadRequest || !bytes.Contains(contents, want) {
+		fatal(fmt.Errorf("send malformed Content-Type: HTTP %d: %s: %v", response.StatusCode, contents, readErr))
 	}
 }
 
