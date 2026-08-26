@@ -1,5 +1,6 @@
 use alloc::format;
 use alloc::string::String;
+use alloc::vec::Vec;
 use serde_json::Value;
 
 pub(crate) fn validate_export(signal: &str, value: &Value) -> Result<(), String> {
@@ -248,7 +249,10 @@ fn validate_any_value(value: &Value) -> Result<(), String> {
     }
     let (name, item) = fields.iter().next().unwrap();
     let valid = match name.as_str() {
-        "string_value" | "stringValue" | "bytes_value" | "bytesValue" => item.is_string(),
+        "string_value" | "stringValue" => item.is_string(),
+        "bytes_value" | "bytesValue" => item
+            .as_str()
+            .is_some_and(|value| decode_base64(value).is_some()),
         "bool_value" | "boolValue" => item.is_boolean(),
         "int_value" | "intValue" => {
             item.as_i64().is_some()
@@ -904,5 +908,64 @@ fn validate_log_record(value: &Value) -> Result<(), String> {
         ],
     )?;
     validate_object_field(value, "body", "body", validate_any_value)?;
-    validate_array_field(value, "attributes", "attributes", validate_key_value)
+    validate_array_field(value, "attributes", "attributes", validate_key_value)?;
+    validate_scalar_field(value, "flags", "flags", "log record", trace_flags_scalar)
+}
+
+fn trace_flags_scalar(value: &Value) -> bool {
+    integer_value(value).is_some_and(|flags| matches!(flags, 0 | 1))
+}
+
+fn integer_value(value: &Value) -> Option<i128> {
+    value
+        .as_i64()
+        .map(i128::from)
+        .or_else(|| value.as_u64().map(i128::from))
+        .or_else(|| value.as_str().and_then(|value| value.parse::<i128>().ok()))
+}
+
+pub(crate) fn decode_base64(encoded: &str) -> Option<Vec<u8>> {
+    let mut output = Vec::with_capacity(encoded.len().saturating_mul(3) / 4);
+    let mut buffer = 0_u32;
+    let mut bits = 0_u8;
+    let mut data_characters = 0_usize;
+    let mut padding = 0_usize;
+    for byte in encoded.bytes() {
+        if byte == b'=' {
+            padding += 1;
+            if padding > 2 {
+                return None;
+            }
+            continue;
+        }
+        if padding != 0 {
+            return None;
+        }
+        let value = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' | b'-' => 62,
+            b'/' | b'_' => 63,
+            _ => return None,
+        };
+        data_characters += 1;
+        buffer = (buffer << 6) | u32::from(value);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            output.push((buffer >> bits) as u8);
+            buffer &= (1_u32 << bits) - 1;
+        }
+    }
+    let remainder = data_characters % 4;
+    if remainder == 1
+        || (padding != 0 && (data_characters + padding) % 4 != 0)
+        || (padding == 1 && remainder != 3)
+        || (padding == 2 && remainder != 2)
+        || buffer != 0
+    {
+        return None;
+    }
+    Some(output)
 }

@@ -1,5 +1,7 @@
 use crate::data::{Payload, Record};
+use crate::otlp_json;
 use crate::proto;
+use crate::trace_forest::{self, Forest, Group, Node, Trace};
 use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::String;
@@ -132,7 +134,9 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
             }
         }
     }
-    output.push_str("))\n(metrics (\n");
+    output.push_str("))\n(trace-shapes ");
+    write_trace_forest(&mut output, &trace_forest::from_records(records)?, None);
+    output.push_str(")\n(metrics (\n");
     for record in records {
         if let Payload::Metrics(payload) = &record.payload {
             for resource in &payload.resource_metrics {
@@ -909,7 +913,9 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
             }
         }
     }
-    output.push_str("))\n(metrics (\n");
+    output.push_str("))\n(trace-shapes ");
+    write_trace_forest(&mut output, &trace_forest::from_records(records)?, None);
+    output.push_str(")\n(metrics (\n");
     for (record, payload) in records.iter().zip(&payloads) {
         if record.signal != "metrics" {
             continue;
@@ -1106,16 +1112,6 @@ fn span_key(trace_id: &str, span_id: &str) -> (String, String) {
     (normalized_id(trace_id), normalized_id(span_id))
 }
 
-struct Bucket {
-    count: usize,
-    scope: String,
-    kind: &'static str,
-    status: &'static str,
-    name_matcher: String,
-    parent: &'static str,
-    http_status: Option<i128>,
-}
-
 pub fn golden_candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String> {
     let payloads = records
         .iter()
@@ -1134,177 +1130,113 @@ pub fn golden_candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String
     if payloads.iter().any(has_malformed_json_string) {
         return Err("malformed OTLP JSON string field".into());
     }
-    let mut span_keys = BTreeMap::<(String, String), ()>::new();
-    let parents = span_parents(&payloads);
-    for payload in &payloads {
-        for group in trace_groups(payload) {
-            for span in array(group.get("spans")) {
-                let span_id = text(json_field(span, "span_id", "spanId"));
-                let trace_id = text(json_field(span, "trace_id", "traceId"));
-                let parent_id = text(json_field(span, "parent_span_id", "parentSpanId"));
-                if !valid_hex(trace_id, 32) {
-                    return Err(format!("invalid trace ID {trace_id:?}"));
-                }
-                if !valid_hex(span_id, 16) {
-                    return Err(format!("invalid span ID {span_id:?}"));
-                }
-                if !parent_id.is_empty() && !valid_hex(parent_id, 16) {
-                    return Err(format!("invalid parent span ID {parent_id:?}"));
-                }
-                if span_keys.insert(span_key(trace_id, span_id), ()).is_some() {
-                    return Err(format!(
-                        "duplicate span ID {span_id:?} in trace {trace_id:?}"
-                    ));
-                }
-                if !parent_topology_valid(trace_id, span_id, &parents) {
-                    return Err("span parent topology is cyclic".into());
-                }
-            }
-        }
-    }
-    let mut buckets = BTreeMap::<String, Bucket>::new();
-    let mut saw_span = false;
-    for payload in &payloads {
-        for group in trace_groups(payload) {
-            let scope_name = text(group.get("scope").and_then(|scope| scope.get("name")));
-            let scope = scope_alias(app, scope_name)?;
-            for span in array(group.get("spans")) {
-                saw_span = true;
-                let name = text(span.get("name"));
-                if name.is_empty() {
-                    return Err("span has no name".into());
-                }
-                let start = try_integer(json_field(
-                    span,
-                    "start_time_unix_nano",
-                    "startTimeUnixNano",
-                ))
-                .map_err(|()| String::from("invalid span start timestamp"))?;
-                let end = try_integer(json_field(span, "end_time_unix_nano", "endTimeUnixNano"))
-                    .map_err(|()| String::from("invalid span end timestamp"))?;
-                if start <= 0 || end < start {
-                    return Err("span timestamps are not ordered".into());
-                }
-                let kind = enum_name(
-                    try_integer(span.get("kind"))
-                        .map_err(|()| String::from("invalid span kind value"))?,
-                    &[
-                        "unspecified",
-                        "internal",
-                        "server",
-                        "client",
-                        "producer",
-                        "consumer",
-                    ],
-                    "span kind",
-                )?;
-                let status = enum_name(
-                    try_integer(span.get("status").and_then(|status| status.get("code")))
-                        .map_err(|()| String::from("invalid span status value"))?,
-                    &["unset", "ok", "error"],
-                    "span status",
-                )?;
-                if kind == "server" {
-                    continue;
-                }
-                let parent_id = text(json_field(span, "parent_span_id", "parentSpanId"));
-                let trace_id = text(json_field(span, "trace_id", "traceId"));
-                let parent = if parent_id.is_empty() {
-                    "root"
-                } else if span_keys.contains_key(&span_key(trace_id, parent_id)) {
-                    "child"
-                } else {
-                    "external"
-                };
-                let matcher = name_matcher(app, &scope, name);
-                let http_status = integer_attribute(span.get("attributes"), "http.status_code")?;
-                let key = format!(
-                    "{scope}\u{1f}{kind}\u{1f}{status}\u{1f}{matcher}\u{1f}{parent}\u{1f}{http_status:?}"
-                );
-                buckets
-                    .entry(key)
-                    .and_modify(|bucket| bucket.count += 1)
-                    .or_insert(Bucket {
-                        count: 1,
-                        scope: scope.clone(),
-                        kind,
-                        status,
-                        name_matcher: matcher,
-                        parent,
-                        http_status,
-                    });
-            }
-        }
-    }
-    if !saw_span {
+    let forest = trace_forest::from_records(records)?;
+    if forest.traces.is_empty() {
         return Err("trace capture contains no spans".into());
     }
-    let mut output = String::from("(define expected-implementation-buckets\n  '(\n");
-    for bucket in buckets.values() {
-        write!(
-            output,
-            "    ({} {} {} {} {} {} ",
-            bucket.count,
-            bucket.scope,
-            bucket.kind,
-            bucket.status,
-            bucket.name_matcher,
-            bucket.parent
-        )
-        .unwrap();
-        match bucket.http_status {
-            Some(status) => write!(output, "{status}").unwrap(),
-            None => output.push_str("absent"),
-        }
-        output.push_str(")\n");
-    }
-    output.push_str("  ))\n");
+    let mut output = String::from("(define expected-trace-shapes\n  ");
+    write_trace_forest(&mut output, &forest, Some(app));
+    output.push_str(")\n");
     Ok(output.into_bytes())
 }
 
-fn scope_alias(app: &str, scope: &str) -> Result<String, String> {
-    match (app, scope) {
-        ("aiohttp", "opentelemetry.instrumentation.sqlite3") => Ok("sqlite".into()),
-        ("aiohttp", "opentelemetry.instrumentation.sqlalchemy") => Ok("sqlalchemy".into()),
-        ("aiohttp", "opentelemetry.instrumentation.aiohttp_server") => Ok("http".into()),
-        ("django", "opentelemetry.instrumentation.sqlite3") => Ok("sqlite".into()),
-        ("django", "opentelemetry.instrumentation.django") => Ok("django".into()),
-        _ if scope.is_empty() => Err(format!("empty instrumentation scope for {app}")),
-        _ => Ok(generic_scope_alias(scope)),
+fn write_trace_forest(output: &mut String, forest: &Forest, candidate_app: Option<&str>) {
+    output.push_str("(traces");
+    for trace in &forest.traces {
+        output.push('\n');
+        write_group(output, trace, 4, candidate_app, write_trace);
+    }
+    output.push(')');
+}
+
+fn write_group<T>(
+    output: &mut String,
+    group: &Group<T>,
+    indent: usize,
+    candidate_app: Option<&str>,
+    writer: fn(&mut String, &T, usize, Option<&str>),
+) {
+    spaces(output, indent);
+    if group.count > 1 {
+        write!(output, "(repeat {} ", group.count).unwrap();
+        writer(output, &group.item, indent + 2, candidate_app);
+        output.push(')');
+    } else {
+        writer(output, &group.item, indent, candidate_app);
     }
 }
 
-fn generic_scope_alias(scope: &str) -> String {
-    let mut alias = String::from("scope-");
-    let mut previous_separator = false;
-    for character in scope.chars() {
-        if character.is_ascii_alphanumeric() {
-            alias.push(character.to_ascii_lowercase());
-            previous_separator = false;
-        } else if !previous_separator {
-            alias.push('-');
-            previous_separator = true;
+fn write_trace(output: &mut String, trace: &Trace, indent: usize, candidate_app: Option<&str>) {
+    output.push_str("(trace (coverage ");
+    if candidate_app.is_some() {
+        output.push('\'');
+    }
+    write!(output, "{})\n", trace.coverage.name()).unwrap();
+    spaces(output, indent + 2);
+    output.push_str("(unordered");
+    for root in &trace.roots {
+        output.push('\n');
+        write_group(output, root, indent + 4, candidate_app, write_node);
+    }
+    output.push_str("))");
+}
+
+fn write_node(output: &mut String, node: &Node, indent: usize, candidate_app: Option<&str>) {
+    output.push_str("(span (scope ");
+    string(output, &node.span.scope);
+    output.push_str(") (kind ");
+    if candidate_app.is_some() {
+        output.push('\'');
+    }
+    output.push_str(&node.span.kind);
+    output.push_str(") (status ");
+    if candidate_app.is_some() {
+        output.push('\'');
+    }
+    output.push_str(&node.span.status);
+    output.push_str(") (name ");
+    if let Some(app) = candidate_app {
+        output.push_str(&name_matcher(app, &node.span.scope, &node.span.name));
+    } else if node.span.name.ends_with("realworld.sqlite3") && node.span.name.contains(" /") {
+        output.push_str(&name_matcher("aiohttp", &node.span.scope, &node.span.name));
+    } else {
+        string(output, &node.span.name);
+    }
+    output.push_str(") (http-status ");
+    match node.span.http_status {
+        Some(status) => write!(output, "{status}").unwrap(),
+        None => {
+            if candidate_app.is_some() {
+                output.push('\'');
+            }
+            output.push_str("absent");
         }
     }
-    while alias.ends_with('-') {
-        alias.pop();
+    output.push(')');
+    if !node.children.is_empty() {
+        output.push('\n');
+        spaces(output, indent + 2);
+        output.push_str("(children (unordered");
+        for child in &node.children {
+            output.push('\n');
+            write_group(output, child, indent + 4, candidate_app, write_node);
+        }
+        output.push_str("))");
     }
-    alias.push('-');
-    for byte in scope.bytes() {
-        write!(alias, "{byte:02x}").unwrap();
-    }
-    alias
+    output.push(')');
 }
 
-fn enum_name(value: i128, names: &[&'static str], label: &str) -> Result<&'static str, String> {
-    names
-        .get(usize::try_from(value).unwrap_or(usize::MAX))
-        .copied()
-        .ok_or_else(|| format!("invalid {label} {value}"))
+fn spaces(output: &mut String, count: usize) {
+    for _ in 0..count {
+        output.push(' ');
+    }
 }
 
 fn name_matcher(app: &str, scope: &str, name: &str) -> String {
-    if app == "aiohttp" && scope == "sqlalchemy" && name.ends_with("realworld.sqlite3") {
+    if app == "aiohttp"
+        && (scope == "sqlalchemy" || scope == "opentelemetry.instrumentation.sqlalchemy")
+        && name.ends_with("realworld.sqlite3")
+    {
         if let Some((operation, _)) = name.split_once(" /") {
             let mut output = String::from("(prefix-suffix ");
             string(&mut output, &format!("{operation} /"));
@@ -1318,31 +1250,6 @@ fn name_matcher(app: &str, scope: &str, name: &str) -> String {
     string(&mut output, name);
     output.push(')');
     output
-}
-
-fn integer_attribute(
-    attributes_value: Option<&Value>,
-    wanted: &str,
-) -> Result<Option<i128>, String> {
-    let mut result = None;
-    for attribute in array(attributes_value) {
-        if text(attribute.get("key")) != wanted {
-            continue;
-        }
-        if result.is_some() {
-            return Err(format!("duplicate attribute {wanted:?}"));
-        }
-        let value = attribute
-            .get("value")
-            .map(|value| value.get("value").unwrap_or(value))
-            .and_then(|value| json_field(value, "int_value", "intValue"))
-            .ok_or_else(|| format!("attribute {wanted:?} is not an integer"))?;
-        result = Some(
-            try_integer(Some(value))
-                .map_err(|()| format!("attribute {wanted:?} is not an integer"))?,
-        );
-    }
-    Ok(result)
 }
 
 fn trace_payloads<'a>(
@@ -1865,51 +1772,7 @@ fn byte_value(value: &Value) -> Option<Vec<u8>> {
 }
 
 fn decode_base64(encoded: &str) -> Option<Vec<u8>> {
-    let mut output = Vec::with_capacity(encoded.len().saturating_mul(3) / 4);
-    let mut buffer = 0_u32;
-    let mut bits = 0_u8;
-    let mut data_characters = 0_usize;
-    let mut padding = 0_usize;
-
-    for byte in encoded.bytes() {
-        if byte == b'=' {
-            padding += 1;
-            if padding > 2 {
-                return None;
-            }
-            continue;
-        }
-        if padding != 0 {
-            return None;
-        }
-        let value = match byte {
-            b'A'..=b'Z' => byte - b'A',
-            b'a'..=b'z' => byte - b'a' + 26,
-            b'0'..=b'9' => byte - b'0' + 52,
-            b'+' | b'-' => 62,
-            b'/' | b'_' => 63,
-            _ => return None,
-        };
-        data_characters += 1;
-        buffer = (buffer << 6) | u32::from(value);
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            output.push((buffer >> bits) as u8);
-            buffer &= (1_u32 << bits) - 1;
-        }
-    }
-
-    let remainder = data_characters % 4;
-    if remainder == 1
-        || (padding != 0 && (data_characters + padding) % 4 != 0)
-        || (padding == 1 && remainder != 3)
-        || (padding == 2 && remainder != 2)
-        || buffer != 0
-    {
-        return None;
-    }
-    Some(output)
+    otlp_json::decode_base64(encoded)
 }
 
 fn events(output: &mut String, value: Option<&Value>) {

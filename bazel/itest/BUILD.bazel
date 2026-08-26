@@ -34,6 +34,7 @@ rust_binary(
         "otel_sink/server.rs",
         "otel_sink/stats.rs",
         "otel_sink/storage.rs",
+        "otel_sink/trace_forest.rs",
         "otel_sink/validation.rs",
     ],
     aliases = aliases(),
@@ -56,6 +57,7 @@ rust_binary(
 
 go_library(
     name = "otel_sink_probe_lib",
+    embedsrcs = ["//bazel/itest/goldens:trace_shape.scm"],
     srcs = ["otel_sink_probe.go"],
     importpath = "github.com/pawelchcki/rules_stests/bazel/itest/otel_sink_probe",
     visibility = ["//visibility:private"],

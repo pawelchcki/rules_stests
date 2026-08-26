@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -15,6 +16,9 @@ import (
 	"strings"
 	"time"
 )
+
+//go:embed goldens/trace_shape.scm
+var traceShapeLibrary []byte
 
 type sinkRecord struct {
 	Signal   string          `json:"signal"`
@@ -101,6 +105,20 @@ func main() {
 	)
 	rejectJSON(
 		endpoint,
+		"/v1/logs",
+		"non-canonical bytesValue base64",
+		[]byte("unexpected JSON type"),
+		[]byte(`{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{"bytesValue":"AB=="}}]}]}]}`),
+	)
+	rejectJSON(
+		endpoint,
+		"/v1/logs",
+		"invalid log trace flags",
+		[]byte("unexpected JSON type"),
+		[]byte(`{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"flags":256}]}]}]}`),
+	)
+	rejectJSON(
+		endpoint,
 		"/v1/metrics",
 		"string monotonicity",
 		[]byte("unexpected JSON type"),
@@ -148,6 +166,20 @@ func main() {
 		headerCountRequest.String(),
 		http.StatusRequestEntityTooLarge,
 		[]byte("request header count exceeds limit"),
+	)
+	rejectRawRequest(
+		endpoint,
+		"control byte in field value",
+		"POST /v1/metrics HTTP/1.1\r\nHost: sink\r\nX-Probe: bad\x00value\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+		http.StatusBadRequest,
+		[]byte("invalid HTTP field value"),
+	)
+	rejectRawRequest(
+		endpoint,
+		"malformed bracketed IPv6 Host",
+		"POST /v1/metrics HTTP/1.1\r\nHost: [2001:::1]\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+		http.StatusBadRequest,
+		[]byte("invalid bracketed IPv6 Host field"),
 	)
 
 	duplicateEncodingConnection, err := net.Dial("tcp", strings.TrimPrefix(endpoint, "http://"))
@@ -525,29 +557,8 @@ func main() {
 	} else if status != http.StatusUnprocessableEntity || !bytes.Contains(output, []byte("output sandbox limit")) {
 		fatal(fmt.Errorf("output-spamming Scheme rule returned HTTP %d: %s", status, output))
 	}
-	malformedLog := []byte(`{"resourceLogs":[{"resource":{"attributes":[]},"scopeLogs":[{"scope":{"name":"probe-log"},"logRecords":[{"timeUnixNano":"1","observedTimeUnixNano":"2","severityNumber":9,"severityText":"INFO","body":{"stringValue":"malformed numeric probe"},"attributes":[{"key":"probe.attribute","value":{"stringValue":"present"}}],"flags":"broken"}]}]}]}`)
-	malformedResponse, err := http.Post(endpoint+"/v1/logs", "application/json", bytes.NewReader(malformedLog))
-	if err != nil {
-		fatal(fmt.Errorf("send malformed numeric probe: %w", err))
-	}
-	malformedBody, readErr := io.ReadAll(malformedResponse.Body)
-	malformedResponse.Body.Close()
-	if readErr != nil || malformedResponse.StatusCode != http.StatusOK {
-		fatal(fmt.Errorf("send malformed numeric probe: HTTP %d: %s: %v", malformedResponse.StatusCode, malformedBody, readErr))
-	}
-	freezeCapture(endpoint, "/dump", "malformed numeric capture")
-	malformedRule := []byte(`(import (scheme base) (scheme read) (scheme write))
-(let* ((capture (read))
-       (logs (cadr (assq 'logs capture)))
-       (latest (car (reverse logs))))
-  (if (= (cadr (assq 'flags latest)) -1)
-      (display "malformed numeric preserved\n")
-      (error "malformed numeric was normalized")))`)
-	if output, status, err := validateScheme(endpoint, malformedRule); err != nil {
-		fatal(err)
-	} else if status != http.StatusOK || !bytes.Contains(output, []byte("malformed numeric preserved")) {
-		fatal(fmt.Errorf("malformed numeric Scheme rule returned HTTP %d: %s", status, output))
-	}
+	rejectJSON(endpoint, "/v1/logs", "malformed numeric log flags", []byte("unexpected JSON type"), []byte(`{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"flags":"broken"}]}]}]}`))
+	resetSink(endpoint)
 	customTrace := []byte(`{"resourceSpans":[{"resource":{"attributes":[]},"scopeSpans":[{"scope":{"name":"example.custom/db-client"},"spans":[{"traceId":"11111111111111111111111111111111","spanId":"2222222222222222","name":"SELECT","kind":3,"startTimeUnixNano":"1","endTimeUnixNano":"2","status":{"code":0}}]}]}]}`)
 	customResponse, err := http.Post(endpoint+"/v1/traces", "application/json", bytes.NewReader(customTrace))
 	if err != nil {
@@ -575,18 +586,62 @@ func main() {
 	}
 	candidateBody, readErr := io.ReadAll(candidate.Body)
 	candidate.Body.Close()
-	wantAliases := []string{
-		"scope-example-custom-db-client-6578616d706c652e637573746f6d2f64622d636c69656e74",
-		"scope-foo-bar-666f6f2e626172",
-		"scope-foo-bar-666f6f2f626172",
-		"scope-foo-bar-466f6f2e426172",
+	wantScopes := []string{
+		"example.custom/db-client",
+		"foo.bar",
+		"foo/bar",
+		"Foo.Bar",
 	}
-	aliasesPresent := true
-	for _, alias := range wantAliases {
-		aliasesPresent = aliasesPresent && bytes.Contains(candidateBody, []byte(alias))
+	scopesPresent := true
+	for _, scope := range wantScopes {
+		scopesPresent = scopesPresent && bytes.Contains(candidateBody, []byte(scope))
 	}
-	if readErr != nil || candidate.StatusCode != http.StatusOK || !aliasesPresent {
+	if readErr != nil || candidate.StatusCode != http.StatusOK || !scopesPresent || !bytes.Contains(candidateBody, []byte("expected-trace-shapes")) {
 		fatal(fmt.Errorf("custom candidate: HTTP %d: %s: %v", candidate.StatusCode, candidateBody, readErr))
+	}
+	resetSink(endpoint)
+	topologyTrace := []byte(`{"resourceSpans":[{"scopeSpans":[{"scope":{"name":"shape.probe"},"spans":[{"traceId":"12121212121212121212121212121212","spanId":"3333333333333333","parentSpanId":"1111111111111111","name":"beta","kind":1,"startTimeUnixNano":"30","endTimeUnixNano":"40"},{"traceId":"12121212121212121212121212121212","spanId":"1111111111111111","name":"root","kind":2,"startTimeUnixNano":"10","endTimeUnixNano":"50"},{"traceId":"12121212121212121212121212121212","spanId":"2222222222222222","parentSpanId":"1111111111111111","name":"alpha","kind":1,"startTimeUnixNano":"20","endTimeUnixNano":"30"}]}]}]}`)
+	postJSON(endpoint, "/v1/traces", "trace-shape topology", topologyTrace)
+	matchingShape := `(traces
+  (repeat 1
+    (trace (coverage 'complete)
+      (unordered
+        (span (scope "shape.probe") (kind 'server) (status 'unset) (name (exact "root")) (http-status 'absent)
+          (children (unordered
+            (between 1 1 (span (scope "shape.probe") (kind 'internal) (status 'unset) (name (exact "beta")) (http-status 'absent)))
+            (span (scope "shape.probe") (kind 'internal) (status 'unset) (name (one-of (exact "alpha") (exact "alternate"))) (http-status 'absent))
+            (optional (span (scope "shape.probe") (name (exact "not-present")))))))))))`
+	if output, status, err := validateShape(endpoint, matchingShape); err != nil {
+		fatal(err)
+	} else if status != http.StatusOK {
+		fatal(fmt.Errorf("unordered/combinator trace shape returned HTTP %d: %s", status, output))
+	}
+	movedChildShape := `(traces
+  (trace (coverage 'complete)
+    (unordered
+      (span (scope "shape.probe") (name (exact "root"))
+        (children (unordered
+          (span (scope "shape.probe") (name (exact "alpha"))
+            (children (unordered (span (scope "shape.probe") (name (exact "beta"))))))))))))`
+	if output, status, err := validateShape(endpoint, movedChildShape); err != nil {
+		fatal(err)
+	} else if status != http.StatusConflict || !bytes.Contains(output, []byte("trace-shape mismatch at traces")) || !bytes.Contains(output, []byte("nearest actual tree")) {
+		fatal(fmt.Errorf("mis-parented child shape returned HTTP %d: %s", status, output))
+	}
+	resetSink(endpoint)
+	partialTrace := []byte(`{"resourceSpans":[{"scopeSpans":[{"scope":{"name":"shape.probe"},"spans":[{"traceId":"34343434343434343434343434343434","spanId":"5555555555555555","parentSpanId":"4444444444444444","name":"remote-child","kind":1,"startTimeUnixNano":"1","endTimeUnixNano":"2"}]}]}]}`)
+	postJSON(endpoint, "/v1/traces", "partial trace shape", partialTrace)
+	partialShape := `(traces (trace (coverage 'partial) (unordered (span (scope "shape.probe") (kind 'internal) (status 'unset) (name (exact "remote-child")) (http-status 'absent)))))`
+	if output, status, err := validateShape(endpoint, partialShape); err != nil {
+		fatal(err)
+	} else if status != http.StatusOK {
+		fatal(fmt.Errorf("partial trace shape returned HTTP %d: %s", status, output))
+	}
+	completeShape := `(traces (trace (coverage 'complete) (unordered (span (scope "shape.probe") (name (exact "remote-child"))))))`
+	if output, status, err := validateShape(endpoint, completeShape); err != nil {
+		fatal(err)
+	} else if status != http.StatusConflict {
+		fatal(fmt.Errorf("complete policy accepted a partial trace: HTTP %d: %s", status, output))
 	}
 	resetSink(endpoint)
 	selfParentTrace := []byte(`{"resourceSpans":[{"resource":{"attributes":[]},"scopeSpans":[{"scope":{"name":"self-parent.probe"},"spans":[{"traceId":"dddddddddddddddddddddddddddddddd","spanId":"5555555555555555","parentSpanId":"5555555555555555","name":"SELECT","kind":3,"startTimeUnixNano":"1","endTimeUnixNano":"2","status":{"code":0}}]}]}]}`)
@@ -613,6 +668,30 @@ func main() {
 	cyclicCandidate.Body.Close()
 	if readErr != nil || cyclicCandidate.StatusCode != http.StatusUnprocessableEntity || !bytes.Contains(cyclicBody, []byte("span parent topology is cyclic")) {
 		fatal(fmt.Errorf("cyclic candidate: HTTP %d: %s: %v", cyclicCandidate.StatusCode, cyclicBody, readErr))
+	}
+	resetSink(endpoint)
+	multipleRootsTrace := []byte(`{"resourceSpans":[{"scopeSpans":[{"scope":{"name":"roots.probe"},"spans":[{"traceId":"56565656565656565656565656565656","spanId":"1111111111111111","name":"root-one","kind":1,"startTimeUnixNano":"1","endTimeUnixNano":"2"},{"traceId":"56565656565656565656565656565656","spanId":"2222222222222222","name":"root-two","kind":1,"startTimeUnixNano":"1","endTimeUnixNano":"2"}]}]}]}`)
+	postJSON(endpoint, "/v1/traces", "multiple-root trace", multipleRootsTrace)
+	multipleRootsCandidate, err := http.Get(endpoint + "/candidate?app=custom-app")
+	if err != nil {
+		fatal(fmt.Errorf("generate multiple-root candidate: %w", err))
+	}
+	multipleRootsBody, readErr := io.ReadAll(multipleRootsCandidate.Body)
+	multipleRootsCandidate.Body.Close()
+	if readErr != nil || multipleRootsCandidate.StatusCode != http.StatusUnprocessableEntity || !bytes.Contains(multipleRootsBody, []byte("multiple explicit roots")) {
+		fatal(fmt.Errorf("multiple-root candidate: HTTP %d: %s: %v", multipleRootsCandidate.StatusCode, multipleRootsBody, readErr))
+	}
+	resetSink(endpoint)
+	duplicateSpanTrace := []byte(`{"resourceSpans":[{"scopeSpans":[{"scope":{"name":"duplicate-span.probe"},"spans":[{"traceId":"78787878787878787878787878787878","spanId":"3333333333333333","name":"first","kind":1,"startTimeUnixNano":"1","endTimeUnixNano":"2"},{"traceId":"78787878787878787878787878787878","spanId":"3333333333333333","name":"second","kind":1,"startTimeUnixNano":"1","endTimeUnixNano":"2"}]}]}]}`)
+	postJSON(endpoint, "/v1/traces", "duplicate-span trace", duplicateSpanTrace)
+	duplicateSpanCandidate, err := http.Get(endpoint + "/candidate?app=custom-app")
+	if err != nil {
+		fatal(fmt.Errorf("generate duplicate-span candidate: %w", err))
+	}
+	duplicateSpanBody, readErr := io.ReadAll(duplicateSpanCandidate.Body)
+	duplicateSpanCandidate.Body.Close()
+	if readErr != nil || duplicateSpanCandidate.StatusCode != http.StatusUnprocessableEntity || !bytes.Contains(duplicateSpanBody, []byte("duplicate span ID")) {
+		fatal(fmt.Errorf("duplicate-span candidate: HTTP %d: %s: %v", duplicateSpanCandidate.StatusCode, duplicateSpanBody, readErr))
 	}
 	resetSink(endpoint)
 	invalidTraceID := []byte(`{"resourceSpans":[{"resource":{"attributes":[]},"scopeSpans":[{"scope":{"name":"trace-id.probe"},"spans":[{"traceId":"00000000000000000000000000000000","spanId":"5555555555555555","name":"SELECT","kind":3,"startTimeUnixNano":"1","endTimeUnixNano":"2","status":{"code":0}}]}]}]}`)
@@ -770,6 +849,7 @@ func main() {
 	}
 	resetSink(endpoint)
 	largeUnknownProtobuf := bytes.Repeat([]byte{0x7d, 0x00, 0x00, 0x00, 0x00}, 24*1024)
+	rejected := false
 	for index := 0; index < 35; index++ {
 		response, err := http.Post(endpoint+"/v1/metrics", "application/x-protobuf", bytes.NewReader(largeUnknownProtobuf))
 		if err != nil {
@@ -778,12 +858,16 @@ func main() {
 		contents, readErr := io.ReadAll(response.Body)
 		response.Body.Close()
 		wantStatus := http.StatusOK
-		if index == 34 {
+		if rejected || response.StatusCode == http.StatusRequestEntityTooLarge {
 			wantStatus = http.StatusRequestEntityTooLarge
+			rejected = true
 		}
-		if readErr != nil || response.StatusCode != wantStatus || (index == 34 && !bytes.Contains(contents, []byte("cumulative OTLP capture exceeds limit"))) {
+		if readErr != nil || response.StatusCode != wantStatus || (wantStatus == http.StatusRequestEntityTooLarge && !bytes.Contains(contents, []byte("cumulative OTLP capture exceeds limit"))) {
 			fatal(fmt.Errorf("cumulative capture probe %d: HTTP %d: %s: %v", index, response.StatusCode, contents, readErr))
 		}
+	}
+	if !rejected {
+		fatal(errors.New("cumulative capture probe never reached the retained-memory limit"))
 	}
 	resetSink(endpoint)
 	resetDump, err := http.Get(endpoint + "/dump")
@@ -897,6 +981,15 @@ func resetSink(endpoint string) {
 	if readErr != nil || response.StatusCode != http.StatusOK {
 		fatal(fmt.Errorf("reset sink: HTTP %d: %s: %v", response.StatusCode, contents, readErr))
 	}
+}
+
+func validateShape(endpoint, expected string) ([]byte, int, error) {
+	source := make([]byte, 0, len(traceShapeLibrary)+len(expected)+128)
+	source = append(source, traceShapeLibrary...)
+	source = append(source, []byte("\n(import (scheme base) (scheme read) (otel trace-shape))\n(define probe-expected ")...)
+	source = append(source, expected...)
+	source = append(source, []byte(")\n(otel-validate-trace-shapes probe-expected (read))\n")...)
+	return validateScheme(endpoint, source)
 }
 
 func validateScheme(endpoint string, source []byte) ([]byte, int, error) {

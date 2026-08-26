@@ -2,8 +2,10 @@ use crate::data::Header;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use core::net::Ipv6Addr;
+use core::str::FromStr;
 use rustix::fd::OwnedFd;
-use rustix::net::{send, SendFlags};
+use rustix::net::{SendFlags, send};
 
 const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 const MAX_HEADER_BYTES: usize = 64 * 1024;
@@ -119,10 +121,20 @@ pub(crate) fn read_request(connection: &OwnedFd) -> Result<Request, RequestError
         if !valid_token(name) {
             return Err("invalid HTTP field name".to_string().into());
         }
+        if !valid_field_value(value) {
+            return Err("invalid HTTP field value".to_string().into());
+        }
         headers.push(Header {
             name: name.to_ascii_lowercase(),
             value: value.trim().to_string(),
         });
+    }
+    if headers.iter().any(|header| {
+        header.name == "host"
+            && header.value.starts_with('[')
+            && !valid_bracketed_ipv6_host(&header.value)
+    }) {
+        return Err("invalid bracketed IPv6 Host field".to_string().into());
     }
     if headers
         .iter()
@@ -242,6 +254,29 @@ pub(crate) fn valid_token(name: &str) -> bool {
                         | b'~'
                 )
         })
+}
+
+fn valid_field_value(value: &str) -> bool {
+    value
+        .bytes()
+        .all(|byte| byte == b'\t' || byte >= 0x20 && byte != 0x7f)
+}
+
+fn valid_bracketed_ipv6_host(value: &str) -> bool {
+    let Some(close) = value.find(']') else {
+        return false;
+    };
+    if close <= 1 || Ipv6Addr::from_str(&value[1..close]).is_err() {
+        return false;
+    }
+    let remainder = &value[close + 1..];
+    if remainder.is_empty() {
+        return true;
+    }
+    remainder
+        .strip_prefix(':')
+        .and_then(|port| port.parse::<u16>().ok())
+        .is_some_and(|port| port != 0)
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {

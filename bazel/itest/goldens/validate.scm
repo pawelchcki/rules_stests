@@ -1,8 +1,9 @@
 (define expected-span-buckets
-  (append (http-contract-buckets (expected-http-requests-for scenario-name)
-                                 server-scope
-                                 render-server-span-name)
-          (implementation-buckets-for scenario-name)))
+  (http-contract-buckets (expected-http-requests-for scenario-name)
+                         server-scope
+                         render-server-span-name))
+
+(define capture (read))
 
 (otel-validate-exact expected-resource-attributes
                      expected-resource-schema-url
@@ -18,4 +19,6 @@
                      expected-trace-state
                      expected-error-status-message-policy
                      expected-span-buckets
-                     (read))
+                     capture)
+
+(otel-validate-trace-shapes expected-trace-shapes capture)

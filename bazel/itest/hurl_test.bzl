@@ -81,6 +81,7 @@ def realworld_hurl_test_suite(
         otel_profile = None,
         otel_profile_library = None,
         otel_runtime_libraries = None,
+        otel_trace_shape_library_prefix = None,
         otel_exact = True,
         otel_candidates = True,
         otel_flaky_reason = "",
@@ -114,6 +115,7 @@ def realworld_hurl_test_suite(
         profile = otel_profile or "python-{}-auto-v0-65b0".format(otel_app)
         profile_library = otel_profile_library or "//bazel/itest/goldens:{}/common.scm".format(otel_app)
         runtime_libraries = otel_runtime_libraries if otel_runtime_libraries != None else ["//bazel/itest/goldens:python.scm"]
+        trace_shape_library_prefix = otel_trace_shape_library_prefix or "//bazel/itest/goldens:details/{}/".format(profile)
     else:
         profile = ""
         profile_library = None
@@ -147,6 +149,15 @@ def realworld_hurl_test_suite(
                 "realworld.profile.{}".format(profile),
             ]
             if otel_exact:
+                detail_library = trace_shape_library_prefix + case + "/golden.scm"
+                libraries.extend([
+                    "//bazel/itest/goldens:trace_shape.scm",
+                    detail_library,
+                ])
+                imports.extend([
+                    "otel.trace-shape",
+                    "realworld.detail.{}.{}".format(profile, case),
+                ])
                 program = "//bazel/itest/goldens:validate.scm"
             else:
                 program = "//bazel/itest/goldens:validate_contract.scm"

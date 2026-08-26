@@ -120,7 +120,8 @@ The sink keeps its no-std entry point deliberately thin. `runtime` owns the
 allocator, ELF entry point, panic path, and compiler shims; `platform` contains
 raw console I/O; `server` routes requests; `http`, `otlp`, `storage`, and
 `stats` each own one boundary; `data` contains the shared serialized model;
-and `scheme`, `validation`, and `proto` remain independent domain modules.
+`trace_forest` canonicalizes protobuf, JSON, and mixed span captures; and
+`scheme`, `validation`, and `proto` remain independent domain modules.
 
 The snapshot is checked by Stak Scheme 0.12.23 inside the same no-std Rust
 binary. Bazel pins the Stak crates, compiler bytecode, and prelude. A golden is
@@ -140,7 +141,7 @@ explicit `--otel-program`. A standalone client can equivalently post one
 self-contained source bundle containing `define-library` declarations and a
 program import to `/validate`.
 
-The libraries deliberately separate four layers:
+The libraries deliberately separate five layers:
 
 - `(otel validation)` checks transport and OTLP integrity: request metadata,
   exact resources and scopes, IDs, timestamp ordering, parents, events, links,
@@ -152,12 +153,13 @@ The libraries deliberately separate four layers:
 - `(otel profile python-auto-v0-65b0)` holds facts shared by the current Python
   agent independently of the web framework. A Go or custom Python tracer can
   supply an equivalent language/runtime library without changing the workload.
-- `(realworld profile <implementation>)` preserves exact implementation
-  behavior: resource identity, instrumentation libraries and versions,
-  attribute schemas, per-scenario event policy and counts, span-name rendering,
-  database topology, names, parentage, status, and counts. Each profile contains
-  one compact fixed-column count table for all topics instead of one library per
-  topic.
+- `(realworld profile <implementation>)` preserves implementation-wide behavior:
+  resource identity, instrumentation libraries and versions, attribute schemas,
+  per-scenario event policy, and server-span name rendering.
+- `(otel trace-shape)` defines unordered hierarchical trace matchers, while each
+  `(realworld detail <implementation> <scenario>)` library pins complete trace
+  topology, scope, kind, status, name, and HTTP status without volatile IDs or
+  timestamps. Repeated equivalent traces and children use `repeat`.
 
 For example, the shared articles contract says:
 
@@ -179,15 +181,21 @@ The aiohttp Python profile renders the canonical route as
 `DELETE /api/articles/{slug}` in scope `http`; the Django Python profile
 renders it as `DELETE api/articles/<slug>` in scope `django`. Both consume that
 same portable row and the neutral Python helpers. Only their genuine tracing
-differences remain in their own profiles. For example, aiohttp stores its
-counts as:
+differences remain in their profiles and generated detail libraries. For
+example, an aiohttp detail shape contains:
 
 ```scheme
-; Columns: scenario, connect, delete, insert, select, update.
-(define implementation-shapes
-  '((articles 21 2 3 77 3)
-    (auth     20 0 1 23 11)
-    ...))
+(trace (coverage 'complete)
+  (unordered
+    (span (scope "opentelemetry.instrumentation.aiohttp_server")
+          (kind 'server)
+          (status 'unset)
+          (name (exact "GET /api/articles"))
+          (http-status 200)
+          (children (unordered
+            (repeat 2
+              (span (scope "opentelemetry.instrumentation.sqlalchemy")
+                    (name (prefix-suffix "SELECT /" "realworld.sqlite3")))))))))
 ```
 
 A Go implementation adds one new profile but imports the same scenario table.
@@ -197,10 +205,10 @@ remains an executable 1:1 specification.
 
 Two validation programs are available. `validate_contract.scm` checks the
 portable HTTP multiset and OTLP/profile invariants while allowing additional
-implementation-specific non-server spans. `validate.scm` adds the detailed
-counts returned by `implementation-buckets-for` and requires the exact complete
-span multiset. The current contract-only targets are manual because the exact
-targets already imply them:
+implementation-specific non-server spans. `validate.scm` adds the generated
+trace-shape library and requires the exact complete parent-child forest as an
+unordered one-to-one multiset. The current contract-only targets are manual
+because the exact targets already imply them:
 
 ```bash
 bazel test //bazel/itest:aiohttp_otel_contract_test_articles \
@@ -208,10 +216,11 @@ bazel test //bazel/itest:aiohttp_otel_contract_test_articles \
 ```
 
 `realworld_hurl_test_suite` exposes `otel_profile`,
-`otel_profile_library`, `otel_runtime_libraries`, and `otel_exact`. A new Go
+`otel_profile_library`, `otel_runtime_libraries`,
+`otel_trace_shape_library_prefix`, and `otel_exact`. A new Go
 implementation can begin with `otel_exact = False` and the shared scenarios,
-then add its compact implementation table once its telemetry is ready to be
-pinned as another exact implementation specification.
+then add generated detail libraries once its telemetry is ready to be pinned
+as another exact implementation specification.
 
 Known telemetry defects belong in the suite's `otel_xfails` dictionary rather
 than in a weakened golden. Each entry maps a topic to a non-empty issue or
@@ -251,7 +260,7 @@ export can cross the explicit trace-only reset boundary; the exact golden is
 unchanged, so the race remains visible instead of being accepted as valid
 telemetry.
 
-Random IDs and timestamps remain shape-checked rather than pinned. The one
+Random IDs and timestamps remain integrity-checked rather than pinned. The one
 known random path fragment in aiohttp SQLAlchemy span names uses the explicit
 `prefix-suffix` matcher. All other profile dimensions and counts are exact.
 
@@ -269,15 +278,14 @@ bazel test //bazel/itest:aiohttp_otel_hurl_test_golden_candidates \
   --jobs=4 --nocache_test_results
 ```
 
-The candidate is an expanded, importable implementation-detail library for
-inspection. Review its buckets and translate the counts into the compact row
-in `goldens/<app>/common.scm`; do not check in a per-topic copy. Portable HTTP
-contracts stay in the single shared scenario table. Normal validation targets
-cannot rewrite checked-in goldens. The driver reports HTTP wall time,
+The candidate is a deterministic, importable implementation-detail library for
+inspection. Check it in under
+`goldens/details/<profile>/<scenario>/golden.scm`. Portable HTTP contracts stay
+in the single shared scenario table. Normal validation targets cannot rewrite
+checked-in goldens. The driver reports HTTP wall time,
 sink-measured evaluation time, and sink process peak RSS for each validation.
-Configured profile names are propagated into candidate libraries; unfamiliar
-instrumentation scopes receive deterministic Scheme-safe aliases so a new
-implementation can generate a candidate before its final profile exists.
+Configured profile names are propagated into candidate libraries, so a new
+implementation can generate candidates before exact tests import them.
 
 ```bash
 bazel test //bazel/itest:aiohttp_test

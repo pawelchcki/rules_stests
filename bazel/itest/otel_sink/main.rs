@@ -14,4 +14,5 @@ mod scheme;
 mod server;
 mod stats;
 mod storage;
+mod trace_forest;
 mod validation;

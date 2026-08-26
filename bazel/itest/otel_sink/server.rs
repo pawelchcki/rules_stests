@@ -9,12 +9,12 @@ use alloc::vec::Vec;
 use core::ffi::CStr;
 use core::time::Duration;
 use rustix::fd::OwnedFd;
-use rustix::net::sockopt::{set_socket_reuseport, set_socket_timeout, Timeout};
+use rustix::net::sockopt::{Timeout, set_socket_reuseport, set_socket_timeout};
 use rustix::net::{
-    acceptfrom, bind, listen, socket, AddressFamily, Ipv4Addr, SocketAddrAny, SocketAddrV4,
-    SocketType,
+    AddressFamily, Ipv4Addr, SocketAddrAny, SocketAddrV4, SocketType, acceptfrom, bind, listen,
+    socket,
 };
-use rustix::time::{clock_gettime, ClockId};
+use rustix::time::{ClockId, clock_gettime};
 
 const MAX_CAPTURE_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CAPTURE_RECORDS: usize = 4096;
@@ -295,7 +295,7 @@ fn ingest(
         .flatten()
         .chain(records.iter())
         .try_fold(0usize, |total, record| {
-            total.checked_add(record.request.content_length)
+            total.checked_add(record.retained_bytes)
         });
     if retained_count >= MAX_CAPTURE_RECORDS
         || retained_bytes
@@ -344,6 +344,43 @@ fn ingest(
         .map(|address| format!("{address:?}"))
         .unwrap_or_else(|| "unknown".to_string());
     let content_length = request.body.len();
+    let retained_bytes = match estimated_retained_bytes(
+        &request,
+        &remote_address,
+        signal,
+        &encoding,
+        &content_type,
+        &content_encoding,
+        decoded_size,
+    ) {
+        Some(size) => size,
+        None => {
+            respond(
+                connection,
+                413,
+                "text/plain",
+                b"cumulative OTLP capture exceeds limit\n",
+            );
+            return;
+        }
+    };
+    if frozen_records
+        .into_iter()
+        .flatten()
+        .chain(records.iter())
+        .try_fold(retained_bytes, |total, record| {
+            total.checked_add(record.retained_bytes)
+        })
+        .is_none_or(|total| total > MAX_CAPTURE_REQUEST_BYTES)
+    {
+        respond(
+            connection,
+            413,
+            "text/plain",
+            b"cumulative OTLP capture exceeds limit\n",
+        );
+        return;
+    }
     records.push(Record {
         received_unix_nano,
         remote_address,
@@ -360,6 +397,7 @@ fn ingest(
         signal: signal.to_string(),
         encoding: encoding.to_string(),
         payload,
+        retained_bytes,
     });
     if let Err(error) = storage::persist_parts(output, frozen_records, records) {
         records.pop();
@@ -371,6 +409,42 @@ fn ingest(
     } else {
         respond(connection, 200, "application/x-protobuf", b"");
     }
+}
+
+fn estimated_retained_bytes(
+    request: &crate::http::Request,
+    remote_address: &str,
+    signal: &str,
+    encoding: &str,
+    content_type: &str,
+    content_encoding: &str,
+    decoded_size: usize,
+) -> Option<usize> {
+    // The decoded protobuf structs / JSON DOM retain allocations beyond their
+    // serialized bytes. A factor of two is a conservative bound for this sink,
+    // and the remaining terms account for every retained metadata string.
+    let payload = decoded_size.checked_mul(2)?;
+    let headers = request.headers.iter().try_fold(0usize, |total, header| {
+        total
+            .checked_add(header.name.len())?
+            .checked_add(header.value.len())
+    })?;
+    [
+        payload,
+        request.body.len(),
+        headers,
+        remote_address.len(),
+        request.method.len(),
+        request.path.len(),
+        request.http_version.len(),
+        signal.len(),
+        encoding.len(),
+        content_type.len(),
+        content_encoding.len(),
+        core::mem::size_of::<Record>(),
+    ]
+    .into_iter()
+    .try_fold(0usize, usize::checked_add)
 }
 
 fn parse_content_type(value: &str) -> Result<String, String> {

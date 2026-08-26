@@ -30,6 +30,8 @@ pub(crate) struct Record {
     pub(crate) signal: String,
     pub(crate) encoding: String,
     pub(crate) payload: Payload,
+    #[serde(skip)]
+    pub(crate) retained_bytes: usize,
 }
 
 #[derive(Serialize)]

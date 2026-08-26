@@ -750,7 +750,7 @@
                    "log body is malformed"))
         (validate-log-attributes attributes-required (field 'attributes log))
         (check (= (field 'dropped-attributes log) 0) "log dropped attributes")
-        (check (member flags '(0 1 256 257)) "log flags are invalid")
+        (check (member flags '(0 1)) "log flags are invalid")
         (check (or (not (and (string=? trace-id "") (string=? span-id "")))
                    (= flags 0))
                "log flags require trace context")
@@ -814,6 +814,6 @@
                     expected-trace-state
                     error-message-policy
                     expected-span-buckets
-                    validate-buckets
+                    validate-contract-buckets
                     capture))
   ))

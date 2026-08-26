@@ -562,13 +562,13 @@ func emitGoldenCandidate(client http.Client, baseURL, goldenCase, configuredProf
 	if err != nil {
 		return err
 	}
-	golden = append([]byte(fmt.Sprintf("(define-library (realworld detail %s %s)\n  (export expected-implementation-buckets)\n  (import (scheme base))\n  (begin\n", profile, scenario)), golden...)
+	golden = append([]byte(fmt.Sprintf("(define-library (realworld detail %s %s)\n  (export expected-trace-shapes)\n  (import (scheme base) (otel trace-shape))\n  (begin\n", profile, scenario)), golden...)
 	golden = append(golden, []byte("  ))\n")...)
 	root := os.Getenv("TEST_UNDECLARED_OUTPUTS_DIR")
 	if root == "" {
 		return errors.New("TEST_UNDECLARED_OUTPUTS_DIR is unavailable for golden candidate")
 	}
-	directory := filepath.Join(root, app, scenario)
+	directory := filepath.Join(root, "details", profile, scenario)
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return fmt.Errorf("create golden candidate output directory: %w", err)
 	}
