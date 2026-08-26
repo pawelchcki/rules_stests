@@ -1,5 +1,5 @@
 load("@crates//:defs.bzl", "aliases", "all_crate_deps")
-load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("@rules_itest//:itest.bzl", "itest_service", "service_test")
 load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
 load(":hurl_test.bzl", "realworld_hurl_test_suite")
@@ -119,6 +119,12 @@ go_binary(
     embed = [":hurl_test_driver_lib"],
 )
 
+go_test(
+    name = "hurl_test_driver_test",
+    srcs = ["hurl_test_driver_test.go"],
+    embed = [":hurl_test_driver_lib"],
+)
+
 oci_rootfs(
     name = "aiohttp_rootfs",
     image = "@aiohttp_realworld_linux_amd64",
@@ -213,6 +219,9 @@ realworld_hurl_test_suite(
     name = "aiohttp_otel_hurl_test",
     timeout = "moderate",
     otel_app = "aiohttp",
+    otel_flaky_cases = {
+        "errors_profiles": "rules_itest startup health polling sometimes exports a second probe span tree",
+    },
     otel_sink = ":otel_sink_service",
     service = ":aiohttp_otel_service",
 )

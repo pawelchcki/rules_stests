@@ -192,6 +192,40 @@ bazel test //bazel/itest:aiohttp_otel_contract_test_articles \
 the shared scenarios, then add a detail pattern once its telemetry is ready to
 be pinned as another exact implementation specification.
 
+Known telemetry defects belong in the suite's `otel_xfails` dictionary rather
+than in a weakened golden. Each entry maps a topic to a non-empty issue or
+reason, for example:
+
+```starlark
+realworld_hurl_test_suite(
+    name = "my_app_otel_test",
+    service = ":my_app_otel_service",
+    otel_app = "my_app",
+    otel_sink = ":otel_sink_service",
+    otel_xfails = {
+        "comments": "https://example.invalid/issues/123",
+    },
+)
+```
+
+The Hurl workload and full OTLP validation still run. A Scheme contract
+rejection is printed as `XFAIL`, tagged `otel-xfail`, and keeps its failed JSON
+capture in undeclared outputs. A validation that starts passing becomes a hard
+`XPASS` failure until the entry is removed. Sink failures, timeouts, validator
+crashes, and other infrastructure errors are never swallowed by an xfail.
+The `errors_*` topics are ordinary passing contracts: their expected HTTP 4xx
+responses and error spans describe application behavior, not known telemetry
+defects.
+
+Intermittent telemetry defects use `otel_flaky_cases`, also as a mapping from
+topic to reason. Those targets receive Bazel's `flaky = True` behavior and an
+`otel-flaky` tag: Bazel retries a failing attempt and reports `FLAKY` if a retry
+passes, while exhausting the retries remains red. The aiohttp `errors_profiles`
+shard is marked this way because variable startup health polling can leak a
+second `/api/tags` span tree into the OTLP snapshot. Its strict golden is left
+unchanged, so the extra server, SQLAlchemy, and SQLite spans remain a detectable
+contract failure rather than accepted behavior.
+
 Random IDs and timestamps remain shape-checked rather than pinned. The one
 known random path fragment in aiohttp SQLAlchemy span names uses the explicit
 `prefix-suffix` matcher. All other profile dimensions and counts are exact.

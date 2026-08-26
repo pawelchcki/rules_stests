@@ -40,6 +40,7 @@ func main() {
 	otelProgram := flag.String("otel-program", "", "Scheme validation program evaluated after importing the libraries")
 	otelMode := flag.String("otel-mode", "validate", "OTLP golden mode: validate or candidate")
 	otelCase := flag.String("otel-case", "", "OTLP golden identity in app/case form")
+	otelXFail := flag.String("otel-xfail", "", "reason this case is expected to violate its OTLP contract")
 	hurlRootfs := flag.String("hurl-rootfs", "bazel/itest/hurl_rootfs", "Hurl OCI rootfs in runfiles")
 	jobs := flag.Int("jobs", 4, "number of Hurl files to execute concurrently")
 	uid := flag.String("uid", "", "unique suffix used for API objects")
@@ -114,7 +115,8 @@ func main() {
 		fatal(fmt.Errorf("RealWorld Hurl suite failed: %w", err))
 	}
 	if *otelSinkSuffix != "" {
-		if err := requireExportedTelemetry(*otelSinkSuffix, *otelMode, *otelCase, otelLibraries, otelImports, *otelProgram); err != nil {
+		validationErr := requireExportedTelemetry(*otelSinkSuffix, *otelMode, *otelCase, otelLibraries, otelImports, *otelProgram)
+		if err := classifyOTLPValidation(validationErr, *otelXFail, *otelCase, os.Stderr); err != nil {
 			fatal(err)
 		}
 	}
@@ -137,6 +139,33 @@ type sinkStats struct {
 type sinkRecord struct {
 	Signal  string          `json:"signal"`
 	Payload json.RawMessage `json:"payload"`
+}
+
+type otlpAssertionFailure struct {
+	cause error
+}
+
+func (failure *otlpAssertionFailure) Error() string {
+	return failure.cause.Error()
+}
+
+func (failure *otlpAssertionFailure) Unwrap() error {
+	return failure.cause
+}
+
+func classifyOTLPValidation(validationErr error, xfailReason, goldenCase string, output io.Writer) error {
+	if xfailReason == "" {
+		return validationErr
+	}
+	if validationErr == nil {
+		return fmt.Errorf("XPASS: OTLP contract %s unexpectedly passed; remove its xfail (%s)", goldenCase, xfailReason)
+	}
+	var assertionFailure *otlpAssertionFailure
+	if !errors.As(validationErr, &assertionFailure) {
+		return fmt.Errorf("OTLP xfail %s applies only to contract assertions; infrastructure failed instead: %w", goldenCase, validationErr)
+	}
+	fmt.Fprintf(output, "XFAIL: OTLP contract %s violated as expected (%s):\n%v\n", goldenCase, xfailReason, validationErr)
+	return nil
 }
 
 func requireExportedTelemetry(serviceSuffix, mode, goldenCase string, libraries, imports []string, program string) error {
@@ -224,7 +253,7 @@ func validateTelemetryDump(client http.Client, baseURL, mode, goldenCase string,
 		}
 	}
 	if !seen["traces"] || !seen["metrics"] || !seen["logs"] {
-		return fmt.Errorf("OTLP dump at %s lacks traces, metrics, or logs with service.name", baseURL)
+		return &otlpAssertionFailure{cause: fmt.Errorf("OTLP dump at %s lacks traces, metrics, or logs with service.name", baseURL)}
 	}
 	if mode == "candidate" {
 		if err := emitGoldenCandidate(client, baseURL, goldenCase, contents); err != nil {
@@ -260,7 +289,11 @@ func validateTelemetryDump(client http.Client, baseURL, mode, goldenCase string,
 	}
 	if validationResponse.StatusCode != http.StatusOK {
 		emitFailedCapture(goldenCase, contents)
-		return fmt.Errorf("Scheme rejected OTLP capture (HTTP %d):\n%s", validationResponse.StatusCode, validationOutput)
+		failure := fmt.Errorf("Scheme rejected OTLP capture (HTTP %d):\n%s", validationResponse.StatusCode, validationOutput)
+		if validationResponse.StatusCode == http.StatusUnprocessableEntity {
+			return &otlpAssertionFailure{cause: failure}
+		}
+		return failure
 	}
 	fmt.Printf("Verified quiescent OTLP Scheme golden: %d spans in %d trace requests, plus metrics and logs (%s): %s", stats.TraceSpans, stats.TraceRequests, baseURL, validationOutput)
 	return nil

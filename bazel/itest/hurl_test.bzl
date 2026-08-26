@@ -28,6 +28,8 @@ def _realworld_hurl_case_test(
         otel_imports = [],
         otel_program = None,
         otel_mode = "validate",
+        otel_xfail = "",
+        flaky = False,
         tags = [],
         **kwargs):
     spec = "@realworld_api_specs//:hurl/{}.hurl".format(case)
@@ -53,6 +55,8 @@ def _realworld_hurl_case_test(
         if otel_program:
             args.append("--otel-program=$(rootpath {})".format(otel_program))
             data.append(otel_program)
+        if otel_xfail:
+            args.append("--otel-xfail=" + otel_xfail)
         data.extend(otel_libraries)
     args.append("$(rootpath {})".format(spec))
     service_test(
@@ -60,6 +64,7 @@ def _realworld_hurl_case_test(
         args = args,
         data = data,
         services = [service],
+        flaky = flaky,
         tags = tags,
         test = "//bazel/itest:realworld_hurl",
         **kwargs
@@ -76,6 +81,9 @@ def realworld_hurl_test_suite(
         otel_detail_pattern = None,
         otel_exact = True,
         otel_candidates = True,
+        otel_flaky_cases = {},
+        otel_xfails = {},
+        flaky = False,
         tags = [],
         **kwargs):
     """Creates one schedulable integration test per upstream Hurl file.
@@ -86,6 +94,19 @@ def realworld_hurl_test_suite(
     """
     if bool(otel_sink) != bool(otel_app):
         fail("otel_sink and otel_app must be supplied together")
+    unknown_xfails = [case for case in otel_xfails if case not in REALWORLD_HURL_CASES]
+    if unknown_xfails:
+        fail("otel_xfails contains unknown cases: {}".format(", ".join(sorted(unknown_xfails))))
+    unknown_flaky = [case for case in otel_flaky_cases if case not in REALWORLD_HURL_CASES]
+    if unknown_flaky:
+        fail("otel_flaky_cases contains unknown cases: {}".format(", ".join(sorted(unknown_flaky))))
+    if otel_xfails and not otel_sink:
+        fail("otel_xfails requires otel_sink")
+    if otel_flaky_cases and not otel_sink:
+        fail("otel_flaky_cases requires otel_sink")
+    overlapping_cases = [case for case in otel_xfails if case in otel_flaky_cases]
+    if overlapping_cases:
+        fail("cases cannot be both flaky and xfail: {}".format(", ".join(sorted(overlapping_cases))))
     if otel_sink:
         profile = otel_profile or "python-{}-auto-v0-65b0".format(otel_app)
         profile_library = otel_profile_library or "//bazel/itest/goldens:{}/common.scm".format(otel_app)
@@ -100,6 +121,13 @@ def realworld_hurl_test_suite(
     candidates = []
     for case in REALWORLD_HURL_CASES:
         test_name = name + "_" + case
+        xfail_reason = otel_xfails.get(case, "")
+        if case in otel_xfails and not xfail_reason:
+            fail("otel_xfails reason for {} must be non-empty".format(case))
+        flaky_reason = otel_flaky_cases.get(case, "")
+        if case in otel_flaky_cases and not flaky_reason:
+            fail("otel_flaky_cases reason for {} must be non-empty".format(case))
+        case_tags = tags + (["otel-xfail"] if xfail_reason else []) + (["otel-flaky"] if flaky_reason else [])
         libraries = []
         imports = []
         program = None
@@ -133,7 +161,9 @@ def realworld_hurl_test_suite(
             otel_libraries = libraries,
             otel_imports = imports,
             otel_program = program,
-            tags = tags,
+            otel_xfail = xfail_reason,
+            flaky = flaky or bool(flaky_reason),
+            tags = case_tags,
             **kwargs
         )
         tests.append(":" + test_name)
