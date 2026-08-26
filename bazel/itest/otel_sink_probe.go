@@ -93,6 +93,22 @@ func main() {
 		[]byte("unexpected JSON type"),
 		[]byte(`{"resourceMetrics":[{"scopeMetrics":[{"metrics":[{"sum":{"aggregationTemporality":2,"isMonotonic":"true"}}]}]}]}`),
 	)
+	rejectJSON(
+		endpoint,
+		"/v1/metrics",
+		"duplicate JSON key",
+		[]byte("duplicate JSON key"),
+		[]byte(`{"resourceMetrics":[],"resourceMetrics":[]}`),
+	)
+	unsupportedResponse, err := http.Post(endpoint+"/v1/metrics", "text/plain", bytes.NewReader([]byte("{}")))
+	if err != nil {
+		fatal(fmt.Errorf("send unsupported media type: %w", err))
+	}
+	unsupportedBody, readErr := io.ReadAll(unsupportedResponse.Body)
+	unsupportedResponse.Body.Close()
+	if readErr != nil || unsupportedResponse.StatusCode != http.StatusUnsupportedMediaType || !bytes.Contains(unsupportedBody, []byte("unsupported content type")) {
+		fatal(fmt.Errorf("unsupported media type: HTTP %d: %s: %v", unsupportedResponse.StatusCode, unsupportedBody, readErr))
+	}
 
 	duplicateEncodingConnection, err := net.Dial("tcp", strings.TrimPrefix(endpoint, "http://"))
 	if err != nil {
@@ -110,6 +126,24 @@ func main() {
 	duplicateEncodingConnection.Close()
 	if readErr != nil || duplicateEncodingResponse.StatusCode != http.StatusBadRequest || !bytes.Contains(duplicateEncodingBody, []byte("must be unique")) {
 		fatal(fmt.Errorf("duplicate content encoding: HTTP %d: %s: %v", duplicateEncodingResponse.StatusCode, duplicateEncodingBody, readErr))
+	}
+
+	trailingTokenConnection, err := net.Dial("tcp", strings.TrimPrefix(endpoint, "http://"))
+	if err != nil {
+		fatal(fmt.Errorf("connect for trailing request-line token: %w", err))
+	}
+	if _, err := fmt.Fprint(trailingTokenConnection, "POST /v1/metrics HTTP/1.1 extra\r\nHost: sink\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"); err != nil {
+		fatal(fmt.Errorf("send trailing request-line token: %w", err))
+	}
+	trailingTokenResponse, err := http.ReadResponse(bufio.NewReader(trailingTokenConnection), &http.Request{Method: http.MethodPost})
+	if err != nil {
+		fatal(fmt.Errorf("read trailing request-line token response: %w", err))
+	}
+	trailingTokenBody, readErr := io.ReadAll(trailingTokenResponse.Body)
+	trailingTokenResponse.Body.Close()
+	trailingTokenConnection.Close()
+	if readErr != nil || trailingTokenResponse.StatusCode != http.StatusBadRequest || !bytes.Contains(trailingTokenBody, []byte("invalid HTTP/1.1 request line")) {
+		fatal(fmt.Errorf("trailing request-line token: HTTP %d: %s: %v", trailingTokenResponse.StatusCode, trailingTokenBody, readErr))
 	}
 
 	nonDecimalLengthConnection, err := net.Dial("tcp", strings.TrimPrefix(endpoint, "http://"))
@@ -164,6 +198,24 @@ func main() {
 	oversizedJSONConnection.Close()
 	if readErr != nil || oversizedJSONResponse.StatusCode != http.StatusBadRequest || !bytes.Contains(oversizedJSONBody, []byte("request body exceeds limit")) {
 		fatal(fmt.Errorf("oversized JSON: HTTP %d: %s: %v", oversizedJSONResponse.StatusCode, oversizedJSONBody, readErr))
+	}
+
+	oversizedProtobufConnection, err := net.Dial("tcp", strings.TrimPrefix(endpoint, "http://"))
+	if err != nil {
+		fatal(fmt.Errorf("connect for oversized protobuf: %w", err))
+	}
+	if _, err := fmt.Fprint(oversizedProtobufConnection, "POST /v1/metrics HTTP/1.1\r\nHost: sink\r\nContent-Type: application/x-protobuf\r\nContent-Length: 1048577\r\nConnection: close\r\n\r\n"); err != nil {
+		fatal(fmt.Errorf("send oversized protobuf headers: %w", err))
+	}
+	oversizedProtobufResponse, err := http.ReadResponse(bufio.NewReader(oversizedProtobufConnection), &http.Request{Method: http.MethodPost})
+	if err != nil {
+		fatal(fmt.Errorf("read oversized protobuf response: %w", err))
+	}
+	oversizedProtobufBody, readErr := io.ReadAll(oversizedProtobufResponse.Body)
+	oversizedProtobufResponse.Body.Close()
+	oversizedProtobufConnection.Close()
+	if readErr != nil || oversizedProtobufResponse.StatusCode != http.StatusBadRequest || !bytes.Contains(oversizedProtobufBody, []byte("request body exceeds limit")) {
+		fatal(fmt.Errorf("oversized protobuf: HTTP %d: %s: %v", oversizedProtobufResponse.StatusCode, oversizedProtobufBody, readErr))
 	}
 
 	partialConnection, err := net.Dial("tcp", strings.TrimPrefix(endpoint, "http://"))

@@ -5,6 +5,7 @@
           (implementation-buckets-for scenario-name)))
 
 (otel-validate-exact expected-resource-attributes
+                     expected-resource-schema-url
                      expected-scopes
                      expected-metric-scopes
                      expected-metric-descriptors

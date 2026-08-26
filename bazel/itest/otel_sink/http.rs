@@ -6,7 +6,7 @@ use rustix::fd::OwnedFd;
 use rustix::net::{send, SendFlags};
 
 const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
-const MAX_JSON_REQUEST_BYTES: usize = 1024 * 1024;
+const MAX_OTLP_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_VALIDATION_SOURCE_BYTES: usize = 256 * 1024;
 
 pub(crate) struct Request {
@@ -56,7 +56,11 @@ pub(crate) fn read_request(connection: &OwnedFd) -> Result<Request, String> {
     let method = request_line.next().unwrap_or("").to_string();
     let path = request_line.next().unwrap_or("").to_string();
     let http_version = request_line.next().unwrap_or("").to_string();
-    if method.is_empty() || path.is_empty() || http_version != "HTTP/1.1" {
+    if method.is_empty()
+        || path.is_empty()
+        || http_version != "HTTP/1.1"
+        || request_line.next().is_some()
+    {
         return Err("invalid HTTP/1.1 request line".to_string());
     }
     let mut headers = Vec::new();
@@ -87,15 +91,10 @@ pub(crate) fn read_request(connection: &OwnedFd) -> Result<Request, String> {
         .transpose()
         .map_err(|_| "invalid Content-Length".to_string())?
         .unwrap_or(0);
-    let is_json = headers
-        .iter()
-        .find(|header| header.name == "content-type")
-        .and_then(|header| header.value.split(';').next())
-        .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"));
     let max_body_bytes = if method == "POST" && path == "/validate" {
         MAX_VALIDATION_SOURCE_BYTES
-    } else if method == "POST" && path.starts_with("/v1/") && is_json {
-        MAX_JSON_REQUEST_BYTES
+    } else if method == "POST" && path.starts_with("/v1/") {
+        MAX_OTLP_REQUEST_BYTES
     } else {
         MAX_REQUEST_BYTES
     };

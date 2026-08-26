@@ -255,14 +255,18 @@
                "content-encoding header is not unique")))
     requests))
 
-(define (validate-resources expected resources)
+(define (validate-resources expected expected-schema-url resources)
   (check (> (length resources) 0) "capture contains no resources")
   (for-each
     (lambda (resource)
       (let ((attributes (field 'attributes resource)))
         (check (= (field 'dropped-attributes resource) 0) "resource dropped attributes")
         (check (= (field 'entity-refs resource) 0) "resource has entity references")
-        (check (string=? (field 'schema-url resource) "") "resource schema URL changed")
+        (check (string? (field 'schema-url resource)) "resource schema URL is not a string")
+        (if expected-schema-url
+            (check (string=? (field 'schema-url resource) expected-schema-url)
+                   "resource schema URL changed")
+            #t)
         (check (= (length attributes) (length expected)) "resource attribute set changed")
         (for-each
           (lambda (rule)
@@ -696,7 +700,7 @@
                "log trace context is incomplete")))
     logs))
 
-(define (validate-capture expected-resource-attributes expected-scopes expected-metric-scopes expected-metric-descriptors expected-metric-aggregation expected-metric-point-schemas expected-log-scopes log-policy event-policy expected-span-flags expected-trace-state error-message-policy expected-span-buckets bucket-validator capture)
+(define (validate-capture expected-resource-attributes expected-resource-schema-url expected-scopes expected-metric-scopes expected-metric-descriptors expected-metric-aggregation expected-metric-point-schemas expected-log-scopes log-policy event-policy expected-span-flags expected-trace-state error-message-policy expected-span-buckets bucket-validator capture)
   (let ((requests (field 'requests capture))
         (resources (field 'resources capture))
         (scopes (field 'scopes capture))
@@ -710,7 +714,7 @@
     (check (field 'json-strings-valid capture)
            "malformed OTLP JSON string field")
     (validate-requests requests)
-    (validate-resources expected-resource-attributes resources)
+    (validate-resources expected-resource-attributes expected-resource-schema-url resources)
     (validate-scopes expected-scopes scopes)
     (validate-spans expected-scopes event-policy expected-span-flags expected-trace-state error-message-policy spans)
     (bucket-validator expected-span-buckets expected-scopes spans)
@@ -718,8 +722,9 @@
     (validate-logs expected-log-scopes log-policy logs)
     (display "valid OTLP capture\n")))
 
-(define (otel-validate-contract expected-resource-attributes expected-scopes expected-metric-scopes expected-log-scopes event-policy expected-span-buckets capture)
+(define (otel-validate-contract expected-resource-attributes expected-resource-schema-url expected-scopes expected-metric-scopes expected-log-scopes event-policy expected-span-buckets capture)
   (validate-capture expected-resource-attributes
+                    expected-resource-schema-url
                     expected-scopes
                     expected-metric-scopes
                     #f
@@ -735,8 +740,9 @@
                     validate-contract-buckets
                     capture))
 
-(define (otel-validate-exact expected-resource-attributes expected-scopes expected-metric-scopes expected-metric-descriptors expected-metric-aggregation expected-metric-point-schemas expected-log-scopes log-policy event-policy expected-span-flags expected-trace-state error-message-policy expected-span-buckets capture)
+(define (otel-validate-exact expected-resource-attributes expected-resource-schema-url expected-scopes expected-metric-scopes expected-metric-descriptors expected-metric-aggregation expected-metric-point-schemas expected-log-scopes log-policy event-policy expected-span-flags expected-trace-state error-message-policy expected-span-buckets capture)
   (validate-capture expected-resource-attributes
+                    expected-resource-schema-url
                     expected-scopes
                     expected-metric-scopes
                     expected-metric-descriptors

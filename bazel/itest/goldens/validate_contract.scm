@@ -4,6 +4,7 @@
                          render-server-span-name))
 
 (otel-validate-contract expected-resource-attributes
+                        expected-resource-schema-url
                         expected-scopes
                         expected-metric-scopes
                         expected-log-scopes

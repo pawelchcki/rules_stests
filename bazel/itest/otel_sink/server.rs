@@ -265,6 +265,18 @@ fn ingest(
         .unwrap_or("")
         .trim()
         .to_ascii_lowercase();
+    if content_type != "application/json"
+        && content_type != "application/x-protobuf"
+        && content_type != "application/protobuf"
+    {
+        respond(
+            connection,
+            415,
+            "text/plain",
+            format!("unsupported content type {content_type:?}\n").as_bytes(),
+        );
+        return;
+    }
     let (encoding, payload) = match otlp::decode(signal, &content_type, &request.body) {
         Ok(decoded) => decoded,
         Err(error) => {

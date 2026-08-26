@@ -1,6 +1,7 @@
 (define-library (realworld profile python-aiohttp-auto-v0-65b0)
   (export implementation-profile
           expected-resource-attributes
+          expected-resource-schema-url
           expected-scopes
           expected-metric-scopes
           expected-metric-descriptors
