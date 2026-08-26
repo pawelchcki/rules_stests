@@ -69,16 +69,25 @@ fn validate_array_field(
     camel: &str,
     validate: Validator,
 ) -> Result<(), String> {
-    if let Some(items) = value.get(snake).and_then(Value::as_array) {
-        for item in items {
-            validate(item)?;
-        }
-    }
-    if camel != snake {
-        if let Some(items) = value.get(camel).and_then(Value::as_array) {
+    for name in [snake, camel] {
+        if let Some(field) = value.get(name) {
+            if field.is_null() {
+                if camel == snake {
+                    break;
+                }
+                continue;
+            }
+            let Some(items) = field.as_array() else {
+                return Err(format!(
+                    "invalid OTLP repeated field {name:?}: expected array"
+                ));
+            };
             for item in items {
                 validate(item)?;
             }
+        }
+        if camel == snake {
+            break;
         }
     }
     Ok(())
@@ -142,6 +151,13 @@ fn integer_scalar(value: &Value) -> bool {
         || value
             .as_str()
             .is_some_and(|value| value.parse::<i64>().is_ok() || value.parse::<u64>().is_ok())
+}
+
+fn signed_integer_scalar(value: &Value) -> bool {
+    value.as_i64().is_some()
+        || value
+            .as_str()
+            .is_some_and(|value| value.parse::<i64>().is_ok())
 }
 
 fn double_scalar(value: &Value) -> bool {
@@ -597,7 +613,7 @@ fn validate_number_data_point(value: &Value) -> Result<(), String> {
         "as_int",
         "asInt",
         "number data point",
-        integer_scalar,
+        signed_integer_scalar,
     )
 }
 
@@ -818,7 +834,7 @@ fn validate_exemplar(value: &Value) -> Result<(), String> {
         integer_scalar,
     )?;
     validate_scalar_field(value, "as_double", "asDouble", "exemplar", double_scalar)?;
-    validate_scalar_field(value, "as_int", "asInt", "exemplar", integer_scalar)?;
+    validate_scalar_field(value, "as_int", "asInt", "exemplar", signed_integer_scalar)?;
     validate_scalar_field(value, "span_id", "spanId", "exemplar", Value::is_string)?;
     validate_scalar_field(value, "trace_id", "traceId", "exemplar", Value::is_string)?;
     validate_array_field(

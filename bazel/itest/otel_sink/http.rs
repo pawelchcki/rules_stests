@@ -6,6 +6,8 @@ use rustix::fd::OwnedFd;
 use rustix::net::{send, SendFlags};
 
 const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
+const MAX_HEADER_BYTES: usize = 64 * 1024;
+const MAX_HEADER_COUNT: usize = 128;
 const MAX_JSON_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_PROTOBUF_REQUEST_BYTES: usize = 128 * 1024;
 const MAX_VALIDATION_SOURCE_BYTES: usize = 256 * 1024;
@@ -64,9 +66,14 @@ pub(crate) fn read_request(connection: &OwnedFd) -> Result<Request, RequestError
     loop {
         if let Some(position) = find(&bytes, b"\r\n\r\n") {
             header_end = position + 4;
+            if header_end > MAX_HEADER_BYTES {
+                return Err(RequestError::payload_too_large(
+                    "request headers exceed limit".to_string(),
+                ));
+            }
             break;
         }
-        if bytes.len() >= MAX_REQUEST_BYTES {
+        if bytes.len() >= MAX_HEADER_BYTES {
             return Err(RequestError::payload_too_large(
                 "request headers exceed limit".to_string(),
             ));
@@ -101,6 +108,11 @@ pub(crate) fn read_request(connection: &OwnedFd) -> Result<Request, RequestError
     }
     let mut headers = Vec::new();
     for line in lines {
+        if headers.len() >= MAX_HEADER_COUNT {
+            return Err(RequestError::payload_too_large(
+                "request header count exceeds limit".to_string(),
+            ));
+        }
         let (name, value) = line
             .split_once(':')
             .ok_or_else(|| "malformed HTTP header".to_string())?;

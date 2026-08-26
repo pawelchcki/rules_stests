@@ -109,6 +109,20 @@ func main() {
 	rejectJSON(
 		endpoint,
 		"/v1/metrics",
+		"non-array metric metadata",
+		[]byte("expected array"),
+		[]byte(`{"resourceMetrics":[{"scopeMetrics":[{"metrics":[{"name":"bad-metadata","metadata":{},"gauge":{"dataPoints":[]}}]}]}]}`),
+	)
+	rejectJSON(
+		endpoint,
+		"/v1/metrics",
+		"out-of-range signed metric value",
+		[]byte("unexpected JSON type"),
+		[]byte(`{"resourceMetrics":[{"scopeMetrics":[{"metrics":[{"name":"bad-int","gauge":{"dataPoints":[{"timeUnixNano":"1","asInt":"18446744073709551615"}]}}]}]}]}`),
+	)
+	rejectJSON(
+		endpoint,
+		"/v1/metrics",
 		"duplicate JSON key",
 		[]byte("duplicate JSON key"),
 		[]byte(`{"resourceMetrics":[],"resourceMetrics":[]}`),
@@ -122,6 +136,19 @@ func main() {
 	if readErr != nil || unsupportedResponse.StatusCode != http.StatusUnsupportedMediaType || !bytes.Contains(unsupportedBody, []byte("unsupported content type")) {
 		fatal(fmt.Errorf("unsupported media type: HTTP %d: %s: %v", unsupportedResponse.StatusCode, unsupportedBody, readErr))
 	}
+	var headerCountRequest strings.Builder
+	headerCountRequest.WriteString("POST /v1/metrics HTTP/1.1\r\n")
+	for index := 0; index < 129; index++ {
+		fmt.Fprintf(&headerCountRequest, "X-Probe-%d: value\r\n", index)
+	}
+	headerCountRequest.WriteString("\r\n")
+	rejectRawRequest(
+		endpoint,
+		"oversized header count",
+		headerCountRequest.String(),
+		http.StatusRequestEntityTooLarge,
+		[]byte("request header count exceeds limit"),
+	)
 
 	duplicateEncodingConnection, err := net.Dial("tcp", strings.TrimPrefix(endpoint, "http://"))
 	if err != nil {
@@ -602,20 +629,13 @@ func main() {
 	}
 	resetSink(endpoint)
 	malformedCollectionTrace := []byte(`{"resourceSpans":[{"resource":{"attributes":[]},"scopeSpans":[{"scope":{"name":"collection.probe"},"spans":[{"traceId":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","spanId":"6666666666666666","name":"SELECT","kind":3,"startTimeUnixNano":"1","endTimeUnixNano":"2","links":"corrupt","status":{"code":0}}]}]}]}`)
-	postJSON(endpoint, "/v1/traces", "malformed-collection trace", malformedCollectionTrace)
-	malformedDumpBody := freezeCapture(endpoint, "/dump.scm", "malformed-collection Scheme capture")
-	if !bytes.Contains(malformedDumpBody, []byte("(json-collections-valid #f)")) {
-		fatal(fmt.Errorf("malformed collection was absent from Scheme capture: %s", malformedDumpBody))
-	}
-	malformedCandidate, err := http.Get(endpoint + "/candidate?app=custom-app")
-	if err != nil {
-		fatal(fmt.Errorf("generate malformed-collection candidate: %w", err))
-	}
-	malformedCandidateBody, readErr := io.ReadAll(malformedCandidate.Body)
-	malformedCandidate.Body.Close()
-	if readErr != nil || malformedCandidate.StatusCode != http.StatusUnprocessableEntity || !bytes.Contains(malformedCandidateBody, []byte("malformed OTLP JSON collection")) {
-		fatal(fmt.Errorf("malformed-collection candidate: HTTP %d: %s: %v", malformedCandidate.StatusCode, malformedCandidateBody, readErr))
-	}
+	rejectJSON(
+		endpoint,
+		"/v1/traces",
+		"malformed-collection trace",
+		[]byte("expected array"),
+		malformedCollectionTrace,
+	)
 	resetSink(endpoint)
 	malformedStringTrace := []byte(`{"resourceSpans":[{"resource":{"attributes":[]},"scopeSpans":[{"scope":{"name":"string.probe"},"spans":[{"traceId":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","spanId":"7777777777777777","traceState":0,"name":"SELECT","kind":3,"startTimeUnixNano":"1","endTimeUnixNano":"2","status":{"code":0}}]}]}]}`)
 	postJSON(endpoint, "/v1/traces", "malformed-string trace", malformedStringTrace)
@@ -638,6 +658,13 @@ func main() {
 	malformedMetricDump := freezeCapture(endpoint, "/dump.scm", "malformed-metric Scheme capture")
 	if !bytes.Contains(malformedMetricDump, []byte("(data-type multiple)")) || !bytes.Contains(malformedMetricDump, []byte("(data-points-valid #f)")) {
 		fatal(fmt.Errorf("malformed metric point was absent from Scheme capture: %s", malformedMetricDump))
+	}
+	resetSink(endpoint)
+	nullOneofs := []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"metric.probe"},"metrics":[{"name":"null-oneofs","gauge":{"dataPoints":[{"timeUnixNano":"9","asInt":"1","asDouble":null,"exemplars":[{"timeUnixNano":"9","asInt":"1","asDouble":null}]}]},"summary":null}]}]}]}`)
+	postJSON(endpoint, "/v1/metrics", "null oneof alternatives", nullOneofs)
+	nullOneofsDump := freezeCapture(endpoint, "/dump.scm", "null-oneofs Scheme capture")
+	if !bytes.Contains(nullOneofsDump, []byte("(data-type gauge)")) || !bytes.Contains(nullOneofsDump, []byte("(data-points-valid #t)")) {
+		fatal(fmt.Errorf("null oneof alternatives were not treated as unset: %s", nullOneofsDump))
 	}
 	resetSink(endpoint)
 	defaultedMetrics := []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"metric.probe"},"metrics":[{"name":"nullable-histogram","metadata":null,"histogram":{"dataPoints":[{"attributes":null,"startTimeUnixNano":null,"timeUnixNano":"3","count":"1","sum":null,"bucketCounts":["1"],"explicitBounds":[],"min":null,"max":null,"flags":null}],"aggregationTemporality":2}},{"name":"defaulted-summary","summary":{"dataPoints":[{"timeUnixNano":"4","count":"0"}]}},{"name":"maximum-uint64-histogram","histogram":{"dataPoints":[{"timeUnixNano":"18446744073709551615","count":"18446744073709551615","bucketCounts":["18446744073709551615"],"explicitBounds":[]}],"aggregationTemporality":2}},{"name":"aggregation-semantics","sum":{"dataPoints":[{"timeUnixNano":"5","asInt":"1"}],"aggregationTemporality":2,"isMonotonic":true}},{"name":"no-recorded-value","gauge":{"dataPoints":[{"timeUnixNano":"7","flags":1}]}}]}]}]}`)
@@ -824,6 +851,26 @@ func rejectContentType(endpoint, contentType string, want []byte) {
 	response.Body.Close()
 	if readErr != nil || response.StatusCode != http.StatusBadRequest || !bytes.Contains(contents, want) {
 		fatal(fmt.Errorf("send malformed Content-Type: HTTP %d: %s: %v", response.StatusCode, contents, readErr))
+	}
+}
+
+func rejectRawRequest(endpoint, label, request string, wantStatus int, want []byte) {
+	connection, err := net.Dial("tcp", strings.TrimPrefix(endpoint, "http://"))
+	if err != nil {
+		fatal(fmt.Errorf("connect for %s: %w", label, err))
+	}
+	if _, err := fmt.Fprint(connection, request); err != nil {
+		fatal(fmt.Errorf("send %s: %w", label, err))
+	}
+	response, err := http.ReadResponse(bufio.NewReader(connection), &http.Request{Method: http.MethodPost})
+	if err != nil {
+		fatal(fmt.Errorf("read %s response: %w", label, err))
+	}
+	contents, readErr := io.ReadAll(response.Body)
+	response.Body.Close()
+	connection.Close()
+	if readErr != nil || response.StatusCode != wantStatus || !bytes.Contains(contents, want) {
+		fatal(fmt.Errorf("%s: HTTP %d: %s: %v", label, response.StatusCode, contents, readErr))
 	}
 }
 

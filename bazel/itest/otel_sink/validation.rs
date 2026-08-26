@@ -1391,7 +1391,7 @@ fn json_metric_data(metric: &Value) -> (&'static str, usize, bool, &'static str,
         ),
         ("summary", "summary", "summary", json_summary_point_valid),
     ] {
-        if let Some(value) = json_field(data, snake, camel) {
+        if let Some(value) = json_non_null_field(data, snake, camel) {
             if selected.is_some() {
                 return ("multiple", 0, false, "absent", "absent");
             }
@@ -1446,7 +1446,7 @@ fn json_metric_point_attributes(output: &mut String, metric: &Value) {
         ("exponential_histogram", "exponentialHistogram"),
         ("summary", "summary"),
     ] {
-        if let Some(data) = json_field(data, snake, camel) {
+        if let Some(data) = json_non_null_field(data, snake, camel) {
             for point in array(json_field(data, "data_points", "dataPoints")) {
                 attributes(output, point.get("attributes"));
             }
@@ -1484,9 +1484,12 @@ fn json_number_point_valid(point: &Value) -> bool {
     // Prost's serde representation keeps a oneof under `value`, while OTLP/JSON
     // places asInt/asDouble directly on the point. Mixed captures can contain
     // both representations, so validate the numeric alternative in either.
-    let number = point.get("value").unwrap_or(point);
-    let as_double = json_field(number, "as_double", "asDouble");
-    let as_integer = json_field(number, "as_int", "asInt");
+    let number = point
+        .get("value")
+        .filter(|value| !value.is_null())
+        .unwrap_or(point);
+    let as_double = json_non_null_field(number, "as_double", "asDouble");
+    let as_integer = json_non_null_field(number, "as_int", "asInt");
     json_point_metadata_valid(point)
         && json_exemplars_valid(point)
         && (json_no_recorded_value(point)
@@ -1641,9 +1644,12 @@ fn json_extrema_valid(point: &Value) -> bool {
 fn json_exemplars_valid(point: &Value) -> bool {
     array(point.get("exemplars")).iter().all(|exemplar| {
         let time = try_integer(json_field(exemplar, "time_unix_nano", "timeUnixNano"));
-        let value = exemplar.get("value").unwrap_or(exemplar);
-        let as_double = json_field(value, "as_double", "asDouble");
-        let as_integer = json_field(value, "as_int", "asInt");
+        let value = exemplar
+            .get("value")
+            .filter(|value| !value.is_null())
+            .unwrap_or(exemplar);
+        let as_double = json_non_null_field(value, "as_double", "asDouble");
+        let as_integer = json_non_null_field(value, "as_int", "asInt");
         let selected_value_valid = match (as_double, as_integer) {
             (Some(value), None) => json_double(value).is_some(),
             (None, Some(value)) => try_integer(Some(value)).is_ok(),
@@ -1997,6 +2003,10 @@ fn try_integer(value: Option<&Value>) -> Result<i128, ()> {
 
 fn json_field<'a>(value: &'a Value, snake: &str, camel: &str) -> Option<&'a Value> {
     value.get(snake).or_else(|| value.get(camel))
+}
+
+fn json_non_null_field<'a>(value: &'a Value, snake: &str, camel: &str) -> Option<&'a Value> {
+    json_field(value, snake, camel).filter(|value| !value.is_null())
 }
 
 fn has_duplicate_json_field_spellings(value: &Value) -> bool {
