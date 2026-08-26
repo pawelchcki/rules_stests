@@ -2,7 +2,7 @@
   (export implementation-profile
           expected-resource-attributes
           expected-scopes
-          event-policy
+          event-policy-for
           server-scope
           render-server-span-name
           implementation-buckets-for)
@@ -27,7 +27,9 @@
       '(("http.scheme" (exact "http")) ("net.host.name" (loopback-port)) ("net.peer.ip" (exact "127.0.0.1")))
       '("net.host.port" "http.status_code"))))
 
-(define event-policy 'exception-on-error)
+(define (event-policy-for scenario)
+  (list 'exception-on-error
+        (list-ref (python-profile-shape scenario implementation-shapes) 5)))
 (define server-scope 'django)
 
 (define (render-server-span-name method canonical-route)

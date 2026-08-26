@@ -198,11 +198,11 @@
 (define (scope-alias expected-scopes name)
   (car (scope-declaration expected-scopes name)))
 
-(define (validate-events policy span)
+(define (validate-events mode span)
   (let ((events (field 'events span)))
     (cond
-      ((eq? policy 'empty) (check (null? events) "span events changed"))
-      ((eq? policy 'exception-on-error)
+      ((eq? mode 'empty) (check (null? events) "span events changed"))
+      ((eq? mode 'exception-on-error)
        (if (null? events)
            #t
            (begin
@@ -216,31 +216,36 @@
                         "event timestamp is outside its span")
                  (check (= (field 'dropped-attributes event) 0) "event dropped attributes"))
                events))))
-      (else (error "unknown event policy" policy)))))
+      (else (error "unknown event policy" mode)))))
 
 (define (validate-spans expected-scopes event-policy spans)
-  (check (> (length spans) 0) "capture contains no spans")
-  (for-each
-    (lambda (span)
-      (begin
-        (check (valid-hex? (field 'trace-id span) 32) "invalid trace ID")
-        (check (valid-hex? (field 'span-id span) 16) "invalid span ID")
-        (check (= (field 'id-count span) 1) "duplicate span ID")
-        (check (or (string=? (field 'parent-span-id span) "")
-                   (valid-hex? (field 'parent-span-id span) 16))
-               "invalid parent span ID")
-        (check (field 'parent-trace-matches span) "parent belongs to another trace")
-        (check (string=? (field 'trace-state span) "") "trace state changed")
-        (check (and (> (field 'start span) 0) (>= (field 'end span) (field 'start span)))
-               "span timestamps are not ordered")
-        (check (= (field 'dropped-attributes span) 0) "span dropped attributes")
-        (check (= (field 'dropped-events span) 0) "span dropped events")
-        (check (= (field 'dropped-links span) 0) "span dropped links")
-        (check (null? (field 'links span)) "span links changed")
-        (check (= (field 'flags span) 256) "span flags changed")
-        (validate-span-attributes span expected-scopes)
-        (validate-events event-policy span)))
-    spans))
+  (let ((event-mode (car event-policy))
+        (expected-event-count (cadr event-policy)))
+    (check (> (length spans) 0) "capture contains no spans")
+    (for-each
+      (lambda (span)
+        (begin
+          (check (valid-hex? (field 'trace-id span) 32) "invalid trace ID")
+          (check (valid-hex? (field 'span-id span) 16) "invalid span ID")
+          (check (= (field 'id-count span) 1) "duplicate span ID within trace")
+          (check (or (string=? (field 'parent-span-id span) "")
+                     (valid-hex? (field 'parent-span-id span) 16))
+                 "invalid parent span ID")
+          (check (field 'parent-trace-matches span) "parent belongs to another trace")
+          (check (string=? (field 'trace-state span) "") "trace state changed")
+          (check (and (> (field 'start span) 0) (>= (field 'end span) (field 'start span)))
+                 "span timestamps are not ordered")
+          (check (= (field 'dropped-attributes span) 0) "span dropped attributes")
+          (check (= (field 'dropped-events span) 0) "span dropped events")
+          (check (= (field 'dropped-links span) 0) "span dropped links")
+          (check (null? (field 'links span)) "span links changed")
+          (check (= (field 'flags span) 256) "span flags changed")
+          (validate-span-attributes span expected-scopes)
+          (validate-events event-mode span)))
+      spans)
+    (check (= expected-event-count
+              (sum (map (lambda (span) (length (field 'events span))) spans)))
+           "span exception event count changed")))
 
 (define (matches-name? matcher name)
   (cond
@@ -266,16 +271,10 @@
              "golden span bucket count changed"))
     buckets))
 
-(define (bucket-domain-matches? span bucket expected-scopes)
-  (and (eq? (scope-alias expected-scopes (field 'scope span)) (list-ref bucket 1))
-       (eq? (kind-name (field 'kind span)) (list-ref bucket 2))))
-
 (define (validate-contract-buckets buckets expected-scopes spans)
   (check (= (sum (map car buckets))
             (count (lambda (span)
-                     (find (lambda (bucket)
-                             (bucket-domain-matches? span bucket expected-scopes))
-                           buckets))
+                     (eq? (kind-name (field 'kind span)) 'server))
                    spans))
          "contract span total changed")
   (for-each

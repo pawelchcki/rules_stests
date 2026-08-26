@@ -149,9 +149,10 @@ The libraries deliberately separate four layers:
   supply an equivalent language/runtime library without changing the workload.
 - `(realworld profile <implementation>)` preserves exact implementation
   behavior: resource identity, instrumentation libraries and versions,
-  attribute schemas, event policy, span-name rendering, database topology,
-  names, parentage, status, and counts. Each profile contains one compact
-  fixed-column count table for all topics instead of one library per topic.
+  attribute schemas, per-scenario event policy and counts, span-name rendering,
+  database topology, names, parentage, status, and counts. Each profile contains
+  one compact fixed-column count table for all topics instead of one library per
+  topic.
 
 For example, the shared articles contract says:
 

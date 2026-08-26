@@ -154,6 +154,28 @@ func main() {
 	} else if status != http.StatusUnprocessableEntity || !bytes.Contains(output, []byte("output sandbox limit")) {
 		fatal(fmt.Errorf("output-spamming Scheme rule returned HTTP %d: %s", status, output))
 	}
+	malformedLog := []byte(`{"resourceLogs":[{"resource":{"attributes":[]},"scopeLogs":[{"scope":{"name":"probe-log"},"logRecords":[{"timeUnixNano":"1","observedTimeUnixNano":"2","severityNumber":9,"severityText":"INFO","body":{"stringValue":"malformed numeric probe"},"attributes":[{"key":"probe.attribute","value":{"stringValue":"present"}}],"flags":"broken"}]}]}]}`)
+	malformedResponse, err := http.Post(endpoint+"/v1/logs", "application/json", bytes.NewReader(malformedLog))
+	if err != nil {
+		fatal(fmt.Errorf("send malformed numeric probe: %w", err))
+	}
+	malformedBody, readErr := io.ReadAll(malformedResponse.Body)
+	malformedResponse.Body.Close()
+	if readErr != nil || malformedResponse.StatusCode != http.StatusOK {
+		fatal(fmt.Errorf("send malformed numeric probe: HTTP %d: %s: %v", malformedResponse.StatusCode, malformedBody, readErr))
+	}
+	malformedRule := []byte(`(import (scheme base) (scheme read) (scheme write))
+(let* ((capture (read))
+       (logs (cadr (assq 'logs capture)))
+       (latest (car (reverse logs))))
+  (if (= (cadr (assq 'flags latest)) -1)
+      (display "malformed numeric preserved\n")
+      (error "malformed numeric was normalized")))`)
+	if output, status, err := validateScheme(endpoint, malformedRule); err != nil {
+		fatal(err)
+	} else if status != http.StatusOK || !bytes.Contains(output, []byte("malformed numeric preserved")) {
+		fatal(fmt.Errorf("malformed numeric Scheme rule returned HTTP %d: %s", status, output))
+	}
 	customTrace := []byte(`{"resourceSpans":[{"resource":{"attributes":[]},"scopeSpans":[{"scope":{"name":"example.custom/db-client"},"spans":[{"traceId":"11111111111111111111111111111111","spanId":"2222222222222222","name":"SELECT","kind":3,"startTimeUnixNano":"1","endTimeUnixNano":"2","status":{"code":0}}]}]}]}`)
 	customResponse, err := http.Post(endpoint+"/v1/traces", "application/json", bytes.NewReader(customTrace))
 	if err != nil {
@@ -164,13 +186,33 @@ func main() {
 	if readErr != nil || customResponse.StatusCode != http.StatusOK {
 		fatal(fmt.Errorf("send custom candidate trace: HTTP %d: %s: %v", customResponse.StatusCode, customBody, readErr))
 	}
+	collidingScopesTrace := []byte(`{"resourceSpans":[{"resource":{"attributes":[]},"scopeSpans":[{"scope":{"name":"foo.bar"},"spans":[{"traceId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","spanId":"3333333333333333","name":"SELECT","kind":3,"startTimeUnixNano":"1","endTimeUnixNano":"2","status":{"code":0}}]},{"scope":{"name":"foo/bar"},"spans":[{"traceId":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","spanId":"3333333333333333","name":"SELECT","kind":3,"startTimeUnixNano":"1","endTimeUnixNano":"2","status":{"code":0}}]},{"scope":{"name":"Foo.Bar"},"spans":[{"traceId":"cccccccccccccccccccccccccccccccc","spanId":"4444444444444444","name":"SELECT","kind":3,"startTimeUnixNano":"1","endTimeUnixNano":"2","status":{"code":0}}]}]}]}`)
+	collidingResponse, err := http.Post(endpoint+"/v1/traces", "application/json", bytes.NewReader(collidingScopesTrace))
+	if err != nil {
+		fatal(fmt.Errorf("send colliding-scope candidate traces: %w", err))
+	}
+	collidingBody, readErr := io.ReadAll(collidingResponse.Body)
+	collidingResponse.Body.Close()
+	if readErr != nil || collidingResponse.StatusCode != http.StatusOK {
+		fatal(fmt.Errorf("send colliding-scope candidate traces: HTTP %d: %s: %v", collidingResponse.StatusCode, collidingBody, readErr))
+	}
 	candidate, err := http.Get(endpoint + "/candidate?app=custom-app")
 	if err != nil {
 		fatal(fmt.Errorf("generate custom candidate: %w", err))
 	}
 	candidateBody, readErr := io.ReadAll(candidate.Body)
 	candidate.Body.Close()
-	if readErr != nil || candidate.StatusCode != http.StatusOK || !bytes.Contains(candidateBody, []byte("scope-example-custom-db-client")) {
+	wantAliases := []string{
+		"scope-example-custom-db-client-6578616d706c652e637573746f6d2f64622d636c69656e74",
+		"scope-foo-bar-666f6f2e626172",
+		"scope-foo-bar-666f6f2f626172",
+		"scope-foo-bar-466f6f2e426172",
+	}
+	aliasesPresent := true
+	for _, alias := range wantAliases {
+		aliasesPresent = aliasesPresent && bytes.Contains(candidateBody, []byte(alias))
+	}
+	if readErr != nil || candidate.StatusCode != http.StatusOK || !aliasesPresent {
 		fatal(fmt.Errorf("custom candidate: HTTP %d: %s: %v", candidate.StatusCode, candidateBody, readErr))
 	}
 	reset, err := http.Post(endpoint+"/reset", "application/json", nil)

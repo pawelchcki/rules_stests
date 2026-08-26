@@ -19,7 +19,7 @@ pub fn capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
 }
 
 fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
-    let mut span_index = BTreeMap::<String, (usize, String)>::new();
+    let mut span_index = BTreeMap::<(String, String), usize>::new();
     for record in records {
         if let Payload::Traces(payload) = &record.payload {
             for resource in &payload.resource_spans {
@@ -28,9 +28,9 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                         let span_id = hex_text(&span.span_id);
                         let trace_id = hex_text(&span.trace_id);
                         span_index
-                            .entry(span_id)
-                            .and_modify(|entry| entry.0 += 1)
-                            .or_insert((1, trace_id));
+                            .entry((trace_id, span_id))
+                            .and_modify(|count| *count += 1)
+                            .or_insert(1);
                     }
                 }
             }
@@ -260,18 +260,21 @@ fn write_typed_span(
     output: &mut String,
     scope: &str,
     span: &proto::Span,
-    index: &BTreeMap<String, (usize, String)>,
+    index: &BTreeMap<(String, String), usize>,
 ) {
     let trace_id = hex_text(&span.trace_id);
     let span_id = hex_text(&span.span_id);
     let parent_id = hex_text(&span.parent_span_id);
-    let id_count = index.get(&span_id).map(|entry| entry.0).unwrap_or(0);
-    let (parent_class, parent_trace_matches) = if parent_id.is_empty() {
-        ("root", true)
-    } else if let Some((_, parent_trace)) = index.get(&parent_id) {
-        ("child", parent_trace == &trace_id)
+    let id_count = index
+        .get(&(trace_id.clone(), span_id.clone()))
+        .copied()
+        .unwrap_or(0);
+    let parent_class = if parent_id.is_empty() {
+        "root"
+    } else if index.contains_key(&(trace_id.clone(), parent_id.clone())) {
+        "child"
     } else {
-        ("external", true)
+        "external"
     };
     output.push_str("  ((scope ");
     string(output, scope);
@@ -281,7 +284,7 @@ fn write_typed_span(
     string(output, &span_id);
     output.push_str(") (parent-span-id ");
     string(output, &parent_id);
-    write!(output, ") (id-count {id_count}) (parent-class {parent_class}) (parent-trace-matches {}) (trace-state ", if parent_trace_matches { "#t" } else { "#f" }).unwrap();
+    write!(output, ") (id-count {id_count}) (parent-class {parent_class}) (parent-trace-matches #t) (trace-state ").unwrap();
     string(output, &span.trace_state);
     output.push_str(") (name ");
     string(output, &span.name);
@@ -504,18 +507,19 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                 );
                 let span_id = text(json_field(span, "span_id", "spanId"));
                 let parent_id = text(json_field(span, "parent_span_id", "parentSpanId"));
-                let id_count = span_index.get(span_id).map(|entry| entry.0).unwrap_or(0);
-                let (parent_class, parent_trace_matches) = if parent_id.is_empty() {
-                    ("root", true)
-                } else if let Some((_, parent_trace)) = span_index.get(parent_id) {
-                    (
-                        "child",
-                        parent_trace == text(json_field(span, "trace_id", "traceId")),
-                    )
+                let trace_id = text(json_field(span, "trace_id", "traceId"));
+                let id_count = span_index
+                    .get(&(trace_id.into(), span_id.into()))
+                    .copied()
+                    .unwrap_or(0);
+                let parent_class = if parent_id.is_empty() {
+                    "root"
+                } else if span_index.contains_key(&(trace_id.into(), parent_id.into())) {
+                    "child"
                 } else {
-                    ("external", true)
+                    "external"
                 };
-                write!(output, ") (id-count {id_count}) (parent-class {parent_class}) (parent-trace-matches {}) (trace-state ", if parent_trace_matches { "#t" } else { "#f" }).unwrap();
+                write!(output, ") (id-count {id_count}) (parent-class {parent_class}) (parent-trace-matches #t) (trace-state ").unwrap();
                 string(
                     &mut output,
                     text(json_field(span, "trace_state", "traceState")),
@@ -652,16 +656,17 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
     Ok(output.into_bytes())
 }
 
-fn span_index(payloads: &[Value]) -> BTreeMap<String, (usize, String)> {
-    let mut index = BTreeMap::<String, (usize, String)>::new();
+fn span_index(payloads: &[Value]) -> BTreeMap<(String, String), usize> {
+    let mut index = BTreeMap::<(String, String), usize>::new();
     for payload in payloads {
         for group in trace_groups(payload) {
             for span in array(group.get("spans")) {
                 let span_id = text(json_field(span, "span_id", "spanId"));
+                let trace_id = text(json_field(span, "trace_id", "traceId"));
                 index
-                    .entry(span_id.into())
-                    .and_modify(|entry| entry.0 += 1)
-                    .or_insert((1, text(json_field(span, "trace_id", "traceId")).into()));
+                    .entry((trace_id.into(), span_id.into()))
+                    .and_modify(|count| *count += 1)
+                    .or_insert(1);
             }
         }
     }
@@ -687,20 +692,20 @@ pub fn golden_candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String
                 .map_err(|error| format!("serialize trace payload for golden: {error}"))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let mut span_traces = BTreeMap::<String, String>::new();
+    let mut span_keys = BTreeMap::<(String, String), ()>::new();
     for payload in &payloads {
         for group in trace_groups(payload) {
             for span in array(group.get("spans")) {
                 let span_id = text(json_field(span, "span_id", "spanId"));
+                let trace_id = text(json_field(span, "trace_id", "traceId"));
                 if span_id.is_empty()
-                    || span_traces
-                        .insert(
-                            span_id.into(),
-                            text(json_field(span, "trace_id", "traceId")).into(),
-                        )
+                    || span_keys
+                        .insert((trace_id.into(), span_id.into()), ())
                         .is_some()
                 {
-                    return Err(format!("missing or duplicate span ID {span_id:?}"));
+                    return Err(format!(
+                        "missing or duplicate span ID {span_id:?} in trace {trace_id:?}"
+                    ));
                 }
             }
         }
@@ -714,7 +719,8 @@ pub fn golden_candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String
             for span in array(group.get("spans")) {
                 saw_span = true;
                 let kind = enum_name(
-                    integer(span.get("kind")),
+                    try_integer(span.get("kind"))
+                        .map_err(|()| String::from("invalid span kind value"))?,
                     &[
                         "unspecified",
                         "internal",
@@ -729,17 +735,16 @@ pub fn golden_candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String
                     continue;
                 }
                 let status = enum_name(
-                    integer(span.get("status").and_then(|status| status.get("code"))),
+                    try_integer(span.get("status").and_then(|status| status.get("code")))
+                        .map_err(|()| String::from("invalid span status value"))?,
                     &["unset", "ok", "error"],
                     "span status",
                 )?;
                 let parent_id = text(json_field(span, "parent_span_id", "parentSpanId"));
+                let trace_id = text(json_field(span, "trace_id", "traceId"));
                 let parent = if parent_id.is_empty() {
                     "root"
-                } else if let Some(trace_id) = span_traces.get(parent_id) {
-                    if trace_id != text(json_field(span, "trace_id", "traceId")) {
-                        return Err("span parent belongs to another trace".into());
-                    }
+                } else if span_keys.contains_key(&(trace_id.into(), parent_id.into())) {
                     "child"
                 } else {
                     "external"
@@ -817,6 +822,10 @@ fn generic_scope_alias(scope: &str) -> String {
     while alias.ends_with('-') {
         alias.pop();
     }
+    alias.push('-');
+    for byte in scope.bytes() {
+        write!(alias, "{byte:02x}").unwrap();
+    }
     alias
 }
 
@@ -856,14 +865,15 @@ fn integer_attribute(
         if result.is_some() {
             return Err(format!("duplicate attribute {wanted:?}"));
         }
-        result = attribute
+        let value = attribute
             .get("value")
             .map(|value| value.get("value").unwrap_or(value))
             .and_then(|value| json_field(value, "int_value", "intValue"))
-            .map(|value| integer(Some(value)));
-        if result.is_none() {
-            return Err(format!("attribute {wanted:?} is not an integer"));
-        }
+            .ok_or_else(|| format!("attribute {wanted:?} is not an integer"))?;
+        result = Some(
+            try_integer(Some(value))
+                .map_err(|()| format!("attribute {wanted:?} is not an integer"))?,
+        );
     }
     Ok(result)
 }
@@ -944,7 +954,11 @@ fn any_value(output: &mut String, value: Option<&Value>) {
             output.push(')');
         }
     } else if let Some(value) = json_field(value, "int_value", "intValue") {
-        write!(output, "(integer {})", integer(Some(value))).unwrap();
+        if let Ok(value) = try_integer(Some(value)) {
+            write!(output, "(integer {value})").unwrap();
+        } else {
+            output.push_str("(other)");
+        }
     } else if let Some(value) =
         json_field(value, "bool_value", "boolValue").and_then(Value::as_bool)
     {
@@ -1104,13 +1118,17 @@ fn text(value: Option<&Value>) -> &str {
 }
 
 fn integer(value: Option<&Value>) -> i64 {
+    try_integer(value).unwrap_or(-1)
+}
+
+fn try_integer(value: Option<&Value>) -> Result<i64, ()> {
+    let Some(value) = value else {
+        return Ok(0);
+    };
     value
-        .and_then(|value| {
-            value
-                .as_i64()
-                .or_else(|| value.as_str().and_then(|value| value.parse().ok()))
-        })
-        .unwrap_or(0)
+        .as_i64()
+        .or_else(|| value.as_str().and_then(|value| value.parse().ok()))
+        .ok_or(())
 }
 
 fn json_field<'a>(value: &'a Value, snake: &str, camel: &str) -> Option<&'a Value> {

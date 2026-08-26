@@ -6,6 +6,6 @@
 
 (otel-validate-exact expected-resource-attributes
                      expected-scopes
-                     event-policy
+                     (event-policy-for scenario-name)
                      expected-span-buckets
                      (read))

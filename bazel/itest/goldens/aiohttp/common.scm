@@ -2,7 +2,7 @@
   (export implementation-profile
           expected-resource-attributes
           expected-scopes
-          event-policy
+          event-policy-for
           server-scope
           render-server-span-name
           implementation-buckets-for)
@@ -28,7 +28,7 @@
       '(("http.scheme" (exact "http")) ("net.host.name" (exact "127.0.0.1")))
       '("net.host.port" "http.status_code"))))
 
-(define event-policy 'empty)
+(define (event-policy-for scenario) '(empty 0))
 (define server-scope 'http)
 
 (define (render-server-span-name method canonical-route)
