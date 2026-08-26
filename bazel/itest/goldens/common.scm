@@ -178,6 +178,62 @@
              (and (ascii-digit? (string-ref value index))
                   (loop (+ index 1)))))))
 
+(define (ascii-alpha? character)
+  (or (and (char>=? character #\a) (char<=? character #\z))
+      (and (char>=? character #\A) (char<=? character #\Z))))
+
+(define (valid-host-label? value)
+  (and (> (string-length value) 0)
+       (or (ascii-alpha? (string-ref value 0))
+           (ascii-digit? (string-ref value 0)))
+       (or (ascii-alpha? (string-ref value (- (string-length value) 1)))
+           (ascii-digit? (string-ref value (- (string-length value) 1))))
+       (let loop ((index 1))
+         (or (>= index (- (string-length value) 1))
+             (let ((character (string-ref value index)))
+               (and (or (ascii-alpha? character)
+                        (ascii-digit? character)
+                        (char=? character #\-))
+                    (loop (+ index 1))))))))
+
+(define (valid-host-name? value)
+  (and (> (string-length value) 0)
+       (let loop ((remaining value))
+         (let ((separator (character-index remaining #\.)))
+           (if separator
+               (and (> separator 0)
+                    (< separator (- (string-length remaining) 1))
+                    (valid-host-label? (substring remaining 0 separator))
+                    (loop (substring remaining (+ separator 1) (string-length remaining))))
+               (valid-host-label? remaining))))))
+
+(define (valid-host-field? value)
+  (if (and (> (string-length value) 0) (char=? (string-ref value 0) #\[))
+      (let ((close (character-index value #\])))
+        (and close
+             (> close 1)
+             (character-index (substring value 1 close) #\:)
+             (every
+               (lambda (character)
+                 (or (hex-character? character)
+                     (char=? character #\:)
+                     (char=? character #\.)))
+               (string->list (substring value 1 close)))
+             (or (= close (- (string-length value) 1))
+                 (and (char=? (string-ref value (+ close 1)) #\:)
+                      (decimal-string?
+                        (substring value (+ close 2) (string-length value)))))))
+      (let ((separator (character-index value #\:)))
+        (if separator
+            (and (> separator 0)
+                 (not (character-index
+                        (substring value (+ separator 1) (string-length value))
+                        #\:))
+                 (valid-host-name? (substring value 0 separator))
+                 (decimal-string?
+                   (substring value (+ separator 1) (string-length value))))
+            (valid-host-name? value)))))
+
 (define (loopback-port-number value)
   (and (string-prefix? loopback-prefix value)
        (let* ((suffix (substring value (string-length loopback-prefix) (string-length value)))
@@ -253,7 +309,7 @@
         (let ((host-headers (count (lambda (header) (string=? (car header) "host")) headers))
               (host (find (lambda (header) (string=? (car header) "host")) headers)))
           (check (= host-headers 1) "Host header is missing or duplicated")
-          (check (> (string-length (cadr host)) 0) "Host header is empty"))
+          (check (valid-host-field? (cadr host)) "Host header is malformed"))
         (check (<= (count (lambda (header) (string=? (car header) "content-encoding")) headers) 1)
                "content-encoding header is not unique")))
     requests))

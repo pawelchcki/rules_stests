@@ -1170,6 +1170,17 @@ pub fn golden_candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String
                 if name.is_empty() {
                     return Err("span has no name".into());
                 }
+                let start = try_integer(json_field(
+                    span,
+                    "start_time_unix_nano",
+                    "startTimeUnixNano",
+                ))
+                .map_err(|()| String::from("invalid span start timestamp"))?;
+                let end = try_integer(json_field(span, "end_time_unix_nano", "endTimeUnixNano"))
+                    .map_err(|()| String::from("invalid span end timestamp"))?;
+                if start <= 0 || end < start {
+                    return Err("span timestamps are not ordered".into());
+                }
                 let kind = enum_name(
                     try_integer(span.get("kind"))
                         .map_err(|()| String::from("invalid span kind value"))?,

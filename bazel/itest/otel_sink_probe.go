@@ -24,8 +24,9 @@ type sinkRecord struct {
 }
 
 type sinkRequest struct {
-	Path    string       `json:"path"`
-	Headers []sinkHeader `json:"headers"`
+	Path            string       `json:"path"`
+	ContentEncoding string       `json:"content_encoding"`
+	Headers         []sinkHeader `json:"headers"`
 }
 
 type sinkHeader struct {
@@ -240,7 +241,7 @@ func main() {
 	if err != nil {
 		fatal(fmt.Errorf("connect for oversized protobuf: %w", err))
 	}
-	if _, err := fmt.Fprint(oversizedProtobufConnection, "POST /v1/metrics HTTP/1.1\r\nHost: sink\r\nContent-Type: application/x-protobuf\r\nContent-Length: 1048577\r\nConnection: close\r\n\r\n"); err != nil {
+	if _, err := fmt.Fprint(oversizedProtobufConnection, "POST /v1/metrics HTTP/1.1\r\nHost: sink\r\nContent-Type: application/x-protobuf\r\nContent-Length: 131073\r\nConnection: close\r\n\r\n"); err != nil {
 		fatal(fmt.Errorf("send oversized protobuf headers: %w", err))
 	}
 	oversizedProtobufResponse, err := http.ReadResponse(bufio.NewReader(oversizedProtobufConnection), &http.Request{Method: http.MethodPost})
@@ -252,6 +253,17 @@ func main() {
 	oversizedProtobufConnection.Close()
 	if readErr != nil || oversizedProtobufResponse.StatusCode != http.StatusRequestEntityTooLarge || !bytes.Contains(oversizedProtobufBody, []byte("request body exceeds limit")) {
 		fatal(fmt.Errorf("oversized protobuf: HTTP %d: %s: %v", oversizedProtobufResponse.StatusCode, oversizedProtobufBody, readErr))
+	}
+
+	expandedProtobuf := bytes.Repeat([]byte{0x0a, 0x00}, 64*1024)
+	expandedResponse, err := http.Post(endpoint+"/v1/metrics", "application/x-protobuf", bytes.NewReader(expandedProtobuf))
+	if err != nil {
+		fatal(fmt.Errorf("send structurally expanded protobuf: %w", err))
+	}
+	expandedBody, readErr := io.ReadAll(expandedResponse.Body)
+	expandedResponse.Body.Close()
+	if readErr != nil || expandedResponse.StatusCode != http.StatusRequestEntityTooLarge || !bytes.Contains(expandedBody, []byte("decoded OTLP payload exceeds limit")) {
+		fatal(fmt.Errorf("structurally expanded protobuf: HTTP %d: %s: %v", expandedResponse.StatusCode, expandedBody, readErr))
 	}
 
 	partialConnection, err := net.Dial("tcp", strings.TrimPrefix(endpoint, "http://"))
@@ -300,6 +312,9 @@ func main() {
 		}
 		req.Header.Set("Content-Type", item.contentType)
 		req.Header.Set("X-Otel-Sink-Probe", item.marker)
+		if item.marker == "trace-protobuf" {
+			req.Header.Set("Content-Encoding", "Identity")
+		}
 		response, err := http.DefaultClient.Do(req)
 		if err != nil {
 			fatal(fmt.Errorf("send %s: %w", item.signal, err))
@@ -343,6 +358,9 @@ func main() {
 		}
 		if item.marker == "trace-protobuf" && !bytes.Contains(record.Payload, []byte(`"resource_spans"`)) {
 			fatal(fmt.Errorf("trace protobuf was not semantically decoded: %s", record.Payload))
+		}
+		if item.marker == "trace-protobuf" && record.Request.ContentEncoding != "identity" {
+			fatal(fmt.Errorf("content encoding was not normalized: %q", record.Request.ContentEncoding))
 		}
 		if item.marker == "trace-json-uppercase" && !bytes.Contains(record.Payload, []byte("probe-uppercase")) {
 			fatal(fmt.Errorf("trace JSON payload was not preserved: %s", record.Payload))
@@ -683,6 +701,19 @@ func main() {
 		fatal(fmt.Errorf("unnamed candidate: HTTP %d: %s: %v", unnamedCandidate.StatusCode, unnamedCandidateBody, readErr))
 	}
 	resetSink(endpoint)
+	invalidTimestampTrace := []byte(`{"resourceSpans":[{"scopeSpans":[{"scope":{"name":"timestamp.probe"},"spans":[{"traceId":"55555555555555555555555555555555","spanId":"6666666666666666","name":"GET /probe","kind":2,"startTimeUnixNano":"2","endTimeUnixNano":"1","status":{"code":0}}]}]}]}`)
+	postJSON(endpoint, "/v1/traces", "invalid-timestamp candidate trace", invalidTimestampTrace)
+	freezeCapture(endpoint, "/dump", "invalid-timestamp candidate capture")
+	invalidTimestampCandidate, err := http.Get(endpoint + "/candidate?app=custom-app")
+	if err != nil {
+		fatal(fmt.Errorf("generate invalid-timestamp candidate: %w", err))
+	}
+	invalidTimestampBody, readErr := io.ReadAll(invalidTimestampCandidate.Body)
+	invalidTimestampCandidate.Body.Close()
+	if readErr != nil || invalidTimestampCandidate.StatusCode != http.StatusUnprocessableEntity || !bytes.Contains(invalidTimestampBody, []byte("span timestamps are not ordered")) {
+		fatal(fmt.Errorf("invalid-timestamp candidate: HTTP %d: %s: %v", invalidTimestampCandidate.StatusCode, invalidTimestampBody, readErr))
+	}
+	resetSink(endpoint)
 	duplicateSpellingsTrace := []byte(`{"resourceSpans":[{"resource":{"attributes":[]},"scopeSpans":[{"scope":{"name":"duplicate.probe"},"spans":[{"trace_id":"dddddddddddddddddddddddddddddddd","traceId":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","spanId":"5555555555555555","name":"SELECT","kind":3,"startTimeUnixNano":"1","endTimeUnixNano":"2","status":{"code":0}}]}]}]}`)
 	postJSON(endpoint, "/v1/traces", "duplicate-spelling trace", duplicateSpellingsTrace)
 	duplicateDumpBody := freezeCapture(endpoint, "/dump.scm", "duplicate-spelling Scheme capture")
@@ -699,8 +730,8 @@ func main() {
 		fatal(fmt.Errorf("duplicate-spelling candidate: HTTP %d: %s: %v", duplicateCandidate.StatusCode, duplicateCandidateBody, readErr))
 	}
 	resetSink(endpoint)
-	largeUnknownProtobuf := bytes.Repeat([]byte{0x7d, 0x00, 0x00, 0x00, 0x00}, 180*1024)
-	for index := 0; index < 5; index++ {
+	largeUnknownProtobuf := bytes.Repeat([]byte{0x7d, 0x00, 0x00, 0x00, 0x00}, 24*1024)
+	for index := 0; index < 35; index++ {
 		response, err := http.Post(endpoint+"/v1/metrics", "application/x-protobuf", bytes.NewReader(largeUnknownProtobuf))
 		if err != nil {
 			fatal(fmt.Errorf("send cumulative capture probe %d: %w", index, err))
@@ -708,10 +739,10 @@ func main() {
 		contents, readErr := io.ReadAll(response.Body)
 		response.Body.Close()
 		wantStatus := http.StatusOK
-		if index == 4 {
+		if index == 34 {
 			wantStatus = http.StatusRequestEntityTooLarge
 		}
-		if readErr != nil || response.StatusCode != wantStatus || (index == 4 && !bytes.Contains(contents, []byte("cumulative OTLP capture exceeds limit"))) {
+		if readErr != nil || response.StatusCode != wantStatus || (index == 34 && !bytes.Contains(contents, []byte("cumulative OTLP capture exceeds limit"))) {
 			fatal(fmt.Errorf("cumulative capture probe %d: HTTP %d: %s: %v", index, response.StatusCode, contents, readErr))
 		}
 	}

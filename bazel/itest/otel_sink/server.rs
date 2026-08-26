@@ -18,6 +18,7 @@ use rustix::time::{clock_gettime, ClockId};
 
 const MAX_CAPTURE_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CAPTURE_RECORDS: usize = 4096;
+const MAX_DECODED_OTLP_BYTES: usize = 1024 * 1024;
 
 pub(crate) fn serve(port: u16, output: &CStr) -> Result<(), String> {
     let listener = socket(AddressFamily::INET, SocketType::STREAM, None)
@@ -255,7 +256,7 @@ fn ingest(
     let content_encoding = request
         .header("content-encoding")
         .unwrap_or("identity")
-        .to_string();
+        .to_ascii_lowercase();
     if !content_encoding.eq_ignore_ascii_case("identity") && !content_encoding.is_empty() {
         respond(
             connection,
@@ -313,6 +314,27 @@ fn ingest(
             return;
         }
     };
+    let decoded_size = match serde_json::to_vec(&payload) {
+        Ok(encoded) => encoded.len(),
+        Err(error) => {
+            respond(
+                connection,
+                400,
+                "text/plain",
+                format!("serialize decoded OTLP payload: {error}").as_bytes(),
+            );
+            return;
+        }
+    };
+    if decoded_size > MAX_DECODED_OTLP_BYTES {
+        respond(
+            connection,
+            413,
+            "text/plain",
+            b"decoded OTLP payload exceeds limit\n",
+        );
+        return;
+    }
     let received = clock_gettime(ClockId::Realtime);
     let received_unix_nano = received.tv_sec as u64 * 1_000_000_000 + received.tv_nsec as u64;
     let remote_address = remote
