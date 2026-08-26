@@ -50,8 +50,8 @@ func main() {
 		marker      string
 	}{
 		{"traces", "application/x-protobuf", []byte{0x0a, 0x00}, "trace-protobuf"},
-		{"metrics", "application/json", []byte(`{"resourceMetrics":[{"resource":{"attributes":[]},"scopeMetrics":[{"scope":{"name":"probe"},"metrics":[{"name":"probe-metric"}]}]}]}`), "metric-json"},
-		{"logs", "application/json", []byte(`{"resourceLogs":[{"resource":{"attributes":[]},"scopeLogs":[{"scope":{"name":"probe-log"},"logRecords":[{"timeUnixNano":"1","observedTimeUnixNano":"2","severityNumber":9,"severityText":"INFO"}]}]}]}`), "log-json"},
+		{"metrics", "application/json", []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"probe"},"metrics":[{"name":"probe-metric","sum":{"dataPoints":[{"timeUnixNano":"2","asInt":"1"}],"aggregationTemporality":2,"isMonotonic":true}}]}]}]}`), "metric-json"},
+		{"logs", "application/json", []byte(`{"resourceLogs":[{"resource":{"attributes":[]},"scopeLogs":[{"scope":{"name":"probe-log"},"logRecords":[{"timeUnixNano":"1","observedTimeUnixNano":"2","severityNumber":9,"severityText":"INFO","body":{"stringValue":"probe log"},"attributes":[{"key":"probe.attribute","value":{"stringValue":"present"}}]}]}]}]}`), "log-json"},
 	}
 	for _, item := range requests {
 		req, err := http.NewRequest(http.MethodPost, endpoint+"/v1/"+item.signal, bytes.NewReader(item.body))
@@ -114,11 +114,17 @@ func main() {
   (begin
     (define (validate-probe capture)
       (let ((requests (cadr (assq 'requests capture)))
+            (resources (cadr (assq 'resources capture)))
             (metrics (cadr (assq 'metrics capture)))
             (logs (cadr (assq 'logs capture))))
         (if (and (= (length requests) 3)
+                 (= (length resources) 3)
                  (= (length metrics) 1)
-                 (= (length logs) 1))
+                 (= (cadr (assq 'data-points (car metrics))) 1)
+                 (eq? (cadr (assq 'data-type (car metrics))) 'sum)
+                 (= (length logs) 1)
+                 (equal? (cadr (assq 'body (car logs))) '(string "probe log"))
+                 (= (length (cadr (assq 'attributes (car logs)))) 1))
             (display "standalone validation passed\n")
             (error "canonical OTLP JSON shape changed"))))))
 (import (scheme base) (scheme read) (probe contract))
@@ -128,15 +134,44 @@ func main() {
 	} else if status != http.StatusOK || !bytes.Contains(output, []byte("standalone validation passed")) {
 		fatal(fmt.Errorf("valid Scheme rule returned HTTP %d: %s", status, output))
 	}
-	if output, status, err := validateScheme(endpoint, []byte(`(import (scheme base)) (error "intentional rejection")`)); err != nil {
+	if output, status, err := validateScheme(endpoint, []byte(`(import (scheme base)) (error "OTLP contract assertion: intentional rejection")`)); err != nil {
 		fatal(err)
-	} else if status != http.StatusUnprocessableEntity || !bytes.Contains(output, []byte("intentional rejection")) {
-		fatal(fmt.Errorf("invalid Scheme rule returned HTTP %d: %s", status, output))
+	} else if status != http.StatusConflict || !bytes.Contains(output, []byte("intentional rejection")) {
+		fatal(fmt.Errorf("contract-rejecting Scheme rule returned HTTP %d: %s", status, output))
+	}
+	if output, status, err := validateScheme(endpoint, []byte(`(import (scheme base)) (error "validator fault")`)); err != nil {
+		fatal(err)
+	} else if status != http.StatusUnprocessableEntity || !bytes.Contains(output, []byte("validator fault")) {
+		fatal(fmt.Errorf("faulting Scheme rule returned HTTP %d: %s", status, output))
 	}
 	if output, status, err := validateScheme(endpoint, []byte(`(import (scheme base)) (let loop () (loop))`)); err != nil {
 		fatal(err)
 	} else if status != http.StatusUnprocessableEntity || !bytes.Contains(output, []byte("sandbox budget")) {
 		fatal(fmt.Errorf("nonterminating Scheme rule returned HTTP %d: %s", status, output))
+	}
+	if output, status, err := validateScheme(endpoint, []byte(`(import (scheme base) (scheme write)) (let loop () (display "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef") (loop))`)); err != nil {
+		fatal(err)
+	} else if status != http.StatusUnprocessableEntity || !bytes.Contains(output, []byte("output sandbox limit")) {
+		fatal(fmt.Errorf("output-spamming Scheme rule returned HTTP %d: %s", status, output))
+	}
+	customTrace := []byte(`{"resourceSpans":[{"resource":{"attributes":[]},"scopeSpans":[{"scope":{"name":"example.custom/db-client"},"spans":[{"traceId":"11111111111111111111111111111111","spanId":"2222222222222222","name":"SELECT","kind":3,"startTimeUnixNano":"1","endTimeUnixNano":"2","status":{"code":0}}]}]}]}`)
+	customResponse, err := http.Post(endpoint+"/v1/traces", "application/json", bytes.NewReader(customTrace))
+	if err != nil {
+		fatal(fmt.Errorf("send custom candidate trace: %w", err))
+	}
+	customBody, readErr := io.ReadAll(customResponse.Body)
+	customResponse.Body.Close()
+	if readErr != nil || customResponse.StatusCode != http.StatusOK {
+		fatal(fmt.Errorf("send custom candidate trace: HTTP %d: %s: %v", customResponse.StatusCode, customBody, readErr))
+	}
+	candidate, err := http.Get(endpoint + "/candidate?app=custom-app")
+	if err != nil {
+		fatal(fmt.Errorf("generate custom candidate: %w", err))
+	}
+	candidateBody, readErr := io.ReadAll(candidate.Body)
+	candidate.Body.Close()
+	if readErr != nil || candidate.StatusCode != http.StatusOK || !bytes.Contains(candidateBody, []byte("scope-example-custom-db-client")) {
+		fatal(fmt.Errorf("custom candidate: HTTP %d: %s: %v", candidate.StatusCode, candidateBody, readErr))
 	}
 	reset, err := http.Post(endpoint+"/reset", "application/json", nil)
 	if err != nil {

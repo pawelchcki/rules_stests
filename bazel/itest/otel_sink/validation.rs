@@ -121,11 +121,16 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                         .map(|scope| scope.name.as_str())
                         .unwrap_or("");
                     for metric in &group.metrics {
+                        let (data_type, data_points) = typed_metric_data(metric);
                         output.push_str("  ((scope ");
                         string(&mut output, scope);
                         output.push_str(") (name ");
                         string(&mut output, &metric.name);
-                        output.push_str("))\n");
+                        write!(
+                            output,
+                            ") (data-type {data_type}) (data-points {data_points}))\n"
+                        )
+                        .unwrap();
                     }
                 }
             }
@@ -151,6 +156,21 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                         )
                         .unwrap();
                         string(&mut output, &log.severity_text);
+                        output.push_str(") (body ");
+                        typed_any_value(&mut output, log.body.as_ref());
+                        output.push_str(") (attributes ");
+                        typed_attributes(&mut output, &log.attributes);
+                        write!(
+                            output,
+                            ") (dropped-attributes {}) (flags {}) (trace-id ",
+                            log.dropped_attributes_count, log.flags
+                        )
+                        .unwrap();
+                        string(&mut output, &hex_text(&log.trace_id));
+                        output.push_str(") (span-id ");
+                        string(&mut output, &hex_text(&log.span_id));
+                        output.push_str(") (event-name ");
+                        string(&mut output, &log.event_name);
                         output.push_str("))\n");
                     }
                 }
@@ -159,6 +179,19 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
     }
     output.push_str(")))\n");
     Ok(output.into_bytes())
+}
+
+fn typed_metric_data(metric: &proto::Metric) -> (&'static str, usize) {
+    match metric.data.as_ref() {
+        Some(proto::metric::Data::Gauge(data)) => ("gauge", data.data_points.len()),
+        Some(proto::metric::Data::Sum(data)) => ("sum", data.data_points.len()),
+        Some(proto::metric::Data::Histogram(data)) => ("histogram", data.data_points.len()),
+        Some(proto::metric::Data::ExponentialHistogram(data)) => {
+            ("exponential-histogram", data.data_points.len())
+        }
+        Some(proto::metric::Data::Summary(data)) => ("summary", data.data_points.len()),
+        None => ("missing", 0),
+    }
 }
 
 fn write_requests(output: &mut String, records: &[Record]) {
@@ -545,11 +578,16 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
             for group in array(json_field(resource, "scope_metrics", "scopeMetrics")) {
                 let scope = group.get("scope").unwrap_or(&Value::Null);
                 for metric in array(group.get("metrics")) {
+                    let (data_type, data_points) = json_metric_data(metric);
                     output.push_str("  ((scope ");
                     string(&mut output, text(scope.get("name")));
                     output.push_str(") (name ");
                     string(&mut output, text(metric.get("name")));
-                    output.push_str("))\n");
+                    write!(
+                        output,
+                        ") (data-type {data_type}) (data-points {data_points}))\n"
+                    )
+                    .unwrap();
                 }
             }
         }
@@ -581,6 +619,35 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                         &mut output,
                         text(json_field(log, "severity_text", "severityText")),
                     );
+                    output.push_str(") (body ");
+                    any_value(&mut output, log.get("body"));
+                    output.push_str(") (attributes ");
+                    attributes(&mut output, log.get("attributes"));
+                    write!(
+                        output,
+                        ") (dropped-attributes {}) (flags {}) (trace-id ",
+                        integer(json_field(
+                            log,
+                            "dropped_attributes_count",
+                            "droppedAttributesCount"
+                        )),
+                        integer(log.get("flags"))
+                    )
+                    .unwrap();
+                    string(
+                        &mut output,
+                        text(json_field(log, "trace_id", "traceId")),
+                    );
+                    output.push_str(") (span-id ");
+                    string(
+                        &mut output,
+                        text(json_field(log, "span_id", "spanId")),
+                    );
+                    output.push_str(") (event-name ");
+                    string(
+                        &mut output,
+                        text(json_field(log, "event_name", "eventName")),
+                    );
                     output.push_str("))\n");
                 }
             }
@@ -608,7 +675,7 @@ fn span_index(payloads: &[Value]) -> BTreeMap<String, (usize, String)> {
 
 struct Bucket {
     count: usize,
-    scope: &'static str,
+    scope: String,
     kind: &'static str,
     status: &'static str,
     name_matcher: String,
@@ -617,9 +684,6 @@ struct Bucket {
 }
 
 pub fn golden_candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String> {
-    if app != "aiohttp" && app != "django" {
-        return Err(format!("unknown golden application {app:?}"));
-    }
     let payloads = records
         .iter()
         .filter(|record| record.signal == "traces")
@@ -685,7 +749,7 @@ pub fn golden_candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String
                 } else {
                     "external"
                 };
-                let matcher = name_matcher(app, scope, text(span.get("name")));
+                let matcher = name_matcher(app, &scope, text(span.get("name")));
                 let http_status = integer_attribute(span.get("attributes"), "http.status_code")?;
                 let key = format!(
                     "{scope}\u{1f}{kind}\u{1f}{status}\u{1f}{matcher}\u{1f}{parent}\u{1f}{http_status:?}"
@@ -695,7 +759,7 @@ pub fn golden_candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String
                     .and_modify(|bucket| bucket.count += 1)
                     .or_insert(Bucket {
                         count: 1,
-                        scope,
+                        scope: scope.clone(),
                         kind,
                         status,
                         name_matcher: matcher,
@@ -731,17 +795,34 @@ pub fn golden_candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String
     Ok(output.into_bytes())
 }
 
-fn scope_alias(app: &str, scope: &str) -> Result<&'static str, String> {
+fn scope_alias(app: &str, scope: &str) -> Result<String, String> {
     match (app, scope) {
-        ("aiohttp", "opentelemetry.instrumentation.sqlite3") => Ok("sqlite"),
-        ("aiohttp", "opentelemetry.instrumentation.sqlalchemy") => Ok("sqlalchemy"),
-        ("aiohttp", "opentelemetry.instrumentation.aiohttp_server") => Ok("http"),
-        ("django", "opentelemetry.instrumentation.sqlite3") => Ok("sqlite"),
-        ("django", "opentelemetry.instrumentation.django") => Ok("django"),
-        _ => Err(format!(
-            "unexpected instrumentation scope {scope:?} for {app}"
-        )),
+        ("aiohttp", "opentelemetry.instrumentation.sqlite3") => Ok("sqlite".into()),
+        ("aiohttp", "opentelemetry.instrumentation.sqlalchemy") => Ok("sqlalchemy".into()),
+        ("aiohttp", "opentelemetry.instrumentation.aiohttp_server") => Ok("http".into()),
+        ("django", "opentelemetry.instrumentation.sqlite3") => Ok("sqlite".into()),
+        ("django", "opentelemetry.instrumentation.django") => Ok("django".into()),
+        _ if scope.is_empty() => Err(format!("empty instrumentation scope for {app}")),
+        _ => Ok(generic_scope_alias(scope)),
     }
+}
+
+fn generic_scope_alias(scope: &str) -> String {
+    let mut alias = String::from("scope-");
+    let mut previous_separator = false;
+    for character in scope.chars() {
+        if character.is_ascii_alphanumeric() {
+            alias.push(character.to_ascii_lowercase());
+            previous_separator = false;
+        } else if !previous_separator {
+            alias.push('-');
+            previous_separator = true;
+        }
+    }
+    while alias.ends_with('-') {
+        alias.pop();
+    }
+    alias
 }
 
 fn enum_name(value: i64, names: &[&'static str], label: &str) -> Result<&'static str, String> {
@@ -812,8 +893,31 @@ fn resources<'a>(payload: &'a Value, signal: &str) -> Vec<&'a Value> {
     };
     array(json_field(payload, snake, camel))
         .iter()
-        .filter_map(|item| item.get("resource"))
+        .map(|item| item.get("resource").unwrap_or(&Value::Null))
         .collect()
+}
+
+fn json_metric_data(metric: &Value) -> (&'static str, usize) {
+    let data = metric.get("data").unwrap_or(metric);
+    for (name, snake, camel) in [
+        ("gauge", "gauge", "gauge"),
+        ("sum", "sum", "sum"),
+        ("histogram", "histogram", "histogram"),
+        (
+            "exponential-histogram",
+            "exponential_histogram",
+            "exponentialHistogram",
+        ),
+        ("summary", "summary", "summary"),
+    ] {
+        if let Some(value) = json_field(data, snake, camel) {
+            return (
+                name,
+                length(json_field(value, "data_points", "dataPoints")),
+            );
+        }
+    }
+    ("missing", 0)
 }
 
 fn trace_groups(payload: &Value) -> Vec<&Value> {

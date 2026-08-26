@@ -24,6 +24,7 @@ def _realworld_hurl_case_test(
         service,
         otel_sink = None,
         otel_app = None,
+        otel_profile = None,
         otel_libraries = [],
         otel_imports = [],
         otel_program = None,
@@ -48,6 +49,8 @@ def _realworld_hurl_case_test(
             "--otel-mode=" + otel_mode,
             "--otel-case={}/{}".format(otel_app, case),
         ])
+        if otel_profile:
+            args.append("--otel-profile=" + otel_profile)
         for library in otel_libraries:
             args.append("--otel-library=$(rootpath {})".format(library))
         for library in otel_imports:
@@ -151,6 +154,7 @@ def realworld_hurl_test_suite(
             service = service,
             otel_sink = otel_sink,
             otel_app = otel_app,
+            otel_profile = profile,
             otel_libraries = libraries,
             otel_imports = imports,
             otel_program = program,
@@ -168,6 +172,7 @@ def realworld_hurl_test_suite(
                 service = service,
                 otel_sink = otel_sink,
                 otel_app = otel_app,
+                otel_profile = profile,
                 otel_mode = "candidate",
                 tags = tags + ["manual"],
                 **kwargs

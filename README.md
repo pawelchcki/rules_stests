@@ -117,10 +117,10 @@ ordinary Scheme source: the embedded compiler reads it in memory for each
 validation and immediately executes the resulting bytecode, so there is no
 golden compilation action, host Scheme installation, subprocess, or magic
 environment variable. The evaluator uses in-memory input/output and void file,
-process, and clock implementations, plus fixed VM heaps and a procedure-call
-budget, keeping golden execution sandboxed. The sink can therefore also be run
-as a standalone OTLP validator by ingesting
-telemetry and posting a rule to `/validate`.
+process, and clock implementations, plus fixed VM heaps, separate compiler and
+runtime procedure-call budgets, and 1 MiB stdout/stderr caps, keeping golden
+execution sandboxed. The sink can therefore also be run as a standalone OTLP
+validator by ingesting telemetry and posting a rule to `/validate`.
 
 The rules are real R7RS libraries, not load-order-dependent source fragments.
 The test driver includes repeatable `--otel-library` files, turns repeatable
@@ -133,7 +133,8 @@ The libraries deliberately separate four layers:
 
 - `(otel validation)` checks transport and OTLP integrity: request metadata,
   exact resources and scopes, IDs, timestamp ordering, parents, events, links,
-  dropped fields, flags, attributes, and the presence of all three signals.
+  dropped fields, flags, attributes, metric types and nonempty data points, and
+  log timestamps, severity, body, attributes, flags, and trace context.
 - `(realworld scenarios)` is one portable workload table. Its rows record only
   HTTP method, canonical route, status, and exact observation count. Every
   implementation selects a row by the injected `scenario-name` symbol.
@@ -221,6 +222,10 @@ rejection is printed as `XFAIL`, tagged `otel-xfail`, and keeps its failed JSON
 capture in undeclared outputs. A validation that starts passing becomes a hard
 `XPASS` failure until the entry is removed. Sink failures, timeouts, validator
 crashes, and other infrastructure errors are never swallowed by an xfail.
+Contract rejections use a distinct HTTP 409 response; Scheme compilation, VM,
+heap, call-budget, and output-budget failures remain validator errors and can
+never satisfy an xfail.
+
 The `errors_*` topics are ordinary passing contracts: their expected HTTP 4xx
 responses and error spans describe application behavior, not known telemetry
 defects.
@@ -256,6 +261,9 @@ in `goldens/<app>/common.scm`; do not check in a per-topic copy. Portable HTTP
 contracts stay in the single shared scenario table. Normal validation targets
 cannot rewrite checked-in goldens. The driver reports HTTP wall time,
 sink-measured evaluation time, and sink process peak RSS for each validation.
+Configured profile names are propagated into candidate libraries; unfamiliar
+instrumentation scopes receive deterministic Scheme-safe aliases so a new
+implementation can generate a candidate before its final profile exists.
 
 ```bash
 bazel test //bazel/itest:aiohttp_test

@@ -2,8 +2,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::convert::Infallible;
-use stak_device::Device;
+use stak_device::{BufferError, Device};
 use stak_file::VoidFileSystem;
 use stak_process_context::VoidProcessContext;
 use stak_r7rs::SmallPrimitiveSet;
@@ -14,7 +13,10 @@ const COMPILER_BYTECODE: &[u8] = include_bytes!(env!("STAK_COMPILER_BYTECODE"));
 const PRELUDE: &[u8] = include_bytes!(env!("STAK_PRELUDE"));
 const COMPILER_HEAP_CELLS: usize = 1 << 22;
 const VALIDATOR_HEAP_CELLS: usize = 1 << 20;
-const VM_CALL_BUDGET: usize = 50_000_000;
+const COMPILER_CALL_BUDGET: usize = 100_000_000;
+const VALIDATOR_CALL_BUDGET: usize = 50_000_000;
+const VM_OUTPUT_BUDGET: usize = 1 << 20;
+pub const CONTRACT_ASSERTION_MARKER: &str = "OTLP contract assertion:";
 
 struct CallBudget {
     remaining: usize,
@@ -50,10 +52,12 @@ struct MemoryDevice<'a> {
     input_index: usize,
     output: &'a mut Vec<u8>,
     error: &'a mut Vec<u8>,
+    output_exhausted: &'a mut bool,
+    error_exhausted: &'a mut bool,
 }
 
 impl Device for MemoryDevice<'_> {
-    type Error = Infallible;
+    type Error = BufferError;
 
     fn read(&mut self) -> Result<Option<u8>, Self::Error> {
         let byte = self.input.get(self.input_index).copied();
@@ -62,11 +66,19 @@ impl Device for MemoryDevice<'_> {
     }
 
     fn write(&mut self, byte: u8) -> Result<(), Self::Error> {
+        if self.output.len() >= VM_OUTPUT_BUDGET {
+            *self.output_exhausted = true;
+            return Err(BufferError::Write);
+        }
         self.output.push(byte);
         Ok(())
     }
 
     fn write_error(&mut self, byte: u8) -> Result<(), Self::Error> {
+        if self.error.len() >= VM_OUTPUT_BUDGET {
+            *self.error_exhausted = true;
+            return Err(BufferError::Write);
+        }
         self.error.push(byte);
         Ok(())
     }
@@ -74,7 +86,13 @@ impl Device for MemoryDevice<'_> {
 
 pub fn evaluate(source: &[u8], input: &[u8]) -> Result<(Vec<u8>, usize), String> {
     let (bytecode, compilation_calls) = compile(source)?;
-    let (output, validation_calls) = run(&bytecode, input, "validation", VALIDATOR_HEAP_CELLS)?;
+    let (output, validation_calls) = run(
+        &bytecode,
+        input,
+        "validation",
+        VALIDATOR_HEAP_CELLS,
+        VALIDATOR_CALL_BUDGET,
+    )?;
     Ok((output, compilation_calls + validation_calls))
 }
 
@@ -88,6 +106,7 @@ fn compile(source: &[u8]) -> Result<(Vec<u8>, usize), String> {
         &input,
         "compilation",
         COMPILER_HEAP_CELLS,
+        COMPILER_CALL_BUDGET,
     )
 }
 
@@ -96,11 +115,14 @@ fn run(
     input: &[u8],
     phase: &str,
     heap_cells: usize,
+    call_budget: usize,
 ) -> Result<(Vec<u8>, usize), String> {
     let mut output = Vec::new();
     let mut error_output = Vec::new();
+    let mut output_exhausted = false;
+    let mut error_exhausted = false;
     let mut budget = CallBudget {
-        remaining: VM_CALL_BUDGET,
+        remaining: call_budget,
         exhausted: false,
     };
     let result = {
@@ -109,6 +131,8 @@ fn run(
             input_index: 0,
             output: &mut output,
             error: &mut error_output,
+            output_exhausted: &mut output_exhausted,
+            error_exhausted: &mut error_exhausted,
         };
         let heap = vec![Value::default(); heap_cells];
         let mut vm = Vm::new(
@@ -127,7 +151,12 @@ fn run(
 
     if budget.exhausted {
         return Err(format!(
-            "Stak {phase} exceeded the {VM_CALL_BUDGET}-call sandbox budget"
+            "Stak {phase} exceeded the {call_budget}-call sandbox budget"
+        ));
+    }
+    if output_exhausted || error_exhausted {
+        return Err(format!(
+            "Stak {phase} exceeded the {VM_OUTPUT_BUDGET}-byte output sandbox limit"
         ));
     }
     if let Err(error) = result {
@@ -149,5 +178,5 @@ fn run(
             String::from_utf8_lossy(&error_output).trim()
         ));
     }
-    Ok((output, VM_CALL_BUDGET - budget.remaining))
+    Ok((output, call_budget - budget.remaining))
 }

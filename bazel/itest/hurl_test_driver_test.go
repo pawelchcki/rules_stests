@@ -54,3 +54,29 @@ func TestSchemeIdentifier(t *testing.T) {
 		}
 	}
 }
+
+func TestSchemeValidationFailureClassification(t *testing.T) {
+	contractFailure := schemeValidationFailure(409, []byte("OTLP contract assertion: changed"))
+	var assertion *otlpAssertionFailure
+	if !errors.As(contractFailure, &assertion) {
+		t.Fatalf("HTTP 409 was not classified as a contract assertion: %v", contractFailure)
+	}
+	validatorFailure := schemeValidationFailure(422, []byte("Stak compilation failed"))
+	if errors.As(validatorFailure, &assertion) {
+		t.Fatalf("HTTP 422 validator fault was classified as a contract assertion: %v", validatorFailure)
+	}
+}
+
+func TestImplementationProfile(t *testing.T) {
+	profile, err := implementationProfile("custom-app", "go-realworld-v1")
+	if err != nil || profile != "go-realworld-v1" {
+		t.Fatalf("custom profile = %q, %v", profile, err)
+	}
+	if _, err := implementationProfile("custom-app", "not/a-symbol"); err == nil {
+		t.Fatal("invalid custom profile unexpectedly succeeded")
+	}
+	profile, err = implementationProfile("aiohttp", "")
+	if err != nil || profile != "python-aiohttp-auto-v0-65b0" {
+		t.Fatalf("default profile = %q, %v", profile, err)
+	}
+}

@@ -292,7 +292,12 @@ fn handle_connection(
             }
             Err(error) => {
                 validation_stats.failures += 1;
-                respond(connection, 422, "text/plain", error.as_bytes());
+                let status = if error.contains(scheme::CONTRACT_ASSERTION_MARKER) {
+                    409
+                } else {
+                    422
+                };
+                respond(connection, status, "text/plain", error.as_bytes());
             }
         }
         return;
@@ -593,6 +598,7 @@ fn respond(connection: &OwnedFd, status: u16, content_type: &str, body: &[u8]) {
         200 => "OK",
         400 => "Bad Request",
         404 => "Not Found",
+        409 => "Conflict",
         405 => "Method Not Allowed",
         415 => "Unsupported Media Type",
         422 => "Unprocessable Content",

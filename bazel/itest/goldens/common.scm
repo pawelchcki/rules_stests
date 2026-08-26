@@ -3,12 +3,15 @@
   (import (scheme base) (scheme char) (scheme write))
   (begin
 
+(define (contract-error message)
+  (error (string-append "OTLP contract assertion: " message)))
+
 (define (check condition message)
-  (if condition #t (error message)))
+  (if condition #t (contract-error message)))
 
 (define (field key object)
   (let ((entry (assq key object)))
-    (if entry (cadr entry) (error "missing OTLP field" key))))
+    (if entry (cadr entry) (contract-error "missing OTLP field"))))
 
 (define (third values)
   (car (cdr (cdr values))))
@@ -280,6 +283,53 @@
              "contract span bucket count changed"))
     buckets))
 
+(define (validate-metrics metrics)
+  (check (> (length metrics) 0) "capture contains no metrics")
+  (for-each
+    (lambda (metric)
+      (check (> (string-length (field 'scope metric)) 0) "metric has no instrumentation scope")
+      (check (> (string-length (field 'name metric)) 0) "metric has no name")
+      (check (member (field 'data-type metric)
+                     '(gauge sum histogram exponential-histogram summary))
+             "metric has no supported data type")
+      (check (> (field 'data-points metric) 0) "metric has no data points"))
+    metrics))
+
+(define (valid-log-value? value)
+  (and (pair? value) (not (eq? (car value) 'other))))
+
+(define (validate-log-attributes attributes)
+  (check (> (length attributes) 0) "log has no attributes")
+  (for-each
+    (lambda (entry)
+      (check (> (string-length (car entry)) 0) "log attribute has no key")
+      (check (valid-log-value? (cadr entry)) "log attribute has no value")
+      (check (= (attribute-count attributes (car entry)) 1) "log attribute is duplicated"))
+    attributes))
+
+(define (validate-logs logs)
+  (check (> (length logs) 0) "capture contains no logs")
+  (for-each
+    (lambda (log)
+      (let ((trace-id (field 'trace-id log))
+            (span-id (field 'span-id log))
+            (time (field 'time log))
+            (observed-time (field 'observed-time log)))
+        (check (> (string-length (field 'scope log)) 0) "log has no instrumentation scope")
+        (check (and (> time 0) (>= observed-time time)) "log timestamps are not ordered")
+        (check (and (> (field 'severity-number log) 0)
+                    (<= (field 'severity-number log) 24))
+               "log severity number is invalid")
+        (check (> (string-length (field 'severity-text log)) 0) "log severity text is empty")
+        (check (valid-log-value? (field 'body log)) "log body is missing")
+        (validate-log-attributes (field 'attributes log))
+        (check (= (field 'dropped-attributes log) 0) "log dropped attributes")
+        (check (member (field 'flags log) '(0 1 256 257)) "log flags are invalid")
+        (check (or (and (string=? trace-id "") (string=? span-id ""))
+                   (and (valid-hex? trace-id 32) (valid-hex? span-id 16)))
+               "log trace context is incomplete")))
+    logs))
+
 (define (validate-capture expected-resource-attributes expected-scopes event-policy expected-span-buckets bucket-validator capture)
   (let ((requests (field 'requests capture))
         (resources (field 'resources capture))
@@ -292,8 +342,8 @@
     (validate-scopes expected-scopes scopes)
     (validate-spans expected-scopes event-policy spans)
     (bucket-validator expected-span-buckets expected-scopes spans)
-    (check (> (length metrics) 0) "capture contains no metrics")
-    (check (> (length logs) 0) "capture contains no logs")
+    (validate-metrics metrics)
+    (validate-logs logs)
     (display "valid OTLP capture\n")))
 
 (define (otel-validate-contract expected-resource-attributes expected-scopes event-policy expected-span-buckets capture)

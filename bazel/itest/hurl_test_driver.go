@@ -40,6 +40,7 @@ func main() {
 	otelProgram := flag.String("otel-program", "", "Scheme validation program evaluated after importing the libraries")
 	otelMode := flag.String("otel-mode", "validate", "OTLP golden mode: validate or candidate")
 	otelCase := flag.String("otel-case", "", "OTLP golden identity in app/case form")
+	otelProfile := flag.String("otel-profile", "", "Scheme implementation profile name used by golden candidates")
 	otelXFail := flag.String("otel-xfail", "", "reason this case is expected to violate its OTLP contract")
 	hurlRootfs := flag.String("hurl-rootfs", "bazel/itest/hurl_rootfs", "Hurl OCI rootfs in runfiles")
 	jobs := flag.Int("jobs", 4, "number of Hurl files to execute concurrently")
@@ -120,7 +121,7 @@ func main() {
 		fatal(fmt.Errorf("RealWorld Hurl suite failed: %w", err))
 	}
 	if *otelSinkSuffix != "" {
-		validationErr := requireExportedTelemetry(*otelSinkSuffix, *otelMode, *otelCase, otelLibraries, otelImports, *otelProgram)
+		validationErr := requireExportedTelemetry(*otelSinkSuffix, *otelMode, *otelCase, *otelProfile, otelLibraries, otelImports, *otelProgram)
 		if err := classifyOTLPValidation(validationErr, *otelXFail, *otelCase, os.Stderr); err != nil {
 			fatal(err)
 		}
@@ -219,7 +220,7 @@ func resetStartupTelemetry(serviceSuffix string) error {
 	return nil
 }
 
-func requireExportedTelemetry(serviceSuffix, mode, goldenCase string, libraries, imports []string, program string) error {
+func requireExportedTelemetry(serviceSuffix, mode, goldenCase, profile string, libraries, imports []string, program string) error {
 	if mode != "validate" && mode != "candidate" {
 		return fmt.Errorf("invalid --otel-mode %q", mode)
 	}
@@ -268,7 +269,7 @@ func requireExportedTelemetry(serviceSuffix, mode, goldenCase string, libraries,
 						lastTraceSpans = stats.TraceSpans
 						stableSince = time.Now()
 					} else if !stableSince.IsZero() && time.Since(stableSince) >= 2*time.Second {
-						return validateTelemetryDump(http.Client{Timeout: time.Minute}, baseURL, mode, goldenCase, libraries, imports, program, stats)
+						return validateTelemetryDump(http.Client{Timeout: time.Minute}, baseURL, mode, goldenCase, profile, libraries, imports, program, stats)
 					}
 				}
 			}
@@ -280,7 +281,7 @@ func requireExportedTelemetry(serviceSuffix, mode, goldenCase string, libraries,
 	}
 }
 
-func validateTelemetryDump(client http.Client, baseURL, mode, goldenCase string, libraries, imports []string, program string, stats sinkStats) error {
+func validateTelemetryDump(client http.Client, baseURL, mode, goldenCase, profile string, libraries, imports []string, program string, stats sinkStats) error {
 	response, err := client.Get(baseURL + "/dump")
 	if err != nil {
 		return fmt.Errorf("read quiescent OTLP dump: %w", err)
@@ -307,7 +308,7 @@ func validateTelemetryDump(client http.Client, baseURL, mode, goldenCase string,
 		return &otlpAssertionFailure{cause: fmt.Errorf("OTLP dump at %s lacks traces, metrics, or logs with service.name", baseURL)}
 	}
 	if mode == "candidate" {
-		if err := emitGoldenCandidate(client, baseURL, goldenCase, contents); err != nil {
+		if err := emitGoldenCandidate(client, baseURL, goldenCase, profile, contents); err != nil {
 			return err
 		}
 		fmt.Printf("Emitted OTLP golden candidate for %s: %d spans in %d trace requests, plus metrics and logs\n", goldenCase, stats.TraceSpans, stats.TraceRequests)
@@ -340,14 +341,18 @@ func validateTelemetryDump(client http.Client, baseURL, mode, goldenCase string,
 	}
 	if validationResponse.StatusCode != http.StatusOK {
 		emitFailedCapture(goldenCase, contents)
-		failure := fmt.Errorf("Scheme rejected OTLP capture (HTTP %d):\n%s", validationResponse.StatusCode, validationOutput)
-		if validationResponse.StatusCode == http.StatusUnprocessableEntity {
-			return &otlpAssertionFailure{cause: failure}
-		}
-		return failure
+		return schemeValidationFailure(validationResponse.StatusCode, validationOutput)
 	}
 	fmt.Printf("Verified quiescent OTLP Scheme golden: %d spans in %d trace requests, plus metrics and logs (%s): %s", stats.TraceSpans, stats.TraceRequests, baseURL, validationOutput)
 	return nil
+}
+
+func schemeValidationFailure(status int, output []byte) error {
+	failure := fmt.Errorf("Scheme rejected OTLP capture (HTTP %d):\n%s", status, output)
+	if status == http.StatusConflict {
+		return &otlpAssertionFailure{cause: failure}
+	}
+	return failure
 }
 
 func readSinkStats(client http.Client, baseURL string) (sinkStats, error) {
@@ -455,7 +460,7 @@ func schemeLibraryName(value string) ([]byte, error) {
 	return []byte("(" + strings.Join(parts, " ") + ")"), nil
 }
 
-func emitGoldenCandidate(client http.Client, baseURL, goldenCase string, capture []byte) error {
+func emitGoldenCandidate(client http.Client, baseURL, goldenCase, configuredProfile string, capture []byte) error {
 	parts := strings.SplitN(goldenCase, "/", 2)
 	response, err := client.Get(baseURL + "/candidate?app=" + parts[0])
 	if err != nil {
@@ -469,7 +474,7 @@ func emitGoldenCandidate(client http.Client, baseURL, goldenCase string, capture
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("generate OTLP Scheme golden candidate: HTTP %d: %s", response.StatusCode, golden)
 	}
-	profile, err := implementationProfile(parts[0])
+	profile, err := implementationProfile(parts[0], configuredProfile)
 	if err != nil {
 		return err
 	}
@@ -494,7 +499,13 @@ func emitGoldenCandidate(client http.Client, baseURL, goldenCase string, capture
 	return nil
 }
 
-func implementationProfile(app string) (string, error) {
+func implementationProfile(app, configured string) (string, error) {
+	if configured != "" {
+		if err := schemeIdentifier(configured); err != nil {
+			return "", fmt.Errorf("invalid OTLP implementation profile: %w", err)
+		}
+		return configured, nil
+	}
 	switch app {
 	case "aiohttp":
 		return "python-aiohttp-auto-v0-65b0", nil
