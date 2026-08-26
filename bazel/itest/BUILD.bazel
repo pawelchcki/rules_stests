@@ -230,6 +230,9 @@ realworld_hurl_test_suite(
     name = "aiohttp_otel_hurl_test",
     timeout = "moderate",
     otel_app = "aiohttp",
+    otel_flaky_cases = {
+        "errors_profiles": "a late startup /api/tags export can cross the trace-only reset boundary",
+    },
     otel_sink = ":otel_sink_service",
     service = ":aiohttp_otel_service",
 )

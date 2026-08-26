@@ -51,7 +51,7 @@ func main() {
 	}{
 		{"traces", "application/x-protobuf", []byte{0x0a, 0x00}, "trace-protobuf"},
 		{"metrics", "application/json", []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"probe"},"metrics":[{"name":"probe-metric","sum":{"dataPoints":[{"timeUnixNano":"2","asInt":"1"}],"aggregationTemporality":2,"isMonotonic":true}}]}]}]}`), "metric-json"},
-		{"logs", "application/json", []byte(`{"resourceLogs":[{"resource":{"attributes":[]},"scopeLogs":[{"scope":{"name":"probe-log"},"logRecords":[{"timeUnixNano":"1","observedTimeUnixNano":"2","severityNumber":9,"severityText":"INFO","body":{"stringValue":"probe log"},"attributes":[{"key":"probe.attribute","value":{"stringValue":"present"}}]}]}]}]}`), "log-json"},
+		{"logs", "application/json", []byte(`{"resourceLogs":[{"resource":{"attributes":[]},"scopeLogs":[{"scope":{"name":"probe-log"},"logRecords":[{"timeUnixNano":"1","observedTimeUnixNano":"2","severityNumber":9,"severityText":"INFO","body":{"bytesValue":"AQID/w=="},"attributes":[{"key":"probe.attribute","value":{"stringValue":"present"}}]}]}]}]}`), "log-json"},
 	}
 	for _, item := range requests {
 		req, err := http.NewRequest(http.MethodPost, endpoint+"/v1/"+item.signal, bytes.NewReader(item.body))
@@ -123,7 +123,7 @@ func main() {
                  (= (cadr (assq 'data-points (car metrics))) 1)
                  (eq? (cadr (assq 'data-type (car metrics))) 'sum)
                  (= (length logs) 1)
-                 (equal? (cadr (assq 'body (car logs))) '(string "probe log"))
+                 (equal? (cadr (assq 'body (car logs))) '(bytes (1 2 3 255)))
                  (= (length (cadr (assq 'attributes (car logs)))) 1))
             (display "standalone validation passed\n")
             (error "canonical OTLP JSON shape changed"))))))

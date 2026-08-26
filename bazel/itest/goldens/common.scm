@@ -188,9 +188,11 @@
       integer-keys)))
 
 (define (kind-name value)
+  (check (and (integer? value) (>= value 0) (< value 6)) "invalid span kind")
   (list-ref '(unspecified internal server client producer consumer) value))
 
 (define (status-name value)
+  (check (and (integer? value) (>= value 0) (< value 3)) "invalid span status")
   (list-ref '(unset ok error) value))
 
 (define (scope-alias expected-scopes name)

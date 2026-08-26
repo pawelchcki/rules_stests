@@ -239,9 +239,11 @@ defects.
 Intermittent telemetry defects use `otel_flaky_cases`, also as a mapping from
 topic to reason. Those targets receive Bazel's `flaky = True` behavior and an
 `otel-flaky` tag: Bazel retries a failing attempt and reports `FLAKY` if a retry
-passes, while exhausting the retries remains red. There are currently no
-listed flaky topics: startup health traces are excluded by the explicit
-trace-only reset boundary rather than tolerated by a broader golden.
+passes, while exhausting the retries remains red. The aiohttp
+`errors_profiles` topic is marked flaky because a late startup `/api/tags`
+export can cross the explicit trace-only reset boundary; the exact golden is
+unchanged, so the race remains visible instead of being accepted as valid
+telemetry.
 
 Random IDs and timestamps remain shape-checked rather than pinned. The one
 known random path fragment in aiohttp SQLAlchemy span names uses the explicit

@@ -960,19 +960,77 @@ fn any_value(output: &mut String, value: Option<&Value>) {
         string(output, &format!("{value}"));
         output.push(')');
     } else if let Some(value) = json_field(value, "bytes_value", "bytesValue") {
-        output.push_str("(bytes (");
-        for byte in value
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_u64)
-        {
-            write!(output, "{byte} ").unwrap();
+        if let Some(bytes) = byte_value(value) {
+            output.push_str("(bytes (");
+            for byte in bytes {
+                write!(output, "{byte} ").unwrap();
+            }
+            output.push_str("))");
+        } else {
+            output.push_str("(other)");
         }
-        output.push_str("))");
     } else {
         output.push_str("(other)");
     }
+}
+
+fn byte_value(value: &Value) -> Option<Vec<u8>> {
+    if let Some(encoded) = value.as_str() {
+        return decode_base64(encoded);
+    }
+    value
+        .as_array()?
+        .iter()
+        .map(|byte| u8::try_from(byte.as_u64()?).ok())
+        .collect()
+}
+
+fn decode_base64(encoded: &str) -> Option<Vec<u8>> {
+    let mut output = Vec::with_capacity(encoded.len().saturating_mul(3) / 4);
+    let mut buffer = 0_u32;
+    let mut bits = 0_u8;
+    let mut data_characters = 0_usize;
+    let mut padding = 0_usize;
+
+    for byte in encoded.bytes() {
+        if byte == b'=' {
+            padding += 1;
+            if padding > 2 {
+                return None;
+            }
+            continue;
+        }
+        if padding != 0 {
+            return None;
+        }
+        let value = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' | b'-' => 62,
+            b'/' | b'_' => 63,
+            _ => return None,
+        };
+        data_characters += 1;
+        buffer = (buffer << 6) | u32::from(value);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            output.push((buffer >> bits) as u8);
+            buffer &= (1_u32 << bits) - 1;
+        }
+    }
+
+    let remainder = data_characters % 4;
+    if remainder == 1
+        || (padding != 0 && (data_characters + padding) % 4 != 0)
+        || (padding == 1 && remainder != 3)
+        || (padding == 2 && remainder != 2)
+        || buffer != 0
+    {
+        return None;
+    }
+    Some(output)
 }
 
 fn events(output: &mut String, value: Option<&Value>) {

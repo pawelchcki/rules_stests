@@ -187,7 +187,7 @@ func resetStartupTelemetry(serviceSuffix string) error {
 	stableSince := time.Time{}
 	for {
 		stats, statsErr := readSinkStats(client, baseURL)
-		if statsErr == nil && stats.TraceSpans > 0 {
+		if statsErr == nil {
 			if stats.TraceRequests != lastTraceRequests || stats.TraceSpans != lastTraceSpans {
 				lastTraceRequests = stats.TraceRequests
 				lastTraceSpans = stats.TraceSpans
