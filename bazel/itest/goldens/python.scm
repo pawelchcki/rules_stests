@@ -5,6 +5,7 @@
           python-sqlalchemy-scope
           python-logging-scope
           python-system-metrics-scope
+          python-system-metric-descriptors
           python-http-scope
           python-database-bucket
           python-profile-shape
@@ -57,6 +58,41 @@
   '("opentelemetry.instrumentation.system_metrics"
     "0.65b0"
     "https://opentelemetry.io/schemas/1.11.0"))
+
+; Descriptor fields are scope, name, description, unit, data type, and metadata.
+(define python-system-metric-descriptors
+  '(("opentelemetry.instrumentation.system_metrics" "cpython.gc.collected_objects" "The total number of objects collected since interpreter start." "{object}" sum ())
+    ("opentelemetry.instrumentation.system_metrics" "cpython.gc.collections" "The number of times a generation was collected since interpreter start." "{collection}" sum ())
+    ("opentelemetry.instrumentation.system_metrics" "cpython.gc.uncollectable_objects" "The total number of uncollectable objects found since interpreter start." "{object}" sum ())
+    ("opentelemetry.instrumentation.system_metrics" "process.context_switches" "Number of times the process has been context switched." "" sum ())
+    ("opentelemetry.instrumentation.system_metrics" "process.cpu.time" "Total CPU seconds broken down by different states." "s" sum ())
+    ("opentelemetry.instrumentation.system_metrics" "process.cpu.utilization" "Difference in process.cpu.time since the last measurement, divided by the elapsed time and number of CPUs available to the process." "1" gauge ())
+    ("opentelemetry.instrumentation.system_metrics" "process.disk.io" "Disk bytes transferred for the process." "By" sum ())
+    ("opentelemetry.instrumentation.system_metrics" "process.memory.usage" "The amount of physical memory in use." "By" sum ())
+    ("opentelemetry.instrumentation.system_metrics" "process.memory.virtual" "The amount of committed virtual memory." "By" sum ())
+    ("opentelemetry.instrumentation.system_metrics" "process.open_file_descriptor.count" "Number of file descriptors in use by the process." "" sum ())
+    ("opentelemetry.instrumentation.system_metrics" "process.runtime.cpython.context_switches" "Runtime context switches" "switches" sum ())
+    ("opentelemetry.instrumentation.system_metrics" "process.runtime.cpython.cpu.utilization" "Runtime CPU utilization" "1" gauge ())
+    ("opentelemetry.instrumentation.system_metrics" "process.runtime.cpython.cpu_time" "Runtime cpython CPU time" "s" sum ())
+    ("opentelemetry.instrumentation.system_metrics" "process.runtime.cpython.gc_count" "Runtime cpython GC count" "By" sum ())
+    ("opentelemetry.instrumentation.system_metrics" "process.runtime.cpython.memory" "Runtime cpython memory" "By" sum ())
+    ("opentelemetry.instrumentation.system_metrics" "process.runtime.cpython.thread_count" "Runtime active threads count" "" sum ())
+    ("opentelemetry.instrumentation.system_metrics" "process.thread.count" "Process threads count." "" sum ())
+    ("opentelemetry.instrumentation.system_metrics" "system.cpu.time" "System CPU time" "s" sum ())
+    ("opentelemetry.instrumentation.system_metrics" "system.cpu.utilization" "System CPU utilization" "1" gauge ())
+    ("opentelemetry.instrumentation.system_metrics" "system.disk.io" "System disk IO" "By" sum ())
+    ("opentelemetry.instrumentation.system_metrics" "system.disk.operations" "System disk operations" "operations" sum ())
+    ("opentelemetry.instrumentation.system_metrics" "system.disk.time" "System disk time" "s" sum ())
+    ("opentelemetry.instrumentation.system_metrics" "system.memory.usage" "System memory usage" "By" gauge ())
+    ("opentelemetry.instrumentation.system_metrics" "system.memory.utilization" "System memory utilization" "1" gauge ())
+    ("opentelemetry.instrumentation.system_metrics" "system.network.connections" "System network connections" "connections" sum ())
+    ("opentelemetry.instrumentation.system_metrics" "system.network.dropped_packets" "System network dropped_packets" "packets" sum ())
+    ("opentelemetry.instrumentation.system_metrics" "system.network.errors" "System network errors" "errors" sum ())
+    ("opentelemetry.instrumentation.system_metrics" "system.network.io" "System network io" "By" sum ())
+    ("opentelemetry.instrumentation.system_metrics" "system.network.packets" "System network packets" "packets" sum ())
+    ("opentelemetry.instrumentation.system_metrics" "system.swap.usage" "System swap usage" "pages" gauge ())
+    ("opentelemetry.instrumentation.system_metrics" "system.swap.utilization" "System swap utilization" "1" gauge ())
+    ("opentelemetry.instrumentation.system_metrics" "system.thread_count" "System active threads count" "" gauge ())))
 
 (define (python-http-scope alias instrumentation-name attributes string-rules integer-keys)
   (list alias

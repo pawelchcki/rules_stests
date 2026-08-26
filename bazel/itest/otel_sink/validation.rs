@@ -161,6 +161,12 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                         string(&mut output, &group.schema_url);
                         output.push_str(") (name ");
                         string(&mut output, &metric.name);
+                        output.push_str(") (description ");
+                        string(&mut output, &metric.description);
+                        output.push_str(") (unit ");
+                        string(&mut output, &metric.unit);
+                        output.push_str(") (metadata ");
+                        typed_attributes(&mut output, &metric.metadata);
                         write!(
                             output,
                             ") (scope-dropped-attributes {}) (data-type {data_type}) (data-points {data_points}) (data-points-valid {}))\n",
@@ -334,6 +340,9 @@ fn typed_exponential_histogram_point_valid(point: &proto::ExponentialHistogramDa
         point.time_unix_nano,
         point.flags,
     ) && typed_exemplars_valid(&point.exemplars)
+        && (-10..=20).contains(&point.scale)
+        && point.zero_threshold.is_finite()
+        && point.zero_threshold >= 0.0
         && bucket_count.and_then(|count| count.checked_add(point.zero_count)) == Some(point.count)
 }
 
@@ -837,6 +846,12 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                     );
                     output.push_str(") (name ");
                     string(&mut output, text(metric.get("name")));
+                    output.push_str(") (description ");
+                    string(&mut output, text(metric.get("description")));
+                    output.push_str(") (unit ");
+                    string(&mut output, text(metric.get("unit")));
+                    output.push_str(") (metadata ");
+                    attributes(&mut output, metric.get("metadata"));
                     write!(
                         output,
                         ") (scope-dropped-attributes {}) (data-type {data_type}) (data-points {data_points}) (data-points-valid {}))\n",
@@ -1364,8 +1379,22 @@ fn json_exponential_histogram_point_valid(point: &Value) -> bool {
     let Ok(count) = try_integer(point.get("count")) else {
         return false;
     };
+    let Ok(scale) = try_integer(point.get("scale")) else {
+        return false;
+    };
+    let Some(zero_threshold) = point
+        .get("zero_threshold")
+        .or_else(|| point.get("zeroThreshold"))
+        .map(json_double)
+        .unwrap_or(Some(0.0))
+    else {
+        return false;
+    };
     json_point_metadata_valid(point)
         && json_exemplars_valid(point)
+        && (-10..=20).contains(&scale)
+        && zero_threshold.is_finite()
+        && zero_threshold >= 0.0
         && positive >= 0
         && negative >= 0
         && zero >= 0
@@ -1386,7 +1415,7 @@ fn json_summary_point_valid(point: &Value) -> bool {
     let quantiles = array(json_field(point, "quantile_values", "quantileValues"));
     json_point_metadata_valid(point)
         && count >= 0
-        && point.get("sum").and_then(json_double).is_some()
+        && optional_json_double_valid(point.get("sum"))
         && quantiles.iter().all(|value| {
             value
                 .get("quantile")

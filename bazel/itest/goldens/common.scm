@@ -382,19 +382,50 @@
                "signal instrumentation scope dropped attributes")))
     items))
 
-(define (validate-metrics expected-scopes metrics)
+(define (metric-descriptor metric)
+  (list (field 'scope metric)
+        (field 'name metric)
+        (field 'description metric)
+        (field 'unit metric)
+        (field 'data-type metric)
+        (field 'metadata metric)))
+
+(define (validate-metric-metadata metadata)
+  (for-each
+    (lambda (entry)
+      (begin
+        (check (> (string-length (car entry)) 0) "metric metadata has no key")
+        (check (valid-attribute-value? (cadr entry)) "metric metadata has no value")
+        (check (= (attribute-count metadata (car entry)) 1) "metric metadata is duplicated")))
+    metadata))
+
+(define (validate-metrics expected-scopes expected-descriptors metrics)
   (check (> (length metrics) 0) "capture contains no metrics")
   (validate-signal-scopes expected-scopes metrics)
   (for-each
     (lambda (metric)
       (check (> (string-length (field 'scope metric)) 0) "metric has no instrumentation scope")
       (check (> (string-length (field 'name metric)) 0) "metric has no name")
+      (check (string? (field 'description metric)) "metric description is malformed")
+      (check (string? (field 'unit metric)) "metric unit is malformed")
+      (validate-metric-metadata (field 'metadata metric))
       (check (member (field 'data-type metric)
                      '(gauge sum histogram exponential-histogram summary))
              "metric has no supported data type")
       (check (> (field 'data-points metric) 0) "metric has no data points")
-      (check (field 'data-points-valid metric) "metric data point is malformed"))
-    metrics))
+      (check (field 'data-points-valid metric) "metric data point is malformed")
+      (if expected-descriptors
+          (check (member (metric-descriptor metric) expected-descriptors)
+                 "metric descriptor changed")
+          #t))
+    metrics)
+  (if expected-descriptors
+      (for-each
+        (lambda (expected)
+          (check (> (count (lambda (metric) (equal? (metric-descriptor metric) expected)) metrics) 0)
+                 "expected metric descriptor is missing"))
+        expected-descriptors)
+      #t))
 
 (define (valid-attribute-value? value)
   (and (pair? value)
@@ -456,7 +487,7 @@
                "log trace context is incomplete")))
     logs))
 
-(define (validate-capture expected-resource-attributes expected-scopes expected-metric-scopes expected-log-scopes event-policy expected-span-flags expected-span-buckets bucket-validator capture)
+(define (validate-capture expected-resource-attributes expected-scopes expected-metric-scopes expected-metric-descriptors expected-log-scopes event-policy expected-span-flags expected-span-buckets bucket-validator capture)
   (let ((requests (field 'requests capture))
         (resources (field 'resources capture))
         (scopes (field 'scopes capture))
@@ -474,7 +505,7 @@
     (validate-scopes expected-scopes scopes)
     (validate-spans expected-scopes event-policy expected-span-flags spans)
     (bucket-validator expected-span-buckets expected-scopes spans)
-    (validate-metrics expected-metric-scopes metrics)
+    (validate-metrics expected-metric-scopes expected-metric-descriptors metrics)
     (validate-logs expected-log-scopes logs)
     (display "valid OTLP capture\n")))
 
@@ -482,6 +513,7 @@
   (validate-capture expected-resource-attributes
                     expected-scopes
                     expected-metric-scopes
+                    #f
                     expected-log-scopes
                     event-policy
                     '(0 1 256 257)
@@ -489,10 +521,11 @@
                     validate-contract-buckets
                     capture))
 
-(define (otel-validate-exact expected-resource-attributes expected-scopes expected-metric-scopes expected-log-scopes event-policy expected-span-flags expected-span-buckets capture)
+(define (otel-validate-exact expected-resource-attributes expected-scopes expected-metric-scopes expected-metric-descriptors expected-log-scopes event-policy expected-span-flags expected-span-buckets capture)
   (validate-capture expected-resource-attributes
                     expected-scopes
                     expected-metric-scopes
+                    expected-metric-descriptors
                     expected-log-scopes
                     event-policy
                     expected-span-flags

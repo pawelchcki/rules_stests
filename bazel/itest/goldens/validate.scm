@@ -7,6 +7,7 @@
 (otel-validate-exact expected-resource-attributes
                      expected-scopes
                      expected-metric-scopes
+                     expected-metric-descriptors
                      expected-log-scopes
                      (event-policy-for scenario-name)
                      expected-span-flags

@@ -3,6 +3,7 @@
           expected-resource-attributes
           expected-scopes
           expected-metric-scopes
+          expected-metric-descriptors
           expected-log-scopes
           expected-span-flags
           event-policy-for
@@ -37,6 +38,15 @@
     '("opentelemetry.instrumentation.asyncio" "0.65b0" "")
     (list "opentelemetry.instrumentation.sqlalchemy" "0.65b0" python-schema-url)
     python-system-metrics-scope))
+
+(define expected-metric-descriptors
+  (append
+    '(("opentelemetry.instrumentation.aiohttp_server" "http.server.active_requests" "Number of active HTTP server requests." "{request}" sum ())
+      ("opentelemetry.instrumentation.aiohttp_server" "http.server.duration" "Measures the duration of inbound HTTP requests." "ms" histogram ())
+      ("opentelemetry.instrumentation.asyncio" "asyncio.process.created" "Number of asyncio process" "{process}" sum ())
+      ("opentelemetry.instrumentation.asyncio" "asyncio.process.duration" "Duration of asyncio process" "s" histogram ())
+      ("opentelemetry.instrumentation.sqlalchemy" "db.client.connections.usage" "The number of connections that are currently in state described by the state attribute." "connections" sum ()))
+    python-system-metric-descriptors))
 
 (define expected-log-scopes (list python-logging-scope))
 

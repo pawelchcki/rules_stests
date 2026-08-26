@@ -3,6 +3,7 @@
           expected-resource-attributes
           expected-scopes
           expected-metric-scopes
+          expected-metric-descriptors
           expected-log-scopes
           expected-span-flags
           event-policy-for
@@ -34,6 +35,12 @@
   (list
     (list "opentelemetry.instrumentation.django" "0.65b0" python-schema-url)
     python-system-metrics-scope))
+
+(define expected-metric-descriptors
+  (append
+    '(("opentelemetry.instrumentation.django" "http.server.active_requests" "Number of active HTTP server requests." "{request}" sum ())
+      ("opentelemetry.instrumentation.django" "http.server.duration" "Measures the duration of inbound HTTP requests." "ms" histogram ()))
+    python-system-metric-descriptors))
 
 (define expected-log-scopes
   (list
