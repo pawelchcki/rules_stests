@@ -9,6 +9,7 @@
                      expected-metric-scopes
                      expected-metric-descriptors
                      expected-log-scopes
+                     expected-log-severity-required
                      (event-policy-for scenario-name)
                      expected-span-flags
                      expected-span-buckets

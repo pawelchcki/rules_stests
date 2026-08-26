@@ -10,7 +10,8 @@
           python-database-bucket
           python-profile-shape
           python-counted-operation-buckets
-          expected-span-flags)
+          expected-span-flags
+          expected-log-severity-required)
   (import (scheme base))
   (begin
 
@@ -24,6 +25,7 @@
 (define python-schema-url "https://opentelemetry.io/schemas/1.11.0")
 
 (define expected-span-flags '(256))
+(define expected-log-severity-required #t)
 
 (define (python-service-resource-attributes service-name)
   (append python-resource-attributes

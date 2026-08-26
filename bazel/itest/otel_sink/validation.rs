@@ -315,6 +315,7 @@ fn typed_histogram_point_valid(point: &proto::HistogramDataPoint) -> bool {
     ) && typed_exemplars_valid(&point.exemplars)
         && point.bucket_counts.len() == point.explicit_bounds.len().saturating_add(1)
         && finite_strictly_increasing(&point.explicit_bounds)
+        && typed_extrema_valid(point.min, point.max)
         && point
             .bucket_counts
             .iter()
@@ -343,7 +344,17 @@ fn typed_exponential_histogram_point_valid(point: &proto::ExponentialHistogramDa
         && (-10..=20).contains(&point.scale)
         && point.zero_threshold.is_finite()
         && point.zero_threshold >= 0.0
+        && typed_extrema_valid(point.min, point.max)
         && bucket_count.and_then(|count| count.checked_add(point.zero_count)) == Some(point.count)
+}
+
+fn typed_extrema_valid(min: Option<f64>, max: Option<f64>) -> bool {
+    min.is_none_or(f64::is_finite)
+        && max.is_none_or(f64::is_finite)
+        && match (min, max) {
+            (Some(min), Some(max)) => min <= max,
+            _ => true,
+        }
 }
 
 fn typed_exemplars_valid(exemplars: &[proto::Exemplar]) -> bool {
@@ -1351,8 +1362,7 @@ fn json_histogram_point_valid(point: &Value) -> bool {
         && json_bounds_valid(bounds)
         && bucket_total == count
         && optional_json_double_valid(point.get("sum"))
-        && optional_json_double_valid(point.get("min"))
-        && optional_json_double_valid(point.get("max"))
+        && json_extrema_valid(point)
 }
 
 fn json_bounds_valid(bounds: &[Value]) -> bool {
@@ -1404,8 +1414,7 @@ fn json_exponential_histogram_point_valid(point: &Value) -> bool {
             .and_then(|total| total.checked_add(zero))
             == Some(count)
         && optional_json_double_valid(point.get("sum"))
-        && optional_json_double_valid(point.get("min"))
-        && optional_json_double_valid(point.get("max"))
+        && json_extrema_valid(point)
 }
 
 fn json_summary_point_valid(point: &Value) -> bool {
@@ -1442,6 +1451,22 @@ fn json_integer_sum(values: &[Value]) -> Option<i64> {
 
 fn optional_json_double_valid(value: Option<&Value>) -> bool {
     value.is_none_or(|value| value.is_null() || json_double(value).is_some())
+}
+
+fn json_extrema_valid(point: &Value) -> bool {
+    let decode = |value: Option<&Value>| -> Option<Option<f64>> {
+        match value {
+            None | Some(Value::Null) => Some(None),
+            Some(value) => json_double(value)
+                .filter(|value| value.is_finite())
+                .map(Some),
+        }
+    };
+    match (decode(point.get("min")), decode(point.get("max"))) {
+        (Some(Some(min)), Some(Some(max))) => min <= max,
+        (Some(_), Some(_)) => true,
+        _ => false,
+    }
 }
 
 fn json_exemplars_valid(point: &Value) -> bool {
@@ -1596,6 +1621,9 @@ fn json_key_values_valid(value: Option<&Value>) -> bool {
     let Some(values) = value else {
         return true;
     };
+    if values.is_null() {
+        return true;
+    }
     let Some(values) = values.as_array() else {
         return false;
     };
@@ -1817,7 +1845,7 @@ fn has_malformed_json_collection(value: &Value) -> bool {
     match value {
         Value::Array(values) => values.iter().any(has_malformed_json_collection),
         Value::Object(fields) => fields.iter().any(|(name, value)| {
-            (is_json_collection_field(name) && !value.is_array())
+            (is_json_collection_field(name) && !value.is_null() && !value.is_array())
                 || has_malformed_json_collection(value)
         }),
         _ => false,
@@ -1828,7 +1856,8 @@ fn has_malformed_json_string(value: &Value) -> bool {
     match value {
         Value::Array(values) => values.iter().any(has_malformed_json_string),
         Value::Object(fields) => fields.iter().any(|(name, value)| {
-            (is_json_string_field(name) && !value.is_string()) || has_malformed_json_string(value)
+            (is_json_string_field(name) && !value.is_null() && !value.is_string())
+                || has_malformed_json_string(value)
         }),
         _ => false,
     }
