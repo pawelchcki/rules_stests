@@ -68,8 +68,11 @@ pub(crate) fn read_request(connection: &OwnedFd) -> Result<Request, String> {
         let (name, value) = line
             .split_once(':')
             .ok_or_else(|| "malformed HTTP header".to_string())?;
+        if !valid_field_name(name) {
+            return Err("invalid HTTP field name".to_string());
+        }
         headers.push(Header {
-            name: name.trim().to_ascii_lowercase(),
+            name: name.to_ascii_lowercase(),
             value: value.trim().to_string(),
         });
     }
@@ -139,6 +142,7 @@ pub(crate) fn respond(connection: &OwnedFd, status: u16, content_type: &str, bod
         404 => "Not Found",
         405 => "Method Not Allowed",
         409 => "Conflict",
+        413 => "Payload Too Large",
         415 => "Unsupported Media Type",
         422 => "Unprocessable Content",
         _ => "Internal Server Error",
@@ -149,6 +153,30 @@ pub(crate) fn respond(connection: &OwnedFd, status: u16, content_type: &str, bod
     );
     let _ = send_all(connection, head.as_bytes());
     let _ = send_all(connection, body);
+}
+
+fn valid_field_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {

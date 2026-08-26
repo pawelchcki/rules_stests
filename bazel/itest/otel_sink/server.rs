@@ -16,6 +16,9 @@ use rustix::net::{
 };
 use rustix::time::{clock_gettime, ClockId};
 
+const MAX_CAPTURE_REQUEST_BYTES: usize = 4 * 1024 * 1024;
+const MAX_CAPTURE_RECORDS: usize = 4096;
+
 pub(crate) fn serve(port: u16, output: &CStr) -> Result<(), String> {
     let listener = socket(AddressFamily::INET, SocketType::STREAM, None)
         .map_err(|error| format!("socket: {error}"))?;
@@ -274,6 +277,27 @@ fn ingest(
             415,
             "text/plain",
             format!("unsupported content type {content_type:?}\n").as_bytes(),
+        );
+        return;
+    }
+    let retained_count = frozen_records.map_or(0, <[Record]>::len) + records.len();
+    let retained_bytes = frozen_records
+        .into_iter()
+        .flatten()
+        .chain(records.iter())
+        .try_fold(0usize, |total, record| {
+            total.checked_add(record.request.content_length)
+        });
+    if retained_count >= MAX_CAPTURE_RECORDS
+        || retained_bytes
+            .and_then(|total| total.checked_add(request.body.len()))
+            .is_none_or(|total| total > MAX_CAPTURE_REQUEST_BYTES)
+    {
+        respond(
+            connection,
+            413,
+            "text/plain",
+            b"cumulative OTLP capture exceeds limit\n",
         );
         return;
     }

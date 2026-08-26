@@ -1179,15 +1179,15 @@ pub fn golden_candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String
                     ],
                     "span kind",
                 )?;
-                if kind == "server" {
-                    continue;
-                }
                 let status = enum_name(
                     try_integer(span.get("status").and_then(|status| status.get("code")))
                         .map_err(|()| String::from("invalid span status value"))?,
                     &["unset", "ok", "error"],
                     "span status",
                 )?;
+                if kind == "server" {
+                    continue;
+                }
                 let parent_id = text(json_field(span, "parent_span_id", "parentSpanId"));
                 let trace_id = text(json_field(span, "trace_id", "traceId"));
                 let parent = if parent_id.is_empty() {

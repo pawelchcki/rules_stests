@@ -1,6 +1,42 @@
 use alloc::string::String;
 use alloc::vec::Vec;
+use serde::ser::SerializeSeq;
 use serde::{Serialize, Serializer};
+
+fn double<S: Serializer>(value: &f64, serializer: S) -> Result<S::Ok, S::Error> {
+    if value.is_nan() {
+        serializer.serialize_str("NaN")
+    } else if *value == f64::INFINITY {
+        serializer.serialize_str("Infinity")
+    } else if *value == f64::NEG_INFINITY {
+        serializer.serialize_str("-Infinity")
+    } else {
+        serializer.serialize_f64(*value)
+    }
+}
+
+fn option_double<S: Serializer>(value: &Option<f64>, serializer: S) -> Result<S::Ok, S::Error> {
+    match value {
+        Some(value) => double(value, serializer),
+        None => serializer.serialize_none(),
+    }
+}
+
+struct CanonicalDouble(f64);
+
+impl Serialize for CanonicalDouble {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        double(&self.0, serializer)
+    }
+}
+
+fn doubles<S: Serializer>(values: &[f64], serializer: S) -> Result<S::Ok, S::Error> {
+    let mut sequence = serializer.serialize_seq(Some(values.len()))?;
+    for value in values {
+        sequence.serialize_element(&CanonicalDouble(*value))?;
+    }
+    sequence.end()
+}
 
 fn hex<S: Serializer>(bytes: &Vec<u8>, serializer: S) -> Result<S::Ok, S::Error> {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
@@ -34,7 +70,7 @@ pub mod any_value {
         #[prost(int64, tag = "3")]
         IntValue(i64),
         #[prost(double, tag = "4")]
-        DoubleValue(f64),
+        DoubleValue(#[serde(serialize_with = "super::double")] f64),
         #[prost(message, tag = "5")]
         ArrayValue(ArrayValue),
         #[prost(message, tag = "6")]
@@ -175,7 +211,7 @@ pub enum SpanKind {
 }
 
 pub mod span {
-    use super::{KeyValue, hex};
+    use super::{hex, KeyValue};
     use alloc::string::String;
     use alloc::vec::Vec;
     use serde::Serialize;
@@ -356,7 +392,7 @@ pub mod number_data_point {
     #[serde(rename_all = "snake_case")]
     pub enum Value {
         #[prost(double, tag = "4")]
-        AsDouble(f64),
+        AsDouble(#[serde(serialize_with = "super::double")] f64),
         #[prost(sfixed64, tag = "6")]
         AsInt(i64),
     }
@@ -373,18 +409,22 @@ pub struct HistogramDataPoint {
     #[prost(fixed64, tag = "4")]
     pub count: u64,
     #[prost(double, optional, tag = "5")]
+    #[serde(serialize_with = "option_double")]
     pub sum: Option<f64>,
     #[prost(fixed64, repeated, tag = "6")]
     pub bucket_counts: Vec<u64>,
     #[prost(double, repeated, tag = "7")]
+    #[serde(serialize_with = "doubles")]
     pub explicit_bounds: Vec<f64>,
     #[prost(message, repeated, tag = "8")]
     pub exemplars: Vec<Exemplar>,
     #[prost(uint32, tag = "10")]
     pub flags: u32,
     #[prost(double, optional, tag = "11")]
+    #[serde(serialize_with = "option_double")]
     pub min: Option<f64>,
     #[prost(double, optional, tag = "12")]
+    #[serde(serialize_with = "option_double")]
     pub max: Option<f64>,
 }
 
@@ -399,6 +439,7 @@ pub struct ExponentialHistogramDataPoint {
     #[prost(fixed64, tag = "4")]
     pub count: u64,
     #[prost(double, optional, tag = "5")]
+    #[serde(serialize_with = "option_double")]
     pub sum: Option<f64>,
     #[prost(sint32, tag = "6")]
     pub scale: i32,
@@ -413,10 +454,13 @@ pub struct ExponentialHistogramDataPoint {
     #[prost(message, repeated, tag = "11")]
     pub exemplars: Vec<Exemplar>,
     #[prost(double, optional, tag = "12")]
+    #[serde(serialize_with = "option_double")]
     pub min: Option<f64>,
     #[prost(double, optional, tag = "13")]
+    #[serde(serialize_with = "option_double")]
     pub max: Option<f64>,
     #[prost(double, tag = "14")]
+    #[serde(serialize_with = "double")]
     pub zero_threshold: f64,
 }
 
@@ -439,6 +483,7 @@ pub struct SummaryDataPoint {
     #[prost(fixed64, tag = "4")]
     pub count: u64,
     #[prost(double, tag = "5")]
+    #[serde(serialize_with = "double")]
     pub sum: f64,
     #[prost(message, repeated, tag = "6")]
     pub quantile_values: Vec<ValueAtQuantile>,
@@ -449,8 +494,10 @@ pub struct SummaryDataPoint {
 #[derive(Clone, PartialEq, prost::Message, Serialize)]
 pub struct ValueAtQuantile {
     #[prost(double, tag = "1")]
+    #[serde(serialize_with = "double")]
     pub quantile: f64,
     #[prost(double, tag = "2")]
+    #[serde(serialize_with = "double")]
     pub value: f64,
 }
 
@@ -477,7 +524,7 @@ pub mod exemplar {
     #[serde(rename_all = "snake_case")]
     pub enum Value {
         #[prost(double, tag = "3")]
-        AsDouble(f64),
+        AsDouble(#[serde(serialize_with = "super::double")] f64),
         #[prost(sfixed64, tag = "6")]
         AsInt(i64),
     }

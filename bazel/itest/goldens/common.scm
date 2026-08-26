@@ -48,7 +48,7 @@
          (string=? suffix (substring value offset (string-length value))))))
 
 (define (hex-character? character)
-  (or (char-numeric? character)
+  (or (and (char>=? character #\0) (char<=? character #\9))
       (and (char>=? character #\a) (char<=? character #\f))
       (and (char>=? character #\A) (char<=? character #\F))))
 

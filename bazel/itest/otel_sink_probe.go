@@ -146,6 +146,24 @@ func main() {
 		fatal(fmt.Errorf("trailing request-line token: HTTP %d: %s: %v", trailingTokenResponse.StatusCode, trailingTokenBody, readErr))
 	}
 
+	invalidFieldConnection, err := net.Dial("tcp", strings.TrimPrefix(endpoint, "http://"))
+	if err != nil {
+		fatal(fmt.Errorf("connect for invalid HTTP field name: %w", err))
+	}
+	if _, err := fmt.Fprint(invalidFieldConnection, "POST /v1/metrics HTTP/1.1\r\nHost: sink\r\nContent-Type : application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"); err != nil {
+		fatal(fmt.Errorf("send invalid HTTP field name: %w", err))
+	}
+	invalidFieldResponse, err := http.ReadResponse(bufio.NewReader(invalidFieldConnection), &http.Request{Method: http.MethodPost})
+	if err != nil {
+		fatal(fmt.Errorf("read invalid HTTP field name response: %w", err))
+	}
+	invalidFieldBody, readErr := io.ReadAll(invalidFieldResponse.Body)
+	invalidFieldResponse.Body.Close()
+	invalidFieldConnection.Close()
+	if readErr != nil || invalidFieldResponse.StatusCode != http.StatusBadRequest || !bytes.Contains(invalidFieldBody, []byte("invalid HTTP field name")) {
+		fatal(fmt.Errorf("invalid HTTP field name: HTTP %d: %s: %v", invalidFieldResponse.StatusCode, invalidFieldBody, readErr))
+	}
+
 	nonDecimalLengthConnection, err := net.Dial("tcp", strings.TrimPrefix(endpoint, "http://"))
 	if err != nil {
 		fatal(fmt.Errorf("connect for non-decimal Content-Length: %w", err))
@@ -252,8 +270,8 @@ func main() {
 			'1', '.', '2', '.', '3', 0x12, 0x27, 0x0a, 0x0f,
 			'p', 'r', 'o', 'b', 'e', '-', 'p', 'b', '-', 'm', 'e', 't', 'r', 'i', 'c',
 			0x2a, 0x14, 0x0a, 0x12, 0x19, 0x02, 0x00, 0x00,
-			0x00, 0x00, 0x00, 0x00, 0x00, 0x31, 0x01, 0x00,
-			0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+			0x00, 0x00, 0x00, 0x00, 0x00, 0x21, 0x00, 0x00,
+			0x00, 0x00, 0x00, 0x00, 0xf8, 0x7f,
 		}, "metric-protobuf"},
 		{"logs", "application/json", []byte(`{"resourceLogs":[{"resource":{"attributes":[]},"scopeLogs":[{"scope":{"name":"probe-log","version":"4.5.6","attributes":[],"droppedAttributesCount":0},"logRecords":[{"timeUnixNano":"1","observedTimeUnixNano":"2","severityNumber":9,"severityText":"INFO","body":{"arrayValue":{"values":[{"bytesValue":"AQID/w=="},{"kvlistValue":{"values":[{"key":"nested","value":{"stringValue":"present"}}]}},{"doubleValue":"NaN"}]}},"attributes":[{"key":"probe.attribute","value":{"stringValue":"present"}}]}]}]}]}`), "log-json"},
 	}
@@ -313,6 +331,9 @@ func main() {
 		}
 		if item.signal != "traces" && !bytes.Contains(record.Payload, []byte("probe-")) {
 			fatal(fmt.Errorf("JSON payload was not preserved: %s", record.Payload))
+		}
+		if item.marker == "metric-protobuf" && !bytes.Contains(record.Payload, []byte(`"NaN"`)) {
+			fatal(fmt.Errorf("protobuf non-finite double was not preserved: %s", record.Payload))
 		}
 	}
 	lateLog := []byte(`{"resourceLogs":[{"resource":{"attributes":[]},"scopeLogs":[{"scope":{"name":"late-log"},"logRecords":[{"timeUnixNano":"3","observedTimeUnixNano":"4","severityNumber":9,"severityText":"INFO","body":{"stringValue":"arrived after dump"},"attributes":[{"key":"probe.attribute","value":{"stringValue":"present"}}]}]}]}]}`)
@@ -585,6 +606,37 @@ func main() {
 		fatal(fmt.Errorf("invalid metric semantics were absent from Scheme capture: %s", invalidMetricDump))
 	}
 	resetSink(endpoint)
+	invalidStatusSpan := append([]byte{}, lengthDelimited(0x0a, bytes.Repeat([]byte{0x11}, 16))...)
+	invalidStatusSpan = append(invalidStatusSpan, lengthDelimited(0x12, bytes.Repeat([]byte{0x22}, 8))...)
+	invalidStatusSpan = append(invalidStatusSpan, lengthDelimited(0x2a, []byte("GET /probe"))...)
+	invalidStatusSpan = append(invalidStatusSpan, 0x30, 0x02)
+	invalidStatusSpan = append(invalidStatusSpan, 0x39, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
+	invalidStatusSpan = append(invalidStatusSpan, 0x41, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
+	invalidStatusSpan = append(invalidStatusSpan, lengthDelimited(0x7a, []byte{0x18, 0x63})...)
+	invalidStatusScope := lengthDelimited(0x0a, []byte("status.probe"))
+	invalidStatusGroup := append(lengthDelimited(0x0a, invalidStatusScope), lengthDelimited(0x12, invalidStatusSpan)...)
+	invalidStatusResource := lengthDelimited(0x12, invalidStatusGroup)
+	invalidStatusRequest := lengthDelimited(0x0a, invalidStatusResource)
+	invalidStatusResponse, err := http.Post(endpoint+"/v1/traces", "application/x-protobuf", bytes.NewReader(invalidStatusRequest))
+	if err != nil {
+		fatal(fmt.Errorf("send invalid-status candidate trace: %w", err))
+	}
+	invalidStatusBody, readErr := io.ReadAll(invalidStatusResponse.Body)
+	invalidStatusResponse.Body.Close()
+	if readErr != nil || invalidStatusResponse.StatusCode != http.StatusOK {
+		fatal(fmt.Errorf("send invalid-status candidate trace: HTTP %d: %s: %v", invalidStatusResponse.StatusCode, invalidStatusBody, readErr))
+	}
+	freezeCapture(endpoint, "/dump", "invalid-status candidate capture")
+	invalidStatusCandidate, err := http.Get(endpoint + "/candidate?app=custom-app")
+	if err != nil {
+		fatal(fmt.Errorf("generate invalid-status candidate: %w", err))
+	}
+	invalidStatusCandidateBody, readErr := io.ReadAll(invalidStatusCandidate.Body)
+	invalidStatusCandidate.Body.Close()
+	if readErr != nil || invalidStatusCandidate.StatusCode != http.StatusUnprocessableEntity || !bytes.Contains(invalidStatusCandidateBody, []byte("invalid span status 99")) {
+		fatal(fmt.Errorf("invalid-status candidate: HTTP %d: %s: %v", invalidStatusCandidate.StatusCode, invalidStatusCandidateBody, readErr))
+	}
+	resetSink(endpoint)
 	duplicateSpellingsTrace := []byte(`{"resourceSpans":[{"resource":{"attributes":[]},"scopeSpans":[{"scope":{"name":"duplicate.probe"},"spans":[{"trace_id":"dddddddddddddddddddddddddddddddd","traceId":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","spanId":"5555555555555555","name":"SELECT","kind":3,"startTimeUnixNano":"1","endTimeUnixNano":"2","status":{"code":0}}]}]}]}`)
 	postJSON(endpoint, "/v1/traces", "duplicate-spelling trace", duplicateSpellingsTrace)
 	duplicateDumpBody := freezeCapture(endpoint, "/dump.scm", "duplicate-spelling Scheme capture")
@@ -599,6 +651,23 @@ func main() {
 	duplicateCandidate.Body.Close()
 	if readErr != nil || duplicateCandidate.StatusCode != http.StatusUnprocessableEntity || !bytes.Contains(duplicateCandidateBody, []byte("duplicate OTLP JSON field spellings")) {
 		fatal(fmt.Errorf("duplicate-spelling candidate: HTTP %d: %s: %v", duplicateCandidate.StatusCode, duplicateCandidateBody, readErr))
+	}
+	resetSink(endpoint)
+	largeUnknownProtobuf := bytes.Repeat([]byte{0x7d, 0x00, 0x00, 0x00, 0x00}, 180*1024)
+	for index := 0; index < 5; index++ {
+		response, err := http.Post(endpoint+"/v1/metrics", "application/x-protobuf", bytes.NewReader(largeUnknownProtobuf))
+		if err != nil {
+			fatal(fmt.Errorf("send cumulative capture probe %d: %w", index, err))
+		}
+		contents, readErr := io.ReadAll(response.Body)
+		response.Body.Close()
+		wantStatus := http.StatusOK
+		if index == 4 {
+			wantStatus = http.StatusRequestEntityTooLarge
+		}
+		if readErr != nil || response.StatusCode != wantStatus || (index == 4 && !bytes.Contains(contents, []byte("cumulative OTLP capture exceeds limit"))) {
+			fatal(fmt.Errorf("cumulative capture probe %d: HTTP %d: %s: %v", index, response.StatusCode, contents, readErr))
+		}
 	}
 	resetSink(endpoint)
 	resetDump, err := http.Get(endpoint + "/dump")
@@ -627,6 +696,17 @@ func postJSON(endpoint, path, label string, body []byte) {
 	if readErr != nil || response.StatusCode != http.StatusOK {
 		fatal(fmt.Errorf("send %s: HTTP %d: %s: %v", label, response.StatusCode, contents, readErr))
 	}
+}
+
+func lengthDelimited(tag byte, payload []byte) []byte {
+	field := []byte{tag}
+	length := len(payload)
+	for length >= 0x80 {
+		field = append(field, byte(length)|0x80)
+		length >>= 7
+	}
+	field = append(field, byte(length))
+	return append(field, payload...)
 }
 
 func rejectJSON(endpoint, path, label string, want []byte, body []byte) {
