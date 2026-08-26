@@ -1,4 +1,5 @@
 use crate::data::Payload;
+use crate::otlp_json;
 use crate::proto;
 use alloc::format;
 use alloc::string::String;
@@ -14,7 +15,7 @@ pub(crate) fn decode(
     if content_type == "application/json" {
         let value: Value =
             serde_json::from_slice(body).map_err(|error| format!("invalid OTLP JSON: {error}"))?;
-        validate_json_export(signal, &value)?;
+        otlp_json::validate_export(signal, &value)?;
         return Ok(("json", Payload::Json(value)));
     }
     if content_type != "application/x-protobuf" && content_type != "application/protobuf" {
@@ -36,22 +37,6 @@ pub(crate) fn decode(
         _ => unreachable!(),
     };
     Ok(("protobuf", value))
-}
-
-fn validate_json_export(signal: &str, value: &Value) -> Result<(), String> {
-    let allowed = match signal {
-        "traces" => ["resource_spans", "resourceSpans"],
-        "metrics" => ["resource_metrics", "resourceMetrics"],
-        "logs" => ["resource_logs", "resourceLogs"],
-        _ => unreachable!(),
-    };
-    let fields = value
-        .as_object()
-        .ok_or_else(|| format!("invalid OTLP {signal} JSON export: expected object"))?;
-    if let Some(name) = fields.keys().find(|name| !allowed.contains(&name.as_str())) {
-        return Err(format!("invalid OTLP {signal} JSON export field {name:?}"));
-    }
-    Ok(())
 }
 
 pub(crate) fn json_trace_span_count(payload: &Value) -> usize {

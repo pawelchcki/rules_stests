@@ -55,6 +55,16 @@ func main() {
 	if readErr != nil || mismatchedResponse.StatusCode != http.StatusBadRequest || !bytes.Contains(mismatchedBody, []byte("invalid OTLP traces JSON export field")) {
 		fatal(fmt.Errorf("signal-mismatched trace: HTTP %d: %s: %v", mismatchedResponse.StatusCode, mismatchedBody, readErr))
 	}
+	nestedUnknownTrace := []byte(`{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"11111111111111111111111111111111","spanId":"2222222222222222","name":"probe","status":{"code":1,"mysteryField":true}}]}]}]}`)
+	nestedUnknownResponse, err := http.Post(endpoint+"/v1/traces", "application/json", bytes.NewReader(nestedUnknownTrace))
+	if err != nil {
+		fatal(fmt.Errorf("send nested-unknown trace: %w", err))
+	}
+	nestedUnknownBody, readErr := io.ReadAll(nestedUnknownResponse.Body)
+	nestedUnknownResponse.Body.Close()
+	if readErr != nil || nestedUnknownResponse.StatusCode != http.StatusBadRequest || !bytes.Contains(nestedUnknownBody, []byte("invalid OTLP span status field")) {
+		fatal(fmt.Errorf("nested-unknown trace: HTTP %d: %s: %v", nestedUnknownResponse.StatusCode, nestedUnknownBody, readErr))
+	}
 
 	requests := []struct {
 		signal      string
@@ -63,7 +73,15 @@ func main() {
 		marker      string
 	}{
 		{"traces", "application/x-protobuf", []byte{0x0a, 0x00}, "trace-protobuf"},
-		{"metrics", "application/json", []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"probe","version":"1.2.3","attributes":[],"droppedAttributesCount":0},"metrics":[{"name":"probe-metric","sum":{"dataPoints":[{"timeUnixNano":"2","asInt":"1"}],"aggregationTemporality":2,"isMonotonic":true}}]}]}]}`), "metric-json"},
+		{"metrics", "application/x-protobuf", []byte{
+			0x0a, 0x3e, 0x12, 0x3c, 0x0a, 0x11, 0x0a, 0x08,
+			'p', 'r', 'o', 'b', 'e', '-', 'p', 'b', 0x12, 0x05,
+			'1', '.', '2', '.', '3', 0x12, 0x27, 0x0a, 0x0f,
+			'p', 'r', 'o', 'b', 'e', '-', 'p', 'b', '-', 'm', 'e', 't', 'r', 'i', 'c',
+			0x2a, 0x14, 0x0a, 0x12, 0x19, 0x02, 0x00, 0x00,
+			0x00, 0x00, 0x00, 0x00, 0x00, 0x31, 0x01, 0x00,
+			0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		}, "metric-protobuf"},
 		{"logs", "application/json", []byte(`{"resourceLogs":[{"resource":{"attributes":[]},"scopeLogs":[{"scope":{"name":"probe-log","version":"4.5.6","attributes":[],"droppedAttributesCount":0},"logRecords":[{"timeUnixNano":"1","observedTimeUnixNano":"2","severityNumber":9,"severityText":"INFO","body":{"arrayValue":{"values":[{"bytesValue":"AQID/w=="},{"kvlistValue":{"values":[{"key":"nested","value":{"stringValue":"present"}}]}},{"doubleValue":"NaN"}]}},"attributes":[{"key":"probe.attribute","value":{"stringValue":"present"}}]}]}]}]}`), "log-json"},
 	}
 	for _, item := range requests {
@@ -163,7 +181,7 @@ func main() {
                  (= (length metrics) 1)
                  (= (cadr (assq 'data-points (car metrics))) 1)
                  (cadr (assq 'data-points-valid (car metrics)))
-                 (eq? (cadr (assq 'data-type (car metrics))) 'sum)
+                 (eq? (cadr (assq 'data-type (car metrics))) 'gauge)
                  (string=? (cadr (assq 'scope-version (car metrics))) "1.2.3")
                  (string=? (cadr (assq 'schema-url (car metrics))) "")
                  (null? (cadr (assq 'scope-attributes (car metrics))))

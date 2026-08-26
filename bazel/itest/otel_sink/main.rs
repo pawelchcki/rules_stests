@@ -6,6 +6,7 @@ extern crate alloc;
 mod data;
 mod http;
 mod otlp;
+mod otlp_json;
 mod platform;
 mod proto;
 mod runtime;

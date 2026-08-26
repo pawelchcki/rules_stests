@@ -1261,8 +1261,12 @@ fn json_point_metadata_valid(point: &Value) -> bool {
 }
 
 fn json_number_point_valid(point: &Value) -> bool {
-    let as_double = json_field(point, "as_double", "asDouble");
-    let as_integer = json_field(point, "as_int", "asInt");
+    // Prost's serde representation keeps a oneof under `value`, while OTLP/JSON
+    // places asInt/asDouble directly on the point. Mixed captures can contain
+    // both representations, so validate the numeric alternative in either.
+    let number = point.get("value").unwrap_or(point);
+    let as_double = json_field(number, "as_double", "asDouble");
+    let as_integer = json_field(number, "as_int", "asInt");
     json_point_metadata_valid(point)
         && match (as_double, as_integer) {
             (Some(value), None) => json_double(value).is_some(),

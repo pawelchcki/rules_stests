@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -227,8 +228,10 @@ func requireExportedTelemetry(serviceSuffix, mode, goldenCase, profile string, l
 	if mode == "validate" && (len(libraries) == 0 || len(imports) == 0 || program == "") {
 		return errors.New("--otel-library, --otel-import, and --otel-program are required in validate mode")
 	}
-	if mode == "candidate" && !strings.Contains(goldenCase, "/") {
-		return errors.New("--otel-case must use app/case form in candidate mode")
+	if mode == "candidate" {
+		if _, _, err := goldenCandidateParts(goldenCase); err != nil {
+			return err
+		}
 	}
 	port, err := assignedPort(serviceSuffix)
 	if err != nil {
@@ -462,8 +465,11 @@ func schemeLibraryName(value string) ([]byte, error) {
 }
 
 func emitGoldenCandidate(client http.Client, baseURL, goldenCase, configuredProfile string, capture []byte) error {
-	parts := strings.SplitN(goldenCase, "/", 2)
-	response, err := client.Get(baseURL + "/candidate?app=" + parts[0])
+	app, scenario, err := goldenCandidateParts(goldenCase)
+	if err != nil {
+		return err
+	}
+	response, err := client.Get(baseURL + "/candidate?app=" + url.QueryEscape(app))
 	if err != nil {
 		return fmt.Errorf("generate OTLP Scheme golden candidate: %w", err)
 	}
@@ -475,17 +481,17 @@ func emitGoldenCandidate(client http.Client, baseURL, goldenCase, configuredProf
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("generate OTLP Scheme golden candidate: HTTP %d: %s", response.StatusCode, golden)
 	}
-	profile, err := implementationProfile(parts[0], configuredProfile)
+	profile, err := implementationProfile(app, configuredProfile)
 	if err != nil {
 		return err
 	}
-	golden = append([]byte(fmt.Sprintf("(define-library (realworld detail %s %s)\n  (export expected-implementation-buckets)\n  (import (scheme base))\n  (begin\n", profile, parts[1])), golden...)
+	golden = append([]byte(fmt.Sprintf("(define-library (realworld detail %s %s)\n  (export expected-implementation-buckets)\n  (import (scheme base))\n  (begin\n", profile, scenario)), golden...)
 	golden = append(golden, []byte("  ))\n")...)
 	root := os.Getenv("TEST_UNDECLARED_OUTPUTS_DIR")
 	if root == "" {
 		return errors.New("TEST_UNDECLARED_OUTPUTS_DIR is unavailable for golden candidate")
 	}
-	directory := filepath.Join(root, parts[0], parts[1])
+	directory := filepath.Join(root, app, scenario)
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return fmt.Errorf("create golden candidate output directory: %w", err)
 	}
@@ -498,6 +504,20 @@ func emitGoldenCandidate(client http.Client, baseURL, goldenCase, configuredProf
 		return fmt.Errorf("write Scheme golden candidate: %w", err)
 	}
 	return nil
+}
+
+func goldenCandidateParts(value string) (string, string, error) {
+	parts := strings.Split(value, "/")
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("--otel-case must use app/case form, got %q", value)
+	}
+	if err := schemeIdentifier(parts[0]); err != nil {
+		return "", "", fmt.Errorf("invalid OTLP application: %w", err)
+	}
+	if err := schemeIdentifier(parts[1]); err != nil {
+		return "", "", fmt.Errorf("invalid OTLP scenario: %w", err)
+	}
+	return parts[0], parts[1], nil
 }
 
 func implementationProfile(app, configured string) (string, error) {

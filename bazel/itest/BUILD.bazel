@@ -26,6 +26,7 @@ rust_binary(
         "otel_sink/http.rs",
         "otel_sink/main.rs",
         "otel_sink/otlp.rs",
+        "otel_sink/otlp_json.rs",
         "otel_sink/platform.rs",
         "otel_sink/proto.rs",
         "otel_sink/runtime.rs",

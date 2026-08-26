@@ -70,6 +70,25 @@ func TestSchemeIdentifier(t *testing.T) {
 	}
 }
 
+func TestGoldenCandidateParts(t *testing.T) {
+	app, scenario, err := goldenCandidateParts("aiohttp/errors_profiles")
+	if err != nil || app != "aiohttp" || scenario != "errors_profiles" {
+		t.Fatalf("goldenCandidateParts(valid) = %q, %q, %v", app, scenario, err)
+	}
+	for _, value := range []string{
+		"aiohttp/../../../tmp",
+		"aiohttp/errors/profiles",
+		"../aiohttp/articles",
+		"aiohttp/.",
+		"aiohttp/",
+		"/articles",
+	} {
+		if _, _, err := goldenCandidateParts(value); err == nil {
+			t.Errorf("goldenCandidateParts(%q) unexpectedly succeeded", value)
+		}
+	}
+}
+
 func TestSchemeValidationFailureClassification(t *testing.T) {
 	contractFailure := schemeValidationFailure(409, []byte("OTLP contract assertion: changed"))
 	var assertion *otlpAssertionFailure
