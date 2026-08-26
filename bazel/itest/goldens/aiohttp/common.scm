@@ -5,9 +5,12 @@
           expected-metric-scopes
           expected-metric-descriptors
           expected-metric-aggregation
+          expected-metric-point-schemas
           expected-log-scopes
           expected-log-policy
           expected-span-flags
+          expected-trace-state
+          expected-error-status-message-policy
           event-policy-for
           server-scope
           render-server-span-name
@@ -19,6 +22,7 @@
 
 ; Exact profile for OpenTelemetry Python auto-instrumentation 0.65b0 on aiohttp.
 (define implementation-profile 'python-aiohttp-auto-v0-65b0)
+(define expected-error-status-message-policy 'empty)
 
 (define expected-resource-attributes
   (python-service-resource-attributes "aiohttp-otel"))
@@ -53,6 +57,19 @@
 (define expected-metric-aggregation
   (list (car python-metric-aggregation)
         (cons "asyncio.process.created" (cadr python-metric-aggregation))))
+
+(define expected-metric-point-schemas
+  (append
+    '(("http.server.active_requests"
+       ("http.flavor" "http.host" "http.method" "http.scheme" "http.server_name")
+       (("http.flavor" (exact "1.1")) ("http.host" (exact "127.0.0.1")) ("http.method" (one-of "DELETE" "GET" "POST" "PUT")) ("http.scheme" (exact "http")) ("http.server_name" (loopback-port))))
+      ("http.server.duration"
+       ("http.flavor" "http.host" "http.method" "http.scheme" "http.server_name" "http.status_code" "net.host.name" "net.host.port")
+       (("http.flavor" (exact "1.1")) ("http.host" (exact "127.0.0.1")) ("http.method" (one-of "DELETE" "GET" "POST" "PUT")) ("http.scheme" (exact "http")) ("http.server_name" (loopback-port)) ("http.status_code" (http-status)) ("net.host.name" (exact "127.0.0.1")) ("net.host.port" (positive-integer))))
+      ("asyncio.process.created" ("name" "state" "type") (("name" (nonempty)) ("state" (exact "finished")) ("type" (exact "coroutine"))))
+      ("asyncio.process.duration" ("name" "state" "type") (("name" (nonempty)) ("state" (exact "finished")) ("type" (exact "coroutine"))))
+      ("db.client.connections.usage" ("pool.name" "state") (("pool.name" (nonempty)) ("state" (one-of "idle" "used")))))
+    python-system-metric-point-schemas))
 
 (define expected-log-scopes (list python-logging-scope))
 

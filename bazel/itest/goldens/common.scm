@@ -61,6 +61,101 @@
                (and (hex-character? character)
                     (loop (+ index 1) (or nonzero (not (char=? character #\0))))))))))
 
+(define (lower-alpha? character)
+  (and (char>=? character #\a) (char<=? character #\z)))
+
+(define (trace-key-character? character)
+  (or (lower-alpha? character)
+      (char-numeric? character)
+      (memv character '(#\_ #\- #\* #\/))))
+
+(define (character-index value wanted)
+  (let loop ((index 0))
+    (cond ((= index (string-length value)) #f)
+          ((char=? (string-ref value index) wanted) index)
+          (else (loop (+ index 1))))))
+
+(define (valid-trace-key-part? value max-length first-predicate)
+  (and (> (string-length value) 0)
+       (<= (string-length value) max-length)
+       (first-predicate (string-ref value 0))
+       (let loop ((index 1))
+         (or (= index (string-length value))
+             (and (trace-key-character? (string-ref value index))
+                  (loop (+ index 1)))))))
+
+(define (valid-trace-state-key? key)
+  (let ((separator (character-index key #\@)))
+    (if separator
+        (and (not (character-index (substring key (+ separator 1) (string-length key)) #\@))
+             (valid-trace-key-part?
+               (substring key 0 separator)
+               241
+               (lambda (character) (or (lower-alpha? character) (char-numeric? character))))
+             (valid-trace-key-part?
+               (substring key (+ separator 1) (string-length key))
+               14
+               lower-alpha?))
+        (valid-trace-key-part? key 256 lower-alpha?))))
+
+(define (ows? character)
+  (or (char=? character #\space) (char=? character #\tab)))
+
+(define (trim-ows value)
+  (let find-start ((start 0))
+    (if (and (< start (string-length value)) (ows? (string-ref value start)))
+        (find-start (+ start 1))
+        (let find-end ((end (string-length value)))
+          (if (and (> end start) (ows? (string-ref value (- end 1))))
+              (find-end (- end 1))
+              (substring value start end))))))
+
+(define (split-on-comma value)
+  (let loop ((index 0) (start 0) (members '()))
+    (if (= index (string-length value))
+        (reverse (cons (trim-ows (substring value start index)) members))
+        (if (char=? (string-ref value index) #\,)
+            (loop (+ index 1) (+ index 1)
+                  (cons (trim-ows (substring value start index)) members))
+            (loop (+ index 1) start members)))))
+
+(define (valid-trace-state-value? value)
+  (and (> (string-length value) 0)
+       (<= (string-length value) 256)
+       (not (ows? (string-ref value (- (string-length value) 1))))
+       (let loop ((index 0))
+         (or (= index (string-length value))
+             (let* ((character (string-ref value index))
+                    (code (char->integer character)))
+               (and (>= code 32)
+                    (<= code 126)
+                    (not (memv character '(#\, #\=)))
+                    (loop (+ index 1))))))))
+
+(define (valid-trace-state-member? member)
+  (let ((separator (character-index member #\=)))
+    (and separator
+         (not (character-index (substring member (+ separator 1) (string-length member)) #\=))
+         (valid-trace-state-key? (substring member 0 separator))
+         (valid-trace-state-value?
+           (substring member (+ separator 1) (string-length member))))))
+
+(define (valid-trace-state? value)
+  (or (string=? value "")
+      (and (<= (string-length value) 512)
+           (let ((members (split-on-comma value)))
+             (and (<= (length members) 32)
+                  (every valid-trace-state-member? members)
+                  (every
+                    (lambda (member)
+                      (= (count
+                           (lambda (candidate)
+                             (string=? (substring member 0 (character-index member #\=))
+                                       (substring candidate 0 (character-index candidate #\=))))
+                           members)
+                         1))
+                    members))))))
+
 (define (uuid? value)
   (and (= (string-length value) 36)
        (let loop ((index 0))
@@ -103,6 +198,14 @@
        (and (tagged-value? 'string value) (loopback-port-number (cadr value))))
       ((eq? kind 'integer)
        (tagged-value? 'integer value))
+      ((eq? kind 'nonnegative-integer)
+       (and (tagged-value? 'integer value) (>= (cadr value) 0)))
+      ((eq? kind 'positive-integer)
+       (and (tagged-value? 'integer value) (> (cadr value) 0)))
+      ((eq? kind 'http-status)
+       (and (tagged-value? 'integer value) (>= (cadr value) 100) (<= (cadr value) 599)))
+      ((eq? kind 'one-of)
+       (and (tagged-value? 'string value) (member (cadr value) (cdr matcher))))
       (else (error "unknown value matcher" kind)))))
 
 (define (attribute attributes key)
@@ -144,6 +247,10 @@
                "content-type header is not unique")
         (check (= (count (lambda (header) (string=? (car header) "content-length")) headers) 1)
                "content-length header is not unique")
+        (let ((host-headers (count (lambda (header) (string=? (car header) "host")) headers))
+              (host (find (lambda (header) (string=? (car header) "host")) headers)))
+          (check (= host-headers 1) "Host header is missing or duplicated")
+          (check (> (string-length (cadr host)) 0) "Host header is empty"))
         (check (<= (count (lambda (header) (string=? (car header) "content-encoding")) headers) 1)
                "content-encoding header is not unique")))
     requests))
@@ -291,7 +398,20 @@
                events))))
       (else (error "unknown event policy" mode)))))
 
-(define (validate-spans expected-scopes event-policy expected-flags spans)
+(define (validate-span-status error-message-policy span)
+  (let ((status (status-name (field 'status-code span)))
+        (message (field 'status-message span)))
+    (check (string? message) "span status message is malformed")
+    (if (eq? status 'error)
+        (cond ((eq? error-message-policy 'any) #t)
+              ((eq? error-message-policy 'empty)
+               (check (string=? message "") "error span status message changed"))
+              ((eq? error-message-policy 'nonempty)
+               (check (> (string-length message) 0) "error span status message is empty"))
+              (else (error "unknown error status-message policy" error-message-policy)))
+        (check (string=? message "") "non-error span has a status message"))))
+
+(define (validate-spans expected-scopes event-policy expected-flags expected-trace-state error-message-policy spans)
   (let ((event-mode (car event-policy))
         (expected-event-count (cadr event-policy)))
     (check (> (length spans) 0) "capture contains no spans")
@@ -305,10 +425,13 @@
                      (valid-hex? (field 'parent-span-id span) 16))
                  "invalid parent span ID")
           (check (field 'parent-valid span) "span parent topology is cyclic")
-          (check (string=? (field 'trace-state span) "") "trace state changed")
+          (check (valid-trace-state? (field 'trace-state span)) "invalid trace state")
+          (if expected-trace-state
+              (check (string=? (field 'trace-state span) expected-trace-state) "trace state changed")
+              #t)
           (check (and (> (field 'start span) 0) (>= (field 'end span) (field 'start span)))
                  "span timestamps are not ordered")
-          (status-name (field 'status-code span))
+          (validate-span-status error-message-policy span)
           (check (= (field 'dropped-attributes span) 0) "span dropped attributes")
           (check (= (field 'dropped-events span) 0) "span dropped events")
           (check (= (field 'dropped-links span) 0) "span dropped links")
@@ -428,7 +551,32 @@
               #t))
         #t)))
 
-(define (validate-metrics expected-scopes expected-descriptors expected-aggregation metrics)
+(define (same-attribute-keys? attributes expected)
+  (and (= (length attributes) (length expected))
+       (every (lambda (key) (= (attribute-count attributes key) 1)) expected)))
+
+(define (validate-metric-point-attributes expected-schemas metric)
+  (let ((points (field 'point-attributes metric)))
+    (check (= (length points) (field 'data-points metric))
+           "metric point attribute projection changed")
+    (if expected-schemas
+        (let ((schema (find (lambda (candidate)
+                              (string=? (car candidate) (field 'name metric)))
+                            expected-schemas)))
+          (check schema "metric point attribute schema is missing")
+          (for-each
+            (lambda (attributes)
+              (check (same-attribute-keys? attributes (cadr schema))
+                     "metric point attribute keys changed")
+              (for-each
+                (lambda (rule)
+                  (check (matches-value? (cadr rule) (attribute attributes (car rule)))
+                         "metric point attribute value changed"))
+                (third schema)))
+            points))
+        #t)))
+
+(define (validate-metrics expected-scopes expected-descriptors expected-aggregation expected-point-schemas metrics)
   (check (> (length metrics) 0) "capture contains no metrics")
   (validate-signal-scopes expected-scopes metrics)
   (for-each
@@ -444,6 +592,7 @@
              "metric has no supported data type")
       (check (> (field 'data-points metric) 0) "metric has no data points")
       (check (field 'data-points-valid metric) "metric data point is malformed")
+      (validate-metric-point-attributes expected-point-schemas metric)
       (if expected-descriptors
           (check (member (metric-descriptor metric) expected-descriptors)
                  "metric descriptor changed")
@@ -496,6 +645,7 @@
       (let ((severity-required (car policy))
             (attributes-required (cadr policy))
             (timestamps-required (third policy))
+            (body-required (list-ref policy 3))
             (trace-id (field 'trace-id log))
             (span-id (field 'span-id log))
             (flags (field 'flags log))
@@ -517,7 +667,11 @@
               (check (> (string-length (field 'severity-text log)) 0) "log severity text is empty"))
             #t)
         (check (string=? (field 'event-name log) "") "log event name changed")
-        (check (valid-log-value? (field 'body log)) "log body is missing")
+        (if body-required
+            (check (valid-log-value? (field 'body log)) "log body is missing")
+            (check (or (equal? (field 'body log) '(other))
+                       (valid-log-value? (field 'body log)))
+                   "log body is malformed"))
         (validate-log-attributes attributes-required (field 'attributes log))
         (check (= (field 'dropped-attributes log) 0) "log dropped attributes")
         (check (member flags '(0 1 256 257)) "log flags are invalid")
@@ -529,7 +683,7 @@
                "log trace context is incomplete")))
     logs))
 
-(define (validate-capture expected-resource-attributes expected-scopes expected-metric-scopes expected-metric-descriptors expected-metric-aggregation expected-log-scopes log-policy event-policy expected-span-flags expected-span-buckets bucket-validator capture)
+(define (validate-capture expected-resource-attributes expected-scopes expected-metric-scopes expected-metric-descriptors expected-metric-aggregation expected-metric-point-schemas expected-log-scopes log-policy event-policy expected-span-flags expected-trace-state error-message-policy expected-span-buckets bucket-validator capture)
   (let ((requests (field 'requests capture))
         (resources (field 'resources capture))
         (scopes (field 'scopes capture))
@@ -545,9 +699,9 @@
     (validate-requests requests)
     (validate-resources expected-resource-attributes resources)
     (validate-scopes expected-scopes scopes)
-    (validate-spans expected-scopes event-policy expected-span-flags spans)
+    (validate-spans expected-scopes event-policy expected-span-flags expected-trace-state error-message-policy spans)
     (bucket-validator expected-span-buckets expected-scopes spans)
-    (validate-metrics expected-metric-scopes expected-metric-descriptors expected-metric-aggregation metrics)
+    (validate-metrics expected-metric-scopes expected-metric-descriptors expected-metric-aggregation expected-metric-point-schemas metrics)
     (validate-logs expected-log-scopes log-policy logs)
     (display "valid OTLP capture\n")))
 
@@ -557,24 +711,30 @@
                     expected-metric-scopes
                     #f
                     #f
+                    #f
                     expected-log-scopes
-                    '(#f #f #f)
+                    '(#f #f #f #f)
                     event-policy
                     '(0 1 256 257)
+                    #f
+                    'any
                     expected-span-buckets
                     validate-contract-buckets
                     capture))
 
-(define (otel-validate-exact expected-resource-attributes expected-scopes expected-metric-scopes expected-metric-descriptors expected-metric-aggregation expected-log-scopes log-policy event-policy expected-span-flags expected-span-buckets capture)
+(define (otel-validate-exact expected-resource-attributes expected-scopes expected-metric-scopes expected-metric-descriptors expected-metric-aggregation expected-metric-point-schemas expected-log-scopes log-policy event-policy expected-span-flags expected-trace-state error-message-policy expected-span-buckets capture)
   (validate-capture expected-resource-attributes
                     expected-scopes
                     expected-metric-scopes
                     expected-metric-descriptors
                     expected-metric-aggregation
+                    expected-metric-point-schemas
                     expected-log-scopes
                     log-policy
                     event-policy
                     expected-span-flags
+                    expected-trace-state
+                    error-message-policy
                     expected-span-buckets
                     validate-buckets
                     capture))

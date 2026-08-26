@@ -303,7 +303,7 @@ func validateTelemetryDump(client http.Client, baseURL, mode, goldenCase, profil
 	}
 	seen := map[string]bool{}
 	for _, record := range records {
-		if strings.Contains(string(record.Payload), `"service.name"`) {
+		if payloadHasServiceName(record.Payload, record.Signal) {
 			seen[record.Signal] = true
 		}
 	}
@@ -348,6 +348,54 @@ func validateTelemetryDump(client http.Client, baseURL, mode, goldenCase, profil
 		return schemeValidationFailure(validationResponse.StatusCode, validationOutput)
 	}
 	fmt.Printf("Verified quiescent OTLP Scheme golden: %d spans in %d trace requests, plus metrics and logs (%s): %s", stats.TraceSpans, stats.TraceRequests, baseURL, validationOutput)
+	return nil
+}
+
+func payloadHasServiceName(payload json.RawMessage, signal string) bool {
+	var document map[string]any
+	if json.Unmarshal(payload, &document) != nil {
+		return false
+	}
+	var wrapperNames []string
+	switch signal {
+	case "traces":
+		wrapperNames = []string{"resource_spans", "resourceSpans"}
+	case "metrics":
+		wrapperNames = []string{"resource_metrics", "resourceMetrics"}
+	case "logs":
+		wrapperNames = []string{"resource_logs", "resourceLogs"}
+	default:
+		return false
+	}
+	wrappers, _ := mapValue(document, wrapperNames...).([]any)
+	for _, wrapperValue := range wrappers {
+		wrapper, _ := wrapperValue.(map[string]any)
+		resource, _ := wrapper["resource"].(map[string]any)
+		attributes, _ := resource["attributes"].([]any)
+		for _, attributeValue := range attributes {
+			attribute, _ := attributeValue.(map[string]any)
+			if attribute["key"] != "service.name" {
+				continue
+			}
+			value, _ := attribute["value"].(map[string]any)
+			if nested, ok := value["value"].(map[string]any); ok {
+				value = nested
+			}
+			name, _ := mapValue(value, "string_value", "stringValue").(string)
+			if name != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func mapValue(object map[string]any, names ...string) any {
+	for _, name := range names {
+		if value, ok := object[name]; ok {
+			return value
+		}
+	}
 	return nil
 }
 

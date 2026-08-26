@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -112,5 +113,44 @@ func TestImplementationProfile(t *testing.T) {
 	profile, err = implementationProfile("aiohttp", "")
 	if err != nil || profile != "python-aiohttp-auto-v0-65b0" {
 		t.Fatalf("default profile = %q, %v", profile, err)
+	}
+}
+
+func TestPayloadHasServiceName(t *testing.T) {
+	tests := []struct {
+		name    string
+		signal  string
+		payload string
+		want    bool
+	}{
+		{
+			name:    "typed protobuf JSON",
+			signal:  "metrics",
+			payload: `{"resource_metrics":[{"resource":{"attributes":[{"key":"service.name","value":{"value":{"string_value":"service"}}}]}}]}`,
+			want:    true,
+		},
+		{
+			name:    "OTLP JSON",
+			signal:  "logs",
+			payload: `{"resourceLogs":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"service"}}]}}]}`,
+			want:    true,
+		},
+		{
+			name:    "ordinary payload string",
+			signal:  "logs",
+			payload: `{"resourceLogs":[{"resource":{"attributes":[]},"scopeLogs":[{"logRecords":[{"body":{"stringValue":"service.name"}}]}]}]}`,
+		},
+		{
+			name:    "empty service name",
+			signal:  "traces",
+			payload: `{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":""}}]}}]}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := payloadHasServiceName(json.RawMessage(test.payload), test.signal); got != test.want {
+				t.Fatalf("payloadHasServiceName() = %v, want %v", got, test.want)
+			}
+		})
 	}
 }

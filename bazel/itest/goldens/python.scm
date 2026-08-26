@@ -6,12 +6,14 @@
           python-logging-scope
           python-system-metrics-scope
           python-system-metric-descriptors
+          python-system-metric-point-schemas
           python-metric-aggregation
           python-http-scope
           python-database-bucket
           python-profile-shape
           python-counted-operation-buckets
           expected-span-flags
+          expected-trace-state
           expected-log-policy)
   (import (scheme base))
   (begin
@@ -26,8 +28,9 @@
 (define python-schema-url "https://opentelemetry.io/schemas/1.11.0")
 
 (define expected-span-flags '(256))
-; Require severity, nonempty enrichment attributes, and both timestamps.
-(define expected-log-policy '(#t #t #t))
+(define expected-trace-state "")
+; Require severity, nonempty enrichment attributes, both timestamps, and a body.
+(define expected-log-policy '(#t #t #t #t))
 
 (define (python-service-resource-attributes service-name)
   (append python-resource-attributes
@@ -97,6 +100,41 @@
     ("opentelemetry.instrumentation.system_metrics" "system.swap.usage" "System swap usage" "pages" gauge ())
     ("opentelemetry.instrumentation.system_metrics" "system.swap.utilization" "System swap utilization" "1" gauge ())
     ("opentelemetry.instrumentation.system_metrics" "system.thread_count" "System active threads count" "" gauge ())))
+
+; Point schemas are metric name, the exact attribute keys, and value matchers.
+(define python-system-metric-point-schemas
+  '(("cpython.gc.collected_objects" ("cpython.gc.generation" "generation") (("cpython.gc.generation" (nonnegative-integer)) ("generation" (one-of "0" "1" "2"))))
+    ("cpython.gc.collections" ("cpython.gc.generation" "generation") (("cpython.gc.generation" (nonnegative-integer)) ("generation" (one-of "0" "1" "2"))))
+    ("cpython.gc.uncollectable_objects" ("cpython.gc.generation" "generation") (("cpython.gc.generation" (nonnegative-integer)) ("generation" (one-of "0" "1" "2"))))
+    ("process.context_switches" ("type") (("type" (one-of "involuntary" "voluntary"))))
+    ("process.cpu.time" ("type") (("type" (one-of "system" "user"))))
+    ("process.cpu.utilization" () ())
+    ("process.disk.io" ("direction") (("direction" (one-of "read" "write"))))
+    ("process.memory.usage" () ())
+    ("process.memory.virtual" () ())
+    ("process.open_file_descriptor.count" () ())
+    ("process.runtime.cpython.context_switches" ("type") (("type" (one-of "involuntary" "voluntary"))))
+    ("process.runtime.cpython.cpu.utilization" () ())
+    ("process.runtime.cpython.cpu_time" ("type") (("type" (one-of "system" "user"))))
+    ("process.runtime.cpython.gc_count" ("count") (("count" (one-of "0" "1" "2"))))
+    ("process.runtime.cpython.memory" ("type") (("type" (one-of "rss" "vms"))))
+    ("process.runtime.cpython.thread_count" () ())
+    ("process.thread.count" () ())
+    ("system.cpu.time" ("cpu" "state") (("cpu" (nonnegative-integer)) ("state" (one-of "idle" "iowait" "irq" "nice" "softirq" "steal" "system" "user"))))
+    ("system.cpu.utilization" ("cpu" "state") (("cpu" (nonnegative-integer)) ("state" (one-of "idle" "iowait" "irq" "nice" "softirq" "steal" "system" "user"))))
+    ("system.disk.io" ("device" "direction") (("device" (nonempty)) ("direction" (one-of "read" "write"))))
+    ("system.disk.operations" ("device" "direction") (("device" (nonempty)) ("direction" (one-of "read" "write"))))
+    ("system.disk.time" ("device" "direction") (("device" (nonempty)) ("direction" (one-of "read" "write"))))
+    ("system.memory.usage" ("state") (("state" (one-of "cached" "free" "used"))))
+    ("system.memory.utilization" ("state") (("state" (one-of "cached" "free" "used"))))
+    ("system.network.connections" ("family" "protocol" "state" "type") (("family" (nonnegative-integer)) ("protocol" (nonempty)) ("state" (nonempty)) ("type" (nonnegative-integer))))
+    ("system.network.dropped_packets" ("device" "direction") (("device" (nonempty)) ("direction" (one-of "receive" "transmit"))))
+    ("system.network.errors" ("device" "direction") (("device" (nonempty)) ("direction" (one-of "receive" "transmit"))))
+    ("system.network.io" ("device" "direction") (("device" (nonempty)) ("direction" (one-of "receive" "transmit"))))
+    ("system.network.packets" ("device" "direction") (("device" (nonempty)) ("direction" (one-of "receive" "transmit"))))
+    ("system.swap.usage" ("state") (("state" (one-of "free" "used"))))
+    ("system.swap.utilization" ("state") (("state" (one-of "free" "used"))))
+    ("system.thread_count" () ())))
 
 ; Python instrumentation in this profile exports cumulative aggregations.
 ; The second field pins the subset of sums whose monotonic bit is set.

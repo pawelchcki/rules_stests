@@ -5,9 +5,12 @@
           expected-metric-scopes
           expected-metric-descriptors
           expected-metric-aggregation
+          expected-metric-point-schemas
           expected-log-scopes
           expected-log-policy
           expected-span-flags
+          expected-trace-state
+          expected-error-status-message-policy
           event-policy-for
           server-scope
           render-server-span-name
@@ -19,6 +22,7 @@
 
 ; Exact profile for OpenTelemetry Python auto-instrumentation 0.65b0 on Django.
 (define implementation-profile 'python-django-auto-v0-65b0)
+(define expected-error-status-message-policy 'nonempty)
 
 (define expected-resource-attributes
   (python-service-resource-attributes "django-otel"))
@@ -45,6 +49,16 @@
     python-system-metric-descriptors))
 
 (define expected-metric-aggregation python-metric-aggregation)
+
+(define expected-metric-point-schemas
+  (append
+    '(("http.server.active_requests"
+       ("http.flavor" "http.host" "http.method" "http.scheme" "http.server_name")
+       (("http.flavor" (exact "1.1")) ("http.host" (loopback-port)) ("http.method" (one-of "DELETE" "GET" "POST" "PUT")) ("http.scheme" (exact "http")) ("http.server_name" (exact "localhost.localdomain"))))
+      ("http.server.duration"
+       ("http.flavor" "http.host" "http.method" "http.scheme" "http.server_name" "http.status_code" "http.target" "net.host.name" "net.host.port")
+       (("http.flavor" (exact "1.1")) ("http.host" (loopback-port)) ("http.method" (one-of "DELETE" "GET" "POST" "PUT")) ("http.scheme" (exact "http")) ("http.server_name" (exact "localhost.localdomain")) ("http.status_code" (http-status)) ("http.target" (nonempty)) ("net.host.name" (loopback-port)) ("net.host.port" (positive-integer)))))
+    python-system-metric-point-schemas))
 
 (define expected-log-scopes
   (list

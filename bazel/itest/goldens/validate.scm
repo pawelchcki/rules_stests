@@ -9,9 +9,12 @@
                      expected-metric-scopes
                      expected-metric-descriptors
                      expected-metric-aggregation
+                     expected-metric-point-schemas
                      expected-log-scopes
                      expected-log-policy
                      (event-policy-for scenario-name)
                      expected-span-flags
+                     expected-trace-state
+                     expected-error-status-message-policy
                      expected-span-buckets
                      (read))

@@ -175,13 +175,15 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                         typed_attributes(&mut output, &metric.metadata);
                         write!(
                             output,
-                            ") (scope-dropped-attributes {}) (data-type {data_type}) (aggregation-temporality {aggregation_temporality}) (monotonic {monotonic}) (data-points {data_points}) (data-points-valid {}))\n",
+                            ") (scope-dropped-attributes {}) (data-type {data_type}) (aggregation-temporality {aggregation_temporality}) (monotonic {monotonic}) (data-points {data_points}) (data-points-valid {}) (point-attributes ",
                             scope
                                 .map(|scope| scope.dropped_attributes_count)
                                 .unwrap_or(0),
                             if data_points_valid { "#t" } else { "#f" }
                         )
                         .unwrap();
+                        typed_metric_point_attributes(&mut output, metric);
+                        output.push_str("))\n");
                     }
                 }
             }
@@ -299,6 +301,39 @@ fn typed_metric_data(
         ),
         None => ("missing", 0, false, "absent", "absent"),
     }
+}
+
+fn typed_metric_point_attributes(output: &mut String, metric: &proto::Metric) {
+    output.push('(');
+    match metric.data.as_ref() {
+        Some(proto::metric::Data::Gauge(data)) => {
+            for point in &data.data_points {
+                typed_attributes(output, &point.attributes);
+            }
+        }
+        Some(proto::metric::Data::Sum(data)) => {
+            for point in &data.data_points {
+                typed_attributes(output, &point.attributes);
+            }
+        }
+        Some(proto::metric::Data::Histogram(data)) => {
+            for point in &data.data_points {
+                typed_attributes(output, &point.attributes);
+            }
+        }
+        Some(proto::metric::Data::ExponentialHistogram(data)) => {
+            for point in &data.data_points {
+                typed_attributes(output, &point.attributes);
+            }
+        }
+        Some(proto::metric::Data::Summary(data)) => {
+            for point in &data.data_points {
+                typed_attributes(output, &point.attributes);
+            }
+        }
+        None => {}
+    }
+    output.push(')');
 }
 
 fn aggregation_temporality_valid(value: i32) -> bool {
@@ -900,7 +935,7 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                     attributes(&mut output, metric.get("metadata"));
                     write!(
                         output,
-                        ") (scope-dropped-attributes {}) (data-type {data_type}) (aggregation-temporality {aggregation_temporality}) (monotonic {monotonic}) (data-points {data_points}) (data-points-valid {}))\n",
+                        ") (scope-dropped-attributes {}) (data-type {data_type}) (aggregation-temporality {aggregation_temporality}) (monotonic {monotonic}) (data-points {data_points}) (data-points-valid {}) (point-attributes ",
                         integer(json_field(
                             scope,
                             "dropped_attributes_count",
@@ -909,6 +944,8 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                         if data_points_valid { "#t" } else { "#f" }
                     )
                     .unwrap();
+                    json_metric_point_attributes(&mut output, metric);
+                    output.push_str("))\n");
                 }
             }
         }
@@ -1371,6 +1408,25 @@ fn json_metric_data(metric: &Value) -> (&'static str, usize, bool, &'static str,
         temporality,
         monotonic,
     )
+}
+
+fn json_metric_point_attributes(output: &mut String, metric: &Value) {
+    let data = metric.get("data").unwrap_or(metric);
+    output.push('(');
+    for (snake, camel) in [
+        ("gauge", "gauge"),
+        ("sum", "sum"),
+        ("histogram", "histogram"),
+        ("exponential_histogram", "exponentialHistogram"),
+        ("summary", "summary"),
+    ] {
+        if let Some(data) = json_field(data, snake, camel) {
+            for point in array(json_field(data, "data_points", "dataPoints")) {
+                attributes(output, point.get("attributes"));
+            }
+        }
+    }
+    output.push(')');
 }
 
 fn json_point_metadata_valid(point: &Value) -> bool {

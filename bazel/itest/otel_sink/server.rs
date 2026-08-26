@@ -9,12 +9,12 @@ use alloc::vec::Vec;
 use core::ffi::CStr;
 use core::time::Duration;
 use rustix::fd::OwnedFd;
-use rustix::net::sockopt::{Timeout, set_socket_reuseport, set_socket_timeout};
+use rustix::net::sockopt::{set_socket_reuseport, set_socket_timeout, Timeout};
 use rustix::net::{
-    AddressFamily, Ipv4Addr, SocketAddrAny, SocketAddrV4, SocketType, acceptfrom, bind, listen,
-    socket,
+    acceptfrom, bind, listen, socket, AddressFamily, Ipv4Addr, SocketAddrAny, SocketAddrV4,
+    SocketType,
 };
-use rustix::time::{ClockId, clock_gettime};
+use rustix::time::{clock_gettime, ClockId};
 
 pub(crate) fn serve(port: u16, output: &CStr) -> Result<(), String> {
     let listener = socket(AddressFamily::INET, SocketType::STREAM, None)
@@ -37,6 +37,12 @@ pub(crate) fn serve(port: u16, output: &CStr) -> Result<(), String> {
     loop {
         let (connection, remote) =
             acceptfrom(&listener).map_err(|error| format!("accept: {error}"))?;
+        if let Err(error) =
+            set_socket_timeout(&connection, Timeout::Send, Some(Duration::from_secs(2)))
+        {
+            write_stdout(format!("otel_sink: set send timeout: {error}\n").as_bytes());
+            continue;
+        }
         if let Err(error) =
             set_socket_timeout(&connection, Timeout::Recv, Some(Duration::from_secs(2)))
         {
