@@ -4,6 +4,7 @@
           expected-scopes
           expected-metric-scopes
           expected-log-scopes
+          expected-span-flags
           event-policy-for
           server-scope
           render-server-span-name

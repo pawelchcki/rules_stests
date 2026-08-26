@@ -86,6 +86,31 @@ func main() {
 		[]byte("unexpected JSON type"),
 		[]byte(`{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{"arrayValue":null}}]}]}]}`),
 	)
+	rejectJSON(
+		endpoint,
+		"/v1/metrics",
+		"string monotonicity",
+		[]byte("unexpected JSON type"),
+		[]byte(`{"resourceMetrics":[{"scopeMetrics":[{"metrics":[{"sum":{"aggregationTemporality":2,"isMonotonic":"true"}}]}]}]}`),
+	)
+
+	duplicateEncodingConnection, err := net.Dial("tcp", strings.TrimPrefix(endpoint, "http://"))
+	if err != nil {
+		fatal(fmt.Errorf("connect for duplicate content encoding: %w", err))
+	}
+	if _, err := fmt.Fprint(duplicateEncodingConnection, "POST /v1/metrics HTTP/1.1\r\nHost: sink\r\nContent-Type: application/json\r\nContent-Encoding: identity\r\nContent-Encoding: gzip\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"); err != nil {
+		fatal(fmt.Errorf("send duplicate content encoding: %w", err))
+	}
+	duplicateEncodingResponse, err := http.ReadResponse(bufio.NewReader(duplicateEncodingConnection), &http.Request{Method: http.MethodPost})
+	if err != nil {
+		fatal(fmt.Errorf("read duplicate content encoding response: %w", err))
+	}
+	duplicateEncodingBody, readErr := io.ReadAll(duplicateEncodingResponse.Body)
+	duplicateEncodingResponse.Body.Close()
+	duplicateEncodingConnection.Close()
+	if readErr != nil || duplicateEncodingResponse.StatusCode != http.StatusBadRequest || !bytes.Contains(duplicateEncodingBody, []byte("must be unique")) {
+		fatal(fmt.Errorf("duplicate content encoding: HTTP %d: %s: %v", duplicateEncodingResponse.StatusCode, duplicateEncodingBody, readErr))
+	}
 
 	requests := []struct {
 		signal      string
@@ -407,10 +432,17 @@ func main() {
 		fatal(fmt.Errorf("malformed metric point was absent from Scheme capture: %s", malformedMetricDump))
 	}
 	resetSink(endpoint)
-	invalidMetricSemantics := []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"metric.probe"},"metrics":[{"name":"missing-temporality","sum":{"dataPoints":[{"timeUnixNano":"2","asInt":"1"}],"aggregationTemporality":0,"isMonotonic":true}},{"name":"descending-bounds","histogram":{"dataPoints":[{"timeUnixNano":"3","count":"3","bucketCounts":["1","1","1"],"explicitBounds":[10,1]}],"aggregationTemporality":2}}]}]}]}`)
+	nullableHistogram := []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"metric.probe"},"metrics":[{"name":"nullable-histogram","histogram":{"dataPoints":[{"timeUnixNano":"3","count":"1","sum":null,"bucketCounts":["1"],"explicitBounds":[],"min":null,"max":null}],"aggregationTemporality":2}}]}]}]}`)
+	postJSON(endpoint, "/v1/metrics", "nullable histogram", nullableHistogram)
+	nullableHistogramDump := freezeCapture(endpoint, "/dump.scm", "nullable-histogram Scheme capture")
+	if !bytes.Contains(nullableHistogramDump, []byte("(data-points-valid #t)")) {
+		fatal(fmt.Errorf("nullable histogram was rejected by Scheme projection: %s", nullableHistogramDump))
+	}
+	resetSink(endpoint)
+	invalidMetricSemantics := []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"metric.probe"},"metrics":[{"name":"missing-temporality","sum":{"dataPoints":[{"timeUnixNano":"2","asInt":"1"}],"aggregationTemporality":0,"isMonotonic":true}},{"name":"descending-bounds","histogram":{"dataPoints":[{"timeUnixNano":"3","count":"3","bucketCounts":["1","1","1"],"explicitBounds":[10,1]}],"aggregationTemporality":2}},{"name":"invalid-exemplar","gauge":{"dataPoints":[{"timeUnixNano":"4","asInt":"1","exemplars":[{"timeUnixNano":"0"}]}]}}]}]}]}`)
 	postJSON(endpoint, "/v1/metrics", "invalid metric semantics", invalidMetricSemantics)
 	invalidMetricDump := freezeCapture(endpoint, "/dump.scm", "invalid-metric-semantics Scheme capture")
-	if bytes.Count(invalidMetricDump, []byte("(data-points-valid #f)")) != 2 {
+	if bytes.Count(invalidMetricDump, []byte("(data-points-valid #f)")) != 3 {
 		fatal(fmt.Errorf("invalid metric semantics were absent from Scheme capture: %s", invalidMetricDump))
 	}
 	resetSink(endpoint)

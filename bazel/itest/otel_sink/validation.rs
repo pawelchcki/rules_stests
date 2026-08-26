@@ -297,6 +297,7 @@ fn typed_number_point_valid(point: &proto::NumberDataPoint) -> bool {
         point.time_unix_nano,
         point.flags,
     ) && point.value.is_some()
+        && typed_exemplars_valid(&point.exemplars)
 }
 
 fn typed_histogram_point_valid(point: &proto::HistogramDataPoint) -> bool {
@@ -305,7 +306,8 @@ fn typed_histogram_point_valid(point: &proto::HistogramDataPoint) -> bool {
         point.start_time_unix_nano,
         point.time_unix_nano,
         point.flags,
-    ) && point.bucket_counts.len() == point.explicit_bounds.len().saturating_add(1)
+    ) && typed_exemplars_valid(&point.exemplars)
+        && point.bucket_counts.len() == point.explicit_bounds.len().saturating_add(1)
         && finite_strictly_increasing(&point.explicit_bounds)
         && point
             .bucket_counts
@@ -331,7 +333,19 @@ fn typed_exponential_histogram_point_valid(point: &proto::ExponentialHistogramDa
         point.start_time_unix_nano,
         point.time_unix_nano,
         point.flags,
-    ) && bucket_count.and_then(|count| count.checked_add(point.zero_count)) == Some(point.count)
+    ) && typed_exemplars_valid(&point.exemplars)
+        && bucket_count.and_then(|count| count.checked_add(point.zero_count)) == Some(point.count)
+}
+
+fn typed_exemplars_valid(exemplars: &[proto::Exemplar]) -> bool {
+    exemplars.iter().all(|exemplar| {
+        let context_valid = (exemplar.trace_id.is_empty() && exemplar.span_id.is_empty())
+            || (exemplar.trace_id.len() == 16 && exemplar.span_id.len() == 8);
+        exemplar.time_unix_nano > 0
+            && exemplar.value.is_some()
+            && context_valid
+            && typed_key_values_valid(&exemplar.filtered_attributes)
+    })
 }
 
 fn typed_summary_point_valid(point: &proto::SummaryDataPoint) -> bool {
@@ -1298,6 +1312,7 @@ fn json_number_point_valid(point: &Value) -> bool {
     let as_double = json_field(number, "as_double", "asDouble");
     let as_integer = json_field(number, "as_int", "asInt");
     json_point_metadata_valid(point)
+        && json_exemplars_valid(point)
         && match (as_double, as_integer) {
             (Some(value), None) => json_double(value).is_some(),
             (None, Some(value)) => try_integer(Some(value)).is_ok(),
@@ -1315,6 +1330,7 @@ fn json_histogram_point_valid(point: &Value) -> bool {
         return false;
     };
     json_point_metadata_valid(point)
+        && json_exemplars_valid(point)
         && count >= 0
         && counts.len() == bounds.len().saturating_add(1)
         && json_bounds_valid(bounds)
@@ -1349,6 +1365,7 @@ fn json_exponential_histogram_point_valid(point: &Value) -> bool {
         return false;
     };
     json_point_metadata_valid(point)
+        && json_exemplars_valid(point)
         && positive >= 0
         && negative >= 0
         && zero >= 0
@@ -1395,7 +1412,39 @@ fn json_integer_sum(values: &[Value]) -> Option<i64> {
 }
 
 fn optional_json_double_valid(value: Option<&Value>) -> bool {
-    value.is_none_or(|value| json_double(value).is_some())
+    value.is_none_or(|value| value.is_null() || json_double(value).is_some())
+}
+
+fn json_exemplars_valid(point: &Value) -> bool {
+    array(point.get("exemplars")).iter().all(|exemplar| {
+        let time = try_integer(json_field(exemplar, "time_unix_nano", "timeUnixNano"));
+        let value = exemplar.get("value").unwrap_or(exemplar);
+        let as_double = json_field(value, "as_double", "asDouble");
+        let as_integer = json_field(value, "as_int", "asInt");
+        let selected_value_valid = match (as_double, as_integer) {
+            (Some(value), None) => json_double(value).is_some(),
+            (None, Some(value)) => try_integer(Some(value)).is_ok(),
+            _ => false,
+        };
+        let trace_id = text(json_field(exemplar, "trace_id", "traceId"));
+        let span_id = text(json_field(exemplar, "span_id", "spanId"));
+        let context_valid = (trace_id.is_empty() && span_id.is_empty())
+            || (valid_hex(trace_id, 32) && valid_hex(span_id, 16));
+        time.is_ok_and(|time| time > 0)
+            && selected_value_valid
+            && context_valid
+            && json_key_values_valid(json_field(
+                exemplar,
+                "filtered_attributes",
+                "filteredAttributes",
+            ))
+    })
+}
+
+fn valid_hex(value: &str, width: usize) -> bool {
+    value.len() == width
+        && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+        && value.bytes().any(|byte| byte != b'0')
 }
 
 fn trace_groups(payload: &Value) -> Vec<&Value> {

@@ -143,7 +143,9 @@
         (check (= (count (lambda (header) (string=? (car header) "content-type")) headers) 1)
                "content-type header is not unique")
         (check (= (count (lambda (header) (string=? (car header) "content-length")) headers) 1)
-               "content-length header is not unique")))
+               "content-length header is not unique")
+        (check (<= (count (lambda (header) (string=? (car header) "content-encoding")) headers) 1)
+               "content-encoding header is not unique")))
     requests))
 
 (define (validate-resources expected resources)
@@ -195,10 +197,18 @@
     (check (every (lambda (entry) (member (car entry) allowed)) attributes) "unexpected span attribute")
     (for-each
       (lambda (entry)
-        (check (= (attribute-count attributes (car entry)) 1) "span attribute is duplicated"))
+        (begin
+          (check (= (attribute-count attributes (car entry)) 1) "span attribute is duplicated")
+          (check (valid-attribute-value? (cadr entry)) "span attribute has no value")))
       attributes)
     (for-each
-      (lambda (key) (check (= (attribute-count attributes key) 1) "required span attribute missing or duplicated"))
+      (lambda (key)
+        (let ((value (attribute attributes key))
+              (rule (find (lambda (rule) (string=? (car rule) key)) string-rules)))
+          (check (= (attribute-count attributes key) 1) "required span attribute missing or duplicated")
+          (if (or rule (member key integer-keys))
+              #t
+              (check (nonempty-string-value? value) "required span string attribute mismatch"))))
       required)
     (for-each
       (lambda (rule)
@@ -281,7 +291,7 @@
                events))))
       (else (error "unknown event policy" mode)))))
 
-(define (validate-spans expected-scopes event-policy spans)
+(define (validate-spans expected-scopes event-policy expected-flags spans)
   (let ((event-mode (car event-policy))
         (expected-event-count (cadr event-policy)))
     (check (> (length spans) 0) "capture contains no spans")
@@ -302,7 +312,7 @@
           (check (= (field 'dropped-events span) 0) "span dropped events")
           (check (= (field 'dropped-links span) 0) "span dropped links")
           (check (null? (field 'links span)) "span links changed")
-          (check (= (field 'flags span) 256) "span flags changed")
+          (check (member (field 'flags span) expected-flags) "span flags changed")
           (validate-span-attributes span expected-scopes)
           (validate-events event-mode span)))
       spans)
@@ -386,13 +396,13 @@
       (check (field 'data-points-valid metric) "metric data point is malformed"))
     metrics))
 
-(define (valid-log-value? value)
+(define (valid-attribute-value? value)
   (and (pair? value)
        (cond
          ((eq? (car value) 'other) #f)
          ((eq? (car value) 'array)
           (and (pair? (cdr value))
-               (every valid-log-value? (cadr value))))
+               (every valid-attribute-value? (cadr value))))
          ((eq? (car value) 'kvlist)
           (and (pair? (cdr value))
                (every
@@ -401,10 +411,12 @@
                         (pair? (cdr entry))
                         (string? (car entry))
                         (> (string-length (car entry)) 0)
-                        (valid-log-value? (cadr entry))
+                        (valid-attribute-value? (cadr entry))
                         (= (attribute-count (cadr value) (car entry)) 1)))
                  (cadr value))))
          (else #t))))
+
+(define valid-log-value? valid-attribute-value?)
 
 (define (validate-log-attributes attributes)
   (check (> (length attributes) 0) "log has no attributes")
@@ -431,6 +443,7 @@
                     (<= (field 'severity-number log) 24))
                "log severity number is invalid")
         (check (> (string-length (field 'severity-text log)) 0) "log severity text is empty")
+        (check (string=? (field 'event-name log) "") "log event name changed")
         (check (valid-log-value? (field 'body log)) "log body is missing")
         (validate-log-attributes (field 'attributes log))
         (check (= (field 'dropped-attributes log) 0) "log dropped attributes")
@@ -443,7 +456,7 @@
                "log trace context is incomplete")))
     logs))
 
-(define (validate-capture expected-resource-attributes expected-scopes expected-metric-scopes expected-log-scopes event-policy expected-span-buckets bucket-validator capture)
+(define (validate-capture expected-resource-attributes expected-scopes expected-metric-scopes expected-log-scopes event-policy expected-span-flags expected-span-buckets bucket-validator capture)
   (let ((requests (field 'requests capture))
         (resources (field 'resources capture))
         (scopes (field 'scopes capture))
@@ -459,7 +472,7 @@
     (validate-requests requests)
     (validate-resources expected-resource-attributes resources)
     (validate-scopes expected-scopes scopes)
-    (validate-spans expected-scopes event-policy spans)
+    (validate-spans expected-scopes event-policy expected-span-flags spans)
     (bucket-validator expected-span-buckets expected-scopes spans)
     (validate-metrics expected-metric-scopes metrics)
     (validate-logs expected-log-scopes logs)
@@ -471,16 +484,18 @@
                     expected-metric-scopes
                     expected-log-scopes
                     event-policy
+                    '(0 1 256 257)
                     expected-span-buckets
                     validate-contract-buckets
                     capture))
 
-(define (otel-validate-exact expected-resource-attributes expected-scopes expected-metric-scopes expected-log-scopes event-policy expected-span-buckets capture)
+(define (otel-validate-exact expected-resource-attributes expected-scopes expected-metric-scopes expected-log-scopes event-policy expected-span-flags expected-span-buckets capture)
   (validate-capture expected-resource-attributes
                     expected-scopes
                     expected-metric-scopes
                     expected-log-scopes
                     event-policy
+                    expected-span-flags
                     expected-span-buckets
                     validate-buckets
                     capture))

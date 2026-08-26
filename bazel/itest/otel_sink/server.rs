@@ -10,10 +10,10 @@ use core::ffi::CStr;
 use rustix::fd::OwnedFd;
 use rustix::net::sockopt::set_socket_reuseport;
 use rustix::net::{
-    acceptfrom, bind, listen, socket, AddressFamily, Ipv4Addr, SocketAddrAny, SocketAddrV4,
-    SocketType,
+    AddressFamily, Ipv4Addr, SocketAddrAny, SocketAddrV4, SocketType, acceptfrom, bind, listen,
+    socket,
 };
-use rustix::time::{clock_gettime, ClockId};
+use rustix::time::{ClockId, clock_gettime};
 
 pub(crate) fn serve(port: u16, output: &CStr) -> Result<(), String> {
     let listener = socket(AddressFamily::INET, SocketType::STREAM, None)
@@ -212,11 +212,25 @@ fn ingest(
             return;
         }
     };
+    let content_encoding_count = request
+        .headers
+        .iter()
+        .filter(|header| header.name.eq_ignore_ascii_case("content-encoding"))
+        .count();
+    if content_encoding_count > 1 {
+        respond(
+            connection,
+            400,
+            "text/plain",
+            b"Content-Encoding header must be unique\n",
+        );
+        return;
+    }
     let content_encoding = request
         .header("content-encoding")
         .unwrap_or("identity")
         .to_string();
-    if content_encoding != "identity" && !content_encoding.is_empty() {
+    if !content_encoding.eq_ignore_ascii_case("identity") && !content_encoding.is_empty() {
         respond(
             connection,
             415,

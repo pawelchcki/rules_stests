@@ -51,6 +51,7 @@ pub(crate) fn validate_export(signal: &str, value: &Value) -> Result<(), String>
 }
 
 type Validator = fn(&Value) -> Result<(), String>;
+type ScalarValidator = fn(&Value) -> bool;
 
 fn reject_unknown(value: &Value, context: &str, allowed: &[&str]) -> Result<(), String> {
     let Some(fields) = value.as_object() else {
@@ -110,6 +111,41 @@ fn validate_named_object(value: &Value, name: &str, validate: Validator) -> Resu
         ));
     }
     validate(item)
+}
+
+fn validate_scalar_field(
+    value: &Value,
+    snake: &str,
+    camel: &str,
+    context: &str,
+    validate: ScalarValidator,
+) -> Result<(), String> {
+    for name in [snake, camel] {
+        if let Some(item) = value.get(name) {
+            // ProtoJSON accepts null for a singular field and treats it as unset.
+            if !item.is_null() && !validate(item) {
+                return Err(format!(
+                    "invalid OTLP {context} field {name:?}: unexpected JSON type"
+                ));
+            }
+        }
+        if camel == snake {
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn integer_scalar(value: &Value) -> bool {
+    value.as_i64().is_some()
+        || value.as_u64().is_some()
+        || value
+            .as_str()
+            .is_some_and(|value| value.parse::<i64>().is_ok() || value.parse::<u64>().is_ok())
+}
+
+fn double_scalar(value: &Value) -> bool {
+    value.is_number() || matches!(value.as_str(), Some("NaN" | "Infinity" | "-Infinity"))
 }
 
 fn validate_resource(value: &Value) -> Result<(), String> {
@@ -396,6 +432,15 @@ fn validate_metric(value: &Value) -> Result<(), String> {
             "metadata",
         ],
     )?;
+    validate_scalar_field(value, "name", "name", "metric", Value::is_string)?;
+    validate_scalar_field(
+        value,
+        "description",
+        "description",
+        "metric",
+        Value::is_string,
+    )?;
+    validate_scalar_field(value, "unit", "unit", "metric", Value::is_string)?;
     validate_array_field(value, "metadata", "metadata", validate_key_value)?;
     validate_object_field(value, "gauge", "gauge", validate_gauge)?;
     validate_object_field(value, "sum", "sum", validate_sum)?;
@@ -432,6 +477,20 @@ fn validate_sum(value: &Value) -> Result<(), String> {
             "isMonotonic",
         ],
     )?;
+    validate_scalar_field(
+        value,
+        "aggregation_temporality",
+        "aggregationTemporality",
+        "sum",
+        integer_scalar,
+    )?;
+    validate_scalar_field(
+        value,
+        "is_monotonic",
+        "isMonotonic",
+        "sum",
+        Value::is_boolean,
+    )?;
     validate_array_field(
         value,
         "data_points",
@@ -451,6 +510,13 @@ fn validate_histogram(value: &Value) -> Result<(), String> {
             "aggregationTemporality",
         ],
     )?;
+    validate_scalar_field(
+        value,
+        "aggregation_temporality",
+        "aggregationTemporality",
+        "histogram",
+        integer_scalar,
+    )?;
     validate_array_field(
         value,
         "data_points",
@@ -469,6 +535,13 @@ fn validate_exponential_histogram(value: &Value) -> Result<(), String> {
             "aggregation_temporality",
             "aggregationTemporality",
         ],
+    )?;
+    validate_scalar_field(
+        value,
+        "aggregation_temporality",
+        "aggregationTemporality",
+        "exponential histogram",
+        integer_scalar,
     )?;
     validate_array_field(
         value,
@@ -510,6 +583,21 @@ fn validate_number_data_point(value: &Value) -> Result<(), String> {
             "exemplars",
             "flags",
         ],
+    )?;
+    validate_metric_point_scalars(value)?;
+    validate_scalar_field(
+        value,
+        "as_double",
+        "asDouble",
+        "number data point",
+        double_scalar,
+    )?;
+    validate_scalar_field(
+        value,
+        "as_int",
+        "asInt",
+        "number data point",
+        integer_scalar,
     )
 }
 
@@ -533,7 +621,18 @@ fn validate_histogram_data_point(value: &Value) -> Result<(), String> {
             "min",
             "max",
         ],
-    )
+    )?;
+    validate_metric_point_scalars(value)?;
+    validate_scalar_field(
+        value,
+        "count",
+        "count",
+        "histogram data point",
+        integer_scalar,
+    )?;
+    validate_scalar_field(value, "sum", "sum", "histogram data point", double_scalar)?;
+    validate_scalar_field(value, "min", "min", "histogram data point", double_scalar)?;
+    validate_scalar_field(value, "max", "max", "histogram data point", double_scalar)
 }
 
 fn validate_exponential_histogram_data_point(value: &Value) -> Result<(), String> {
@@ -560,6 +659,56 @@ fn validate_exponential_histogram_data_point(value: &Value) -> Result<(), String
             "zeroThreshold",
         ],
     )?;
+    validate_metric_point_scalars(value)?;
+    validate_scalar_field(
+        value,
+        "count",
+        "count",
+        "exponential histogram data point",
+        integer_scalar,
+    )?;
+    validate_scalar_field(
+        value,
+        "sum",
+        "sum",
+        "exponential histogram data point",
+        double_scalar,
+    )?;
+    validate_scalar_field(
+        value,
+        "scale",
+        "scale",
+        "exponential histogram data point",
+        integer_scalar,
+    )?;
+    validate_scalar_field(
+        value,
+        "zero_count",
+        "zeroCount",
+        "exponential histogram data point",
+        integer_scalar,
+    )?;
+    validate_scalar_field(
+        value,
+        "min",
+        "min",
+        "exponential histogram data point",
+        double_scalar,
+    )?;
+    validate_scalar_field(
+        value,
+        "max",
+        "max",
+        "exponential histogram data point",
+        double_scalar,
+    )?;
+    validate_scalar_field(
+        value,
+        "zero_threshold",
+        "zeroThreshold",
+        "exponential histogram data point",
+        double_scalar,
+    )?;
     validate_object_field(value, "positive", "positive", validate_buckets)?;
     validate_object_field(value, "negative", "negative", validate_buckets)
 }
@@ -569,6 +718,13 @@ fn validate_buckets(value: &Value) -> Result<(), String> {
         value,
         "exponential histogram buckets",
         &["offset", "bucket_counts", "bucketCounts"],
+    )?;
+    validate_scalar_field(
+        value,
+        "offset",
+        "offset",
+        "exponential histogram buckets",
+        integer_scalar,
     )
 }
 
@@ -588,6 +744,15 @@ fn validate_summary_data_point(value: &Value) -> Result<(), String> {
             "flags",
         ],
     )?;
+    validate_metric_point_scalars(value)?;
+    validate_scalar_field(
+        value,
+        "count",
+        "count",
+        "summary data point",
+        integer_scalar,
+    )?;
+    validate_scalar_field(value, "sum", "sum", "summary data point", double_scalar)?;
     validate_array_field(
         value,
         "quantile_values",
@@ -597,7 +762,33 @@ fn validate_summary_data_point(value: &Value) -> Result<(), String> {
 }
 
 fn validate_quantile(value: &Value) -> Result<(), String> {
-    reject_unknown(value, "summary quantile", &["quantile", "value"])
+    reject_unknown(value, "summary quantile", &["quantile", "value"])?;
+    validate_scalar_field(
+        value,
+        "quantile",
+        "quantile",
+        "summary quantile",
+        double_scalar,
+    )?;
+    validate_scalar_field(value, "value", "value", "summary quantile", double_scalar)
+}
+
+fn validate_metric_point_scalars(value: &Value) -> Result<(), String> {
+    validate_scalar_field(
+        value,
+        "start_time_unix_nano",
+        "startTimeUnixNano",
+        "metric data point",
+        integer_scalar,
+    )?;
+    validate_scalar_field(
+        value,
+        "time_unix_nano",
+        "timeUnixNano",
+        "metric data point",
+        integer_scalar,
+    )?;
+    validate_scalar_field(value, "flags", "flags", "metric data point", integer_scalar)
 }
 
 fn validate_exemplar(value: &Value) -> Result<(), String> {
@@ -619,6 +810,17 @@ fn validate_exemplar(value: &Value) -> Result<(), String> {
             "traceId",
         ],
     )?;
+    validate_scalar_field(
+        value,
+        "time_unix_nano",
+        "timeUnixNano",
+        "exemplar",
+        integer_scalar,
+    )?;
+    validate_scalar_field(value, "as_double", "asDouble", "exemplar", double_scalar)?;
+    validate_scalar_field(value, "as_int", "asInt", "exemplar", integer_scalar)?;
+    validate_scalar_field(value, "span_id", "spanId", "exemplar", Value::is_string)?;
+    validate_scalar_field(value, "trace_id", "traceId", "exemplar", Value::is_string)?;
     validate_array_field(
         value,
         "filtered_attributes",

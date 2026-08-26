@@ -8,7 +8,8 @@
           python-http-scope
           python-database-bucket
           python-profile-shape
-          python-counted-operation-buckets)
+          python-counted-operation-buckets
+          expected-span-flags)
   (import (scheme base))
   (begin
 
@@ -20,6 +21,8 @@
     ("telemetry.auto.version" (exact "0.65b0"))))
 
 (define python-schema-url "https://opentelemetry.io/schemas/1.11.0")
+
+(define expected-span-flags '(256))
 
 (define (python-service-resource-attributes service-name)
   (append python-resource-attributes

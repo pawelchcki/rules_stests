@@ -9,5 +9,6 @@
                      expected-metric-scopes
                      expected-log-scopes
                      (event-policy-for scenario-name)
+                     expected-span-flags
                      expected-span-buckets
                      (read))
