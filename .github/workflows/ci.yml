@@ -29,4 +29,4 @@ jobs:
           cache-save: ${{ github.event_name != 'pull_request' }}
 
       - name: Run all tests
-        run: bazel test //bazel/... //bazel/itest:aiohttp_otel_contract_test //bazel/itest:django_otel_contract_test --build_tests_only
+        run: bazel test //bazel/... //bazel/itest:aiohttp_otel_contract_test //bazel/itest:django_otel_contract_test --build_tests_only --local_test_jobs=1
