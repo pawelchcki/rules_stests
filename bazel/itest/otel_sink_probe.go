@@ -413,6 +413,19 @@ func main() {
 		fatal(fmt.Errorf("cyclic candidate: HTTP %d: %s: %v", cyclicCandidate.StatusCode, cyclicBody, readErr))
 	}
 	resetSink(endpoint)
+	invalidTraceID := []byte(`{"resourceSpans":[{"resource":{"attributes":[]},"scopeSpans":[{"scope":{"name":"trace-id.probe"},"spans":[{"traceId":"00000000000000000000000000000000","spanId":"5555555555555555","name":"SELECT","kind":3,"startTimeUnixNano":"1","endTimeUnixNano":"2","status":{"code":0}}]}]}]}`)
+	postJSON(endpoint, "/v1/traces", "invalid trace-ID candidate", invalidTraceID)
+	freezeCapture(endpoint, "/dump", "invalid trace-ID capture")
+	invalidTraceIDCandidate, err := http.Get(endpoint + "/candidate?app=custom-app")
+	if err != nil {
+		fatal(fmt.Errorf("generate invalid trace-ID candidate: %w", err))
+	}
+	invalidTraceIDBody, readErr := io.ReadAll(invalidTraceIDCandidate.Body)
+	invalidTraceIDCandidate.Body.Close()
+	if readErr != nil || invalidTraceIDCandidate.StatusCode != http.StatusUnprocessableEntity || !bytes.Contains(invalidTraceIDBody, []byte("invalid trace ID")) {
+		fatal(fmt.Errorf("invalid trace-ID candidate: HTTP %d: %s: %v", invalidTraceIDCandidate.StatusCode, invalidTraceIDBody, readErr))
+	}
+	resetSink(endpoint)
 	malformedCollectionTrace := []byte(`{"resourceSpans":[{"resource":{"attributes":[]},"scopeSpans":[{"scope":{"name":"collection.probe"},"spans":[{"traceId":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","spanId":"6666666666666666","name":"SELECT","kind":3,"startTimeUnixNano":"1","endTimeUnixNano":"2","links":"corrupt","status":{"code":0}}]}]}]}`)
 	postJSON(endpoint, "/v1/traces", "malformed-collection trace", malformedCollectionTrace)
 	malformedDumpBody := freezeCapture(endpoint, "/dump.scm", "malformed-collection Scheme capture")
@@ -452,7 +465,7 @@ func main() {
 		fatal(fmt.Errorf("malformed metric point was absent from Scheme capture: %s", malformedMetricDump))
 	}
 	resetSink(endpoint)
-	defaultedMetrics := []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"metric.probe"},"metrics":[{"name":"nullable-histogram","metadata":null,"histogram":{"dataPoints":[{"attributes":null,"timeUnixNano":"3","count":"1","sum":null,"bucketCounts":["1"],"explicitBounds":[],"min":null,"max":null}],"aggregationTemporality":2}},{"name":"defaulted-summary","summary":{"dataPoints":[{"timeUnixNano":"4","count":"0"}]}},{"name":"maximum-uint64-histogram","histogram":{"dataPoints":[{"timeUnixNano":"18446744073709551615","count":"18446744073709551615","bucketCounts":["18446744073709551615"],"explicitBounds":[]}],"aggregationTemporality":2}},{"name":"aggregation-semantics","sum":{"dataPoints":[{"timeUnixNano":"5","asInt":"1"}],"aggregationTemporality":2,"isMonotonic":true}}]}]}]}`)
+	defaultedMetrics := []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"metric.probe"},"metrics":[{"name":"nullable-histogram","metadata":null,"histogram":{"dataPoints":[{"attributes":null,"startTimeUnixNano":null,"timeUnixNano":"3","count":"1","sum":null,"bucketCounts":["1"],"explicitBounds":[],"min":null,"max":null,"flags":null}],"aggregationTemporality":2}},{"name":"defaulted-summary","summary":{"dataPoints":[{"timeUnixNano":"4","count":"0"}]}},{"name":"maximum-uint64-histogram","histogram":{"dataPoints":[{"timeUnixNano":"18446744073709551615","count":"18446744073709551615","bucketCounts":["18446744073709551615"],"explicitBounds":[]}],"aggregationTemporality":2}},{"name":"aggregation-semantics","sum":{"dataPoints":[{"timeUnixNano":"5","asInt":"1"}],"aggregationTemporality":2,"isMonotonic":true}}]}]}]}`)
 	postJSON(endpoint, "/v1/metrics", "defaulted metrics", defaultedMetrics)
 	defaultedMetricsDump := freezeCapture(endpoint, "/dump.scm", "defaulted-metrics Scheme capture")
 	if bytes.Count(defaultedMetricsDump, []byte("(data-points-valid #t)")) != 4 || !bytes.Contains(defaultedMetricsDump, []byte("(aggregation-temporality cumulative) (monotonic #t)")) {

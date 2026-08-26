@@ -1093,10 +1093,19 @@ pub fn golden_candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String
             for span in array(group.get("spans")) {
                 let span_id = text(json_field(span, "span_id", "spanId"));
                 let trace_id = text(json_field(span, "trace_id", "traceId"));
-                if span_id.is_empty() || span_keys.insert(span_key(trace_id, span_id), ()).is_some()
-                {
+                let parent_id = text(json_field(span, "parent_span_id", "parentSpanId"));
+                if !valid_hex(trace_id, 32) {
+                    return Err(format!("invalid trace ID {trace_id:?}"));
+                }
+                if !valid_hex(span_id, 16) {
+                    return Err(format!("invalid span ID {span_id:?}"));
+                }
+                if !parent_id.is_empty() && !valid_hex(parent_id, 16) {
+                    return Err(format!("invalid parent span ID {parent_id:?}"));
+                }
+                if span_keys.insert(span_key(trace_id, span_id), ()).is_some() {
                     return Err(format!(
-                        "missing or duplicate span ID {span_id:?} in trace {trace_id:?}"
+                        "duplicate span ID {span_id:?} in trace {trace_id:?}"
                     ));
                 }
                 if !parent_topology_valid(trace_id, span_id, &parents) {
@@ -1870,6 +1879,9 @@ fn try_integer(value: Option<&Value>) -> Result<i128, ()> {
     let Some(value) = value else {
         return Ok(0);
     };
+    if value.is_null() {
+        return Ok(0);
+    }
     value
         .as_i64()
         .map(i128::from)

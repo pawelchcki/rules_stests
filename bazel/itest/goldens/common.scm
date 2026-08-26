@@ -308,6 +308,7 @@
           (check (string=? (field 'trace-state span) "") "trace state changed")
           (check (and (> (field 'start span) 0) (>= (field 'end span) (field 'start span)))
                  "span timestamps are not ordered")
+          (status-name (field 'status-code span))
           (check (= (field 'dropped-attributes span) 0) "span dropped attributes")
           (check (= (field 'dropped-events span) 0) "span dropped events")
           (check (= (field 'dropped-links span) 0) "span dropped links")
