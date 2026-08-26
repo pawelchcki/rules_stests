@@ -1,5 +1,5 @@
 (define expected-span-buckets
-  (http-contract-buckets expected-http-requests
+  (http-contract-buckets (expected-http-requests-for scenario-name)
                          server-scope
                          render-server-span-name))
 

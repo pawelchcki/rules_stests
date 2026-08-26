@@ -101,10 +101,15 @@ request/span counters plus validator duration and process peak RSS. `GET /dump`
 is the JSON snapshot boundary: it writes the complete decoded document as
 pretty JSON and returns the same bytes. `GET /dump.scm` returns the capture as
 a canonical S-expression, while `POST /validate` evaluates a Scheme body
-against it. `GET /healthz` is the service health check. Each OTEL contract test
-waits until trace request and span counts have been unchanged for two seconds, snapshots
-the sink, and validates the decoded traces, metrics, logs, request metadata,
-and HTTP headers. It does not infer success from console logs.
+against it. `POST /reset` clears every signal, while `POST /reset/traces`
+creates a trace-only boundary without discarding startup metrics and logs.
+`GET /healthz` is the service health check. Each OTEL contract test waits for
+startup traces to become quiescent, clears those traces, runs exactly one Hurl
+topic, waits for its trace counts to become quiescent, and validates the
+decoded traces, metrics, logs, request metadata, and HTTP headers. It does not
+infer success from console logs. The sink and instrumented Python servers use
+the `rules_itest` reuse-port handoff, so parallel shards retain their reserved
+ports until each service has bound them.
 
 The snapshot is checked by Stak Scheme 0.12.23 inside the same no-std Rust
 binary. Bazel pins the Stak crates, compiler bytecode, and prelude. A golden is
@@ -124,62 +129,65 @@ explicit `--otel-program`. A standalone client can equivalently post one
 self-contained source bundle containing `define-library` declarations and a
 program import to `/validate`.
 
-The libraries deliberately separate three contracts:
+The libraries deliberately separate four layers:
 
 - `(otel validation)` checks transport and OTLP integrity: request metadata,
   exact resources and scopes, IDs, timestamp ordering, parents, events, links,
   dropped fields, flags, attributes, and the presence of all three signals.
-- `(realworld scenario <topic>)` is the portable workload contract. It records
-  only HTTP method, canonical route, status, and exact observation count, and
-  is shared by every implementation.
+- `(realworld scenarios)` is one portable workload table. Its rows record only
+  HTTP method, canonical route, status, and exact observation count. Every
+  implementation selects a row by the injected `scenario-name` symbol.
 - `(otel profile python-auto-v0-65b0)` holds facts shared by the current Python
   agent independently of the web framework. A Go or custom Python tracer can
   supply an equivalent language/runtime library without changing the workload.
-- `(realworld profile <implementation>)` and
-  `(realworld detail <implementation> <topic>)` preserve exact implementation
+- `(realworld profile <implementation>)` preserves exact implementation
   behavior: resource identity, instrumentation libraries and versions,
   attribute schemas, event policy, span-name rendering, database topology,
-  names, parentage, status, and counts.
+  names, parentage, status, and counts. Each profile contains one compact
+  fixed-column count table for all topics instead of one library per topic.
 
 For example, the shared articles contract says:
 
 ```scheme
-(define-library (realworld scenario articles)
-  (export expected-http-requests)
+(define-library (realworld scenarios)
+  (export expected-http-requests-for)
   (import (scheme base))
   (begin
-    (define expected-http-requests
-      '((1 "DELETE" "/api/articles/{slug}" 204)
-        (6 "GET" "/api/articles" 200)))))
+    (define scenario-shapes
+      '((articles
+          (1 "DELETE" "/api/articles/{slug}" 204)
+          (6 "GET" "/api/articles" 200))
+        ...))
+    (define (expected-http-requests-for scenario)
+      (cdr (assq scenario scenario-shapes)))))
 ```
 
 The aiohttp Python profile renders the canonical route as
 `DELETE /api/articles/{slug}` in scope `http`; the Django Python profile
-renders it as `DELETE api/articles/<slug>` in scope `django`. Both are checked
-against the same scenario. Their detailed libraries separately pin SQLAlchemy
-and SQLite behavior, for example:
+renders it as `DELETE api/articles/<slug>` in scope `django`. Both consume that
+same portable row and the neutral Python helpers. Only their genuine tracing
+differences remain in their own profiles. For example, aiohttp stores its
+counts as:
 
 ```scheme
-(define-library (realworld detail python-aiohttp-auto-v0-65b0 articles)
-  (export expected-implementation-buckets)
-  (import (scheme base))
-  (begin
-    (define expected-implementation-buckets
-      '((78 sqlalchemy client unset
-            (prefix-suffix "SELECT /" "realworld.sqlite3") child absent)
-        (78 sqlite client unset (exact "SELECT") root absent)))))
+; Columns: scenario, connect, delete, insert, select, update.
+(define implementation-shapes
+  '((articles 21 2 3 77 3)
+    (auth     20 0 1 23 11)
+    ...))
 ```
 
-A Go implementation adds a new profile and detail library but imports the same
-13 scenario libraries. A replacement Python tracer likewise gets a new named
-profile instead of weakening or overwriting the auto-instrumentation profile;
-the old profile remains an executable 1:1 specification.
+A Go implementation adds one new profile but imports the same scenario table.
+A replacement Python tracer likewise gets a new named profile instead of
+weakening or overwriting the auto-instrumentation profile; the old profile
+remains an executable 1:1 specification.
 
 Two validation programs are available. `validate_contract.scm` checks the
 portable HTTP multiset and OTLP/profile invariants while allowing additional
-implementation-specific non-server spans. `validate.scm` appends the detail
-library and requires the exact complete span multiset. The current contract-only
-targets are manual because the exact targets already imply them:
+implementation-specific non-server spans. `validate.scm` adds the detailed
+counts returned by `implementation-buckets-for` and requires the exact complete
+span multiset. The current contract-only targets are manual because the exact
+targets already imply them:
 
 ```bash
 bazel test //bazel/itest:aiohttp_otel_contract_test_articles \
@@ -187,10 +195,10 @@ bazel test //bazel/itest:aiohttp_otel_contract_test_articles \
 ```
 
 `realworld_hurl_test_suite` exposes `otel_profile`,
-`otel_profile_library`, `otel_runtime_libraries`, `otel_detail_pattern`, and
-`otel_exact`. A new Go implementation can begin with `otel_exact = False` and
-the shared scenarios, then add a detail pattern once its telemetry is ready to
-be pinned as another exact implementation specification.
+`otel_profile_library`, `otel_runtime_libraries`, and `otel_exact`. A new Go
+implementation can begin with `otel_exact = False` and the shared scenarios,
+then add its compact implementation table once its telemetry is ready to be
+pinned as another exact implementation specification.
 
 Known telemetry defects belong in the suite's `otel_xfails` dictionary rather
 than in a weakened golden. Each entry maps a topic to a non-empty issue or
@@ -220,11 +228,9 @@ defects.
 Intermittent telemetry defects use `otel_flaky_cases`, also as a mapping from
 topic to reason. Those targets receive Bazel's `flaky = True` behavior and an
 `otel-flaky` tag: Bazel retries a failing attempt and reports `FLAKY` if a retry
-passes, while exhausting the retries remains red. The aiohttp `errors_profiles`
-shard is marked this way because variable startup health polling can leak a
-second `/api/tags` span tree into the OTLP snapshot. Its strict golden is left
-unchanged, so the extra server, SQLAlchemy, and SQLite spans remain a detectable
-contract failure rather than accepted behavior.
+passes, while exhausting the retries remains red. There are currently no
+listed flaky topics: startup health traces are excluded by the explicit
+trace-only reset boundary rather than tolerated by a broader golden.
 
 Random IDs and timestamps remain shape-checked rather than pinned. The one
 known random path fragment in aiohttp SQLAlchemy span names uses the explicit
@@ -244,12 +250,12 @@ bazel test //bazel/itest:aiohttp_otel_hurl_test_golden_candidates \
   --jobs=4 --nocache_test_results
 ```
 
-The candidate is an importable implementation-detail library; portable HTTP
-contracts are intentionally maintained separately. Review it before copying
-its `golden.scm` into the matching
-`bazel/itest/goldens/<app>/<topic>.scm`. Normal validation targets cannot
-rewrite checked-in goldens. The driver reports HTTP wall time, sink-measured
-evaluation time, and sink process peak RSS for each validation.
+The candidate is an expanded, importable implementation-detail library for
+inspection. Review its buckets and translate the counts into the compact row
+in `goldens/<app>/common.scm`; do not check in a per-topic copy. Portable HTTP
+contracts stay in the single shared scenario table. Normal validation targets
+cannot rewrite checked-in goldens. The driver reports HTTP wall time,
+sink-measured evaluation time, and sink process peak RSS for each validation.
 
 ```bash
 bazel test //bazel/itest:aiohttp_test

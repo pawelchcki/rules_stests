@@ -21,6 +21,7 @@ use rustix::net::{
     AddressFamily, Ipv4Addr, SendFlags, SocketAddrAny, SocketAddrV4, SocketType, acceptfrom, bind,
     listen, send, socket,
 };
+use rustix::net::sockopt::set_socket_reuseport;
 use rustix::time::{ClockId, clock_gettime};
 use serde::Serialize;
 use serde_json::Value;
@@ -166,6 +167,7 @@ fn parse_port(bytes: &[u8]) -> Option<u16> {
 fn serve(port: u16, output: &CStr) -> Result<(), String> {
     let listener = socket(AddressFamily::INET, SocketType::STREAM, None)
         .map_err(|error| format!("socket: {error}"))?;
+    set_socket_reuseport(&listener, true).map_err(|error| format!("SO_REUSEPORT: {error}"))?;
     bind(&listener, &SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port))
         .map_err(|error| format!("bind port {port}: {error}"))?;
     listen(&listener, 128).map_err(|error| format!("listen: {error}"))?;
@@ -244,6 +246,21 @@ fn handle_connection(
                 respond(connection, 200, "application/json", &bytes);
             }
             Err(error) => respond(connection, 500, "text/plain", error.to_string().as_bytes()),
+        }
+        return;
+    }
+    if request.method == "POST"
+        && (request.path == "/reset" || request.path == "/reset/traces")
+    {
+        if request.path == "/reset" {
+            records.clear();
+        } else {
+            records.retain(|record| record.signal != "traces");
+        }
+        *validation_stats = ValidationStats::default();
+        match persist(output, records) {
+            Ok(()) => respond(connection, 200, "application/json", b"{}\n"),
+            Err(error) => respond(connection, 500, "text/plain", error.as_bytes()),
         }
         return;
     }

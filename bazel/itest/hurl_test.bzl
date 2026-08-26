@@ -78,7 +78,6 @@ def realworld_hurl_test_suite(
         otel_profile = None,
         otel_profile_library = None,
         otel_runtime_libraries = None,
-        otel_detail_pattern = None,
         otel_exact = True,
         otel_candidates = True,
         otel_flaky_cases = {},
@@ -88,9 +87,9 @@ def realworld_hurl_test_suite(
         **kwargs):
     """Creates one schedulable integration test per upstream Hurl file.
 
-    OTLP validation composes a portable scenario with a named implementation
-    profile. Exact mode additionally imports a per-scenario detail library;
-    contract mode permits implementation-specific non-server spans.
+    OTLP validation selects a portable scenario from a shared library and
+    combines it with a named implementation profile. Contract mode permits
+    implementation-specific non-server spans.
     """
     if bool(otel_sink) != bool(otel_app):
         fail("otel_sink and otel_app must be supplied together")
@@ -111,12 +110,10 @@ def realworld_hurl_test_suite(
         profile = otel_profile or "python-{}-auto-v0-65b0".format(otel_app)
         profile_library = otel_profile_library or "//bazel/itest/goldens:{}/common.scm".format(otel_app)
         runtime_libraries = otel_runtime_libraries if otel_runtime_libraries != None else ["//bazel/itest/goldens:python.scm"]
-        detail_pattern = otel_detail_pattern
     else:
         profile = ""
         profile_library = None
         runtime_libraries = []
-        detail_pattern = None
     tests = []
     candidates = []
     for case in REALWORLD_HURL_CASES:
@@ -137,18 +134,14 @@ def realworld_hurl_test_suite(
                 "//bazel/itest/goldens:realworld.scm",
             ] + runtime_libraries + [
                 profile_library,
-                "//bazel/itest/goldens:contracts/{}.scm".format(case),
             ]
             imports = [
                 "otel.validation",
                 "realworld.contract",
+                "realworld.scenarios",
                 "realworld.profile.{}".format(profile),
-                "realworld.scenario.{}".format(case),
             ]
             if otel_exact:
-                detail_library = detail_pattern.format(case) if detail_pattern else "//bazel/itest/goldens:{}/{}.scm".format(otel_app, case)
-                libraries.append(detail_library)
-                imports.append("realworld.detail.{}.{}".format(profile, case))
                 program = "//bazel/itest/goldens:validate.scm"
             else:
                 program = "//bazel/itest/goldens:validate_contract.scm"

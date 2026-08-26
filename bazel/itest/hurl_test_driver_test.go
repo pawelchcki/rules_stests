@@ -41,3 +41,16 @@ func TestClassifyOTLPValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestSchemeIdentifier(t *testing.T) {
+	for _, value := range []string{"articles", "errors_profiles", "python-aiohttp+v1"} {
+		if err := schemeIdentifier(value); err != nil {
+			t.Errorf("schemeIdentifier(%q) returned an error: %v", value, err)
+		}
+	}
+	for _, value := range []string{"", "123", "articles/profile", "x) (error"} {
+		if err := schemeIdentifier(value); err == nil {
+			t.Errorf("schemeIdentifier(%q) unexpectedly succeeded", value)
+		}
+	}
+}

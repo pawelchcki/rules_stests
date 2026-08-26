@@ -107,6 +107,11 @@ func main() {
 		"uid=" + objectUID,
 	}
 	args = append(args, specs...)
+	if *otelSinkSuffix != "" {
+		if err := resetStartupTelemetry(*otelSinkSuffix); err != nil {
+			fatal(err)
+		}
+	}
 	command := exec.Command(loader, args...)
 	command.Env = append(os.Environ(), "NO_COLOR=1")
 	command.Stdout = os.Stdout
@@ -165,6 +170,52 @@ func classifyOTLPValidation(validationErr error, xfailReason, goldenCase string,
 		return fmt.Errorf("OTLP xfail %s applies only to contract assertions; infrastructure failed instead: %w", goldenCase, validationErr)
 	}
 	fmt.Fprintf(output, "XFAIL: OTLP contract %s violated as expected (%s):\n%v\n", goldenCase, xfailReason, validationErr)
+	return nil
+}
+
+func resetStartupTelemetry(serviceSuffix string) error {
+	port, err := assignedPort(serviceSuffix)
+	if err != nil {
+		return fmt.Errorf("locate OTLP sink for startup reset: %w", err)
+	}
+	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+	client := http.Client{Timeout: 5 * time.Second}
+	deadline := time.Now().Add(15 * time.Second)
+	lastTraceRequests := -1
+	lastTraceSpans := -1
+	stableSince := time.Time{}
+	for {
+		stats, statsErr := readSinkStats(client, baseURL)
+		if statsErr == nil && stats.TraceSpans > 0 {
+			if stats.TraceRequests != lastTraceRequests || stats.TraceSpans != lastTraceSpans {
+				lastTraceRequests = stats.TraceRequests
+				lastTraceSpans = stats.TraceSpans
+				stableSince = time.Now()
+			} else if time.Since(stableSince) >= 2*time.Second {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("startup OTLP at %s did not quiesce before reset", baseURL)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	request, err := http.NewRequest(http.MethodPost, baseURL+"/reset/traces", nil)
+	if err != nil {
+		return fmt.Errorf("create startup OTLP reset request: %w", err)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("reset startup OTLP: %w", err)
+	}
+	contents, readErr := io.ReadAll(response.Body)
+	response.Body.Close()
+	if readErr != nil {
+		return fmt.Errorf("read startup OTLP reset response: %w", readErr)
+	}
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("reset startup OTLP: HTTP %d: %s", response.StatusCode, contents)
+	}
 	return nil
 }
 
@@ -262,7 +313,7 @@ func validateTelemetryDump(client http.Client, baseURL, mode, goldenCase string,
 		fmt.Printf("Emitted OTLP golden candidate for %s: %d spans in %d trace requests, plus metrics and logs\n", goldenCase, stats.TraceSpans, stats.TraceRequests)
 		return nil
 	}
-	source, err := readSchemeBundle(libraries, imports, program)
+	source, err := readSchemeBundle(libraries, imports, program, goldenCase)
 	if err != nil {
 		return err
 	}
@@ -316,7 +367,7 @@ func readSinkStats(client http.Client, baseURL string) (sinkStats, error) {
 	return stats, nil
 }
 
-func readSchemeBundle(libraries, imports []string, programValue string) ([]byte, error) {
+func readSchemeBundle(libraries, imports []string, programValue, goldenCase string) ([]byte, error) {
 	var source []byte
 	for _, item := range libraries {
 		path, err := resolvePath(item, false)
@@ -340,6 +391,16 @@ func readSchemeBundle(libraries, imports []string, programValue string) ([]byte,
 		source = append(source, declaration...)
 	}
 	source = append(source, []byte(")\n")...)
+	parts := strings.SplitN(goldenCase, "/", 2)
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("--otel-case must use app/case form, got %q", goldenCase)
+	}
+	if err := schemeIdentifier(parts[1]); err != nil {
+		return nil, fmt.Errorf("invalid OTLP scenario: %w", err)
+	}
+	source = append(source, []byte("(define scenario-name '")...)
+	source = append(source, parts[1]...)
+	source = append(source, []byte(")\n")...)
 	program, err := resolvePath(programValue, false)
 	if err != nil {
 		return nil, fmt.Errorf("resolve Scheme program %q: %w", programValue, err)
@@ -351,6 +412,26 @@ func readSchemeBundle(libraries, imports []string, programValue string) ([]byte,
 	source = append(source, contents...)
 	source = append(source, '\n')
 	return source, nil
+}
+
+func schemeIdentifier(value string) error {
+	if value == "" {
+		return errors.New("Scheme identifier is empty")
+	}
+	for index, character := range value {
+		letter := (character >= 'a' && character <= 'z') ||
+			(character >= 'A' && character <= 'Z')
+		if index == 0 && !letter && character != '_' {
+			return fmt.Errorf("invalid Scheme identifier %q", value)
+		}
+		if !((character >= 'a' && character <= 'z') ||
+			(character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') ||
+			strings.ContainsRune("-+_", character)) {
+			return fmt.Errorf("invalid Scheme identifier %q", value)
+		}
+	}
+	return nil
 }
 
 func schemeLibraryName(value string) ([]byte, error) {

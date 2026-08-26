@@ -138,6 +138,31 @@ func main() {
 	} else if status != http.StatusUnprocessableEntity || !bytes.Contains(output, []byte("sandbox budget")) {
 		fatal(fmt.Errorf("nonterminating Scheme rule returned HTTP %d: %s", status, output))
 	}
+	reset, err := http.Post(endpoint+"/reset", "application/json", nil)
+	if err != nil {
+		fatal(fmt.Errorf("reset sink: %w", err))
+	}
+	resetBody, readErr := io.ReadAll(reset.Body)
+	reset.Body.Close()
+	if readErr != nil {
+		fatal(fmt.Errorf("read reset response: %w", readErr))
+	}
+	if reset.StatusCode != http.StatusOK {
+		fatal(fmt.Errorf("reset sink: HTTP %d: %s", reset.StatusCode, resetBody))
+	}
+	resetDump, err := http.Get(endpoint + "/dump")
+	if err != nil {
+		fatal(fmt.Errorf("read reset dump: %w", err))
+	}
+	var resetRecords []sinkRecord
+	decodeErr := json.NewDecoder(resetDump.Body).Decode(&resetRecords)
+	resetDump.Body.Close()
+	if decodeErr != nil {
+		fatal(fmt.Errorf("decode reset dump: %w", decodeErr))
+	}
+	if len(resetRecords) != 0 {
+		fatal(fmt.Errorf("reset retained %d records", len(resetRecords)))
+	}
 	fmt.Printf("OTLP sink accepted and described traces, metrics, and logs at %s\n", endpoint)
 }
 

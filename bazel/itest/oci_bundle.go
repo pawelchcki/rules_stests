@@ -29,6 +29,26 @@ type manifest struct {
 	Layers []descriptor `json:"layers"`
 }
 
+const pythonBootstrap = `
+import asyncio
+import runpy
+import socketserver
+import sys
+
+socketserver.TCPServer.allow_reuse_port = True
+original_create_server = asyncio.BaseEventLoop.create_server
+
+async def create_server_with_reuse_port(self, *args, **kwargs):
+    if kwargs.get("reuse_port") is None:
+        kwargs["reuse_port"] = True
+    return await original_create_server(self, *args, **kwargs)
+
+asyncio.BaseEventLoop.create_server = create_server_with_reuse_port
+entrypoint = sys.argv[1]
+sys.argv = sys.argv[1:]
+runpy.run_path(entrypoint, run_name="__main__")
+`
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "oci_bundle:", err)
@@ -516,7 +536,7 @@ func execApp(root, otelRoot, instance, command string, args []string) error {
 		}
 		fmt.Fprintf(os.Stderr, "oci_bundle: activating OpenTelemetry Python instrumentation for %s from %s\n", instance, otelRoot)
 	}
-	arguments := []string{loader, "--library-path", libraryPath, python, entrypoint, command}
+	arguments := []string{loader, "--library-path", libraryPath, python, "-c", pythonBootstrap, entrypoint, command}
 	arguments = append(arguments, args...)
 	if err := syscall.Exec(loader, arguments, environment); err != nil {
 		return fmt.Errorf("execute app with bundled glibc: %w", err)
