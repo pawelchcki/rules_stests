@@ -250,19 +250,23 @@ fn typed_metric_data(metric: &proto::Metric) -> (&'static str, usize, bool) {
         Some(proto::metric::Data::Sum(data)) => (
             "sum",
             data.data_points.len(),
-            data.data_points.iter().all(typed_number_point_valid),
+            aggregation_temporality_valid(data.aggregation_temporality)
+                && data.data_points.iter().all(typed_number_point_valid),
         ),
         Some(proto::metric::Data::Histogram(data)) => (
             "histogram",
             data.data_points.len(),
-            data.data_points.iter().all(typed_histogram_point_valid),
+            aggregation_temporality_valid(data.aggregation_temporality)
+                && data.data_points.iter().all(typed_histogram_point_valid),
         ),
         Some(proto::metric::Data::ExponentialHistogram(data)) => (
             "exponential-histogram",
             data.data_points.len(),
-            data.data_points
-                .iter()
-                .all(typed_exponential_histogram_point_valid),
+            aggregation_temporality_valid(data.aggregation_temporality)
+                && data
+                    .data_points
+                    .iter()
+                    .all(typed_exponential_histogram_point_valid),
         ),
         Some(proto::metric::Data::Summary(data)) => (
             "summary",
@@ -271,6 +275,10 @@ fn typed_metric_data(metric: &proto::Metric) -> (&'static str, usize, bool) {
         ),
         None => ("missing", 0, false),
     }
+}
+
+fn aggregation_temporality_valid(value: i32) -> bool {
+    matches!(value, 1 | 2)
 }
 
 fn typed_point_metadata_valid(
@@ -298,11 +306,16 @@ fn typed_histogram_point_valid(point: &proto::HistogramDataPoint) -> bool {
         point.time_unix_nano,
         point.flags,
     ) && point.bucket_counts.len() == point.explicit_bounds.len().saturating_add(1)
+        && finite_strictly_increasing(&point.explicit_bounds)
         && point
             .bucket_counts
             .iter()
             .try_fold(0_u64, |total, value| total.checked_add(*value))
             == Some(point.count)
+}
+
+fn finite_strictly_increasing(values: &[f64]) -> bool {
+    values.iter().all(|value| value.is_finite()) && values.windows(2).all(|pair| pair[0] < pair[1])
 }
 
 fn typed_exponential_histogram_point_valid(point: &proto::ExponentialHistogramDataPoint) -> bool {
@@ -720,14 +733,14 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                 let trace_id = text(json_field(span, "trace_id", "traceId"));
                 let parent_valid = parent_topology_valid(trace_id, span_id, &span_parents);
                 let id_count = span_index
-                    .get(&(trace_id.into(), span_id.into()))
+                    .get(&span_key(trace_id, span_id))
                     .copied()
                     .unwrap_or(0);
                 let parent_class = if !parent_valid {
                     "invalid"
                 } else if parent_id.is_empty() {
                     "root"
-                } else if span_index.contains_key(&(trace_id.into(), parent_id.into())) {
+                } else if span_index.contains_key(&span_key(trace_id, parent_id)) {
                     "child"
                 } else {
                     "external"
@@ -913,7 +926,7 @@ fn span_index(payloads: &[Value]) -> BTreeMap<(String, String), usize> {
                 let span_id = text(json_field(span, "span_id", "spanId"));
                 let trace_id = text(json_field(span, "trace_id", "traceId"));
                 index
-                    .entry((trace_id.into(), span_id.into()))
+                    .entry(span_key(trace_id, span_id))
                     .and_modify(|count| *count += 1)
                     .or_insert(1);
             }
@@ -931,8 +944,8 @@ fn span_parents(payloads: &[Value]) -> BTreeMap<(String, String), String> {
                 let trace_id = text(json_field(span, "trace_id", "traceId"));
                 let parent_id = text(json_field(span, "parent_span_id", "parentSpanId"));
                 parents
-                    .entry((trace_id.into(), span_id.into()))
-                    .or_insert_with(|| parent_id.into());
+                    .entry(span_key(trace_id, span_id))
+                    .or_insert_with(|| normalized_id(parent_id));
             }
         }
     }
@@ -945,13 +958,14 @@ fn parent_topology_valid(
     parents: &BTreeMap<(String, String), String>,
 ) -> bool {
     let mut seen = Vec::<String>::new();
-    let mut current = String::from(span_id);
+    let trace_id = normalized_id(trace_id);
+    let mut current = normalized_id(span_id);
     loop {
         if seen.iter().any(|span| span == &current) {
             return false;
         }
         seen.push(current.clone());
-        let Some(parent) = parents.get(&(String::from(trace_id), current)) else {
+        let Some(parent) = parents.get(&(trace_id.clone(), current)) else {
             return true;
         };
         if parent.is_empty() {
@@ -959,6 +973,14 @@ fn parent_topology_valid(
         }
         current = parent.clone();
     }
+}
+
+fn normalized_id(value: &str) -> String {
+    value.to_ascii_lowercase()
+}
+
+fn span_key(trace_id: &str, span_id: &str) -> (String, String) {
+    (normalized_id(trace_id), normalized_id(span_id))
 }
 
 struct Bucket {
@@ -996,10 +1018,7 @@ pub fn golden_candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String
             for span in array(group.get("spans")) {
                 let span_id = text(json_field(span, "span_id", "spanId"));
                 let trace_id = text(json_field(span, "trace_id", "traceId"));
-                if span_id.is_empty()
-                    || span_keys
-                        .insert((trace_id.into(), span_id.into()), ())
-                        .is_some()
+                if span_id.is_empty() || span_keys.insert(span_key(trace_id, span_id), ()).is_some()
                 {
                     return Err(format!(
                         "missing or duplicate span ID {span_id:?} in trace {trace_id:?}"
@@ -1045,7 +1064,7 @@ pub fn golden_candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String
                 let trace_id = text(json_field(span, "trace_id", "traceId"));
                 let parent = if parent_id.is_empty() {
                     "root"
-                } else if span_keys.contains_key(&(trace_id.into(), parent_id.into())) {
+                } else if span_keys.contains_key(&span_key(trace_id, parent_id)) {
                     "child"
                 } else {
                     "external"
@@ -1236,7 +1255,18 @@ fn json_metric_data(metric: &Value) -> (&'static str, usize, bool) {
         return ("missing", 0, false);
     };
     let points = array(json_field(value, "data_points", "dataPoints"));
-    (name, points.len(), points.iter().all(validator))
+    let temporality_valid = !matches!(name, "sum" | "histogram" | "exponential-histogram")
+        || try_integer(json_field(
+            value,
+            "aggregation_temporality",
+            "aggregationTemporality",
+        ))
+        .is_ok_and(|value| matches!(value, 1 | 2));
+    (
+        name,
+        points.len(),
+        temporality_valid && points.iter().all(validator),
+    )
 }
 
 fn json_point_metadata_valid(point: &Value) -> bool {
@@ -1287,11 +1317,22 @@ fn json_histogram_point_valid(point: &Value) -> bool {
     json_point_metadata_valid(point)
         && count >= 0
         && counts.len() == bounds.len().saturating_add(1)
-        && bounds.iter().all(|value| json_double(value).is_some())
+        && json_bounds_valid(bounds)
         && bucket_total == count
         && optional_json_double_valid(point.get("sum"))
         && optional_json_double_valid(point.get("min"))
         && optional_json_double_valid(point.get("max"))
+}
+
+fn json_bounds_valid(bounds: &[Value]) -> bool {
+    let mut previous = None;
+    bounds.iter().all(|value| {
+        json_double(value).is_some_and(|current| {
+            let increasing = current.is_finite() && previous.is_none_or(|value| value < current);
+            previous = Some(current);
+            increasing
+        })
+    })
 }
 
 fn json_exponential_histogram_point_valid(point: &Value) -> bool {

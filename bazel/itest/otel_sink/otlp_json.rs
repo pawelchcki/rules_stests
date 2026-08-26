@@ -209,12 +209,20 @@ fn validate_any_value(value: &Value) -> Result<(), String> {
             item.is_number() || matches!(item.as_str(), Some("NaN" | "Infinity" | "-Infinity"))
         }
         "array_value" | "arrayValue" => {
-            validate_object_field(value, name, name, validate_array_value)?;
-            true
+            if item.is_object() {
+                validate_array_value(item)?;
+                true
+            } else {
+                false
+            }
         }
         "kvlist_value" | "kvlistValue" => {
-            validate_object_field(value, name, name, validate_key_value_list)?;
-            true
+            if item.is_object() {
+                validate_key_value_list(item)?;
+                true
+            } else {
+                false
+            }
         }
         _ => unreachable!(),
     };

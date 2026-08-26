@@ -79,6 +79,13 @@ func main() {
 		[]byte("expected exactly one variant"),
 		[]byte(`{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{"stringValue":"ok","intValue":"5"}}]}]}]}`),
 	)
+	rejectJSON(
+		endpoint,
+		"/v1/logs",
+		"null structured AnyValue",
+		[]byte("unexpected JSON type"),
+		[]byte(`{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{"arrayValue":null}}]}]}]}`),
+	)
 
 	requests := []struct {
 		signal      string
@@ -87,6 +94,7 @@ func main() {
 		marker      string
 	}{
 		{"traces", "application/x-protobuf", []byte{0x0a, 0x00}, "trace-protobuf"},
+		{"traces", "application/json", []byte(`{"resourceSpans":[{"scopeSpans":[{"scope":{"name":"probe-uppercase"},"spans":[{"traceId":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","spanId":"ABCDEFABCDEFABCD","name":"parent","kind":1,"startTimeUnixNano":"1","endTimeUnixNano":"2"},{"traceId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","spanId":"FEDCBAFEDCBAFEDC","parentSpanId":"abcdefabcdefabcd","name":"child","kind":1,"startTimeUnixNano":"2","endTimeUnixNano":"3"}]}]}]}`), "trace-json-uppercase"},
 		{"metrics", "application/x-protobuf", []byte{
 			0x0a, 0x3e, 0x12, 0x3c, 0x0a, 0x11, 0x0a, 0x08,
 			'p', 'r', 'o', 'b', 'e', '-', 'p', 'b', 0x12, 0x05,
@@ -146,8 +154,11 @@ func main() {
 		if !hasHeader(record.Request.Headers, "x-otel-sink-probe", item.marker) {
 			fatal(fmt.Errorf("record %d did not preserve probe header", index))
 		}
-		if item.signal == "traces" && !bytes.Contains(record.Payload, []byte(`"resource_spans"`)) {
+		if item.marker == "trace-protobuf" && !bytes.Contains(record.Payload, []byte(`"resource_spans"`)) {
 			fatal(fmt.Errorf("trace protobuf was not semantically decoded: %s", record.Payload))
+		}
+		if item.marker == "trace-json-uppercase" && !bytes.Contains(record.Payload, []byte("probe-uppercase")) {
+			fatal(fmt.Errorf("trace JSON payload was not preserved: %s", record.Payload))
 		}
 		if item.signal != "traces" && !bytes.Contains(record.Payload, []byte("probe-")) {
 			fatal(fmt.Errorf("JSON payload was not preserved: %s", record.Payload))
@@ -187,11 +198,14 @@ func main() {
     (define (validate-probe capture)
       (let ((requests (cadr (assq 'requests capture)))
             (resources (cadr (assq 'resources capture)))
+            (spans (cadr (assq 'spans capture)))
             (metrics (cadr (assq 'metrics capture)))
             (logs (cadr (assq 'logs capture))))
-        (if (and (= (length requests) 3)
-                 (= (length resources) 3)
+        (if (and (= (length requests) 4)
+                 (= (length resources) 4)
                  (string=? (cadr (assq 'schema-url (car resources))) "")
+                 (= (length spans) 2)
+                 (member 'child (map (lambda (span) (cadr (assq 'parent-class span))) spans))
                  (= (length metrics) 1)
                  (= (cadr (assq 'data-points (car metrics))) 1)
                  (cadr (assq 'data-points-valid (car metrics)))
@@ -391,6 +405,13 @@ func main() {
 	malformedMetricDump := freezeCapture(endpoint, "/dump.scm", "malformed-metric Scheme capture")
 	if !bytes.Contains(malformedMetricDump, []byte("(data-type multiple)")) || !bytes.Contains(malformedMetricDump, []byte("(data-points-valid #f)")) {
 		fatal(fmt.Errorf("malformed metric point was absent from Scheme capture: %s", malformedMetricDump))
+	}
+	resetSink(endpoint)
+	invalidMetricSemantics := []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"metric.probe"},"metrics":[{"name":"missing-temporality","sum":{"dataPoints":[{"timeUnixNano":"2","asInt":"1"}],"aggregationTemporality":0,"isMonotonic":true}},{"name":"descending-bounds","histogram":{"dataPoints":[{"timeUnixNano":"3","count":"3","bucketCounts":["1","1","1"],"explicitBounds":[10,1]}],"aggregationTemporality":2}}]}]}]}`)
+	postJSON(endpoint, "/v1/metrics", "invalid metric semantics", invalidMetricSemantics)
+	invalidMetricDump := freezeCapture(endpoint, "/dump.scm", "invalid-metric-semantics Scheme capture")
+	if bytes.Count(invalidMetricDump, []byte("(data-points-valid #f)")) != 2 {
+		fatal(fmt.Errorf("invalid metric semantics were absent from Scheme capture: %s", invalidMetricDump))
 	}
 	resetSink(endpoint)
 	duplicateSpellingsTrace := []byte(`{"resourceSpans":[{"resource":{"attributes":[]},"scopeSpans":[{"scope":{"name":"duplicate.probe"},"spans":[{"trace_id":"dddddddddddddddddddddddddddddddd","traceId":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","spanId":"5555555555555555","name":"SELECT","kind":3,"startTimeUnixNano":"1","endTimeUnixNano":"2","status":{"code":0}}]}]}]}`)
