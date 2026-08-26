@@ -31,12 +31,12 @@
 
 (define expected-metric-scopes
   (list
-    '("opentelemetry.instrumentation.django" "0.65b0")
+    (list "opentelemetry.instrumentation.django" "0.65b0" python-schema-url)
     python-system-metrics-scope))
 
 (define expected-log-scopes
   (list
-    '("django.request" "" #f)
+    '("django.request" "" "" #f)
     python-logging-scope))
 
 (define (event-policy-for scenario)

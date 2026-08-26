@@ -45,6 +45,17 @@ func main() {
 	}
 	endpoint := fmt.Sprintf("http://127.0.0.1:%d", port)
 
+	mismatchedTrace := []byte(`{"resourceLogs":[]}`)
+	mismatchedResponse, err := http.Post(endpoint+"/v1/traces", "application/json", bytes.NewReader(mismatchedTrace))
+	if err != nil {
+		fatal(fmt.Errorf("send signal-mismatched trace: %w", err))
+	}
+	mismatchedBody, readErr := io.ReadAll(mismatchedResponse.Body)
+	mismatchedResponse.Body.Close()
+	if readErr != nil || mismatchedResponse.StatusCode != http.StatusBadRequest || !bytes.Contains(mismatchedBody, []byte("invalid OTLP traces JSON export field")) {
+		fatal(fmt.Errorf("signal-mismatched trace: HTTP %d: %s: %v", mismatchedResponse.StatusCode, mismatchedBody, readErr))
+	}
+
 	requests := []struct {
 		signal      string
 		contentType string
@@ -148,14 +159,17 @@ func main() {
             (logs (cadr (assq 'logs capture))))
         (if (and (= (length requests) 3)
                  (= (length resources) 3)
+                 (string=? (cadr (assq 'schema-url (car resources))) "")
                  (= (length metrics) 1)
                  (= (cadr (assq 'data-points (car metrics))) 1)
                  (cadr (assq 'data-points-valid (car metrics)))
                  (eq? (cadr (assq 'data-type (car metrics))) 'sum)
                  (string=? (cadr (assq 'scope-version (car metrics))) "1.2.3")
+                 (string=? (cadr (assq 'schema-url (car metrics))) "")
                  (null? (cadr (assq 'scope-attributes (car metrics))))
                  (= (length logs) 1)
                  (string=? (cadr (assq 'scope-version (car logs))) "4.5.6")
+                 (string=? (cadr (assq 'schema-url (car logs))) "")
                  (equal? (cadr (assq 'body (car logs)))
                          '(array ((bytes (1 2 3 255))
                                   (kvlist (("nested" (string "present"))))
@@ -275,8 +289,21 @@ func main() {
 	}
 	selfParentBody, readErr := io.ReadAll(selfParentCandidate.Body)
 	selfParentCandidate.Body.Close()
-	if readErr != nil || selfParentCandidate.StatusCode != http.StatusUnprocessableEntity || !bytes.Contains(selfParentBody, []byte("span is its own parent")) {
+	if readErr != nil || selfParentCandidate.StatusCode != http.StatusUnprocessableEntity || !bytes.Contains(selfParentBody, []byte("span parent topology is cyclic")) {
 		fatal(fmt.Errorf("self-parent candidate: HTTP %d: %s: %v", selfParentCandidate.StatusCode, selfParentBody, readErr))
+	}
+	resetSink(endpoint)
+	cyclicTrace := []byte(`{"resourceSpans":[{"resource":{"attributes":[]},"scopeSpans":[{"scope":{"name":"cycle.probe"},"spans":[{"traceId":"dddddddddddddddddddddddddddddddd","spanId":"1111111111111111","parentSpanId":"2222222222222222","name":"SELECT","kind":3,"startTimeUnixNano":"1","endTimeUnixNano":"2","status":{"code":0}},{"traceId":"dddddddddddddddddddddddddddddddd","spanId":"2222222222222222","parentSpanId":"1111111111111111","name":"SELECT","kind":3,"startTimeUnixNano":"1","endTimeUnixNano":"2","status":{"code":0}}]}]}]}`)
+	postJSON(endpoint, "/v1/traces", "cyclic trace", cyclicTrace)
+	freezeCapture(endpoint, "/dump", "cyclic capture")
+	cyclicCandidate, err := http.Get(endpoint + "/candidate?app=custom-app")
+	if err != nil {
+		fatal(fmt.Errorf("generate cyclic candidate: %w", err))
+	}
+	cyclicBody, readErr := io.ReadAll(cyclicCandidate.Body)
+	cyclicCandidate.Body.Close()
+	if readErr != nil || cyclicCandidate.StatusCode != http.StatusUnprocessableEntity || !bytes.Contains(cyclicBody, []byte("span parent topology is cyclic")) {
+		fatal(fmt.Errorf("cyclic candidate: HTTP %d: %s: %v", cyclicCandidate.StatusCode, cyclicBody, readErr))
 	}
 	resetSink(endpoint)
 	malformedCollectionTrace := []byte(`{"resourceSpans":[{"resource":{"attributes":[]},"scopeSpans":[{"scope":{"name":"collection.probe"},"spans":[{"traceId":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","spanId":"6666666666666666","name":"SELECT","kind":3,"startTimeUnixNano":"1","endTimeUnixNano":"2","links":"corrupt","status":{"code":0}}]}]}]}`)
@@ -311,10 +338,10 @@ func main() {
 		fatal(fmt.Errorf("malformed-string candidate: HTTP %d: %s: %v", malformedStringCandidate.StatusCode, malformedStringBody, readErr))
 	}
 	resetSink(endpoint)
-	malformedMetric := []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"metric.probe"},"metrics":[{"name":"broken","gauge":{"dataPoints":[{"timeUnixNano":"0","flags":2}]}}]}]}]}`)
+	malformedMetric := []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"metric.probe"},"metrics":[{"name":"broken","gauge":{"dataPoints":[{"timeUnixNano":"1","asInt":"1"}]},"sum":{"dataPoints":[{"timeUnixNano":"2","asInt":"2"}]}}]}]}]}`)
 	postJSON(endpoint, "/v1/metrics", "malformed metric", malformedMetric)
 	malformedMetricDump := freezeCapture(endpoint, "/dump.scm", "malformed-metric Scheme capture")
-	if !bytes.Contains(malformedMetricDump, []byte("(data-points-valid #f)")) {
+	if !bytes.Contains(malformedMetricDump, []byte("(data-type multiple)")) || !bytes.Contains(malformedMetricDump, []byte("(data-points-valid #f)")) {
 		fatal(fmt.Errorf("malformed metric point was absent from Scheme capture: %s", malformedMetricDump))
 	}
 	resetSink(endpoint)

@@ -3,9 +3,24 @@ package main
 import (
 	"bytes"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestEmitFailedCapture(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("TEST_UNDECLARED_OUTPUTS_DIR", root)
+	emitFailedCapture("django/errors_auth", []byte("capture"))
+	contents, err := os.ReadFile(filepath.Join(root, "django-errors_auth-failed-capture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "capture" {
+		t.Fatalf("capture = %q, want %q", contents, "capture")
+	}
+}
 
 func TestClassifyOTLPValidation(t *testing.T) {
 	assertion := &otlpAssertionFailure{cause: errors.New("span shape changed")}

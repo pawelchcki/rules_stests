@@ -20,6 +20,7 @@ pub fn capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
 
 fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
     let mut span_index = BTreeMap::<(String, String), usize>::new();
+    let mut span_parents = BTreeMap::<(String, String), String>::new();
     for record in records {
         if let Payload::Traces(payload) = &record.payload {
             for resource in &payload.resource_spans {
@@ -28,9 +29,12 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                         let span_id = hex_text(&span.span_id);
                         let trace_id = hex_text(&span.trace_id);
                         span_index
-                            .entry((trace_id, span_id))
+                            .entry((trace_id.clone(), span_id.clone()))
                             .and_modify(|count| *count += 1)
                             .or_insert(1);
+                        span_parents
+                            .entry((trace_id, span_id))
+                            .or_insert_with(|| hex_text(&span.parent_span_id));
                     }
                 }
             }
@@ -43,17 +47,32 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
         match &record.payload {
             Payload::Traces(payload) => {
                 for item in &payload.resource_spans {
-                    write_typed_resource(&mut output, &record.signal, item.resource.as_ref());
+                    write_typed_resource(
+                        &mut output,
+                        &record.signal,
+                        item.resource.as_ref(),
+                        &item.schema_url,
+                    );
                 }
             }
             Payload::Metrics(payload) => {
                 for item in &payload.resource_metrics {
-                    write_typed_resource(&mut output, &record.signal, item.resource.as_ref());
+                    write_typed_resource(
+                        &mut output,
+                        &record.signal,
+                        item.resource.as_ref(),
+                        &item.schema_url,
+                    );
                 }
             }
             Payload::Logs(payload) => {
                 for item in &payload.resource_logs {
-                    write_typed_resource(&mut output, &record.signal, item.resource.as_ref());
+                    write_typed_resource(
+                        &mut output,
+                        &record.signal,
+                        item.resource.as_ref(),
+                        &item.schema_url,
+                    );
                 }
             }
             Payload::Json(_) => unreachable!(),
@@ -84,12 +103,14 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                     );
                     write!(
                         output,
-                        ") (dropped-attributes {}))\n",
+                        ") (dropped-attributes {}) (schema-url ",
                         scope
                             .map(|scope| scope.dropped_attributes_count)
                             .unwrap_or(0)
                     )
                     .unwrap();
+                    string(&mut output, &group.schema_url);
+                    output.push_str("))\n");
                 }
             }
         }
@@ -105,7 +126,7 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                         .map(|scope| scope.name.as_str())
                         .unwrap_or("");
                     for span in &group.spans {
-                        write_typed_span(&mut output, scope_name, span, &span_index);
+                        write_typed_span(&mut output, scope_name, span, &span_index, &span_parents);
                     }
                 }
             }
@@ -136,6 +157,8 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                                 .map(|scope| scope.attributes.as_slice())
                                 .unwrap_or(&[]),
                         );
+                        output.push_str(") (schema-url ");
+                        string(&mut output, &group.schema_url);
                         output.push_str(") (name ");
                         string(&mut output, &metric.name);
                         write!(
@@ -176,6 +199,8 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                                 .map(|scope| scope.attributes.as_slice())
                                 .unwrap_or(&[]),
                         );
+                        output.push_str(") (schema-url ");
+                        string(&mut output, &group.schema_url);
                         write!(
                             output,
                             ") (scope-dropped-attributes {}) (time {}) (observed-time {}) (severity-number {}) (severity-text ",
@@ -368,7 +393,12 @@ fn write_requests(output: &mut String, records: &[Record]) {
     }
 }
 
-fn write_typed_resource(output: &mut String, signal: &str, resource: Option<&proto::Resource>) {
+fn write_typed_resource(
+    output: &mut String,
+    signal: &str,
+    resource: Option<&proto::Resource>,
+    schema_url: &str,
+) {
     output.push_str("  ((signal ");
     output.push_str(signal);
     output.push_str(") (attributes ");
@@ -380,7 +410,7 @@ fn write_typed_resource(output: &mut String, signal: &str, resource: Option<&pro
     );
     write!(
         output,
-        ") (dropped-attributes {}) (entity-refs {}))\n",
+        ") (dropped-attributes {}) (entity-refs {}) (schema-url ",
         resource
             .map(|resource| resource.dropped_attributes_count)
             .unwrap_or(0),
@@ -389,6 +419,8 @@ fn write_typed_resource(output: &mut String, signal: &str, resource: Option<&pro
             .unwrap_or(0)
     )
     .unwrap();
+    string(output, schema_url);
+    output.push_str("))\n");
 }
 
 fn write_typed_span(
@@ -396,11 +428,12 @@ fn write_typed_span(
     scope: &str,
     span: &proto::Span,
     index: &BTreeMap<(String, String), usize>,
+    parents: &BTreeMap<(String, String), String>,
 ) {
     let trace_id = hex_text(&span.trace_id);
     let span_id = hex_text(&span.span_id);
     let parent_id = hex_text(&span.parent_span_id);
-    let parent_valid = parent_id.is_empty() || parent_id != span_id;
+    let parent_valid = parent_topology_valid(&trace_id, &span_id, parents);
     let id_count = index
         .get(&(trace_id.clone(), span_id.clone()))
         .copied()
@@ -576,6 +609,7 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
     let collections_valid = !payloads.iter().any(has_malformed_json_collection);
     let strings_valid = !payloads.iter().any(has_malformed_json_string);
     let span_index = span_index(&payloads);
+    let span_parents = span_parents(&payloads);
     let mut output = String::from("((requests (\n");
     for record in records {
         output.push_str("  ((signal ");
@@ -614,14 +648,15 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
     }
     output.push_str("))\n(resources (\n");
     for (record, payload) in records.iter().zip(&payloads) {
-        for resource in resources(payload, &record.signal) {
+        for wrapper in resource_wrappers(payload, &record.signal) {
+            let resource = wrapper.get("resource").unwrap_or(&Value::Null);
             output.push_str("  ((signal ");
             output.push_str(&record.signal);
             output.push_str(") (attributes ");
             attributes(&mut output, resource.get("attributes"));
             write!(
                 output,
-                ") (dropped-attributes {}) (entity-refs {}))\n",
+                ") (dropped-attributes {}) (entity-refs {}) (schema-url ",
                 integer(json_field(
                     resource,
                     "dropped_attributes_count",
@@ -630,6 +665,11 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                 length(json_field(resource, "entity_refs", "entityRefs"))
             )
             .unwrap();
+            string(
+                &mut output,
+                text(json_field(wrapper, "schema_url", "schemaUrl")),
+            );
+            output.push_str("))\n");
         }
     }
     output.push_str("))\n(scopes (\n");
@@ -644,7 +684,7 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
             attributes(&mut output, scope.get("attributes"));
             write!(
                 output,
-                ") (dropped-attributes {}))\n",
+                ") (dropped-attributes {}) (schema-url ",
                 integer(json_field(
                     scope,
                     "dropped_attributes_count",
@@ -652,6 +692,11 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                 ))
             )
             .unwrap();
+            string(
+                &mut output,
+                text(json_field(group, "schema_url", "schemaUrl")),
+            );
+            output.push_str("))\n");
         }
     }
     output.push_str("))\n(spans (\n");
@@ -673,7 +718,7 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                 let span_id = text(json_field(span, "span_id", "spanId"));
                 let parent_id = text(json_field(span, "parent_span_id", "parentSpanId"));
                 let trace_id = text(json_field(span, "trace_id", "traceId"));
-                let parent_valid = parent_id.is_empty() || parent_id != span_id;
+                let parent_valid = parent_topology_valid(trace_id, span_id, &span_parents);
                 let id_count = span_index
                     .get(&(trace_id.into(), span_id.into()))
                     .copied()
@@ -758,6 +803,11 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                     string(&mut output, text(scope.get("version")));
                     output.push_str(") (scope-attributes ");
                     attributes(&mut output, scope.get("attributes"));
+                    output.push_str(") (schema-url ");
+                    string(
+                        &mut output,
+                        text(json_field(group, "schema_url", "schemaUrl")),
+                    );
                     output.push_str(") (name ");
                     string(&mut output, text(metric.get("name")));
                     write!(
@@ -790,6 +840,11 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                     string(&mut output, text(scope.get("version")));
                     output.push_str(") (scope-attributes ");
                     attributes(&mut output, scope.get("attributes"));
+                    output.push_str(") (schema-url ");
+                    string(
+                        &mut output,
+                        text(json_field(group, "schema_url", "schemaUrl")),
+                    );
                     write!(
                         output,
                         ") (scope-dropped-attributes {}) (time {}) (observed-time {}) (severity-number {}) (severity-text ",
@@ -867,6 +922,45 @@ fn span_index(payloads: &[Value]) -> BTreeMap<(String, String), usize> {
     index
 }
 
+fn span_parents(payloads: &[Value]) -> BTreeMap<(String, String), String> {
+    let mut parents = BTreeMap::new();
+    for payload in payloads {
+        for group in trace_groups(payload) {
+            for span in array(group.get("spans")) {
+                let span_id = text(json_field(span, "span_id", "spanId"));
+                let trace_id = text(json_field(span, "trace_id", "traceId"));
+                let parent_id = text(json_field(span, "parent_span_id", "parentSpanId"));
+                parents
+                    .entry((trace_id.into(), span_id.into()))
+                    .or_insert_with(|| parent_id.into());
+            }
+        }
+    }
+    parents
+}
+
+fn parent_topology_valid(
+    trace_id: &str,
+    span_id: &str,
+    parents: &BTreeMap<(String, String), String>,
+) -> bool {
+    let mut seen = Vec::<String>::new();
+    let mut current = String::from(span_id);
+    loop {
+        if seen.iter().any(|span| span == &current) {
+            return false;
+        }
+        seen.push(current.clone());
+        let Some(parent) = parents.get(&(String::from(trace_id), current)) else {
+            return true;
+        };
+        if parent.is_empty() {
+            return true;
+        }
+        current = parent.clone();
+    }
+}
+
 struct Bucket {
     count: usize,
     scope: String,
@@ -896,6 +990,7 @@ pub fn golden_candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String
         return Err("malformed OTLP JSON string field".into());
     }
     let mut span_keys = BTreeMap::<(String, String), ()>::new();
+    let parents = span_parents(&payloads);
     for payload in &payloads {
         for group in trace_groups(payload) {
             for span in array(group.get("spans")) {
@@ -909,6 +1004,9 @@ pub fn golden_candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String
                     return Err(format!(
                         "missing or duplicate span ID {span_id:?} in trace {trace_id:?}"
                     ));
+                }
+                if !parent_topology_valid(trace_id, span_id, &parents) {
+                    return Err("span parent topology is cyclic".into());
                 }
             }
         }
@@ -947,8 +1045,6 @@ pub fn golden_candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String
                 let trace_id = text(json_field(span, "trace_id", "traceId"));
                 let parent = if parent_id.is_empty() {
                     "root"
-                } else if parent_id == text(json_field(span, "span_id", "spanId")) {
-                    return Err("span is its own parent".into());
                 } else if span_keys.contains_key(&(trace_id.into(), parent_id.into())) {
                     "child"
                 } else {
@@ -1094,21 +1190,19 @@ fn trace_payloads<'a>(
         .map(|(_, payload)| payload)
 }
 
-fn resources<'a>(payload: &'a Value, signal: &str) -> Vec<&'a Value> {
+fn resource_wrappers<'a>(payload: &'a Value, signal: &str) -> Vec<&'a Value> {
     let (snake, camel) = match signal {
         "traces" => ("resource_spans", "resourceSpans"),
         "metrics" => ("resource_metrics", "resourceMetrics"),
         "logs" => ("resource_logs", "resourceLogs"),
         _ => return Vec::new(),
     };
-    array(json_field(payload, snake, camel))
-        .iter()
-        .map(|item| item.get("resource").unwrap_or(&Value::Null))
-        .collect()
+    array(json_field(payload, snake, camel)).iter().collect()
 }
 
 fn json_metric_data(metric: &Value) -> (&'static str, usize, bool) {
     let data = metric.get("data").unwrap_or(metric);
+    let mut selected = None;
     for (name, snake, camel, validator) in [
         (
             "gauge",
@@ -1132,11 +1226,17 @@ fn json_metric_data(metric: &Value) -> (&'static str, usize, bool) {
         ("summary", "summary", "summary", json_summary_point_valid),
     ] {
         if let Some(value) = json_field(data, snake, camel) {
-            let points = array(json_field(value, "data_points", "dataPoints"));
-            return (name, points.len(), points.iter().all(validator));
+            if selected.is_some() {
+                return ("multiple", 0, false);
+            }
+            selected = Some((name, value, validator));
         }
     }
-    ("missing", 0, false)
+    let Some((name, value, validator)) = selected else {
+        return ("missing", 0, false);
+    };
+    let points = array(json_field(value, "data_points", "dataPoints"));
+    (name, points.len(), points.iter().all(validator))
 }
 
 fn json_point_metadata_valid(point: &Value) -> bool {

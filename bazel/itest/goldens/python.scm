@@ -1,5 +1,6 @@
 (define-library (otel profile python-auto-v0-65b0)
   (export python-service-resource-attributes
+          python-schema-url
           python-sqlite-scope
           python-sqlalchemy-scope
           python-logging-scope
@@ -18,6 +19,8 @@
     ("service.instance.id" (uuid))
     ("telemetry.auto.version" (exact "0.65b0"))))
 
+(define python-schema-url "https://opentelemetry.io/schemas/1.11.0")
+
 (define (python-service-resource-attributes service-name)
   (append python-resource-attributes
           (list (list "service.name" (list 'exact service-name)))))
@@ -29,7 +32,8 @@
     ("db.system" "db.statement")
     ("db.system" "db.statement")
     (("db.system" (exact "sqlite")) ("db.statement" (nonempty)))
-    ()))
+    ()
+    "https://opentelemetry.io/schemas/1.11.0"))
 
 (define python-sqlalchemy-scope
   '(sqlalchemy
@@ -38,14 +42,18 @@
     ("db.name" "db.system")
     ("db.name" "db.system" "db.operation" "db.statement")
     (("db.system" (exact "sqlite")))
-    ()))
+    ()
+    "https://opentelemetry.io/schemas/1.11.0"))
 
-; Metric and log scope declarations are (instrumentation-name version [required?]).
+; Metric and log scope declarations are
+; (instrumentation-name version schema-url [required?]).
 (define python-logging-scope
-  '("opentelemetry.instrumentation.logging" ""))
+  '("opentelemetry.instrumentation.logging" "" ""))
 
 (define python-system-metrics-scope
-  '("opentelemetry.instrumentation.system_metrics" "0.65b0"))
+  '("opentelemetry.instrumentation.system_metrics"
+    "0.65b0"
+    "https://opentelemetry.io/schemas/1.11.0"))
 
 (define (python-http-scope alias instrumentation-name attributes string-rules integer-keys)
   (list alias
@@ -54,7 +62,8 @@
         attributes
         attributes
         string-rules
-        integer-keys))
+        integer-keys
+        python-schema-url))
 
 (define (python-database-bucket count scope status matcher parent)
   (list count scope 'client status matcher parent 'absent))

@@ -66,9 +66,20 @@
                       (hex-character? (string-ref value index)))
                   (loop (+ index 1)))))))
 
-(define (loopback-port? value)
-  (and (string-prefix? "127.0.0.1:" value)
-       (> (string-length value) (string-length "127.0.0.1:"))))
+(define loopback-prefix "127.0.0.1:")
+
+(define (decimal-string? value)
+  (and (> (string-length value) 0)
+       (let loop ((index 0))
+         (or (= index (string-length value))
+             (and (char-numeric? (string-ref value index))
+                  (loop (+ index 1)))))))
+
+(define (loopback-port-number value)
+  (and (string-prefix? loopback-prefix value)
+       (let* ((suffix (substring value (string-length loopback-prefix) (string-length value)))
+              (port (and (decimal-string? suffix) (string->number suffix))))
+         (and (integer? port) (> port 0) (<= port 65535) port))))
 
 (define (tagged-value? tag value)
   (and (pair? value) (eq? (car value) tag) (pair? (cdr value))))
@@ -84,7 +95,7 @@
        (or (and (tagged-value? 'string value) (> (string-length (cadr value)) 0))
            (and (tagged-value? 'long-string value) (> (cadr value) 0))))
       ((eq? kind 'loopback-port)
-       (and (tagged-value? 'string value) (loopback-port? (cadr value))))
+       (and (tagged-value? 'string value) (loopback-port-number (cadr value))))
       ((eq? kind 'integer)
        (tagged-value? 'integer value))
       (else (error "unknown value matcher" kind)))))
@@ -137,6 +148,7 @@
       (let ((attributes (field 'attributes resource)))
         (check (= (field 'dropped-attributes resource) 0) "resource dropped attributes")
         (check (= (field 'entity-refs resource) 0) "resource has entity references")
+        (check (string=? (field 'schema-url resource) "") "resource schema URL changed")
         (check (= (length attributes) (length expected)) "resource attribute set changed")
         (for-each
           (lambda (rule)
@@ -147,7 +159,7 @@
     resources))
 
 ; A scope declaration is:
-; (alias instrumentation-name version required-keys allowed-keys string-rules integer-keys)
+; (alias instrumentation-name version required-keys allowed-keys string-rules integer-keys schema-url)
 (define (scope-declaration expected-scopes name)
   (find (lambda (scope) (string=? (cadr scope) name)) expected-scopes))
 
@@ -163,7 +175,9 @@
         (check expected "unexpected instrumentation scope")
         (check (string=? (field 'version scope) (third expected)) "instrumentation scope version changed")
         (check (null? (field 'attributes scope)) "instrumentation scope attributes changed")
-        (check (= (field 'dropped-attributes scope) 0) "instrumentation scope dropped attributes")))
+        (check (= (field 'dropped-attributes scope) 0) "instrumentation scope dropped attributes")
+        (check (string=? (field 'schema-url scope) (list-ref expected 7))
+               "instrumentation scope schema URL changed")))
     scopes))
 
 (define (validate-span-attributes span expected-scopes)
@@ -189,7 +203,19 @@
       (lambda (key)
         (let ((value (attribute attributes key)))
           (check (and (tagged-value? 'integer value) (>= (cadr value) 0)) "span integer attribute mismatch")))
-      integer-keys)))
+      integer-keys)
+    (let ((host-rule (find (lambda (rule)
+                             (and (string=? (car rule) "net.host.name")
+                                  (eq? (car (cadr rule)) 'loopback-port)))
+                           string-rules)))
+      (if host-rule
+          (let ((host (attribute attributes "net.host.name"))
+                (port (attribute-integer attributes "net.host.port")))
+            (check (and (tagged-value? 'string host)
+                        (integer? port)
+                        (= (loopback-port-number (cadr host)) port))
+                   "loopback host and port attributes disagree"))
+          #t))))
 
 (define (kind-name value)
   (check (and (integer? value) (>= value 0) (< value 6)) "invalid span kind")
@@ -263,7 +289,7 @@
           (check (or (string=? (field 'parent-span-id span) "")
                      (valid-hex? (field 'parent-span-id span) 16))
                  "invalid parent span ID")
-          (check (field 'parent-valid span) "span is its own parent")
+          (check (field 'parent-valid span) "span parent topology is cyclic")
           (check (string=? (field 'trace-state span) "") "trace state changed")
           (check (and (> (field 'start span) 0) (>= (field 'end span) (field 'start span)))
                  "span timestamps are not ordered")
@@ -322,7 +348,7 @@
 (define (validate-signal-scopes expected items)
   (for-each
     (lambda (scope)
-      (if (or (= (length scope) 2) (third scope))
+      (if (or (= (length scope) 3) (list-ref scope 3))
           (check (> (count (lambda (item) (string=? (field 'scope item) (car scope))) items) 0)
                  "expected signal instrumentation scope is missing")
           #t))
@@ -333,6 +359,8 @@
         (check scope "unexpected signal instrumentation scope")
         (check (string=? (field 'scope-version item) (cadr scope))
                "signal instrumentation scope version changed")
+        (check (string=? (field 'schema-url item) (third scope))
+               "signal instrumentation scope schema URL changed")
         (check (null? (field 'scope-attributes item))
                "signal instrumentation scope attributes changed")
         (check (= (field 'scope-dropped-attributes item) 0)

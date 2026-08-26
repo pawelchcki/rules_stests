@@ -305,6 +305,7 @@ func validateTelemetryDump(client http.Client, baseURL, mode, goldenCase, profil
 		}
 	}
 	if !seen["traces"] || !seen["metrics"] || !seen["logs"] {
+		emitFailedCapture(goldenCase, contents)
 		return &otlpAssertionFailure{cause: fmt.Errorf("OTLP dump at %s lacks traces, metrics, or logs with service.name", baseURL)}
 	}
 	if mode == "candidate" {

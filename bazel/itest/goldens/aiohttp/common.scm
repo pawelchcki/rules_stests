@@ -32,9 +32,9 @@
 
 (define expected-metric-scopes
   (list
-    '("opentelemetry.instrumentation.aiohttp_server" "0.65b0")
-    '("opentelemetry.instrumentation.asyncio" "0.65b0")
-    '("opentelemetry.instrumentation.sqlalchemy" "0.65b0")
+    (list "opentelemetry.instrumentation.aiohttp_server" "0.65b0" python-schema-url)
+    '("opentelemetry.instrumentation.asyncio" "0.65b0" "")
+    (list "opentelemetry.instrumentation.sqlalchemy" "0.65b0" python-schema-url)
     python-system-metrics-scope))
 
 (define expected-log-scopes (list python-logging-scope))

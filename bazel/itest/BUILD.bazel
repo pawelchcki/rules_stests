@@ -322,6 +322,9 @@ realworld_hurl_test_suite(
     name = "django_otel_hurl_test",
     timeout = "moderate",
     otel_app = "django",
+    otel_flaky_cases = {
+        "errors_comments": "the Python histogram aggregator can emit a point whose start timestamp follows its collection timestamp under parallel load",
+    },
     otel_sink = ":otel_sink_service",
     service = ":django_otel_service",
 )
