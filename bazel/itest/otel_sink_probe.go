@@ -146,6 +146,24 @@ func main() {
 		fatal(fmt.Errorf("trailing request-line token: HTTP %d: %s: %v", trailingTokenResponse.StatusCode, trailingTokenBody, readErr))
 	}
 
+	tabRequestConnection, err := net.Dial("tcp", strings.TrimPrefix(endpoint, "http://"))
+	if err != nil {
+		fatal(fmt.Errorf("connect for tab-delimited request line: %w", err))
+	}
+	if _, err := fmt.Fprint(tabRequestConnection, "POST\t/v1/metrics\tHTTP/1.1\r\nHost: sink\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"); err != nil {
+		fatal(fmt.Errorf("send tab-delimited request line: %w", err))
+	}
+	tabRequestResponse, err := http.ReadResponse(bufio.NewReader(tabRequestConnection), &http.Request{Method: http.MethodPost})
+	if err != nil {
+		fatal(fmt.Errorf("read tab-delimited request-line response: %w", err))
+	}
+	tabRequestBody, readErr := io.ReadAll(tabRequestResponse.Body)
+	tabRequestResponse.Body.Close()
+	tabRequestConnection.Close()
+	if readErr != nil || tabRequestResponse.StatusCode != http.StatusBadRequest || !bytes.Contains(tabRequestBody, []byte("invalid HTTP/1.1 request line")) {
+		fatal(fmt.Errorf("tab-delimited request line: HTTP %d: %s: %v", tabRequestResponse.StatusCode, tabRequestBody, readErr))
+	}
+
 	invalidFieldConnection, err := net.Dial("tcp", strings.TrimPrefix(endpoint, "http://"))
 	if err != nil {
 		fatal(fmt.Errorf("connect for invalid HTTP field name: %w", err))
@@ -214,7 +232,7 @@ func main() {
 	oversizedJSONBody, readErr := io.ReadAll(oversizedJSONResponse.Body)
 	oversizedJSONResponse.Body.Close()
 	oversizedJSONConnection.Close()
-	if readErr != nil || oversizedJSONResponse.StatusCode != http.StatusBadRequest || !bytes.Contains(oversizedJSONBody, []byte("request body exceeds limit")) {
+	if readErr != nil || oversizedJSONResponse.StatusCode != http.StatusRequestEntityTooLarge || !bytes.Contains(oversizedJSONBody, []byte("request body exceeds limit")) {
 		fatal(fmt.Errorf("oversized JSON: HTTP %d: %s: %v", oversizedJSONResponse.StatusCode, oversizedJSONBody, readErr))
 	}
 
@@ -232,7 +250,7 @@ func main() {
 	oversizedProtobufBody, readErr := io.ReadAll(oversizedProtobufResponse.Body)
 	oversizedProtobufResponse.Body.Close()
 	oversizedProtobufConnection.Close()
-	if readErr != nil || oversizedProtobufResponse.StatusCode != http.StatusBadRequest || !bytes.Contains(oversizedProtobufBody, []byte("request body exceeds limit")) {
+	if readErr != nil || oversizedProtobufResponse.StatusCode != http.StatusRequestEntityTooLarge || !bytes.Contains(oversizedProtobufBody, []byte("request body exceeds limit")) {
 		fatal(fmt.Errorf("oversized protobuf: HTTP %d: %s: %v", oversizedProtobufResponse.StatusCode, oversizedProtobufBody, readErr))
 	}
 
@@ -360,7 +378,7 @@ func main() {
 	oversizedBody, readErr := io.ReadAll(oversizedResponse.Body)
 	oversizedResponse.Body.Close()
 	oversizedConnection.Close()
-	if readErr != nil || oversizedResponse.StatusCode != http.StatusBadRequest || !bytes.Contains(oversizedBody, []byte("validation source exceeds limit")) {
+	if readErr != nil || oversizedResponse.StatusCode != http.StatusRequestEntityTooLarge || !bytes.Contains(oversizedBody, []byte("validation source exceeds limit")) {
 		fatal(fmt.Errorf("oversized validation source: HTTP %d: %s: %v", oversizedResponse.StatusCode, oversizedBody, readErr))
 	}
 	validRule := []byte(`(define-library (probe contract)
@@ -635,6 +653,34 @@ func main() {
 	invalidStatusCandidate.Body.Close()
 	if readErr != nil || invalidStatusCandidate.StatusCode != http.StatusUnprocessableEntity || !bytes.Contains(invalidStatusCandidateBody, []byte("invalid span status 99")) {
 		fatal(fmt.Errorf("invalid-status candidate: HTTP %d: %s: %v", invalidStatusCandidate.StatusCode, invalidStatusCandidateBody, readErr))
+	}
+	resetSink(endpoint)
+	unnamedSpan := append([]byte{}, lengthDelimited(0x0a, bytes.Repeat([]byte{0x33}, 16))...)
+	unnamedSpan = append(unnamedSpan, lengthDelimited(0x12, bytes.Repeat([]byte{0x44}, 8))...)
+	unnamedSpan = append(unnamedSpan, 0x30, 0x02)
+	unnamedSpan = append(unnamedSpan, 0x39, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
+	unnamedSpan = append(unnamedSpan, 0x41, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
+	unnamedScope := lengthDelimited(0x0a, []byte("unnamed.probe"))
+	unnamedGroup := append(lengthDelimited(0x0a, unnamedScope), lengthDelimited(0x12, unnamedSpan)...)
+	unnamedRequest := lengthDelimited(0x0a, lengthDelimited(0x12, unnamedGroup))
+	unnamedResponse, err := http.Post(endpoint+"/v1/traces", "application/x-protobuf", bytes.NewReader(unnamedRequest))
+	if err != nil {
+		fatal(fmt.Errorf("send unnamed candidate trace: %w", err))
+	}
+	unnamedBody, readErr := io.ReadAll(unnamedResponse.Body)
+	unnamedResponse.Body.Close()
+	if readErr != nil || unnamedResponse.StatusCode != http.StatusOK {
+		fatal(fmt.Errorf("send unnamed candidate trace: HTTP %d: %s: %v", unnamedResponse.StatusCode, unnamedBody, readErr))
+	}
+	freezeCapture(endpoint, "/dump", "unnamed candidate capture")
+	unnamedCandidate, err := http.Get(endpoint + "/candidate?app=custom-app")
+	if err != nil {
+		fatal(fmt.Errorf("generate unnamed candidate: %w", err))
+	}
+	unnamedCandidateBody, readErr := io.ReadAll(unnamedCandidate.Body)
+	unnamedCandidate.Body.Close()
+	if readErr != nil || unnamedCandidate.StatusCode != http.StatusUnprocessableEntity || !bytes.Contains(unnamedCandidateBody, []byte("span has no name")) {
+		fatal(fmt.Errorf("unnamed candidate: HTTP %d: %s: %v", unnamedCandidate.StatusCode, unnamedCandidateBody, readErr))
 	}
 	resetSink(endpoint)
 	duplicateSpellingsTrace := []byte(`{"resourceSpans":[{"resource":{"attributes":[]},"scopeSpans":[{"scope":{"name":"duplicate.probe"},"spans":[{"trace_id":"dddddddddddddddddddddddddddddddd","traceId":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","spanId":"5555555555555555","name":"SELECT","kind":3,"startTimeUnixNano":"1","endTimeUnixNano":"2","status":{"code":0}}]}]}]}`)

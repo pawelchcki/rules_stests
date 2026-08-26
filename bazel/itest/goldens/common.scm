@@ -47,8 +47,11 @@
     (and (>= offset 0)
          (string=? suffix (substring value offset (string-length value))))))
 
+(define (ascii-digit? character)
+  (and (char>=? character #\0) (char<=? character #\9)))
+
 (define (hex-character? character)
-  (or (and (char>=? character #\0) (char<=? character #\9))
+  (or (ascii-digit? character)
       (and (char>=? character #\a) (char<=? character #\f))
       (and (char>=? character #\A) (char<=? character #\F))))
 
@@ -66,7 +69,7 @@
 
 (define (trace-key-character? character)
   (or (lower-alpha? character)
-      (char-numeric? character)
+      (ascii-digit? character)
       (memv character '(#\_ #\- #\* #\/))))
 
 (define (character-index value wanted)
@@ -91,7 +94,7 @@
              (valid-trace-key-part?
                (substring key 0 separator)
                241
-               (lambda (character) (or (lower-alpha? character) (char-numeric? character))))
+               (lambda (character) (or (lower-alpha? character) (ascii-digit? character))))
              (valid-trace-key-part?
                (substring key (+ separator 1) (string-length key))
                14
@@ -172,7 +175,7 @@
   (and (> (string-length value) 0)
        (let loop ((index 0))
          (or (= index (string-length value))
-             (and (char-numeric? (string-ref value index))
+             (and (ascii-digit? (string-ref value index))
                   (loop (+ index 1)))))))
 
 (define (loopback-port-number value)

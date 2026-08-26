@@ -1166,6 +1166,10 @@ pub fn golden_candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String
             let scope = scope_alias(app, scope_name)?;
             for span in array(group.get("spans")) {
                 saw_span = true;
+                let name = text(span.get("name"));
+                if name.is_empty() {
+                    return Err("span has no name".into());
+                }
                 let kind = enum_name(
                     try_integer(span.get("kind"))
                         .map_err(|()| String::from("invalid span kind value"))?,
@@ -1197,7 +1201,7 @@ pub fn golden_candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String
                 } else {
                     "external"
                 };
-                let matcher = name_matcher(app, &scope, text(span.get("name")));
+                let matcher = name_matcher(app, &scope, name);
                 let http_status = integer_attribute(span.get("attributes"), "http.status_code")?;
                 let key = format!(
                     "{scope}\u{1f}{kind}\u{1f}{status}\u{1f}{matcher}\u{1f}{parent}\u{1f}{http_status:?}"

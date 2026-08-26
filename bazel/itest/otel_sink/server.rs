@@ -79,7 +79,12 @@ fn handle_connection(
     let request = match read_request(connection) {
         Ok(request) => request,
         Err(error) => {
-            respond(connection, 400, "text/plain", error.as_bytes());
+            respond(
+                connection,
+                error.status(),
+                "text/plain",
+                error.message().as_bytes(),
+            );
             return;
         }
     };

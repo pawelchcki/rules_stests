@@ -17,6 +17,37 @@ pub(crate) struct Request {
     pub(crate) body: Vec<u8>,
 }
 
+pub(crate) struct RequestError {
+    status: u16,
+    message: String,
+}
+
+impl RequestError {
+    fn payload_too_large(message: String) -> Self {
+        Self {
+            status: 413,
+            message,
+        }
+    }
+
+    pub(crate) fn status(&self) -> u16 {
+        self.status
+    }
+
+    pub(crate) fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl From<String> for RequestError {
+    fn from(message: String) -> Self {
+        Self {
+            status: 400,
+            message,
+        }
+    }
+}
+
 impl Request {
     pub(crate) fn header(&self, wanted: &str) -> Option<&str> {
         self.headers
@@ -26,7 +57,7 @@ impl Request {
     }
 }
 
-pub(crate) fn read_request(connection: &OwnedFd) -> Result<Request, String> {
+pub(crate) fn read_request(connection: &OwnedFd) -> Result<Request, RequestError> {
     let mut bytes = Vec::with_capacity(8192);
     let header_end;
     loop {
@@ -35,13 +66,17 @@ pub(crate) fn read_request(connection: &OwnedFd) -> Result<Request, String> {
             break;
         }
         if bytes.len() >= MAX_REQUEST_BYTES {
-            return Err("request headers exceed limit".to_string());
+            return Err(RequestError::payload_too_large(
+                "request headers exceed limit".to_string(),
+            ));
         }
         let mut chunk = [0u8; 8192];
         let count = rustix::io::read(connection, &mut chunk)
             .map_err(|error| format!("read request: {error}"))?;
         if count == 0 {
-            return Err("connection closed before headers completed".to_string());
+            return Err("connection closed before headers completed"
+                .to_string()
+                .into());
         }
         bytes.extend_from_slice(&chunk[..count]);
     }
@@ -52,7 +87,7 @@ pub(crate) fn read_request(connection: &OwnedFd) -> Result<Request, String> {
     let mut request_line = lines
         .next()
         .ok_or_else(|| "missing HTTP request line".to_string())?
-        .split_whitespace();
+        .split(' ');
     let method = request_line.next().unwrap_or("").to_string();
     let path = request_line.next().unwrap_or("").to_string();
     let http_version = request_line.next().unwrap_or("").to_string();
@@ -61,7 +96,7 @@ pub(crate) fn read_request(connection: &OwnedFd) -> Result<Request, String> {
         || http_version != "HTTP/1.1"
         || request_line.next().is_some()
     {
-        return Err("invalid HTTP/1.1 request line".to_string());
+        return Err("invalid HTTP/1.1 request line".to_string().into());
     }
     let mut headers = Vec::new();
     for line in lines {
@@ -69,7 +104,7 @@ pub(crate) fn read_request(connection: &OwnedFd) -> Result<Request, String> {
             .split_once(':')
             .ok_or_else(|| "malformed HTTP header".to_string())?;
         if !valid_field_name(name) {
-            return Err("invalid HTTP field name".to_string());
+            return Err("invalid HTTP field name".to_string().into());
         }
         headers.push(Header {
             name: name.to_ascii_lowercase(),
@@ -80,7 +115,7 @@ pub(crate) fn read_request(connection: &OwnedFd) -> Result<Request, String> {
         .iter()
         .any(|header| header.name == "transfer-encoding")
     {
-        return Err("Transfer-Encoding is not supported".to_string());
+        return Err("Transfer-Encoding is not supported".to_string().into());
     }
     let content_length = headers
         .iter()
@@ -102,28 +137,36 @@ pub(crate) fn read_request(connection: &OwnedFd) -> Result<Request, String> {
         MAX_REQUEST_BYTES
     };
     if content_length > max_body_bytes {
-        return Err(if max_body_bytes == MAX_VALIDATION_SOURCE_BYTES {
-            "Scheme validation source exceeds limit".to_string()
-        } else {
-            "request body exceeds limit".to_string()
-        });
+        return Err(RequestError::payload_too_large(
+            if max_body_bytes == MAX_VALIDATION_SOURCE_BYTES {
+                "Scheme validation source exceeds limit".to_string()
+            } else {
+                "request body exceeds limit".to_string()
+            },
+        ));
     }
     let request_end = header_end
         .checked_add(content_length)
         .ok_or_else(|| "request body exceeds limit".to_string())?;
     if request_end > MAX_REQUEST_BYTES {
-        return Err("request body exceeds limit".to_string());
+        return Err(RequestError::payload_too_large(
+            "request body exceeds limit".to_string(),
+        ));
     }
     while bytes.len() < request_end {
         let mut chunk = [0u8; 8192];
         let count = rustix::io::read(connection, &mut chunk)
             .map_err(|error| format!("read request body: {error}"))?;
         if count == 0 {
-            return Err("connection closed before request body completed".to_string());
+            return Err("connection closed before request body completed"
+                .to_string()
+                .into());
         }
         bytes.extend_from_slice(&chunk[..count]);
         if bytes.len() > MAX_REQUEST_BYTES {
-            return Err("request body exceeds limit".to_string());
+            return Err(RequestError::payload_too_large(
+                "request body exceeds limit".to_string(),
+            ));
         }
     }
     Ok(Request {
