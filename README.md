@@ -111,6 +111,12 @@ infer success from console logs. The sink and instrumented Python servers use
 the `rules_itest` reuse-port handoff, so parallel shards retain their reserved
 ports until each service has bound them.
 
+The sink keeps its no-std entry point deliberately thin. `runtime` owns the
+allocator, ELF entry point, panic path, and compiler shims; `platform` contains
+raw console I/O; `server` routes requests; `http`, `otlp`, `storage`, and
+`stats` each own one boundary; `data` contains the shared serialized model;
+and `scheme`, `validation`, and `proto` remain independent domain modules.
+
 The snapshot is checked by Stak Scheme 0.12.23 inside the same no-std Rust
 binary. Bazel pins the Stak crates, compiler bytecode, and prelude. A golden is
 ordinary Scheme source: the embedded compiler reads it in memory for each

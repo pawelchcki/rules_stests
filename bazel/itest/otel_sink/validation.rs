@@ -1,4 +1,5 @@
-use super::{Payload, Record, proto};
+use crate::data::{Payload, Record};
+use crate::proto;
 use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::String;
@@ -634,15 +635,9 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                         integer(log.get("flags"))
                     )
                     .unwrap();
-                    string(
-                        &mut output,
-                        text(json_field(log, "trace_id", "traceId")),
-                    );
+                    string(&mut output, text(json_field(log, "trace_id", "traceId")));
                     output.push_str(") (span-id ");
-                    string(
-                        &mut output,
-                        text(json_field(log, "span_id", "spanId")),
-                    );
+                    string(&mut output, text(json_field(log, "span_id", "spanId")));
                     output.push_str(") (event-name ");
                     string(
                         &mut output,
@@ -911,10 +906,7 @@ fn json_metric_data(metric: &Value) -> (&'static str, usize) {
         ("summary", "summary", "summary"),
     ] {
         if let Some(value) = json_field(data, snake, camel) {
-            return (
-                name,
-                length(json_field(value, "data_points", "dataPoints")),
-            );
+            return (name, length(json_field(value, "data_points", "dataPoints")));
         }
     }
     ("missing", 0)

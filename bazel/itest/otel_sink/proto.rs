@@ -175,7 +175,7 @@ pub enum SpanKind {
 }
 
 pub mod span {
-    use super::{hex, KeyValue};
+    use super::{KeyValue, hex};
     use alloc::string::String;
     use alloc::vec::Vec;
     use serde::Serialize;
