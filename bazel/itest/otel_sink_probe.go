@@ -52,8 +52,8 @@ func main() {
 		marker      string
 	}{
 		{"traces", "application/x-protobuf", []byte{0x0a, 0x00}, "trace-protobuf"},
-		{"metrics", "application/json", []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"probe"},"metrics":[{"name":"probe-metric","sum":{"dataPoints":[{"timeUnixNano":"2","asInt":"1"}],"aggregationTemporality":2,"isMonotonic":true}}]}]}]}`), "metric-json"},
-		{"logs", "application/json", []byte(`{"resourceLogs":[{"resource":{"attributes":[]},"scopeLogs":[{"scope":{"name":"probe-log"},"logRecords":[{"timeUnixNano":"1","observedTimeUnixNano":"2","severityNumber":9,"severityText":"INFO","body":{"arrayValue":{"values":[{"bytesValue":"AQID/w=="},{"kvlistValue":{"values":[{"key":"nested","value":{"stringValue":"present"}}]}}]}},"attributes":[{"key":"probe.attribute","value":{"stringValue":"present"}}]}]}]}]}`), "log-json"},
+		{"metrics", "application/json", []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"probe","version":"1.2.3","attributes":[],"droppedAttributesCount":0},"metrics":[{"name":"probe-metric","sum":{"dataPoints":[{"timeUnixNano":"2","asInt":"1"}],"aggregationTemporality":2,"isMonotonic":true}}]}]}]}`), "metric-json"},
+		{"logs", "application/json", []byte(`{"resourceLogs":[{"resource":{"attributes":[]},"scopeLogs":[{"scope":{"name":"probe-log","version":"4.5.6","attributes":[],"droppedAttributesCount":0},"logRecords":[{"timeUnixNano":"1","observedTimeUnixNano":"2","severityNumber":9,"severityText":"INFO","body":{"arrayValue":{"values":[{"bytesValue":"AQID/w=="},{"kvlistValue":{"values":[{"key":"nested","value":{"stringValue":"present"}}]}},{"doubleValue":"NaN"}]}},"attributes":[{"key":"probe.attribute","value":{"stringValue":"present"}}]}]}]}]}`), "log-json"},
 	}
 	for _, item := range requests {
 		req, err := http.NewRequest(http.MethodPost, endpoint+"/v1/"+item.signal, bytes.NewReader(item.body))
@@ -150,11 +150,16 @@ func main() {
                  (= (length resources) 3)
                  (= (length metrics) 1)
                  (= (cadr (assq 'data-points (car metrics))) 1)
+                 (cadr (assq 'data-points-valid (car metrics)))
                  (eq? (cadr (assq 'data-type (car metrics))) 'sum)
+                 (string=? (cadr (assq 'scope-version (car metrics))) "1.2.3")
+                 (null? (cadr (assq 'scope-attributes (car metrics))))
                  (= (length logs) 1)
+                 (string=? (cadr (assq 'scope-version (car logs))) "4.5.6")
                  (equal? (cadr (assq 'body (car logs)))
                          '(array ((bytes (1 2 3 255))
-                                  (kvlist (("nested" (string "present")))))))
+                                  (kvlist (("nested" (string "present"))))
+                                  (double "NaN"))))
                  (= (length (cadr (assq 'attributes (car logs)))) 1))
             (display "standalone validation passed\n")
             (error "canonical OTLP JSON shape changed"))))))
@@ -288,6 +293,29 @@ func main() {
 	malformedCandidate.Body.Close()
 	if readErr != nil || malformedCandidate.StatusCode != http.StatusUnprocessableEntity || !bytes.Contains(malformedCandidateBody, []byte("malformed OTLP JSON collection")) {
 		fatal(fmt.Errorf("malformed-collection candidate: HTTP %d: %s: %v", malformedCandidate.StatusCode, malformedCandidateBody, readErr))
+	}
+	resetSink(endpoint)
+	malformedStringTrace := []byte(`{"resourceSpans":[{"resource":{"attributes":[]},"scopeSpans":[{"scope":{"name":"string.probe"},"spans":[{"traceId":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","spanId":"7777777777777777","traceState":0,"name":"SELECT","kind":3,"startTimeUnixNano":"1","endTimeUnixNano":"2","status":{"code":0}}]}]}]}`)
+	postJSON(endpoint, "/v1/traces", "malformed-string trace", malformedStringTrace)
+	malformedStringDump := freezeCapture(endpoint, "/dump.scm", "malformed-string Scheme capture")
+	if !bytes.Contains(malformedStringDump, []byte("(json-strings-valid #f)")) {
+		fatal(fmt.Errorf("malformed string was absent from Scheme capture: %s", malformedStringDump))
+	}
+	malformedStringCandidate, err := http.Get(endpoint + "/candidate?app=custom-app")
+	if err != nil {
+		fatal(fmt.Errorf("generate malformed-string candidate: %w", err))
+	}
+	malformedStringBody, readErr := io.ReadAll(malformedStringCandidate.Body)
+	malformedStringCandidate.Body.Close()
+	if readErr != nil || malformedStringCandidate.StatusCode != http.StatusUnprocessableEntity || !bytes.Contains(malformedStringBody, []byte("malformed OTLP JSON string field")) {
+		fatal(fmt.Errorf("malformed-string candidate: HTTP %d: %s: %v", malformedStringCandidate.StatusCode, malformedStringBody, readErr))
+	}
+	resetSink(endpoint)
+	malformedMetric := []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"metric.probe"},"metrics":[{"name":"broken","gauge":{"dataPoints":[{"timeUnixNano":"0","flags":2}]}}]}]}]}`)
+	postJSON(endpoint, "/v1/metrics", "malformed metric", malformedMetric)
+	malformedMetricDump := freezeCapture(endpoint, "/dump.scm", "malformed-metric Scheme capture")
+	if !bytes.Contains(malformedMetricDump, []byte("(data-points-valid #f)")) {
+		fatal(fmt.Errorf("malformed metric point was absent from Scheme capture: %s", malformedMetricDump))
 	}
 	resetSink(endpoint)
 	duplicateSpellingsTrace := []byte(`{"resourceSpans":[{"resource":{"attributes":[]},"scopeSpans":[{"scope":{"name":"duplicate.probe"},"spans":[{"trace_id":"dddddddddddddddddddddddddddddddd","traceId":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","spanId":"5555555555555555","name":"SELECT","kind":3,"startTimeUnixNano":"1","endTimeUnixNano":"2","status":{"code":0}}]}]}]}`)

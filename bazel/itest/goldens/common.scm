@@ -175,6 +175,10 @@
          (integer-keys (list-ref expected 6)))
     (check (every (lambda (entry) (member (car entry) allowed)) attributes) "unexpected span attribute")
     (for-each
+      (lambda (entry)
+        (check (= (attribute-count attributes (car entry)) 1) "span attribute is duplicated"))
+      attributes)
+    (for-each
       (lambda (key) (check (= (attribute-count attributes key) 1) "required span attribute missing or duplicated"))
       required)
     (for-each
@@ -198,6 +202,33 @@
 (define (scope-alias expected-scopes name)
   (car (scope-declaration expected-scopes name)))
 
+(define exception-attribute-keys
+  '("exception.type" "exception.message" "exception.stacktrace" "exception.escaped"))
+
+(define (nonempty-string-value? value)
+  (and (tagged-value? 'string value) (> (string-length (cadr value)) 0)))
+
+(define (validate-exception-attributes attributes)
+  (check (= (length attributes) (length exception-attribute-keys))
+         "exception attribute set changed")
+  (for-each
+    (lambda (key)
+      (check (= (attribute-count attributes key) 1)
+             "exception attribute missing or duplicated"))
+    exception-attribute-keys)
+  (check (nonempty-string-value? (attribute attributes "exception.type"))
+         "exception type is empty")
+  (check (nonempty-string-value? (attribute attributes "exception.message"))
+         "exception message is empty")
+  (let ((stacktrace (attribute attributes "exception.stacktrace")))
+    (check (and (tagged-value? 'long-string stacktrace)
+                (> (cadr stacktrace) 256))
+           "exception stacktrace is missing"))
+  (let ((escaped (attribute attributes "exception.escaped")))
+    (check (and (tagged-value? 'string escaped)
+                (member (cadr escaped) '("True" "False")))
+           "exception escaped flag is invalid")))
+
 (define (validate-events mode span)
   (let ((events (field 'events span)))
     (cond
@@ -214,7 +245,8 @@
                  (check (and (>= (field 'time event) (field 'start span))
                              (<= (field 'time event) (field 'end span)))
                         "event timestamp is outside its span")
-                 (check (= (field 'dropped-attributes event) 0) "event dropped attributes"))
+                 (check (= (field 'dropped-attributes event) 0) "event dropped attributes")
+                 (validate-exception-attributes (field 'attributes event)))
                events))))
       (else (error "unknown event policy" mode)))))
 
@@ -284,8 +316,32 @@
              "contract span bucket count changed"))
     buckets))
 
-(define (validate-metrics metrics)
+(define (signal-scope-declaration expected name)
+  (find (lambda (scope) (string=? (car scope) name)) expected))
+
+(define (validate-signal-scopes expected items)
+  (for-each
+    (lambda (scope)
+      (if (or (= (length scope) 2) (third scope))
+          (check (> (count (lambda (item) (string=? (field 'scope item) (car scope))) items) 0)
+                 "expected signal instrumentation scope is missing")
+          #t))
+    expected)
+  (for-each
+    (lambda (item)
+      (let ((scope (signal-scope-declaration expected (field 'scope item))))
+        (check scope "unexpected signal instrumentation scope")
+        (check (string=? (field 'scope-version item) (cadr scope))
+               "signal instrumentation scope version changed")
+        (check (null? (field 'scope-attributes item))
+               "signal instrumentation scope attributes changed")
+        (check (= (field 'scope-dropped-attributes item) 0)
+               "signal instrumentation scope dropped attributes")))
+    items))
+
+(define (validate-metrics expected-scopes metrics)
   (check (> (length metrics) 0) "capture contains no metrics")
+  (validate-signal-scopes expected-scopes metrics)
   (for-each
     (lambda (metric)
       (check (> (string-length (field 'scope metric)) 0) "metric has no instrumentation scope")
@@ -293,7 +349,8 @@
       (check (member (field 'data-type metric)
                      '(gauge sum histogram exponential-histogram summary))
              "metric has no supported data type")
-      (check (> (field 'data-points metric) 0) "metric has no data points"))
+      (check (> (field 'data-points metric) 0) "metric has no data points")
+      (check (field 'data-points-valid metric) "metric data point is malformed"))
     metrics))
 
 (define (valid-log-value? value)
@@ -325,8 +382,9 @@
       (check (= (attribute-count attributes (car entry)) 1) "log attribute is duplicated"))
     attributes))
 
-(define (validate-logs logs)
+(define (validate-logs expected-scopes logs)
   (check (> (length logs) 0) "capture contains no logs")
+  (validate-signal-scopes expected-scopes logs)
   (for-each
     (lambda (log)
       (let ((trace-id (field 'trace-id log))
@@ -348,7 +406,7 @@
                "log trace context is incomplete")))
     logs))
 
-(define (validate-capture expected-resource-attributes expected-scopes event-policy expected-span-buckets bucket-validator capture)
+(define (validate-capture expected-resource-attributes expected-scopes expected-metric-scopes expected-log-scopes event-policy expected-span-buckets bucket-validator capture)
   (let ((requests (field 'requests capture))
         (resources (field 'resources capture))
         (scopes (field 'scopes capture))
@@ -359,26 +417,32 @@
            "duplicate OTLP JSON field spellings")
     (check (field 'json-collections-valid capture)
            "malformed OTLP JSON collection")
+    (check (field 'json-strings-valid capture)
+           "malformed OTLP JSON string field")
     (validate-requests requests)
     (validate-resources expected-resource-attributes resources)
     (validate-scopes expected-scopes scopes)
     (validate-spans expected-scopes event-policy spans)
     (bucket-validator expected-span-buckets expected-scopes spans)
-    (validate-metrics metrics)
-    (validate-logs logs)
+    (validate-metrics expected-metric-scopes metrics)
+    (validate-logs expected-log-scopes logs)
     (display "valid OTLP capture\n")))
 
-(define (otel-validate-contract expected-resource-attributes expected-scopes event-policy expected-span-buckets capture)
+(define (otel-validate-contract expected-resource-attributes expected-scopes expected-metric-scopes expected-log-scopes event-policy expected-span-buckets capture)
   (validate-capture expected-resource-attributes
                     expected-scopes
+                    expected-metric-scopes
+                    expected-log-scopes
                     event-policy
                     expected-span-buckets
                     validate-contract-buckets
                     capture))
 
-(define (otel-validate-exact expected-resource-attributes expected-scopes event-policy expected-span-buckets capture)
+(define (otel-validate-exact expected-resource-attributes expected-scopes expected-metric-scopes expected-log-scopes event-policy expected-span-buckets capture)
   (validate-capture expected-resource-attributes
                     expected-scopes
+                    expected-metric-scopes
+                    expected-log-scopes
                     event-policy
                     expected-span-buckets
                     validate-buckets

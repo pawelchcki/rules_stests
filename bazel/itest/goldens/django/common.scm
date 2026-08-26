@@ -2,6 +2,8 @@
   (export implementation-profile
           expected-resource-attributes
           expected-scopes
+          expected-metric-scopes
+          expected-log-scopes
           event-policy-for
           server-scope
           render-server-span-name
@@ -26,6 +28,16 @@
       '("http.flavor" "http.host" "http.method" "http.route" "http.scheme" "http.server_name" "http.status_code" "http.url" "http.user_agent" "net.host.name" "net.host.port" "net.peer.ip")
       '(("http.scheme" (exact "http")) ("net.host.name" (loopback-port)) ("net.peer.ip" (exact "127.0.0.1")))
       '("net.host.port" "http.status_code"))))
+
+(define expected-metric-scopes
+  (list
+    '("opentelemetry.instrumentation.django" "0.65b0")
+    python-system-metrics-scope))
+
+(define expected-log-scopes
+  (list
+    '("django.request" "" #f)
+    python-logging-scope))
 
 (define (event-policy-for scenario)
   (list 'exception-on-error

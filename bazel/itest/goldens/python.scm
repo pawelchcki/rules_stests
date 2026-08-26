@@ -2,6 +2,8 @@
   (export python-service-resource-attributes
           python-sqlite-scope
           python-sqlalchemy-scope
+          python-logging-scope
+          python-system-metrics-scope
           python-http-scope
           python-database-bucket
           python-profile-shape
@@ -37,6 +39,13 @@
     ("db.name" "db.system" "db.operation" "db.statement")
     (("db.system" (exact "sqlite")))
     ()))
+
+; Metric and log scope declarations are (instrumentation-name version [required?]).
+(define python-logging-scope
+  '("opentelemetry.instrumentation.logging" ""))
+
+(define python-system-metrics-scope
+  '("opentelemetry.instrumentation.system_metrics" "0.65b0"))
 
 (define (python-http-scope alias instrumentation-name attributes string-rules integer-keys)
   (list alias

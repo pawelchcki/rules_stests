@@ -2,6 +2,8 @@
   (export implementation-profile
           expected-resource-attributes
           expected-scopes
+          expected-metric-scopes
+          expected-log-scopes
           event-policy-for
           server-scope
           render-server-span-name
@@ -27,6 +29,15 @@
       '("http.flavor" "http.host" "http.method" "http.route" "http.scheme" "http.server_name" "http.status_code" "http.target" "http.url" "http.user_agent" "net.host.name" "net.host.port")
       '(("http.scheme" (exact "http")) ("net.host.name" (exact "127.0.0.1")))
       '("net.host.port" "http.status_code"))))
+
+(define expected-metric-scopes
+  (list
+    '("opentelemetry.instrumentation.aiohttp_server" "0.65b0")
+    '("opentelemetry.instrumentation.asyncio" "0.65b0")
+    '("opentelemetry.instrumentation.sqlalchemy" "0.65b0")
+    python-system-metrics-scope))
+
+(define expected-log-scopes (list python-logging-scope))
 
 (define (event-policy-for scenario) '(empty 0))
 (define server-scope 'http)

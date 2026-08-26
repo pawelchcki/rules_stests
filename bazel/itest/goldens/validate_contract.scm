@@ -5,6 +5,8 @@
 
 (otel-validate-contract expected-resource-attributes
                         expected-scopes
+                        expected-metric-scopes
+                        expected-log-scopes
                         (event-policy-for scenario-name)
                         expected-span-buckets
                         (read))

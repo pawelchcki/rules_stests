@@ -116,20 +116,35 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
         if let Payload::Metrics(payload) = &record.payload {
             for resource in &payload.resource_metrics {
                 for group in &resource.scope_metrics {
-                    let scope = group
-                        .scope
-                        .as_ref()
-                        .map(|scope| scope.name.as_str())
-                        .unwrap_or("");
+                    let scope = group.scope.as_ref();
                     for metric in &group.metrics {
-                        let (data_type, data_points) = typed_metric_data(metric);
+                        let (data_type, data_points, data_points_valid) = typed_metric_data(metric);
                         output.push_str("  ((scope ");
-                        string(&mut output, scope);
+                        string(
+                            &mut output,
+                            scope.map(|scope| scope.name.as_str()).unwrap_or(""),
+                        );
+                        output.push_str(") (scope-version ");
+                        string(
+                            &mut output,
+                            scope.map(|scope| scope.version.as_str()).unwrap_or(""),
+                        );
+                        output.push_str(") (scope-attributes ");
+                        typed_attributes(
+                            &mut output,
+                            scope
+                                .map(|scope| scope.attributes.as_slice())
+                                .unwrap_or(&[]),
+                        );
                         output.push_str(") (name ");
                         string(&mut output, &metric.name);
                         write!(
                             output,
-                            ") (data-type {data_type}) (data-points {data_points}))\n"
+                            ") (scope-dropped-attributes {}) (data-type {data_type}) (data-points {data_points}) (data-points-valid {}))\n",
+                            scope
+                                .map(|scope| scope.dropped_attributes_count)
+                                .unwrap_or(0),
+                            if data_points_valid { "#t" } else { "#f" }
                         )
                         .unwrap();
                     }
@@ -142,18 +157,34 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
         if let Payload::Logs(payload) = &record.payload {
             for resource in &payload.resource_logs {
                 for group in &resource.scope_logs {
-                    let scope = group
-                        .scope
-                        .as_ref()
-                        .map(|scope| scope.name.as_str())
-                        .unwrap_or("");
+                    let scope = group.scope.as_ref();
                     for log in &group.log_records {
                         output.push_str("  ((scope ");
-                        string(&mut output, scope);
+                        string(
+                            &mut output,
+                            scope.map(|scope| scope.name.as_str()).unwrap_or(""),
+                        );
+                        output.push_str(") (scope-version ");
+                        string(
+                            &mut output,
+                            scope.map(|scope| scope.version.as_str()).unwrap_or(""),
+                        );
+                        output.push_str(") (scope-attributes ");
+                        typed_attributes(
+                            &mut output,
+                            scope
+                                .map(|scope| scope.attributes.as_slice())
+                                .unwrap_or(&[]),
+                        );
                         write!(
                             output,
-                            ") (time {}) (observed-time {}) (severity-number {}) (severity-text ",
-                            log.time_unix_nano, log.observed_time_unix_nano, log.severity_number
+                            ") (scope-dropped-attributes {}) (time {}) (observed-time {}) (severity-number {}) (severity-text ",
+                            scope
+                                .map(|scope| scope.dropped_attributes_count)
+                                .unwrap_or(0),
+                            log.time_unix_nano,
+                            log.observed_time_unix_nano,
+                            log.severity_number
                         )
                         .unwrap();
                         string(&mut output, &log.severity_text);
@@ -179,21 +210,123 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
         }
     }
     output.push_str(
-        "))\n(json-field-spellings-valid #t)\n(json-collections-valid #t))\n",
+        "))\n(json-field-spellings-valid #t)\n(json-collections-valid #t)\n(json-strings-valid #t))\n",
     );
     Ok(output.into_bytes())
 }
 
-fn typed_metric_data(metric: &proto::Metric) -> (&'static str, usize) {
+fn typed_metric_data(metric: &proto::Metric) -> (&'static str, usize, bool) {
     match metric.data.as_ref() {
-        Some(proto::metric::Data::Gauge(data)) => ("gauge", data.data_points.len()),
-        Some(proto::metric::Data::Sum(data)) => ("sum", data.data_points.len()),
-        Some(proto::metric::Data::Histogram(data)) => ("histogram", data.data_points.len()),
-        Some(proto::metric::Data::ExponentialHistogram(data)) => {
-            ("exponential-histogram", data.data_points.len())
-        }
-        Some(proto::metric::Data::Summary(data)) => ("summary", data.data_points.len()),
-        None => ("missing", 0),
+        Some(proto::metric::Data::Gauge(data)) => (
+            "gauge",
+            data.data_points.len(),
+            data.data_points.iter().all(typed_number_point_valid),
+        ),
+        Some(proto::metric::Data::Sum(data)) => (
+            "sum",
+            data.data_points.len(),
+            data.data_points.iter().all(typed_number_point_valid),
+        ),
+        Some(proto::metric::Data::Histogram(data)) => (
+            "histogram",
+            data.data_points.len(),
+            data.data_points.iter().all(typed_histogram_point_valid),
+        ),
+        Some(proto::metric::Data::ExponentialHistogram(data)) => (
+            "exponential-histogram",
+            data.data_points.len(),
+            data.data_points
+                .iter()
+                .all(typed_exponential_histogram_point_valid),
+        ),
+        Some(proto::metric::Data::Summary(data)) => (
+            "summary",
+            data.data_points.len(),
+            data.data_points.iter().all(typed_summary_point_valid),
+        ),
+        None => ("missing", 0, false),
+    }
+}
+
+fn typed_point_metadata_valid(
+    attributes: &[proto::KeyValue],
+    start: u64,
+    time: u64,
+    flags: u32,
+) -> bool {
+    time > 0 && start <= time && flags <= 1 && typed_key_values_valid(attributes)
+}
+
+fn typed_number_point_valid(point: &proto::NumberDataPoint) -> bool {
+    typed_point_metadata_valid(
+        &point.attributes,
+        point.start_time_unix_nano,
+        point.time_unix_nano,
+        point.flags,
+    ) && point.value.is_some()
+}
+
+fn typed_histogram_point_valid(point: &proto::HistogramDataPoint) -> bool {
+    typed_point_metadata_valid(
+        &point.attributes,
+        point.start_time_unix_nano,
+        point.time_unix_nano,
+        point.flags,
+    ) && point.bucket_counts.len() == point.explicit_bounds.len().saturating_add(1)
+        && point
+            .bucket_counts
+            .iter()
+            .try_fold(0_u64, |total, value| total.checked_add(*value))
+            == Some(point.count)
+}
+
+fn typed_exponential_histogram_point_valid(point: &proto::ExponentialHistogramDataPoint) -> bool {
+    let bucket_count = point
+        .positive
+        .iter()
+        .chain(point.negative.iter())
+        .flat_map(|buckets| buckets.bucket_counts.iter())
+        .copied()
+        .try_fold(0_u64, u64::checked_add);
+    typed_point_metadata_valid(
+        &point.attributes,
+        point.start_time_unix_nano,
+        point.time_unix_nano,
+        point.flags,
+    ) && bucket_count.and_then(|count| count.checked_add(point.zero_count)) == Some(point.count)
+}
+
+fn typed_summary_point_valid(point: &proto::SummaryDataPoint) -> bool {
+    typed_point_metadata_valid(
+        &point.attributes,
+        point.start_time_unix_nano,
+        point.time_unix_nano,
+        point.flags,
+    ) && point
+        .quantile_values
+        .iter()
+        .all(|value| (0.0..=1.0).contains(&value.quantile))
+}
+
+fn typed_key_values_valid(values: &[proto::KeyValue]) -> bool {
+    values.iter().enumerate().all(|(index, item)| {
+        !item.key.is_empty()
+            && typed_any_value_valid(item.value.as_ref())
+            && !values[..index]
+                .iter()
+                .any(|previous| previous.key == item.key)
+    })
+}
+
+fn typed_any_value_valid(value: Option<&proto::AnyValue>) -> bool {
+    match value.and_then(|value| value.value.as_ref()) {
+        Some(proto::any_value::Value::ArrayValue(value)) => value
+            .values
+            .iter()
+            .all(|item| typed_any_value_valid(Some(item))),
+        Some(proto::any_value::Value::KvlistValue(value)) => typed_key_values_valid(&value.values),
+        Some(_) => true,
+        None => false,
     }
 }
 
@@ -289,7 +422,12 @@ fn write_typed_span(
     string(output, &span_id);
     output.push_str(") (parent-span-id ");
     string(output, &parent_id);
-    write!(output, ") (id-count {id_count}) (parent-class {parent_class}) (parent-valid {}) (trace-state ", if parent_valid { "#t" } else { "#f" }).unwrap();
+    write!(
+        output,
+        ") (id-count {id_count}) (parent-class {parent_class}) (parent-valid {}) (trace-state ",
+        if parent_valid { "#t" } else { "#f" }
+    )
+    .unwrap();
     string(output, &span.trace_state);
     output.push_str(") (name ");
     string(output, &span.name);
@@ -383,7 +521,7 @@ fn typed_any_value(output: &mut String, value: Option<&proto::AnyValue>) {
         }),
         Some(proto::any_value::Value::DoubleValue(value)) => {
             output.push_str("(double ");
-            string(output, &format!("{value}"));
+            string(output, &double_text(*value));
             output.push(')');
         }
         Some(proto::any_value::Value::BytesValue(value)) => {
@@ -434,10 +572,9 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                 .map_err(|error| format!("serialize OTLP payload for Scheme: {error}"))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let field_spellings_valid = !payloads
-        .iter()
-        .any(has_duplicate_json_field_spellings);
+    let field_spellings_valid = !payloads.iter().any(has_duplicate_json_field_spellings);
     let collections_valid = !payloads.iter().any(has_malformed_json_collection);
+    let strings_valid = !payloads.iter().any(has_malformed_json_string);
     let span_index = span_index(&payloads);
     let mut output = String::from("((requests (\n");
     for record in records {
@@ -614,14 +751,24 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
             for group in array(json_field(resource, "scope_metrics", "scopeMetrics")) {
                 let scope = group.get("scope").unwrap_or(&Value::Null);
                 for metric in array(group.get("metrics")) {
-                    let (data_type, data_points) = json_metric_data(metric);
+                    let (data_type, data_points, data_points_valid) = json_metric_data(metric);
                     output.push_str("  ((scope ");
                     string(&mut output, text(scope.get("name")));
+                    output.push_str(") (scope-version ");
+                    string(&mut output, text(scope.get("version")));
+                    output.push_str(") (scope-attributes ");
+                    attributes(&mut output, scope.get("attributes"));
                     output.push_str(") (name ");
                     string(&mut output, text(metric.get("name")));
                     write!(
                         output,
-                        ") (data-type {data_type}) (data-points {data_points}))\n"
+                        ") (scope-dropped-attributes {}) (data-type {data_type}) (data-points {data_points}) (data-points-valid {}))\n",
+                        integer(json_field(
+                            scope,
+                            "dropped_attributes_count",
+                            "droppedAttributesCount"
+                        )),
+                        if data_points_valid { "#t" } else { "#f" }
                     )
                     .unwrap();
                 }
@@ -639,9 +786,18 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                 for log in array(json_field(group, "log_records", "logRecords")) {
                     output.push_str("  ((scope ");
                     string(&mut output, text(scope.get("name")));
+                    output.push_str(") (scope-version ");
+                    string(&mut output, text(scope.get("version")));
+                    output.push_str(") (scope-attributes ");
+                    attributes(&mut output, scope.get("attributes"));
                     write!(
                         output,
-                        ") (time {}) (observed-time {}) (severity-number {}) (severity-text ",
+                        ") (scope-dropped-attributes {}) (time {}) (observed-time {}) (severity-number {}) (severity-text ",
+                        integer(json_field(
+                            scope,
+                            "dropped_attributes_count",
+                            "droppedAttributesCount"
+                        )),
                         integer(json_field(log, "time_unix_nano", "timeUnixNano")),
                         integer(json_field(
                             log,
@@ -685,9 +841,10 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
     }
     write!(
         output,
-        "))\n(json-field-spellings-valid {})\n(json-collections-valid {}))\n",
+        "))\n(json-field-spellings-valid {})\n(json-collections-valid {})\n(json-strings-valid {}))\n",
         if field_spellings_valid { "#t" } else { "#f" },
-        if collections_valid { "#t" } else { "#f" }
+        if collections_valid { "#t" } else { "#f" },
+        if strings_valid { "#t" } else { "#f" }
     )
     .unwrap();
     Ok(output.into_bytes())
@@ -734,6 +891,9 @@ pub fn golden_candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String
     }
     if payloads.iter().any(has_malformed_json_collection) {
         return Err("malformed OTLP JSON collection".into());
+    }
+    if payloads.iter().any(has_malformed_json_string) {
+        return Err("malformed OTLP JSON string field".into());
     }
     let mut span_keys = BTreeMap::<(String, String), ()>::new();
     for payload in &payloads {
@@ -947,24 +1107,150 @@ fn resources<'a>(payload: &'a Value, signal: &str) -> Vec<&'a Value> {
         .collect()
 }
 
-fn json_metric_data(metric: &Value) -> (&'static str, usize) {
+fn json_metric_data(metric: &Value) -> (&'static str, usize, bool) {
     let data = metric.get("data").unwrap_or(metric);
-    for (name, snake, camel) in [
-        ("gauge", "gauge", "gauge"),
-        ("sum", "sum", "sum"),
-        ("histogram", "histogram", "histogram"),
+    for (name, snake, camel, validator) in [
+        (
+            "gauge",
+            "gauge",
+            "gauge",
+            json_number_point_valid as fn(&Value) -> bool,
+        ),
+        ("sum", "sum", "sum", json_number_point_valid),
+        (
+            "histogram",
+            "histogram",
+            "histogram",
+            json_histogram_point_valid,
+        ),
         (
             "exponential-histogram",
             "exponential_histogram",
             "exponentialHistogram",
+            json_exponential_histogram_point_valid,
         ),
-        ("summary", "summary", "summary"),
+        ("summary", "summary", "summary", json_summary_point_valid),
     ] {
         if let Some(value) = json_field(data, snake, camel) {
-            return (name, length(json_field(value, "data_points", "dataPoints")));
+            let points = array(json_field(value, "data_points", "dataPoints"));
+            return (name, points.len(), points.iter().all(validator));
         }
     }
-    ("missing", 0)
+    ("missing", 0, false)
+}
+
+fn json_point_metadata_valid(point: &Value) -> bool {
+    let Ok(start) = try_integer(json_field(
+        point,
+        "start_time_unix_nano",
+        "startTimeUnixNano",
+    )) else {
+        return false;
+    };
+    let Ok(time) = try_integer(json_field(point, "time_unix_nano", "timeUnixNano")) else {
+        return false;
+    };
+    let Ok(flags) = try_integer(point.get("flags")) else {
+        return false;
+    };
+    time > 0
+        && start >= 0
+        && start <= time
+        && (0..=1).contains(&flags)
+        && json_key_values_valid(point.get("attributes"))
+}
+
+fn json_number_point_valid(point: &Value) -> bool {
+    let as_double = json_field(point, "as_double", "asDouble");
+    let as_integer = json_field(point, "as_int", "asInt");
+    json_point_metadata_valid(point)
+        && match (as_double, as_integer) {
+            (Some(value), None) => json_double(value).is_some(),
+            (None, Some(value)) => try_integer(Some(value)).is_ok(),
+            _ => false,
+        }
+}
+
+fn json_histogram_point_valid(point: &Value) -> bool {
+    let counts = array(json_field(point, "bucket_counts", "bucketCounts"));
+    let bounds = array(json_field(point, "explicit_bounds", "explicitBounds"));
+    let Some(bucket_total) = json_integer_sum(counts) else {
+        return false;
+    };
+    let Ok(count) = try_integer(point.get("count")) else {
+        return false;
+    };
+    json_point_metadata_valid(point)
+        && count >= 0
+        && counts.len() == bounds.len().saturating_add(1)
+        && bounds.iter().all(|value| json_double(value).is_some())
+        && bucket_total == count
+        && optional_json_double_valid(point.get("sum"))
+        && optional_json_double_valid(point.get("min"))
+        && optional_json_double_valid(point.get("max"))
+}
+
+fn json_exponential_histogram_point_valid(point: &Value) -> bool {
+    let Some(positive) = json_bucket_total(point.get("positive")) else {
+        return false;
+    };
+    let Some(negative) = json_bucket_total(point.get("negative")) else {
+        return false;
+    };
+    let Ok(zero) = try_integer(json_field(point, "zero_count", "zeroCount")) else {
+        return false;
+    };
+    let Ok(count) = try_integer(point.get("count")) else {
+        return false;
+    };
+    json_point_metadata_valid(point)
+        && positive >= 0
+        && negative >= 0
+        && zero >= 0
+        && count >= 0
+        && positive
+            .checked_add(negative)
+            .and_then(|total| total.checked_add(zero))
+            == Some(count)
+        && optional_json_double_valid(point.get("sum"))
+        && optional_json_double_valid(point.get("min"))
+        && optional_json_double_valid(point.get("max"))
+}
+
+fn json_summary_point_valid(point: &Value) -> bool {
+    let Ok(count) = try_integer(point.get("count")) else {
+        return false;
+    };
+    let quantiles = array(json_field(point, "quantile_values", "quantileValues"));
+    json_point_metadata_valid(point)
+        && count >= 0
+        && point.get("sum").and_then(json_double).is_some()
+        && quantiles.iter().all(|value| {
+            value
+                .get("quantile")
+                .and_then(json_double)
+                .is_some_and(|quantile| (0.0..=1.0).contains(&quantile))
+                && value.get("value").and_then(json_double).is_some()
+        })
+}
+
+fn json_bucket_total(value: Option<&Value>) -> Option<i64> {
+    let Some(value) = value else {
+        return Some(0);
+    };
+    json_integer_sum(array(json_field(value, "bucket_counts", "bucketCounts")))
+}
+
+fn json_integer_sum(values: &[Value]) -> Option<i64> {
+    values.iter().try_fold(0_i64, |total, value| {
+        let value = try_integer(Some(value)).ok()?;
+        (value >= 0).then_some(())?;
+        total.checked_add(value)
+    })
+}
+
+fn optional_json_double_valid(value: Option<&Value>) -> bool {
+    value.is_none_or(|value| json_double(value).is_some())
 }
 
 fn trace_groups(payload: &Value) -> Vec<&Value> {
@@ -1013,10 +1299,10 @@ fn any_value(output: &mut String, value: Option<&Value>) {
             "(boolean #f)"
         });
     } else if let Some(value) =
-        json_field(value, "double_value", "doubleValue").and_then(Value::as_f64)
+        json_field(value, "double_value", "doubleValue").and_then(json_double)
     {
         output.push_str("(double ");
-        string(output, &format!("{value}"));
+        string(output, &double_text(value));
         output.push(')');
     } else if let Some(value) = json_field(value, "bytes_value", "bytesValue") {
         if let Some(bytes) = byte_value(value) {
@@ -1059,6 +1345,85 @@ fn any_value(output: &mut String, value: Option<&Value>) {
         }
     } else {
         output.push_str("(other)");
+    }
+}
+
+fn double_text(value: f64) -> String {
+    if value.is_nan() {
+        String::from("NaN")
+    } else if value.is_infinite() && value.is_sign_positive() {
+        String::from("Infinity")
+    } else if value.is_infinite() {
+        String::from("-Infinity")
+    } else {
+        format!("{value}")
+    }
+}
+
+fn json_double(value: &Value) -> Option<f64> {
+    value.as_f64().or_else(|| match value.as_str()? {
+        "NaN" => Some(f64::NAN),
+        "Infinity" => Some(f64::INFINITY),
+        "-Infinity" => Some(f64::NEG_INFINITY),
+        _ => None,
+    })
+}
+
+fn json_key_values_valid(value: Option<&Value>) -> bool {
+    let Some(values) = value else {
+        return true;
+    };
+    let Some(values) = values.as_array() else {
+        return false;
+    };
+    values.iter().enumerate().all(|(index, item)| {
+        let Some(key) = item.get("key").and_then(Value::as_str) else {
+            return false;
+        };
+        !key.is_empty()
+            && json_any_value_valid(item.get("value"))
+            && !values[..index]
+                .iter()
+                .any(|previous| previous.get("key").and_then(Value::as_str) == Some(key))
+    })
+}
+
+fn json_any_value_valid(value: Option<&Value>) -> bool {
+    let Some(value) = value.map(|value| value.get("value").unwrap_or(value)) else {
+        return false;
+    };
+    let variants = [
+        json_field(value, "string_value", "stringValue"),
+        json_field(value, "int_value", "intValue"),
+        json_field(value, "bool_value", "boolValue"),
+        json_field(value, "double_value", "doubleValue"),
+        json_field(value, "bytes_value", "bytesValue"),
+        json_field(value, "array_value", "arrayValue"),
+        json_field(value, "kvlist_value", "kvlistValue"),
+    ];
+    if variants.iter().filter(|variant| variant.is_some()).count() != 1 {
+        return false;
+    }
+    if let Some(value) = variants[0] {
+        value.is_string()
+    } else if let Some(value) = variants[1] {
+        try_integer(Some(value)).is_ok()
+    } else if let Some(value) = variants[2] {
+        value.is_boolean()
+    } else if let Some(value) = variants[3] {
+        json_double(value).is_some()
+    } else if let Some(value) = variants[4] {
+        byte_value(value).is_some()
+    } else if let Some(value) = variants[5] {
+        value.get("values").is_none_or(|values| {
+            values
+                .as_array()
+                .is_some_and(|items| items.iter().all(|item| json_any_value_valid(Some(item))))
+        })
+    } else if let Some(value) = variants[6] {
+        json_key_values_valid(value.get("values"))
+    } else {
+        false
     }
 }
 
@@ -1212,17 +1577,15 @@ fn json_field<'a>(value: &'a Value, snake: &str, camel: &str) -> Option<&'a Valu
 fn has_duplicate_json_field_spellings(value: &Value) -> bool {
     match value {
         Value::Array(values) => values.iter().any(has_duplicate_json_field_spellings),
-        Value::Object(fields) => {
-            fields.iter().any(|(name, value)| {
-                let duplicate = if name.contains('_') {
-                    let camel = lower_camel_case(name);
-                    camel != *name && fields.contains_key(camel.as_str())
-                } else {
-                    false
-                };
-                duplicate || has_duplicate_json_field_spellings(value)
-            })
-        }
+        Value::Object(fields) => fields.iter().any(|(name, value)| {
+            let duplicate = if name.contains('_') {
+                let camel = lower_camel_case(name);
+                camel != *name && fields.contains_key(camel.as_str())
+            } else {
+                false
+            };
+            duplicate || has_duplicate_json_field_spellings(value)
+        }),
         _ => false,
     }
 }
@@ -1236,6 +1599,44 @@ fn has_malformed_json_collection(value: &Value) -> bool {
         }),
         _ => false,
     }
+}
+
+fn has_malformed_json_string(value: &Value) -> bool {
+    match value {
+        Value::Array(values) => values.iter().any(has_malformed_json_string),
+        Value::Object(fields) => fields.iter().any(|(name, value)| {
+            (is_json_string_field(name) && !value.is_string()) || has_malformed_json_string(value)
+        }),
+        _ => false,
+    }
+}
+
+fn is_json_string_field(name: &str) -> bool {
+    matches!(
+        name,
+        "description"
+            | "event_name"
+            | "eventName"
+            | "key"
+            | "message"
+            | "name"
+            | "parent_span_id"
+            | "parentSpanId"
+            | "schema_url"
+            | "schemaUrl"
+            | "severity_text"
+            | "severityText"
+            | "span_id"
+            | "spanId"
+            | "string_value"
+            | "stringValue"
+            | "trace_id"
+            | "traceId"
+            | "trace_state"
+            | "traceState"
+            | "unit"
+            | "version"
+    )
 }
 
 fn is_json_collection_field(name: &str) -> bool {
