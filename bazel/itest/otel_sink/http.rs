@@ -3,7 +3,7 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use rustix::fd::OwnedFd;
-use rustix::net::{SendFlags, send};
+use rustix::net::{send, SendFlags};
 
 const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 const MAX_VALIDATION_SOURCE_BYTES: usize = 256 * 1024;
@@ -76,7 +76,12 @@ pub(crate) fn read_request(connection: &OwnedFd) -> Result<Request, String> {
     let content_length = headers
         .iter()
         .find(|header| header.name == "content-length")
-        .map(|header| header.value.parse::<usize>())
+        .map(|header| {
+            if header.value.is_empty() || !header.value.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(());
+            }
+            header.value.parse::<usize>().map_err(|_| ())
+        })
         .transpose()
         .map_err(|_| "invalid Content-Length".to_string())?
         .unwrap_or(0);

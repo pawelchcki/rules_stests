@@ -112,6 +112,24 @@ func main() {
 		fatal(fmt.Errorf("duplicate content encoding: HTTP %d: %s: %v", duplicateEncodingResponse.StatusCode, duplicateEncodingBody, readErr))
 	}
 
+	nonDecimalLengthConnection, err := net.Dial("tcp", strings.TrimPrefix(endpoint, "http://"))
+	if err != nil {
+		fatal(fmt.Errorf("connect for non-decimal Content-Length: %w", err))
+	}
+	if _, err := fmt.Fprint(nonDecimalLengthConnection, "POST /v1/metrics HTTP/1.1\r\nHost: sink\r\nContent-Type: application/json\r\nContent-Length: +2\r\nConnection: close\r\n\r\n{}"); err != nil {
+		fatal(fmt.Errorf("send non-decimal Content-Length: %w", err))
+	}
+	nonDecimalLengthResponse, err := http.ReadResponse(bufio.NewReader(nonDecimalLengthConnection), &http.Request{Method: http.MethodPost})
+	if err != nil {
+		fatal(fmt.Errorf("read non-decimal Content-Length response: %w", err))
+	}
+	nonDecimalLengthBody, readErr := io.ReadAll(nonDecimalLengthResponse.Body)
+	nonDecimalLengthResponse.Body.Close()
+	nonDecimalLengthConnection.Close()
+	if readErr != nil || nonDecimalLengthResponse.StatusCode != http.StatusBadRequest || !bytes.Contains(nonDecimalLengthBody, []byte("invalid Content-Length")) {
+		fatal(fmt.Errorf("non-decimal Content-Length: HTTP %d: %s: %v", nonDecimalLengthResponse.StatusCode, nonDecimalLengthBody, readErr))
+	}
+
 	partialConnection, err := net.Dial("tcp", strings.TrimPrefix(endpoint, "http://"))
 	if err != nil {
 		fatal(fmt.Errorf("connect partial request: %w", err))
@@ -472,10 +490,10 @@ func main() {
 		fatal(fmt.Errorf("defaulted metric fields were rejected by Scheme projection: %s", defaultedMetricsDump))
 	}
 	resetSink(endpoint)
-	invalidMetricSemantics := []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"metric.probe"},"metrics":[{"name":"missing-temporality","sum":{"dataPoints":[{"timeUnixNano":"2","asInt":"1"}],"aggregationTemporality":0,"isMonotonic":true}},{"name":"descending-bounds","histogram":{"dataPoints":[{"timeUnixNano":"3","count":"3","bucketCounts":["1","1","1"],"explicitBounds":[10,1]}],"aggregationTemporality":2}},{"name":"invalid-exemplar","gauge":{"dataPoints":[{"timeUnixNano":"4","asInt":"1","exemplars":[{"timeUnixNano":"0"}]}]}},{"name":"invalid-exponential-mapping","exponentialHistogram":{"dataPoints":[{"timeUnixNano":"5","count":"0","scale":21,"zeroThreshold":-1}],"aggregationTemporality":2}},{"name":"inverted-extrema","histogram":{"dataPoints":[{"timeUnixNano":"6","count":"0","bucketCounts":["0"],"explicitBounds":[],"min":2,"max":1}],"aggregationTemporality":2}},{"name":"no-recorded-value","gauge":{"dataPoints":[{"timeUnixNano":"7","asInt":"1","flags":1}]}}]}]}]}`)
+	invalidMetricSemantics := []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"metric.probe"},"metrics":[{"name":"missing-temporality","sum":{"dataPoints":[{"timeUnixNano":"2","asInt":"1"}],"aggregationTemporality":0,"isMonotonic":true}},{"name":"descending-bounds","histogram":{"dataPoints":[{"timeUnixNano":"3","count":"3","bucketCounts":["1","1","1"],"explicitBounds":[10,1]}],"aggregationTemporality":2}},{"name":"invalid-exemplar","gauge":{"dataPoints":[{"timeUnixNano":"4","asInt":"1","exemplars":[{"timeUnixNano":"0"}]}]}},{"name":"invalid-exponential-mapping","exponentialHistogram":{"dataPoints":[{"timeUnixNano":"5","count":"0","scale":21,"zeroThreshold":-1}],"aggregationTemporality":2}},{"name":"inverted-extrema","histogram":{"dataPoints":[{"timeUnixNano":"6","count":"0","bucketCounts":["0"],"explicitBounds":[],"min":2,"max":1}],"aggregationTemporality":2}},{"name":"no-recorded-value","gauge":{"dataPoints":[{"timeUnixNano":"7","asInt":"1","flags":1}]}},{"name":"unsorted-summary","summary":{"dataPoints":[{"timeUnixNano":"8","count":"2","sum":3,"quantileValues":[{"quantile":0.9,"value":1},{"quantile":0.5,"value":2}]}]}}]}]}]}`)
 	postJSON(endpoint, "/v1/metrics", "invalid metric semantics", invalidMetricSemantics)
 	invalidMetricDump := freezeCapture(endpoint, "/dump.scm", "invalid-metric-semantics Scheme capture")
-	if bytes.Count(invalidMetricDump, []byte("(data-points-valid #f)")) != 6 {
+	if bytes.Count(invalidMetricDump, []byte("(data-points-valid #f)")) != 7 {
 		fatal(fmt.Errorf("invalid metric semantics were absent from Scheme capture: %s", invalidMetricDump))
 	}
 	resetSink(endpoint)

@@ -270,7 +270,17 @@
               (check (= (attribute-count attributes key) 1) "resource attribute missing or duplicated")
               (check (matches-value? matcher (attribute attributes key)) "resource attribute mismatch")))
           expected)))
-    resources))
+    resources)
+  (let ((instance-rule (assoc "service.instance.id" expected)))
+    (if instance-rule
+        (let ((instance-id (attribute (field 'attributes (car resources)) "service.instance.id")))
+          (for-each
+            (lambda (resource)
+              (check (equal? (attribute (field 'attributes resource) "service.instance.id")
+                             instance-id)
+                     "service instance ID changed across signals"))
+            resources))
+        #t)))
 
 ; A scope declaration is:
 ; (alias instrumentation-name version required-keys allowed-keys string-rules integer-keys schema-url)

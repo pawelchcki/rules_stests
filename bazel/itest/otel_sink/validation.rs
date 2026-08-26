@@ -438,10 +438,17 @@ fn typed_summary_point_valid(point: &proto::SummaryDataPoint) -> bool {
         point.start_time_unix_nano,
         point.time_unix_nano,
         point.flags,
-    ) && point
-        .quantile_values
-        .iter()
-        .all(|value| (0.0..=1.0).contains(&value.quantile))
+    ) && quantiles_strictly_increasing(point.quantile_values.iter().map(|value| value.quantile))
+}
+
+fn quantiles_strictly_increasing(mut quantiles: impl Iterator<Item = f64>) -> bool {
+    let mut previous = None;
+    quantiles.all(|quantile| {
+        let valid =
+            (0.0..=1.0).contains(&quantile) && previous.is_none_or(|previous| previous < quantile);
+        previous = Some(quantile);
+        valid
+    })
 }
 
 fn typed_key_values_valid(values: &[proto::KeyValue]) -> bool {
@@ -1542,15 +1549,18 @@ fn json_summary_point_valid(point: &Value) -> bool {
         return false;
     };
     let quantiles = array(json_field(point, "quantile_values", "quantileValues"));
+    let mut previous = None;
     json_point_metadata_valid(point)
         && count >= 0
         && optional_json_double_valid(point.get("sum"))
         && quantiles.iter().all(|value| {
-            value
-                .get("quantile")
-                .and_then(json_double)
-                .is_some_and(|quantile| (0.0..=1.0).contains(&quantile))
-                && value.get("value").and_then(json_double).is_some()
+            let quantile = value.get("quantile").and_then(json_double);
+            let valid = quantile.is_some_and(|quantile| {
+                (0.0..=1.0).contains(&quantile)
+                    && previous.is_none_or(|previous| previous < quantile)
+            }) && value.get("value").and_then(json_double).is_some();
+            previous = quantile;
+            valid
         })
 }
 
