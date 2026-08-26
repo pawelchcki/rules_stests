@@ -50,8 +50,8 @@ func main() {
 		marker      string
 	}{
 		{"traces", "application/x-protobuf", []byte{0x0a, 0x00}, "trace-protobuf"},
-		{"metrics", "application/json", []byte(`{"resourceMetrics":[{"schemaUrl":"probe-metric"}]}`), "metric-json"},
-		{"logs", "application/json", []byte(`{"resourceLogs":[{"schemaUrl":"probe-log"}]}`), "log-json"},
+		{"metrics", "application/json", []byte(`{"resourceMetrics":[{"resource":{"attributes":[]},"scopeMetrics":[{"scope":{"name":"probe"},"metrics":[{"name":"probe-metric"}]}]}]}`), "metric-json"},
+		{"logs", "application/json", []byte(`{"resourceLogs":[{"resource":{"attributes":[]},"scopeLogs":[{"scope":{"name":"probe-log"},"logRecords":[{"timeUnixNano":"1","observedTimeUnixNano":"2","severityNumber":9,"severityText":"INFO"}]}]}]}`), "log-json"},
 	}
 	for _, item := range requests {
 		req, err := http.NewRequest(http.MethodPost, endpoint+"/v1/"+item.signal, bytes.NewReader(item.body))
@@ -108,7 +108,52 @@ func main() {
 			fatal(fmt.Errorf("JSON payload was not preserved: %s", record.Payload))
 		}
 	}
+	validRule := []byte(`(define-library (probe contract)
+  (export validate-probe)
+  (import (scheme base) (scheme write))
+  (begin
+    (define (validate-probe capture)
+      (let ((requests (cadr (assq 'requests capture)))
+            (metrics (cadr (assq 'metrics capture)))
+            (logs (cadr (assq 'logs capture))))
+        (if (and (= (length requests) 3)
+                 (= (length metrics) 1)
+                 (= (length logs) 1))
+            (display "standalone validation passed\n")
+            (error "canonical OTLP JSON shape changed"))))))
+(import (scheme base) (scheme read) (probe contract))
+(validate-probe (read))`)
+	if output, status, err := validateScheme(endpoint, validRule); err != nil {
+		fatal(err)
+	} else if status != http.StatusOK || !bytes.Contains(output, []byte("standalone validation passed")) {
+		fatal(fmt.Errorf("valid Scheme rule returned HTTP %d: %s", status, output))
+	}
+	if output, status, err := validateScheme(endpoint, []byte(`(import (scheme base)) (error "intentional rejection")`)); err != nil {
+		fatal(err)
+	} else if status != http.StatusUnprocessableEntity || !bytes.Contains(output, []byte("intentional rejection")) {
+		fatal(fmt.Errorf("invalid Scheme rule returned HTTP %d: %s", status, output))
+	}
+	if output, status, err := validateScheme(endpoint, []byte(`(import (scheme base)) (let loop () (loop))`)); err != nil {
+		fatal(err)
+	} else if status != http.StatusUnprocessableEntity || !bytes.Contains(output, []byte("sandbox budget")) {
+		fatal(fmt.Errorf("nonterminating Scheme rule returned HTTP %d: %s", status, output))
+	}
 	fmt.Printf("OTLP sink accepted and described traces, metrics, and logs at %s\n", endpoint)
+}
+
+func validateScheme(endpoint string, source []byte) ([]byte, int, error) {
+	request, err := http.NewRequest(http.MethodPost, endpoint+"/validate", bytes.NewReader(source))
+	if err != nil {
+		return nil, 0, err
+	}
+	request.Header.Set("Content-Type", "text/x-scheme")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer response.Body.Close()
+	output, err := io.ReadAll(response.Body)
+	return output, response.StatusCode, err
 }
 
 func hasHeader(headers []sinkHeader, name, value string) bool {
