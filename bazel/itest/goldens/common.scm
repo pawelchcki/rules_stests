@@ -478,8 +478,8 @@
 
 (define valid-log-value? valid-attribute-value?)
 
-(define (validate-log-attributes attributes)
-  (check (> (length attributes) 0) "log has no attributes")
+(define (validate-log-attributes required attributes)
+  (if required (check (> (length attributes) 0) "log has no attributes") #t)
   (for-each
     (lambda (entry)
       (check (> (string-length (car entry)) 0) "log attribute has no key")
@@ -487,18 +487,26 @@
       (check (= (attribute-count attributes (car entry)) 1) "log attribute is duplicated"))
     attributes))
 
-(define (validate-logs expected-scopes severity-required logs)
+(define (validate-logs expected-scopes policy logs)
   (check (> (length logs) 0) "capture contains no logs")
   (validate-signal-scopes expected-scopes logs)
   (for-each
     (lambda (log)
-      (let ((trace-id (field 'trace-id log))
+      (let ((severity-required (car policy))
+            (attributes-required (cadr policy))
+            (timestamps-required (third policy))
+            (trace-id (field 'trace-id log))
             (span-id (field 'span-id log))
             (flags (field 'flags log))
             (time (field 'time log))
             (observed-time (field 'observed-time log)))
         (check (> (string-length (field 'scope log)) 0) "log has no instrumentation scope")
-        (check (and (> time 0) (>= observed-time time)) "log timestamps are not ordered")
+        (check (or (> time 0) (> observed-time 0)) "log has no timestamp")
+        (check (or (= time 0) (= observed-time 0) (>= observed-time time))
+               "log timestamps are not ordered")
+        (if timestamps-required
+            (check (and (> time 0) (> observed-time 0)) "log timestamp is unspecified")
+            #t)
         (check (and (>= (field 'severity-number log) 0)
                     (<= (field 'severity-number log) 24))
                "log severity number is invalid")
@@ -509,7 +517,7 @@
             #t)
         (check (string=? (field 'event-name log) "") "log event name changed")
         (check (valid-log-value? (field 'body log)) "log body is missing")
-        (validate-log-attributes (field 'attributes log))
+        (validate-log-attributes attributes-required (field 'attributes log))
         (check (= (field 'dropped-attributes log) 0) "log dropped attributes")
         (check (member flags '(0 1 256 257)) "log flags are invalid")
         (check (or (not (and (string=? trace-id "") (string=? span-id "")))
@@ -520,7 +528,7 @@
                "log trace context is incomplete")))
     logs))
 
-(define (validate-capture expected-resource-attributes expected-scopes expected-metric-scopes expected-metric-descriptors expected-metric-aggregation expected-log-scopes log-severity-required event-policy expected-span-flags expected-span-buckets bucket-validator capture)
+(define (validate-capture expected-resource-attributes expected-scopes expected-metric-scopes expected-metric-descriptors expected-metric-aggregation expected-log-scopes log-policy event-policy expected-span-flags expected-span-buckets bucket-validator capture)
   (let ((requests (field 'requests capture))
         (resources (field 'resources capture))
         (scopes (field 'scopes capture))
@@ -539,7 +547,7 @@
     (validate-spans expected-scopes event-policy expected-span-flags spans)
     (bucket-validator expected-span-buckets expected-scopes spans)
     (validate-metrics expected-metric-scopes expected-metric-descriptors expected-metric-aggregation metrics)
-    (validate-logs expected-log-scopes log-severity-required logs)
+    (validate-logs expected-log-scopes log-policy logs)
     (display "valid OTLP capture\n")))
 
 (define (otel-validate-contract expected-resource-attributes expected-scopes expected-metric-scopes expected-log-scopes event-policy expected-span-buckets capture)
@@ -549,21 +557,21 @@
                     #f
                     #f
                     expected-log-scopes
-                    #f
+                    '(#f #f #f)
                     event-policy
                     '(0 1 256 257)
                     expected-span-buckets
                     validate-contract-buckets
                     capture))
 
-(define (otel-validate-exact expected-resource-attributes expected-scopes expected-metric-scopes expected-metric-descriptors expected-metric-aggregation expected-log-scopes log-severity-required event-policy expected-span-flags expected-span-buckets capture)
+(define (otel-validate-exact expected-resource-attributes expected-scopes expected-metric-scopes expected-metric-descriptors expected-metric-aggregation expected-log-scopes log-policy event-policy expected-span-flags expected-span-buckets capture)
   (validate-capture expected-resource-attributes
                     expected-scopes
                     expected-metric-scopes
                     expected-metric-descriptors
                     expected-metric-aggregation
                     expected-log-scopes
-                    log-severity-required
+                    log-policy
                     event-policy
                     expected-span-flags
                     expected-span-buckets

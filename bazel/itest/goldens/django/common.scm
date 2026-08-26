@@ -6,7 +6,7 @@
           expected-metric-descriptors
           expected-metric-aggregation
           expected-log-scopes
-          expected-log-severity-required
+          expected-log-policy
           expected-span-flags
           event-policy-for
           server-scope

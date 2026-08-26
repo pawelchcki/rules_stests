@@ -459,10 +459,10 @@ func main() {
 		fatal(fmt.Errorf("defaulted metric fields were rejected by Scheme projection: %s", defaultedMetricsDump))
 	}
 	resetSink(endpoint)
-	invalidMetricSemantics := []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"metric.probe"},"metrics":[{"name":"missing-temporality","sum":{"dataPoints":[{"timeUnixNano":"2","asInt":"1"}],"aggregationTemporality":0,"isMonotonic":true}},{"name":"descending-bounds","histogram":{"dataPoints":[{"timeUnixNano":"3","count":"3","bucketCounts":["1","1","1"],"explicitBounds":[10,1]}],"aggregationTemporality":2}},{"name":"invalid-exemplar","gauge":{"dataPoints":[{"timeUnixNano":"4","asInt":"1","exemplars":[{"timeUnixNano":"0"}]}]}},{"name":"invalid-exponential-mapping","exponentialHistogram":{"dataPoints":[{"timeUnixNano":"5","count":"0","scale":21,"zeroThreshold":-1}],"aggregationTemporality":2}},{"name":"inverted-extrema","histogram":{"dataPoints":[{"timeUnixNano":"6","count":"0","bucketCounts":["0"],"explicitBounds":[],"min":2,"max":1}],"aggregationTemporality":2}}]}]}]}`)
+	invalidMetricSemantics := []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"metric.probe"},"metrics":[{"name":"missing-temporality","sum":{"dataPoints":[{"timeUnixNano":"2","asInt":"1"}],"aggregationTemporality":0,"isMonotonic":true}},{"name":"descending-bounds","histogram":{"dataPoints":[{"timeUnixNano":"3","count":"3","bucketCounts":["1","1","1"],"explicitBounds":[10,1]}],"aggregationTemporality":2}},{"name":"invalid-exemplar","gauge":{"dataPoints":[{"timeUnixNano":"4","asInt":"1","exemplars":[{"timeUnixNano":"0"}]}]}},{"name":"invalid-exponential-mapping","exponentialHistogram":{"dataPoints":[{"timeUnixNano":"5","count":"0","scale":21,"zeroThreshold":-1}],"aggregationTemporality":2}},{"name":"inverted-extrema","histogram":{"dataPoints":[{"timeUnixNano":"6","count":"0","bucketCounts":["0"],"explicitBounds":[],"min":2,"max":1}],"aggregationTemporality":2}},{"name":"no-recorded-value","gauge":{"dataPoints":[{"timeUnixNano":"7","asInt":"1","flags":1}]}}]}]}]}`)
 	postJSON(endpoint, "/v1/metrics", "invalid metric semantics", invalidMetricSemantics)
 	invalidMetricDump := freezeCapture(endpoint, "/dump.scm", "invalid-metric-semantics Scheme capture")
-	if bytes.Count(invalidMetricDump, []byte("(data-points-valid #f)")) != 5 {
+	if bytes.Count(invalidMetricDump, []byte("(data-points-valid #f)")) != 6 {
 		fatal(fmt.Errorf("invalid metric semantics were absent from Scheme capture: %s", invalidMetricDump))
 	}
 	resetSink(endpoint)

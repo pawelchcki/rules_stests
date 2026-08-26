@@ -10,7 +10,7 @@
                      expected-metric-descriptors
                      expected-metric-aggregation
                      expected-log-scopes
-                     expected-log-severity-required
+                     expected-log-policy
                      (event-policy-for scenario-name)
                      expected-span-flags
                      expected-span-buckets

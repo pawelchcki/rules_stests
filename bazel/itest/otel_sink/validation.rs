@@ -319,7 +319,7 @@ fn typed_point_metadata_valid(
     time: u64,
     flags: u32,
 ) -> bool {
-    time > 0 && start <= time && flags <= 1 && typed_key_values_valid(attributes)
+    time > 0 && start <= time && flags == 0 && typed_key_values_valid(attributes)
 }
 
 fn typed_number_point_valid(point: &proto::NumberDataPoint) -> bool {
@@ -1381,7 +1381,7 @@ fn json_point_metadata_valid(point: &Value) -> bool {
     time > 0
         && start >= 0
         && start <= time
-        && (0..=1).contains(&flags)
+        && flags == 0
         && json_key_values_valid(point.get("attributes"))
 }
 
