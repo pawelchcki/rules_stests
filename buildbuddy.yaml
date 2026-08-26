@@ -1,0 +1,12 @@
+actions:
+  - name: Full test suite
+    container_image: ubuntu-24.04
+    triggers:
+      push:
+        branches:
+          - main
+      pull_request:
+        branches:
+          - "*"
+    steps:
+      - run: "bazel test //bazel/... //bazel/itest:aiohttp_otel_contract_test //bazel/itest:django_otel_contract_test --build_tests_only"
