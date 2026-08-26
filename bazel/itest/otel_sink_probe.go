@@ -130,6 +130,42 @@ func main() {
 		fatal(fmt.Errorf("non-decimal Content-Length: HTTP %d: %s: %v", nonDecimalLengthResponse.StatusCode, nonDecimalLengthBody, readErr))
 	}
 
+	transferEncodingConnection, err := net.Dial("tcp", strings.TrimPrefix(endpoint, "http://"))
+	if err != nil {
+		fatal(fmt.Errorf("connect for Transfer-Encoding: %w", err))
+	}
+	if _, err := fmt.Fprint(transferEncodingConnection, "POST /v1/metrics HTTP/1.1\r\nHost: sink\r\nContent-Type: application/json\r\nTransfer-Encoding: identity\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"); err != nil {
+		fatal(fmt.Errorf("send Transfer-Encoding: %w", err))
+	}
+	transferEncodingResponse, err := http.ReadResponse(bufio.NewReader(transferEncodingConnection), &http.Request{Method: http.MethodPost})
+	if err != nil {
+		fatal(fmt.Errorf("read Transfer-Encoding response: %w", err))
+	}
+	transferEncodingBody, readErr := io.ReadAll(transferEncodingResponse.Body)
+	transferEncodingResponse.Body.Close()
+	transferEncodingConnection.Close()
+	if readErr != nil || transferEncodingResponse.StatusCode != http.StatusBadRequest || !bytes.Contains(transferEncodingBody, []byte("Transfer-Encoding is not supported")) {
+		fatal(fmt.Errorf("Transfer-Encoding: HTTP %d: %s: %v", transferEncodingResponse.StatusCode, transferEncodingBody, readErr))
+	}
+
+	oversizedJSONConnection, err := net.Dial("tcp", strings.TrimPrefix(endpoint, "http://"))
+	if err != nil {
+		fatal(fmt.Errorf("connect for oversized JSON: %w", err))
+	}
+	if _, err := fmt.Fprint(oversizedJSONConnection, "POST /v1/metrics HTTP/1.1\r\nHost: sink\r\nContent-Type: application/json\r\nContent-Length: 1048577\r\nConnection: close\r\n\r\n"); err != nil {
+		fatal(fmt.Errorf("send oversized JSON headers: %w", err))
+	}
+	oversizedJSONResponse, err := http.ReadResponse(bufio.NewReader(oversizedJSONConnection), &http.Request{Method: http.MethodPost})
+	if err != nil {
+		fatal(fmt.Errorf("read oversized JSON response: %w", err))
+	}
+	oversizedJSONBody, readErr := io.ReadAll(oversizedJSONResponse.Body)
+	oversizedJSONResponse.Body.Close()
+	oversizedJSONConnection.Close()
+	if readErr != nil || oversizedJSONResponse.StatusCode != http.StatusBadRequest || !bytes.Contains(oversizedJSONBody, []byte("request body exceeds limit")) {
+		fatal(fmt.Errorf("oversized JSON: HTTP %d: %s: %v", oversizedJSONResponse.StatusCode, oversizedJSONBody, readErr))
+	}
+
 	partialConnection, err := net.Dial("tcp", strings.TrimPrefix(endpoint, "http://"))
 	if err != nil {
 		fatal(fmt.Errorf("connect partial request: %w", err))

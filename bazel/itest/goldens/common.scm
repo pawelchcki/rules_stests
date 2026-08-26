@@ -430,6 +430,9 @@
         (begin
           (check (valid-hex? (field 'trace-id span) 32) "invalid trace ID")
           (check (valid-hex? (field 'span-id span) 16) "invalid span ID")
+          (check (and (string? (field 'name span))
+                      (> (string-length (field 'name span)) 0))
+                 "span has no name")
           (check (= (field 'id-count span) 1) "duplicate span ID within trace")
           (check (or (string=? (field 'parent-span-id span) "")
                      (valid-hex? (field 'parent-span-id span) 16))
