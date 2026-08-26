@@ -10,10 +10,10 @@ use core::ffi::CStr;
 use rustix::fd::OwnedFd;
 use rustix::net::sockopt::set_socket_reuseport;
 use rustix::net::{
-    AddressFamily, Ipv4Addr, SocketAddrAny, SocketAddrV4, SocketType, acceptfrom, bind, listen,
-    socket,
+    acceptfrom, bind, listen, socket, AddressFamily, Ipv4Addr, SocketAddrAny, SocketAddrV4,
+    SocketType,
 };
-use rustix::time::{ClockId, clock_gettime};
+use rustix::time::{clock_gettime, ClockId};
 
 pub(crate) fn serve(port: u16, output: &CStr) -> Result<(), String> {
     let listener = socket(AddressFamily::INET, SocketType::STREAM, None)
@@ -154,10 +154,7 @@ fn handle_connection(
     );
 }
 
-fn freeze_records<'a>(
-    live: &mut Vec<Record>,
-    frozen: &'a mut Option<Vec<Record>>,
-) -> &'a [Record] {
+fn freeze_records<'a>(live: &mut Vec<Record>, frozen: &'a mut Option<Vec<Record>>) -> &'a [Record] {
     let snapshot = frozen.get_or_insert_with(Vec::new);
     snapshot.append(live);
     snapshot
@@ -189,12 +186,11 @@ fn validate(
         Err((error, calls)) => {
             validation_stats.failures += 1;
             validation_stats.last_calls = calls;
-            let status = if error.contains(scheme::CONTRACT_ASSERTION_MARKER) {
-                409
-            } else {
-                422
+            let (status, message) = match error {
+                scheme::EvaluationFailure::Contract(message) => (409, message),
+                scheme::EvaluationFailure::Fault(message) => (422, message),
             };
-            respond(connection, status, "text/plain", error.as_bytes());
+            respond(connection, status, "text/plain", message.as_bytes());
         }
     }
 }

@@ -17,6 +17,14 @@ const COMPILER_CALL_BUDGET: usize = 100_000_000;
 const VALIDATOR_CALL_BUDGET: usize = 50_000_000;
 const VM_OUTPUT_BUDGET: usize = 1 << 20;
 pub const CONTRACT_ASSERTION_MARKER: &str = "OTLP contract assertion:";
+const CONTRACT_FRAME_PREFIX: &[u8] = b"[[OTLP-CONTRACT-V1:";
+const CONTRACT_FRAME_SEPARATOR: &[u8] = b"]]";
+const CONTRACT_FRAME_SUFFIX: &[u8] = b"OTLP contract sentinel";
+
+pub(crate) enum EvaluationFailure {
+    Contract(String),
+    Fault(String),
+}
 
 struct CallBudget {
     remaining: usize,
@@ -84,7 +92,10 @@ impl Device for MemoryDevice<'_> {
     }
 }
 
-pub fn evaluate(source: &[u8], input: &[u8]) -> Result<(Vec<u8>, usize), (String, usize)> {
+pub fn evaluate(
+    source: &[u8],
+    input: &[u8],
+) -> Result<(Vec<u8>, usize), (EvaluationFailure, usize)> {
     let (bytecode, compilation_calls) = compile(source)?;
     match run(
         &bytecode,
@@ -94,13 +105,11 @@ pub fn evaluate(source: &[u8], input: &[u8]) -> Result<(Vec<u8>, usize), (String
         VALIDATOR_CALL_BUDGET,
     ) {
         Ok((output, validation_calls)) => Ok((output, compilation_calls + validation_calls)),
-        Err((error, validation_calls)) => {
-            Err((error, compilation_calls + validation_calls))
-        }
+        Err((error, validation_calls)) => Err((error, compilation_calls + validation_calls)),
     }
 }
 
-fn compile(source: &[u8]) -> Result<(Vec<u8>, usize), (String, usize)> {
+fn compile(source: &[u8]) -> Result<(Vec<u8>, usize), (EvaluationFailure, usize)> {
     let mut input = Vec::with_capacity(PRELUDE.len() + source.len() + 1);
     input.extend_from_slice(PRELUDE);
     input.push(b'\n');
@@ -120,7 +129,7 @@ fn run(
     phase: &str,
     heap_cells: usize,
     call_budget: usize,
-) -> Result<(Vec<u8>, usize), (String, usize)> {
+) -> Result<(Vec<u8>, usize), (EvaluationFailure, usize)> {
     let mut output = Vec::new();
     let mut error_output = Vec::new();
     let mut output_exhausted = false;
@@ -150,7 +159,7 @@ fn run(
         )
         .map_err(|error| {
             (
-                format!("Stak {phase} VM initialization failed: {error}"),
+                EvaluationFailure::Fault(format!("Stak {phase} VM initialization failed: {error}")),
                 0,
             )
         })?
@@ -161,13 +170,17 @@ fn run(
 
     if budget.exhausted {
         return Err((
-            format!("Stak {phase} exceeded the {call_budget}-call sandbox budget"),
+            EvaluationFailure::Fault(format!(
+                "Stak {phase} exceeded the {call_budget}-call sandbox budget"
+            )),
             calls,
         ));
     }
     if output_exhausted || error_exhausted {
         return Err((
-            format!("Stak {phase} exceeded the {VM_OUTPUT_BUDGET}-byte output sandbox limit"),
+            EvaluationFailure::Fault(format!(
+                "Stak {phase} exceeded the {VM_OUTPUT_BUDGET}-byte output sandbox limit"
+            )),
             calls,
         ));
     }
@@ -183,16 +196,47 @@ fn run(
                 partial.trim()
             )
         };
-        return Err((message, calls));
+        let failure = if phase == "validation" {
+            contract_message(&error_output)
+                .map(EvaluationFailure::Contract)
+                .unwrap_or(EvaluationFailure::Fault(message))
+        } else {
+            EvaluationFailure::Fault(message)
+        };
+        return Err((failure, calls));
     }
     if !error_output.is_empty() {
         return Err((
-            format!(
+            EvaluationFailure::Fault(format!(
                 "Stak {phase} wrote to stderr: {}",
                 String::from_utf8_lossy(&error_output).trim()
-            ),
+            )),
             calls,
         ));
     }
     Ok((output, calls))
+}
+
+fn contract_message(error_output: &[u8]) -> Option<String> {
+    let framed = error_output.strip_prefix(CONTRACT_FRAME_PREFIX)?;
+    let separator = framed
+        .windows(CONTRACT_FRAME_SEPARATOR.len())
+        .position(|window| window == CONTRACT_FRAME_SEPARATOR)?;
+    let length = core::str::from_utf8(&framed[..separator])
+        .ok()?
+        .parse::<usize>()
+        .ok()?;
+    let payload = &framed[separator + CONTRACT_FRAME_SEPARATOR.len()..];
+    if payload.len() < length {
+        return None;
+    }
+    let (message, remainder) = payload.split_at(length);
+    let trailing = remainder.strip_prefix(CONTRACT_FRAME_SUFFIX)?;
+    if !trailing.iter().all(u8::is_ascii_whitespace) {
+        return None;
+    }
+    Some(format!(
+        "{CONTRACT_ASSERTION_MARKER} {}",
+        core::str::from_utf8(message).ok()?
+    ))
 }

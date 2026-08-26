@@ -52,10 +52,6 @@ pub(crate) fn validate_export(signal: &str, value: &Value) -> Result<(), String>
 
 type Validator = fn(&Value) -> Result<(), String>;
 
-fn field<'a>(value: &'a Value, snake: &str, camel: &str) -> Option<&'a Value> {
-    value.get(snake).or_else(|| value.get(camel))
-}
-
 fn reject_unknown(value: &Value, context: &str, allowed: &[&str]) -> Result<(), String> {
     let Some(fields) = value.as_object() else {
         return Ok(());
@@ -93,15 +89,27 @@ fn validate_object_field(
     camel: &str,
     validate: Validator,
 ) -> Result<(), String> {
-    if let Some(item) = value.get(snake).filter(|item| item.is_object()) {
-        validate(item)?;
-    }
+    validate_named_object(value, snake, validate)?;
     if camel != snake {
-        if let Some(item) = value.get(camel).filter(|item| item.is_object()) {
-            validate(item)?;
-        }
+        validate_named_object(value, camel, validate)?;
     }
     Ok(())
+}
+
+fn validate_named_object(value: &Value, name: &str, validate: Validator) -> Result<(), String> {
+    let Some(item) = value.get(name) else {
+        return Ok(());
+    };
+    if item.is_null() {
+        // ProtoJSON accepts null for any message field and treats it as unset.
+        return Ok(());
+    }
+    if !item.is_object() {
+        return Err(format!(
+            "invalid OTLP object field {name:?}: expected object"
+        ));
+    }
+    validate(item)
 }
 
 fn validate_resource(value: &Value) -> Result<(), String> {
@@ -177,16 +185,55 @@ fn validate_any_value(value: &Value) -> Result<(), String> {
             "bytesValue",
         ],
     )?;
-    if let Some(array) = field(value, "array_value", "arrayValue").filter(|item| item.is_object()) {
-        reject_unknown(array, "ArrayValue", &["values"])?;
-        validate_array_field(array, "values", "values", validate_any_value)?;
+    let fields = value
+        .as_object()
+        .ok_or_else(|| String::from("invalid OTLP AnyValue: expected object"))?;
+    if fields.len() != 1 {
+        return Err(format!(
+            "invalid OTLP AnyValue: expected exactly one variant, got {}",
+            fields.len()
+        ));
     }
-    if let Some(list) = field(value, "kvlist_value", "kvlistValue").filter(|item| item.is_object())
-    {
-        reject_unknown(list, "KeyValueList", &["values"])?;
-        validate_array_field(list, "values", "values", validate_key_value)?;
+    let (name, item) = fields.iter().next().unwrap();
+    let valid = match name.as_str() {
+        "string_value" | "stringValue" | "bytes_value" | "bytesValue" => item.is_string(),
+        "bool_value" | "boolValue" => item.is_boolean(),
+        "int_value" | "intValue" => {
+            item.as_i64().is_some()
+                || item.as_u64().is_some_and(|value| value <= i64::MAX as u64)
+                || item
+                    .as_str()
+                    .is_some_and(|value| value.parse::<i64>().is_ok())
+        }
+        "double_value" | "doubleValue" => {
+            item.is_number() || matches!(item.as_str(), Some("NaN" | "Infinity" | "-Infinity"))
+        }
+        "array_value" | "arrayValue" => {
+            validate_object_field(value, name, name, validate_array_value)?;
+            true
+        }
+        "kvlist_value" | "kvlistValue" => {
+            validate_object_field(value, name, name, validate_key_value_list)?;
+            true
+        }
+        _ => unreachable!(),
+    };
+    if !valid {
+        return Err(format!(
+            "invalid OTLP AnyValue variant {name:?}: unexpected JSON type"
+        ));
     }
     Ok(())
+}
+
+fn validate_array_value(value: &Value) -> Result<(), String> {
+    reject_unknown(value, "ArrayValue", &["values"])?;
+    validate_array_field(value, "values", "values", validate_any_value)
+}
+
+fn validate_key_value_list(value: &Value) -> Result<(), String> {
+    reject_unknown(value, "KeyValueList", &["values"])?;
+    validate_array_field(value, "values", "values", validate_key_value)
 }
 
 fn validate_resource_spans(value: &Value) -> Result<(), String> {

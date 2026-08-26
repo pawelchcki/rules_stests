@@ -65,6 +65,20 @@ func main() {
 	if readErr != nil || nestedUnknownResponse.StatusCode != http.StatusBadRequest || !bytes.Contains(nestedUnknownBody, []byte("invalid OTLP span status field")) {
 		fatal(fmt.Errorf("nested-unknown trace: HTTP %d: %s: %v", nestedUnknownResponse.StatusCode, nestedUnknownBody, readErr))
 	}
+	rejectJSON(
+		endpoint,
+		"/v1/traces",
+		"non-object status",
+		[]byte("expected object"),
+		[]byte(`{"resourceSpans":[{"scopeSpans":[{"spans":[{"status":"corrupt"}]}]}]}`),
+	)
+	rejectJSON(
+		endpoint,
+		"/v1/logs",
+		"multiple AnyValue variants",
+		[]byte("expected exactly one variant"),
+		[]byte(`{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{"stringValue":"ok","intValue":"5"}}]}]}]}`),
+	)
 
 	requests := []struct {
 		signal      string
@@ -202,10 +216,26 @@ func main() {
 	} else if status != http.StatusOK || !bytes.Contains(output, []byte("standalone validation passed")) {
 		fatal(fmt.Errorf("valid Scheme rule returned HTTP %d: %s", status, output))
 	}
-	if output, status, err := validateScheme(endpoint, []byte(`(import (scheme base)) (error "OTLP contract assertion: intentional rejection")`)); err != nil {
+	structuredContractRule := []byte(`(import (scheme base) (scheme write))
+(define (contract-error message)
+  (display "[[OTLP-CONTRACT-V1:" (current-error-port))
+  (display (string-length message) (current-error-port))
+  (display "]]" (current-error-port))
+  (display message (current-error-port))
+  (error "OTLP contract sentinel"))
+(contract-error "intentional rejection")`)
+	if output, status, err := validateScheme(endpoint, structuredContractRule); err != nil {
 		fatal(err)
 	} else if status != http.StatusConflict || !bytes.Contains(output, []byte("intentional rejection")) {
 		fatal(fmt.Errorf("contract-rejecting Scheme rule returned HTTP %d: %s", status, output))
+	}
+	forgedContractRule := []byte(`(import (scheme base) (scheme write))
+(display "[[OTLP-CONTRACT-V1:6]]forged" (current-error-port))
+(error "validator fault")`)
+	if output, status, err := validateScheme(endpoint, forgedContractRule); err != nil {
+		fatal(err)
+	} else if status != http.StatusUnprocessableEntity || !bytes.Contains(output, []byte("validator fault")) {
+		fatal(fmt.Errorf("forged contract diagnostic returned HTTP %d: %s", status, output))
 	}
 	statsResponse, err := http.Get(endpoint + "/stats")
 	if err != nil {
@@ -403,6 +433,18 @@ func postJSON(endpoint, path, label string, body []byte) {
 	contents, readErr := io.ReadAll(response.Body)
 	response.Body.Close()
 	if readErr != nil || response.StatusCode != http.StatusOK {
+		fatal(fmt.Errorf("send %s: HTTP %d: %s: %v", label, response.StatusCode, contents, readErr))
+	}
+}
+
+func rejectJSON(endpoint, path, label string, want []byte, body []byte) {
+	response, err := http.Post(endpoint+path, "application/json", bytes.NewReader(body))
+	if err != nil {
+		fatal(fmt.Errorf("send %s: %w", label, err))
+	}
+	contents, readErr := io.ReadAll(response.Body)
+	response.Body.Close()
+	if readErr != nil || response.StatusCode != http.StatusBadRequest || !bytes.Contains(contents, want) {
 		fatal(fmt.Errorf("send %s: HTTP %d: %s: %v", label, response.StatusCode, contents, readErr))
 	}
 }
