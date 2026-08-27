@@ -177,6 +177,15 @@ fn enum_scalar(value: &Value) -> bool {
     value.as_i64().is_some() || value.as_u64().is_some()
 }
 
+fn u32_scalar(value: &Value) -> bool {
+    value
+        .as_u64()
+        .is_some_and(|value| u32::try_from(value).is_ok())
+        || value
+            .as_i64()
+            .is_some_and(|value| u32::try_from(value).is_ok())
+}
+
 fn double_scalar(value: &Value) -> bool {
     value.is_number()
         || value.as_str().is_some_and(|value| {
@@ -386,6 +395,7 @@ fn validate_span(value: &Value) -> Result<(), String> {
     validate_array_field(value, "events", "events", validate_span_event)?;
     validate_array_field(value, "links", "links", validate_span_link)?;
     validate_scalar_field(value, "kind", "kind", "span", enum_scalar)?;
+    validate_scalar_field(value, "flags", "flags", "span", u32_scalar)?;
     validate_object_field(value, "status", "status", validate_status)
 }
 
@@ -402,7 +412,8 @@ fn validate_span_event(value: &Value) -> Result<(), String> {
             "droppedAttributesCount",
         ],
     )?;
-    validate_array_field(value, "attributes", "attributes", validate_key_value)
+    validate_array_field(value, "attributes", "attributes", validate_key_value)?;
+    validate_scalar_field(value, "flags", "flags", "span link", u32_scalar)
 }
 
 fn validate_span_link(value: &Value) -> Result<(), String> {
@@ -835,7 +846,7 @@ fn validate_metric_point_scalars(value: &Value) -> Result<(), String> {
         "metric data point",
         integer_scalar,
     )?;
-    validate_scalar_field(value, "flags", "flags", "metric data point", integer_scalar)
+    validate_scalar_field(value, "flags", "flags", "metric data point", u32_scalar)
 }
 
 fn validate_exemplar(value: &Value) -> Result<(), String> {
@@ -947,15 +958,12 @@ fn validate_log_record(value: &Value) -> Result<(), String> {
 }
 
 fn trace_flags_scalar(value: &Value) -> bool {
-    integer_value(value).is_some_and(|flags| matches!(flags, 0 | 1))
-}
-
-fn integer_value(value: &Value) -> Option<i128> {
     value
-        .as_i64()
-        .map(i128::from)
-        .or_else(|| value.as_u64().map(i128::from))
-        .or_else(|| value.as_str().and_then(|value| value.parse::<i128>().ok()))
+        .as_u64()
+        .is_some_and(|flags| matches!(flags, 0 | 1))
+        || value
+            .as_i64()
+            .is_some_and(|flags| matches!(flags, 0 | 1))
 }
 
 pub(crate) fn decode_base64(encoded: &str) -> Option<Vec<u8>> {

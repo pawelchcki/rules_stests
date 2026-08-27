@@ -86,6 +86,20 @@ func main() {
 	)
 	rejectJSON(
 		endpoint,
+		"/v1/traces",
+		"quoted span flags",
+		[]byte("unexpected JSON type"),
+		[]byte(`{"resourceSpans":[{"scopeSpans":[{"spans":[{"flags":"256"}]}]}]}`),
+	)
+	rejectJSON(
+		endpoint,
+		"/v1/traces",
+		"out-of-range span flags",
+		[]byte("unexpected JSON type"),
+		[]byte(`{"resourceSpans":[{"scopeSpans":[{"spans":[{"flags":4294967296}]}]}]}`),
+	)
+	rejectJSON(
+		endpoint,
 		"/v1/metrics",
 		"non-object repeated message",
 		[]byte("expected object"),
