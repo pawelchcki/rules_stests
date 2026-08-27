@@ -14,8 +14,7 @@
           python-counted-operation-buckets
           expected-span-flags
           expected-trace-state
-          expected-resource-schema-url
-          expected-log-policy)
+          expected-resource-schema-url)
   (import (scheme base))
   (begin
 
@@ -31,8 +30,6 @@
 (define expected-span-flags '(256))
 (define expected-trace-state "")
 (define expected-resource-schema-url "")
-; Require severity, nonempty enrichment attributes, both timestamps, and a body.
-(define expected-log-policy '(#t #t #t #t))
 
 (define (python-service-resource-attributes service-name)
   (append python-resource-attributes

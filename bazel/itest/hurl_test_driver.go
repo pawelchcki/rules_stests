@@ -225,8 +225,8 @@ func requireExportedTelemetry(serviceSuffix, mode, goldenCase, profile string, l
 	if mode != "validate" && mode != "candidate" {
 		return fmt.Errorf("invalid --otel-mode %q", mode)
 	}
-	if mode == "validate" && (len(libraries) == 0 || len(imports) == 0 || program == "") {
-		return errors.New("--otel-library, --otel-import, and --otel-program are required in validate mode")
+	if len(libraries) == 0 || len(imports) == 0 || program == "" {
+		return errors.New("--otel-library, --otel-import, and --otel-program are required for OTLP validation")
 	}
 	if mode == "candidate" {
 		if _, _, err := goldenCandidateParts(goldenCase); err != nil {
@@ -311,13 +311,6 @@ func validateTelemetryDump(client http.Client, baseURL, mode, goldenCase, profil
 		emitFailedCapture(goldenCase, contents)
 		return &otlpAssertionFailure{cause: fmt.Errorf("OTLP dump at %s lacks traces, metrics, or logs with service.name", baseURL)}
 	}
-	if mode == "candidate" {
-		if err := emitGoldenCandidate(client, baseURL, goldenCase, profile, contents); err != nil {
-			return err
-		}
-		fmt.Printf("Emitted OTLP golden candidate for %s: %d spans in %d trace requests, plus metrics and logs\n", goldenCase, stats.TraceSpans, stats.TraceRequests)
-		return nil
-	}
 	source, err := readSchemeBundle(libraries, imports, program, goldenCase)
 	if err != nil {
 		return err
@@ -346,6 +339,13 @@ func validateTelemetryDump(client http.Client, baseURL, mode, goldenCase, profil
 	if validationResponse.StatusCode != http.StatusOK {
 		emitFailedCapture(goldenCase, contents)
 		return schemeValidationFailure(validationResponse.StatusCode, validationOutput)
+	}
+	if mode == "candidate" {
+		if err := emitGoldenCandidate(client, baseURL, goldenCase, profile, contents); err != nil {
+			return err
+		}
+		fmt.Printf("Validated OTLP contract and emitted golden candidate for %s: %d spans in %d trace requests, plus metrics and logs\n", goldenCase, stats.TraceSpans, stats.TraceRequests)
+		return nil
 	}
 	fmt.Printf("Verified quiescent OTLP Scheme golden: %d spans in %d trace requests, plus metrics and logs (%s): %s", stats.TraceSpans, stats.TraceRequests, baseURL, validationOutput)
 	return nil

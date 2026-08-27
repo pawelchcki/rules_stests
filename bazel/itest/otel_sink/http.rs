@@ -91,12 +91,18 @@ pub(crate) fn read_request(connection: &OwnedFd) -> Result<Request, RequestError
         bytes.extend_from_slice(&chunk[..count]);
     }
 
-    let head = core::str::from_utf8(&bytes[..header_end - 4])
-        .map_err(|_| "request headers are not UTF-8".to_string())?;
-    let mut lines = head.split("\r\n");
-    let mut request_line = lines
+    let mut lines = bytes[..header_end - 4]
+        .split(|byte| *byte == b'\n')
+        .peekable();
+    let request_line_raw = lines
         .next()
-        .ok_or_else(|| "missing HTTP request line".to_string())?
+        .ok_or_else(|| "missing HTTP request line".to_string())?;
+    let request_line_bytes = http_line(request_line_raw, lines.peek().is_some())?;
+    if !request_line_bytes.is_ascii() {
+        return Err("invalid HTTP/1.1 request line".to_string().into());
+    }
+    let mut request_line = core::str::from_utf8(request_line_bytes)
+        .map_err(|_| "invalid HTTP/1.1 request line".to_string())?
         .split(' ');
     let method = request_line.next().unwrap_or("").to_string();
     let path = request_line.next().unwrap_or("").to_string();
@@ -109,15 +115,20 @@ pub(crate) fn read_request(connection: &OwnedFd) -> Result<Request, RequestError
         return Err("invalid HTTP/1.1 request line".to_string().into());
     }
     let mut headers = Vec::new();
-    for line in lines {
+    while let Some(raw_line) = lines.next() {
+        let line = http_line(raw_line, lines.peek().is_some())?;
         if headers.len() >= MAX_HEADER_COUNT {
             return Err(RequestError::payload_too_large(
                 "request header count exceeds limit".to_string(),
             ));
         }
-        let (name, value) = line
-            .split_once(':')
+        let separator = line
+            .iter()
+            .position(|byte| *byte == b':')
             .ok_or_else(|| "malformed HTTP header".to_string())?;
+        let name = core::str::from_utf8(&line[..separator])
+            .map_err(|_| "invalid HTTP field name".to_string())?;
+        let value = &line[separator + 1..];
         if !valid_token(name) {
             return Err("invalid HTTP field name".to_string().into());
         }
@@ -126,7 +137,7 @@ pub(crate) fn read_request(connection: &OwnedFd) -> Result<Request, RequestError
         }
         headers.push(Header {
             name: name.to_ascii_lowercase(),
-            value: value.trim().to_string(),
+            value: field_value_to_string(trim_field_value(value)),
         });
     }
     if headers.iter().any(|header| {
@@ -256,10 +267,43 @@ pub(crate) fn valid_token(name: &str) -> bool {
         })
 }
 
-fn valid_field_value(value: &str) -> bool {
+fn valid_field_value(value: &[u8]) -> bool {
     value
-        .bytes()
+        .iter()
+        .copied()
         .all(|byte| byte == b'\t' || byte >= 0x20 && byte != 0x7f)
+}
+
+fn http_line(line: &[u8], terminated: bool) -> Result<&[u8], RequestError> {
+    if terminated {
+        return line
+            .strip_suffix(b"\r")
+            .ok_or_else(|| "malformed HTTP line ending".to_string().into());
+    }
+    if line.contains(&b'\r') || line.contains(&b'\n') {
+        return Err("malformed HTTP line ending".to_string().into());
+    }
+    Ok(line)
+}
+
+fn trim_field_value(mut value: &[u8]) -> &[u8] {
+    while value
+        .first()
+        .is_some_and(|byte| matches!(*byte, b' ' | b'\t'))
+    {
+        value = &value[1..];
+    }
+    while value
+        .last()
+        .is_some_and(|byte| matches!(*byte, b' ' | b'\t'))
+    {
+        value = &value[..value.len() - 1];
+    }
+    value
+}
+
+fn field_value_to_string(value: &[u8]) -> String {
+    value.iter().map(|byte| char::from(*byte)).collect()
 }
 
 fn valid_bracketed_ipv6_host(value: &str) -> bool {

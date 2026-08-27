@@ -4,25 +4,43 @@ use crate::proto;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use core::cell::Cell;
 use core::fmt;
 use prost::Message;
-use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
+use serde::de::{self, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Number, Value};
+
+const MAX_JSON_VALUE_NODES: usize = 16 * 1024;
 
 struct UniqueValue(Value);
 
-impl<'de> Deserialize<'de> for UniqueValue {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+struct UniqueValueSeed<'a> {
+    nodes: &'a Cell<usize>,
+}
+
+impl<'de> DeserializeSeed<'de> for UniqueValueSeed<'_> {
+    type Value = UniqueValue;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_any(UniqueValueVisitor)
+        let count = self.nodes.get() + 1;
+        if count > MAX_JSON_VALUE_NODES {
+            return Err(de::Error::custom(format!(
+                "JSON value exceeds structural limit of {MAX_JSON_VALUE_NODES} nodes"
+            )));
+        }
+        self.nodes.set(count);
+        deserializer.deserialize_any(UniqueValueVisitor { nodes: self.nodes })
     }
 }
 
-struct UniqueValueVisitor;
+struct UniqueValueVisitor<'a> {
+    nodes: &'a Cell<usize>,
+}
 
-impl<'de> Visitor<'de> for UniqueValueVisitor {
+impl<'de> Visitor<'de> for UniqueValueVisitor<'_> {
     type Value = UniqueValue;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -75,7 +93,7 @@ impl<'de> Visitor<'de> for UniqueValueVisitor {
     where
         D: Deserializer<'de>,
     {
-        UniqueValue::deserialize(deserializer)
+        UniqueValueSeed { nodes: self.nodes }.deserialize(deserializer)
     }
 
     fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
@@ -83,7 +101,9 @@ impl<'de> Visitor<'de> for UniqueValueVisitor {
         A: SeqAccess<'de>,
     {
         let mut values = Vec::new();
-        while let Some(UniqueValue(value)) = sequence.next_element()? {
+        while let Some(UniqueValue(value)) =
+            sequence.next_element_seed(UniqueValueSeed { nodes: self.nodes })?
+        {
             values.push(value);
         }
         Ok(UniqueValue(Value::Array(values)))
@@ -98,7 +118,8 @@ impl<'de> Visitor<'de> for UniqueValueVisitor {
             if values.contains_key(&key) {
                 return Err(de::Error::custom(format!("duplicate JSON key {key:?}")));
             }
-            let UniqueValue(value) = map.next_value()?;
+            let UniqueValue(value) =
+                map.next_value_seed(UniqueValueSeed { nodes: self.nodes })?;
             values.insert(key, value);
         }
         Ok(UniqueValue(Value::Object(values)))
@@ -111,8 +132,14 @@ pub(crate) fn decode(
     body: &[u8],
 ) -> Result<(&'static str, Payload), String> {
     if content_type == "application/json" {
-        let UniqueValue(value) =
-            serde_json::from_slice(body).map_err(|error| format!("invalid OTLP JSON: {error}"))?;
+        let nodes = Cell::new(0);
+        let mut deserializer = serde_json::Deserializer::from_slice(body);
+        let UniqueValue(value) = UniqueValueSeed { nodes: &nodes }
+            .deserialize(&mut deserializer)
+            .map_err(|error| format!("invalid OTLP JSON: {error}"))?;
+        deserializer
+            .end()
+            .map_err(|error| format!("invalid OTLP JSON: {error}"))?;
         otlp_json::validate_export(signal, &value)?;
         return Ok(("json", Payload::Json(value)));
     }

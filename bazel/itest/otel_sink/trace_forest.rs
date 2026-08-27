@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 use core::fmt::Write;
 use serde_json::Value;
 
-const MAX_SPANS_PER_TRACE: usize = 32;
+const MAX_TRACE_DEPTH: usize = 128;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SemanticSpan {
@@ -256,11 +256,6 @@ fn build(spans: Vec<RawSpan>) -> Result<Forest, String> {
 
     let mut traces = Vec::new();
     for (trace_id, trace_spans) in by_trace {
-        if trace_spans.len() > MAX_SPANS_PER_TRACE {
-            return Err(format!(
-                "trace {trace_id:?} contains more than {MAX_SPANS_PER_TRACE} spans"
-            ));
-        }
         let mut index = BTreeMap::<String, RawSpan>::new();
         for span in trace_spans {
             index.insert(span.span_id.clone(), span);
@@ -290,7 +285,7 @@ fn build(spans: Vec<RawSpan>) -> Result<Forest, String> {
         }
         let mut roots = Vec::new();
         for root in root_ids {
-            roots.push(build_node(&root, &index)?);
+            roots.push(build_node(&trace_id, &root, &index, 0)?);
         }
         let roots = group_nodes(roots);
         let coverage = if !partial && explicit_roots == 1 {
@@ -332,7 +327,17 @@ fn ensure_acyclic(
     Ok(())
 }
 
-fn build_node(span_id: &str, index: &BTreeMap<String, RawSpan>) -> Result<Node, String> {
+fn build_node(
+    trace_id: &str,
+    span_id: &str,
+    index: &BTreeMap<String, RawSpan>,
+    depth: usize,
+) -> Result<Node, String> {
+    if depth >= MAX_TRACE_DEPTH {
+        return Err(format!(
+            "trace {trace_id:?} exceeds the maximum nesting depth of {MAX_TRACE_DEPTH}"
+        ));
+    }
     let span = index
         .get(span_id)
         .ok_or_else(|| format!("missing span {span_id:?}"))?;
@@ -341,7 +346,7 @@ fn build_node(span_id: &str, index: &BTreeMap<String, RawSpan>) -> Result<Node, 
         .values()
         .filter(|candidate| candidate.parent_span_id == span_id)
     {
-        children.push(build_node(&child.span_id, index)?);
+        children.push(build_node(trace_id, &child.span_id, index, depth + 1)?);
     }
     let children = group_nodes(children);
     let fingerprint = node_fingerprint(&span.semantic, &children);

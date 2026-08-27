@@ -718,6 +718,15 @@
   (validate-signal-scopes expected-scopes logs)
   (for-each
     (lambda (log)
+      (check (member (list-ref policy 4) '(unnamed named any))
+             "log event-name policy is invalid")
+      (check (cond ((eq? (list-ref policy 4) 'unnamed)
+                    (string=? (field 'event-name log) ""))
+                   ((eq? (list-ref policy 4) 'named)
+                    (> (string-length (field 'event-name log)) 0))
+                   ((eq? (list-ref policy 4) 'any) #t)
+                   (else #f))
+             "log event name changed")
       (let ((severity-required (car policy))
             (attributes-required (cadr policy))
             (timestamps-required (third policy))
@@ -742,7 +751,6 @@
               (check (> (field 'severity-number log) 0) "log severity number is unspecified")
               (check (> (string-length (field 'severity-text log)) 0) "log severity text is empty"))
             #t)
-        (check (string=? (field 'event-name log) "") "log event name changed")
         (if body-required
             (check (valid-log-value? (field 'body log)) "log body is missing")
             (check (or (equal? (field 'body log) '(other))
@@ -790,7 +798,7 @@
                     #f
                     #f
                     expected-log-scopes
-                    '(#f #f #f #f)
+                    '(#f #f #f #f any)
                     event-policy
                     '(0 1 256 257)
                     #f

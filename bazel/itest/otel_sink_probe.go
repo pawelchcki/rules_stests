@@ -176,6 +176,13 @@ func main() {
 	)
 	rejectRawRequest(
 		endpoint,
+		"obs-text byte in field value",
+		"GET /missing HTTP/1.1\r\nHost: sink\r\nX-Probe: valid\x80obs-text\r\nConnection: close\r\n\r\n",
+		http.StatusMethodNotAllowed,
+		[]byte("expected POST"),
+	)
+	rejectRawRequest(
+		endpoint,
 		"malformed bracketed IPv6 Host",
 		"POST /v1/metrics HTTP/1.1\r\nHost: [2001:::1]\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
 		http.StatusBadRequest,
@@ -336,6 +343,16 @@ func main() {
 	if readErr != nil || expandedResponse.StatusCode != http.StatusRequestEntityTooLarge || !bytes.Contains(expandedBody, []byte("decoded OTLP payload exceeds limit")) {
 		fatal(fmt.Errorf("structurally expanded protobuf: HTTP %d: %s: %v", expandedResponse.StatusCode, expandedBody, readErr))
 	}
+
+	expandedJSON := append([]byte(`{"resourceMetrics":[`), bytes.Repeat([]byte(`{},`), 16*1024)...)
+	expandedJSON = append(expandedJSON, []byte(`{}]}`)...)
+	rejectJSON(
+		endpoint,
+		"/v1/metrics",
+		"structurally expanded JSON",
+		[]byte("structural limit"),
+		expandedJSON,
+	)
 
 	partialConnection, err := net.Dial("tcp", strings.TrimPrefix(endpoint, "http://"))
 	if err != nil {
@@ -598,6 +615,31 @@ func main() {
 	}
 	if readErr != nil || candidate.StatusCode != http.StatusOK || !scopesPresent || !bytes.Contains(candidateBody, []byte("expected-trace-shapes")) {
 		fatal(fmt.Errorf("custom candidate: HTTP %d: %s: %v", candidate.StatusCode, candidateBody, readErr))
+	}
+	resetSink(endpoint)
+	var wideTrace strings.Builder
+	wideTrace.WriteString(`{"resourceSpans":[{"scopeSpans":[{"scope":{"name":"wide.probe"},"spans":[`)
+	for index := 0; index < 33; index++ {
+		if index > 0 {
+			wideTrace.WriteByte(',')
+		}
+		parent := ""
+		if index > 0 {
+			parent = `,"parentSpanId":"0000000000000001"`
+		}
+		fmt.Fprintf(&wideTrace, `{"traceId":"99999999999999999999999999999999","spanId":"%016x"%s,"name":"span-%d","kind":1,"startTimeUnixNano":"1","endTimeUnixNano":"2"}`, index+1, parent, index)
+	}
+	wideTrace.WriteString(`]}]}]}`)
+	postJSON(endpoint, "/v1/traces", "33-span trace", []byte(wideTrace.String()))
+	freezeCapture(endpoint, "/dump", "33-span capture")
+	wideCandidate, err := http.Get(endpoint + "/candidate?app=custom-app")
+	if err != nil {
+		fatal(fmt.Errorf("generate 33-span candidate: %w", err))
+	}
+	wideCandidateBody, readErr := io.ReadAll(wideCandidate.Body)
+	wideCandidate.Body.Close()
+	if readErr != nil || wideCandidate.StatusCode != http.StatusOK || !bytes.Contains(wideCandidateBody, []byte("wide.probe")) {
+		fatal(fmt.Errorf("33-span candidate: HTTP %d: %s: %v", wideCandidate.StatusCode, wideCandidateBody, readErr))
 	}
 	resetSink(endpoint)
 	topologyTrace := []byte(`{"resourceSpans":[{"scopeSpans":[{"scope":{"name":"shape.probe"},"spans":[{"traceId":"12121212121212121212121212121212","spanId":"3333333333333333","parentSpanId":"1111111111111111","name":"beta","kind":1,"startTimeUnixNano":"30","endTimeUnixNano":"40"},{"traceId":"12121212121212121212121212121212","spanId":"1111111111111111","name":"root","kind":2,"startTimeUnixNano":"10","endTimeUnixNano":"50"},{"traceId":"12121212121212121212121212121212","spanId":"2222222222222222","parentSpanId":"1111111111111111","name":"alpha","kind":1,"startTimeUnixNano":"20","endTimeUnixNano":"30"}]}]}]}`)

@@ -23,6 +23,8 @@
 ; Exact profile for OpenTelemetry Python auto-instrumentation 0.65b0 on aiohttp.
 (define implementation-profile 'python-aiohttp-auto-v0-65b0)
 (define expected-error-status-message-policy 'empty)
+; Require severity, enrichment attributes, timestamps, a body, and unnamed logs.
+(define expected-log-policy '(#t #t #t #t unnamed))
 
 (define expected-resource-attributes
   (python-service-resource-attributes "aiohttp-otel"))

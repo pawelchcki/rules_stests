@@ -23,6 +23,8 @@
 ; Exact profile for OpenTelemetry Python auto-instrumentation 0.65b0 on Django.
 (define implementation-profile 'python-django-auto-v0-65b0)
 (define expected-error-status-message-policy 'nonempty)
+; Require severity, enrichment attributes, timestamps, a body, and unnamed logs.
+(define expected-log-policy '(#t #t #t #t unnamed))
 
 (define expected-resource-attributes
   (python-service-resource-attributes "django-otel"))

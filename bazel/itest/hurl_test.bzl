@@ -148,6 +148,8 @@ def realworld_hurl_test_suite(
                 "realworld.scenarios",
                 "realworld.profile.{}".format(profile),
             ]
+            candidate_libraries = list(libraries)
+            candidate_imports = list(imports)
             if otel_exact:
                 detail_library = trace_shape_library_prefix + case + "/golden.scm"
                 libraries.extend([
@@ -186,6 +188,9 @@ def realworld_hurl_test_suite(
                 otel_sink = otel_sink,
                 otel_app = otel_app,
                 otel_profile = profile,
+                otel_libraries = candidate_libraries,
+                otel_imports = candidate_imports,
+                otel_program = "//bazel/itest/goldens:validate_contract.scm",
                 otel_mode = "candidate",
                 tags = tags + ["manual"],
                 **kwargs
