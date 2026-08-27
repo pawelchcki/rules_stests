@@ -103,6 +103,12 @@ go_binary(
     embed = [":oci_bundle_lib"],
 )
 
+go_test(
+    name = "oci_bundle_test",
+    srcs = ["oci_bundle_test.go"],
+    embed = [":oci_bundle_lib"],
+)
+
 go_library(
     name = "api_probe_lib",
     srcs = ["api_probe.go"],

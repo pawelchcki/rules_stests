@@ -49,6 +49,8 @@ sys.argv = sys.argv[1:]
 runpy.run_path(entrypoint, run_name="__main__")
 `
 
+const treeArtifactDirectoryMarker = ".rules-stests-tree-artifact"
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "oci_bundle:", err)
@@ -117,13 +119,26 @@ func removeDanglingSymlinks(root string) error {
 		if entry.Type()&os.ModeSymlink == 0 {
 			return nil
 		}
-		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		target, err := os.Stat(path)
+		if errors.Is(err, os.ErrNotExist) {
 			if err := os.Remove(path); err != nil {
 				return fmt.Errorf("remove dangling OCI symlink %s: %w", path, err)
 			}
 			return nil
 		} else if err != nil {
 			return fmt.Errorf("inspect OCI symlink %s: %w", path, err)
+		}
+		if target.IsDir() {
+			children, err := os.ReadDir(path)
+			if err != nil {
+				return fmt.Errorf("inspect OCI symlink directory %s: %w", path, err)
+			}
+			if len(children) == 0 {
+				marker := filepath.Join(path, treeArtifactDirectoryMarker)
+				if err := os.WriteFile(marker, nil, 0o444); err != nil {
+					return fmt.Errorf("preserve empty OCI symlink target %s: %w", path, err)
+				}
+			}
 		}
 		return nil
 	})
