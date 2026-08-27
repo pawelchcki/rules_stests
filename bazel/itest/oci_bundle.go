@@ -29,6 +29,28 @@ type manifest struct {
 	Layers []descriptor `json:"layers"`
 }
 
+const pythonBootstrap = `
+import asyncio
+import runpy
+import socketserver
+import sys
+
+socketserver.TCPServer.allow_reuse_port = True
+original_create_server = asyncio.BaseEventLoop.create_server
+
+async def create_server_with_reuse_port(self, *args, **kwargs):
+    if kwargs.get("reuse_port") is None:
+        kwargs["reuse_port"] = True
+    return await original_create_server(self, *args, **kwargs)
+
+asyncio.BaseEventLoop.create_server = create_server_with_reuse_port
+entrypoint = sys.argv[1]
+sys.argv = sys.argv[1:]
+runpy.run_path(entrypoint, run_name="__main__")
+`
+
+const treeArtifactDirectoryMarker = ".rules-stests-tree-artifact"
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "oci_bundle:", err)
@@ -97,7 +119,8 @@ func removeDanglingSymlinks(root string) error {
 		if entry.Type()&os.ModeSymlink == 0 {
 			return nil
 		}
-		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		target, err := os.Stat(path)
+		if errors.Is(err, os.ErrNotExist) {
 			if err := os.Remove(path); err != nil {
 				return fmt.Errorf("remove dangling OCI symlink %s: %w", path, err)
 			}
@@ -105,8 +128,36 @@ func removeDanglingSymlinks(root string) error {
 		} else if err != nil {
 			return fmt.Errorf("inspect OCI symlink %s: %w", path, err)
 		}
+		if target.IsDir() {
+			children, err := os.ReadDir(path)
+			if err != nil {
+				return fmt.Errorf("inspect OCI symlink directory %s: %w", path, err)
+			}
+			if len(children) == 0 {
+				return preserveEmptySymlinkTarget(path, target)
+			}
+		}
 		return nil
 	})
+}
+
+func preserveEmptySymlinkTarget(path string, target os.FileInfo) (result error) {
+	mode := target.Mode().Perm()
+	if mode&0o200 == 0 {
+		if err := os.Chmod(path, mode|0o200); err != nil {
+			return fmt.Errorf("make empty OCI symlink target writable %s: %w", path, err)
+		}
+		defer func() {
+			if err := os.Chmod(path, mode); err != nil && result == nil {
+				result = fmt.Errorf("restore empty OCI symlink target mode %s: %w", path, err)
+			}
+		}()
+	}
+	marker := filepath.Join(path, treeArtifactDirectoryMarker)
+	if err := os.WriteFile(marker, nil, 0o444); err != nil {
+		return fmt.Errorf("preserve empty OCI symlink target %s: %w", path, err)
+	}
+	return nil
 }
 
 func runApp(instance, rootArg, otelRootArg, command string, args []string) error {
@@ -516,7 +567,7 @@ func execApp(root, otelRoot, instance, command string, args []string) error {
 		}
 		fmt.Fprintf(os.Stderr, "oci_bundle: activating OpenTelemetry Python instrumentation for %s from %s\n", instance, otelRoot)
 	}
-	arguments := []string{loader, "--library-path", libraryPath, python, entrypoint, command}
+	arguments := []string{loader, "--library-path", libraryPath, python, "-c", pythonBootstrap, entrypoint, command}
 	arguments = append(arguments, args...)
 	if err := syscall.Exec(loader, arguments, environment); err != nil {
 		return fmt.Errorf("execute app with bundled glibc: %w", err)

@@ -14,3 +14,9 @@ prost = { version = "0.14.4", default-features = false, features = ["derive"] }
 rustix = { version = "1.1.4", default-features = false, features = ["alloc", "fs", "net", "runtime", "stdio", "time"] }
 serde = { version = "1.0.228", default-features = false, features = ["alloc", "derive"] }
 serde_json = { version = "1.0.145", default-features = false, features = ["alloc"] }
+stak-device = { version = "0.12.23", default-features = false }
+stak-file = { version = "0.12.23", default-features = false }
+stak-process-context = { version = "0.12.23", default-features = false }
+stak-r7rs = { version = "0.12.23", default-features = false }
+stak-time = { version = "0.12.23", default-features = false }
+stak-vm = { version = "0.12.23", default-features = false, features = ["profile"] }

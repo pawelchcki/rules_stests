@@ -25,6 +25,7 @@ rust_toolchains.toolchain(
     version = "1.97.1",
 )
 use_repo(rust_toolchains, "default_rust_toolchains")
+
 register_toolchains(
     "@default_rust_toolchains//:all",
     "@llvm//toolchain:all",
@@ -36,6 +37,90 @@ crate.from_cargo(
     cargo_lock = "//bazel/itest:Cargo.lock",
     cargo_toml = "//bazel/itest:Cargo.toml",
     platform_triples = ["x86_64-unknown-linux-gnu"],
+)
+crate.annotation(
+    crate = "serde",
+    repositories = ["crates"],
+    rustc_flags = ["-Copt-level=3"],
+    version = "1.0.229",
+)
+crate.annotation(
+    crate = "serde_core",
+    repositories = ["crates"],
+    rustc_flags = ["-Copt-level=3"],
+    version = "1.0.229",
+)
+crate.annotation(
+    crate = "serde_json",
+    repositories = ["crates"],
+    rustc_flags = ["-Copt-level=3"],
+    version = "1.0.151",
+)
+crate.annotation(
+    crate = "prost",
+    repositories = ["crates"],
+    rustc_flags = ["-Copt-level=3"],
+    version = "0.14.4",
+)
+crate.annotation(
+    crate = "stak-device",
+    repositories = ["crates"],
+    rustc_flags = ["-Copt-level=3"],
+    version = "0.12.23",
+)
+crate.annotation(
+    crate = "stak-file",
+    repositories = ["crates"],
+    rustc_flags = ["-Copt-level=3"],
+    version = "0.12.23",
+)
+crate.annotation(
+    crate = "stak-inexact",
+    repositories = ["crates"],
+    rustc_flags = ["-Copt-level=3"],
+    version = "0.12.23",
+)
+crate.annotation(
+    crate = "stak-lzss",
+    repositories = ["crates"],
+    rustc_flags = ["-Copt-level=3"],
+    version = "0.12.23",
+)
+crate.annotation(
+    crate = "stak-native",
+    repositories = ["crates"],
+    rustc_flags = ["-Copt-level=3"],
+    version = "0.12.23",
+)
+crate.annotation(
+    crate = "stak-process-context",
+    repositories = ["crates"],
+    rustc_flags = ["-Copt-level=3"],
+    version = "0.12.23",
+)
+crate.annotation(
+    crate = "stak-r7rs",
+    repositories = ["crates"],
+    rustc_flags = ["-Copt-level=3"],
+    version = "0.12.23",
+)
+crate.annotation(
+    crate = "stak-time",
+    repositories = ["crates"],
+    rustc_flags = ["-Copt-level=3"],
+    version = "0.12.23",
+)
+crate.annotation(
+    crate = "stak-util",
+    repositories = ["crates"],
+    rustc_flags = ["-Copt-level=3"],
+    version = "0.12.23",
+)
+crate.annotation(
+    crate = "stak-vm",
+    repositories = ["crates"],
+    rustc_flags = ["-Copt-level=3"],
+    version = "0.12.23",
 )
 use_repo(crate, "crates")
 
@@ -53,6 +138,20 @@ use_repo(
 )
 
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "stak_compiler_assets",
+    build_file_content = """
+package(default_visibility = ["//visibility:public"])
+
+filegroup(name = "compiler_bytecode", srcs = ["src/compile.bc"])
+filegroup(name = "prelude", srcs = ["src/prelude.scm"])
+""",
+    sha256 = "e69f89d14ef15e24ce0678ce09c8608f97bed8e97cdd0a9fcf7ce2476a0f0b24",
+    strip_prefix = "stak-compiler-0.12.23",
+    type = "tar.gz",
+    urls = ["https://static.crates.io/crates/stak-compiler/stak-compiler-0.12.23.crate"],
+)
 
 http_archive(
     name = "realworld_api_specs",

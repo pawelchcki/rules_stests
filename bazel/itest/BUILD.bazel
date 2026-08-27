@@ -1,8 +1,8 @@
-load("@rules_go//go:def.bzl", "go_binary", "go_library")
 load("@crates//:defs.bzl", "aliases", "all_crate_deps")
-load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("@rules_itest//:itest.bzl", "itest_service", "service_test")
-load(":hurl_test.bzl", "realworld_hurl_test")
+load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
+load(":hurl_test.bzl", "realworld_hurl_test_suite")
 load(":oci_rootfs.bzl", "oci_rootfs")
 
 package(default_visibility = ["//visibility:public"])
@@ -14,28 +14,50 @@ _OTEL_SINK_ENV = {
     "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
     "OTEL_LOGS_EXPORTER": "otlp",
     "OTEL_METRICS_EXPORTER": "otlp",
-    "OTEL_METRIC_EXPORT_INTERVAL": "500",
+    "OTEL_METRIC_EXPORT_INTERVAL": "1000",
     "OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED": "true",
     "OTEL_TRACES_EXPORTER": "otlp",
 }
 
 rust_binary(
     name = "otel_sink",
-    aliases = aliases(),
     srcs = [
+        "otel_sink/data.rs",
+        "otel_sink/http.rs",
         "otel_sink/main.rs",
+        "otel_sink/otlp.rs",
+        "otel_sink/otlp_json.rs",
+        "otel_sink/platform.rs",
         "otel_sink/proto.rs",
+        "otel_sink/runtime.rs",
+        "otel_sink/scheme.rs",
+        "otel_sink/server.rs",
+        "otel_sink/stats.rs",
+        "otel_sink/storage.rs",
+        "otel_sink/trace_forest.rs",
+        "otel_sink/validation.rs",
     ],
-    deps = all_crate_deps(normal = True),
+    aliases = aliases(),
+    compile_data = [
+        "@stak_compiler_assets//:compiler_bytecode",
+        "@stak_compiler_assets//:prelude",
+    ],
     edition = "2024",
+    rustc_env = {
+        "STAK_COMPILER_BYTECODE": "$(location @stak_compiler_assets//:compiler_bytecode)",
+        "STAK_PRELUDE": "$(location @stak_compiler_assets//:prelude)",
+    },
     rustc_flags = [
+        "-Copt-level=2",
         "-Cpanic=abort",
         "-Clink-arg=-nostartfiles",
     ],
+    deps = all_crate_deps(normal = True),
 )
 
 go_library(
     name = "otel_sink_probe_lib",
+    embedsrcs = ["//bazel/itest/goldens:trace_shape.scm"],
     srcs = ["otel_sink_probe.go"],
     importpath = "github.com/pawelchcki/rules_stests/bazel/itest/otel_sink_probe",
     visibility = ["//visibility:private"],
@@ -57,15 +79,16 @@ itest_service(
     autoassign_port = True,
     exe = ":otel_sink",
     http_health_check_address = "http://127.0.0.1:$${PORT}/healthz",
+    so_reuseport_aware = True,
     shutdown_timeout = "2s",
 )
 
 service_test(
     name = "otel_sink_test",
+    timeout = "short",
     args = ["--service-suffix=//bazel/itest:otel_sink_service"],
     services = [":otel_sink_service"],
     test = ":otel_sink_probe",
-    timeout = "short",
 )
 
 go_library(
@@ -77,6 +100,12 @@ go_library(
 
 go_binary(
     name = "oci_bundle",
+    embed = [":oci_bundle_lib"],
+)
+
+go_test(
+    name = "oci_bundle_test",
+    srcs = ["oci_bundle_test.go"],
     embed = [":oci_bundle_lib"],
 )
 
@@ -105,6 +134,12 @@ go_binary(
         ":hurl_rootfs",
         "@realworld_api_specs//:hurl_all",
     ],
+    embed = [":hurl_test_driver_lib"],
+)
+
+go_test(
+    name = "hurl_test_driver_test",
+    srcs = ["hurl_test_driver_test.go"],
     embed = [":hurl_test_driver_lib"],
 )
 
@@ -147,22 +182,22 @@ itest_service(
     exe = ":oci_bundle",
     expected_start_duration = "3s",
     http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    so_reuseport_aware = True,
     shutdown_timeout = "10s",
 )
 
 service_test(
     name = "aiohttp_test",
+    timeout = "moderate",
     args = ["--service-suffix=//bazel/itest:aiohttp_service"],
     services = [":aiohttp_service"],
     test = ":api_probe",
-    timeout = "moderate",
 )
 
-realworld_hurl_test(
+realworld_hurl_test_suite(
     name = "aiohttp_hurl_test",
-    service = ":aiohttp_service",
-    specs = "@realworld_api_specs//:hurl_all",
     timeout = "moderate",
+    service = ":aiohttp_service",
 )
 
 itest_service(
@@ -183,28 +218,43 @@ itest_service(
         ":aiohttp_rootfs",
         ":otel_python_rootfs",
     ],
-    deps = [":otel_sink_service"],
     env = _OTEL_SINK_ENV,
     exe = ":oci_bundle",
     expected_start_duration = "3s",
     http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    so_reuseport_aware = True,
     shutdown_timeout = "10s",
+    deps = [":otel_sink_service"],
 )
 
 service_test(
     name = "aiohttp_otel_test",
+    timeout = "moderate",
     args = ["--service-suffix=//bazel/itest:aiohttp_otel_service"],
     services = [":aiohttp_otel_service"],
     test = ":api_probe",
-    timeout = "moderate",
 )
 
-realworld_hurl_test(
+realworld_hurl_test_suite(
     name = "aiohttp_otel_hurl_test",
+    timeout = "moderate",
+    otel_app = "aiohttp",
+    otel_flaky_cases = {
+        "errors_profiles": "a late startup /api/tags export can cross the trace-only reset boundary",
+    },
     otel_sink = ":otel_sink_service",
     service = ":aiohttp_otel_service",
-    specs = "@realworld_api_specs//:hurl_all",
+)
+
+realworld_hurl_test_suite(
+    name = "aiohttp_otel_contract_test",
     timeout = "moderate",
+    otel_app = "aiohttp",
+    otel_candidates = False,
+    otel_exact = False,
+    otel_sink = ":otel_sink_service",
+    service = ":aiohttp_otel_service",
+    tags = ["manual"],
 )
 
 itest_service(
@@ -224,23 +274,22 @@ itest_service(
     exe = ":oci_bundle",
     expected_start_duration = "3s",
     http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    so_reuseport_aware = True,
     shutdown_timeout = "10s",
 )
 
 service_test(
     name = "django_test",
+    timeout = "moderate",
     args = ["--service-suffix=//bazel/itest:django_service"],
     services = [":django_service"],
     test = ":api_probe",
-    timeout = "moderate",
 )
 
-realworld_hurl_test(
+realworld_hurl_test_suite(
     name = "django_hurl_test",
-    jobs = 1,
-    service = ":django_service",
-    specs = "@realworld_api_specs//:hurl_all",
     timeout = "moderate",
+    service = ":django_service",
 )
 
 itest_service(
@@ -261,27 +310,40 @@ itest_service(
         ":django_rootfs",
         ":otel_python_rootfs",
     ],
-    deps = [":otel_sink_service"],
     env = _OTEL_SINK_ENV,
     exe = ":oci_bundle",
     expected_start_duration = "3s",
     http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    so_reuseport_aware = True,
     shutdown_timeout = "10s",
+    deps = [":otel_sink_service"],
 )
 
 service_test(
     name = "django_otel_test",
+    timeout = "moderate",
     args = ["--service-suffix=//bazel/itest:django_otel_service"],
     services = [":django_otel_service"],
     test = ":api_probe",
-    timeout = "moderate",
 )
 
-realworld_hurl_test(
+realworld_hurl_test_suite(
     name = "django_otel_hurl_test",
-    jobs = 1,
+    timeout = "moderate",
+    otel_app = "django",
+    otel_flaky_reason = "the Python metric aggregator can emit a point whose start timestamp follows its collection timestamp under parallel load",
     otel_sink = ":otel_sink_service",
     service = ":django_otel_service",
-    specs = "@realworld_api_specs//:hurl_all",
+)
+
+realworld_hurl_test_suite(
+    name = "django_otel_contract_test",
     timeout = "moderate",
+    otel_app = "django",
+    otel_candidates = False,
+    otel_exact = False,
+    otel_flaky_reason = "the Python metric aggregator can emit a point whose start timestamp follows its collection timestamp under parallel load",
+    otel_sink = ":otel_sink_service",
+    service = ":django_otel_service",
+    tags = ["manual"],
 )
