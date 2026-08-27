@@ -568,7 +568,7 @@ func emitGoldenCandidate(client http.Client, baseURL, goldenCase, configuredProf
 	if root == "" {
 		return errors.New("TEST_UNDECLARED_OUTPUTS_DIR is unavailable for golden candidate")
 	}
-	directory := filepath.Join(root, "details", profile, scenario)
+	directory := filepath.Join(root, "goldens", profile, scenario)
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return fmt.Errorf("create golden candidate output directory: %w", err)
 	}

@@ -12,12 +12,10 @@ bazel_dep(name = "aspect_bazel_lib", version = "2.21.1")
 bazel_dep(name = "package_metadata", version = "0.0.7")
 bazel_dep(name = "platforms", version = "1.1.0")
 
+# No `name =` here: rules_go rejects a named SDK in a non-root module, which
+# would break importing this module as a dependency.
 go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
-go_sdk.download(
-    name = "go_sdk",
-    version = "1.25.0",
-)
-use_repo(go_sdk, "go_sdk")
+go_sdk.download(version = "1.25.0")
 
 rust_toolchains = use_extension("@rules_rs//rs/toolchains:module_extension.bzl", "toolchains")
 rust_toolchains.toolchain(
@@ -124,17 +122,28 @@ crate.annotation(
 )
 use_repo(crate, "crates")
 
+# Images used by the shared harness: external consumers get these too.
 corpus_images = use_extension("//bazel:oci_deps.bzl", "oci_deps")
 use_repo(
     corpus_images,
-    "aiohttp_realworld",
-    "aiohttp_realworld_linux_amd64",
-    "django_ninja_realworld",
-    "django_ninja_realworld_linux_amd64",
     "hurl_tool",
     "hurl_tool_linux_amd64",
     "otel_python",
     "otel_python_linux_amd64",
+)
+
+# Images used only by //bazel/itest/apps, this repo's own reference services.
+dev_corpus_images = use_extension(
+    "//bazel:oci_deps.bzl",
+    "oci_deps",
+    dev_dependency = True,
+)
+use_repo(
+    dev_corpus_images,
+    "aiohttp_realworld",
+    "aiohttp_realworld_linux_amd64",
+    "django_ninja_realworld",
+    "django_ninja_realworld_linux_amd64",
 )
 
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")

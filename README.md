@@ -22,6 +22,67 @@ unpacked layer    -> <rootfs>/opt/app/bin/app run
 The unpacked mode needs a Linux/amd64 host with a compatible glibc, but does
 not need Python, uv, a virtual environment, or a container runtime.
 
+## Repository structure
+
+```text
+corpus/       contract data: Scheme libraries, profiles, per-case goldens
+rules/        reusable Starlark: realworld_hurl_test_suite, oci_rootfs
+bazel/itest/  the harness: Go drivers, the Rust otel_sink, shared services
+bazel/itest/apps/  this repo's own reference services (aiohttp, Django Ninja)
+```
+
+`corpus/` and `rules/` carry no dependency on `bazel/itest/apps`, so an
+alternative OpenTelemetry implementation can run these testcases unchanged.
+Corpus filenames mirror their Scheme library names: `corpus/otel/validation.scm`
+defines `(otel validation)`, `corpus/realworld/profiles/<profile>.scm` defines
+`(realworld profile <profile>)`. See [`corpus/README.md`](corpus/README.md).
+
+## External use
+
+Depend on this module and load the macro from `@rules_stests_corpus//rules`:
+
+```starlark
+# MODULE.bazel
+bazel_dep(name = "rules_stests_corpus", version = "...")
+```
+
+```starlark
+# BUILD.bazel
+load("@rules_stests_corpus//rules:hurl_test.bzl", "realworld_hurl_test_suite")
+
+realworld_hurl_test_suite(
+    name = "my_otel",
+    service = ":my_service",
+    otel_app = "myimpl",
+    otel_profile = "go-myimpl-v1",
+    otel_profile_library = "//profiles:go-myimpl-v1.scm",
+    otel_sink = "@rules_stests_corpus//bazel/itest:otel_sink_service",
+)
+```
+
+The offered `otel_sink_service`, Hurl rootfs, and driver all come from the
+module, so the only targets you supply are your service and — once you are
+ready to pin exact traces — your own profile and golden libraries.
+
+To drive the corpus from your own runner instead, load the data API and ignore
+`//rules` entirely:
+
+```starlark
+load(
+    "@rules_stests_corpus//corpus:defs.bzl",
+    "REALWORLD_HURL_CASES",
+    "exact_bundle",
+)
+
+filegroup(
+    name = "articles_contract",
+    srcs = exact_bundle("python-django-auto-v0-65b0", "articles").libraries,
+)
+```
+
+`contract_bundle` and `exact_bundle` return the `.scm` labels alongside the
+Scheme `imports` and validation `program` those libraries expect.
+
 ## Bazel integration tests
 
 OCI manifest digests are recorded in `bazel/oci_images.lock.bzl` and pulled by
@@ -70,7 +131,7 @@ from `ASSIGNED_PORTS`; no endpoint-specific code is compiled into the package.
 Any `rules_itest` service can use the reusable sharding macro:
 
 ```starlark
-load("//bazel/itest:hurl_test.bzl", "realworld_hurl_test_suite")
+load("//rules:hurl_test.bzl", "realworld_hurl_test_suite")
 
 realworld_hurl_test_suite(
     name = "my_app_contract_test",
@@ -211,8 +272,8 @@ unordered one-to-one multiset. The current contract-only targets are manual
 because the exact targets already imply them:
 
 ```bash
-bazel test //bazel/itest:aiohttp_otel_contract_test_articles \
-  //bazel/itest:django_otel_contract_test_articles
+bazel test //bazel/itest/apps:aiohttp_otel_contract_test_articles \
+  //bazel/itest/apps:django_otel_contract_test_articles
 ```
 
 `realworld_hurl_test_suite` exposes `otel_profile`,
@@ -269,18 +330,18 @@ environment variable. It preserves both the raw JSON capture and a Scheme
 candidate in Bazel's undeclared test outputs:
 
 ```bash
-bazel test //bazel/itest:aiohttp_otel_hurl_test_articles_golden_candidate \
+bazel test //bazel/itest/apps:aiohttp_otel_hurl_test_articles_golden_candidate \
   --nocache_test_results --test_output=streamed
 
 # Generate every candidate, safely parallelized by Bazel.
-bazel test //bazel/itest:aiohttp_otel_hurl_test_golden_candidates \
-  //bazel/itest:django_otel_hurl_test_golden_candidates \
+bazel test //bazel/itest/apps:aiohttp_otel_hurl_test_golden_candidates \
+  //bazel/itest/apps:django_otel_hurl_test_golden_candidates \
   --jobs=4 --nocache_test_results
 ```
 
 The candidate is a deterministic, importable implementation-detail library for
 inspection. Check it in under
-`goldens/details/<profile>/<scenario>/golden.scm`. Portable HTTP contracts stay
+`corpus/realworld/goldens/<profile>/<scenario>/golden.scm`. Portable HTTP contracts stay
 in the single shared scenario table. Normal validation targets cannot rewrite
 checked-in goldens. The driver reports HTTP wall time,
 sink-measured evaluation time, and sink process peak RSS for each validation.
@@ -288,24 +349,24 @@ Configured profile names are propagated into candidate libraries, so a new
 implementation can generate candidates before exact tests import them.
 
 ```bash
-bazel test //bazel/itest:aiohttp_test
-bazel test //bazel/itest:aiohttp_hurl_test
-bazel test //bazel/itest:django_test
-bazel test //bazel/itest:django_hurl_test
+bazel test //bazel/itest/apps:aiohttp_test
+bazel test //bazel/itest/apps:aiohttp_hurl_test
+bazel test //bazel/itest/apps:django_test
+bazel test //bazel/itest/apps:django_hurl_test
 
 # The same probes and contracts with OpenTelemetry auto-instrumentation.
 bazel test //bazel/itest:otel_sink_test
-bazel test //bazel/itest:aiohttp_otel_test
-bazel test //bazel/itest:aiohttp_otel_hurl_test
-bazel test //bazel/itest:django_otel_test
-bazel test //bazel/itest:django_otel_hurl_test
+bazel test //bazel/itest/apps:aiohttp_otel_test
+bazel test //bazel/itest/apps:aiohttp_otel_hurl_test
+bazel test //bazel/itest/apps:django_otel_test
+bazel test //bazel/itest/apps:django_otel_hurl_test
 ```
 
 Run a fixture and keep it available for manual development with:
 
 ```bash
-bazel run //bazel/itest:aiohttp_service
-bazel run //bazel/itest:django_service
+bazel run //bazel/itest/apps:aiohttp_service
+bazel run //bazel/itest/apps:django_service
 ```
 
 ## Publication and source identity
