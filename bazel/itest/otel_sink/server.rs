@@ -193,14 +193,20 @@ fn validate(
     records: &[Record],
     validation_stats: &mut ValidationStats,
 ) {
+    let started = clock_gettime(ClockId::Monotonic);
     let input = match validation::capture_to_scheme(records) {
         Ok(input) => input,
         Err(error) => {
-            respond(connection, 500, "text/plain", error.as_bytes());
+            let finished = clock_gettime(ClockId::Monotonic);
+            validation_stats.runs += 1;
+            validation_stats.failures += 1;
+            validation_stats.last_duration_ms = stats::elapsed_millis(started, finished);
+            validation_stats.last_calls = 0;
+            let message = format!("OTLP contract assertion: {error}");
+            respond(connection, 409, "text/plain", message.as_bytes());
             return;
         }
     };
-    let started = clock_gettime(ClockId::Monotonic);
     let result = scheme::evaluate(source, &input);
     let finished = clock_gettime(ClockId::Monotonic);
     validation_stats.runs += 1;

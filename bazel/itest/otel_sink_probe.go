@@ -102,14 +102,25 @@ func main() {
 		"unset AnyValue oneof",
 		[]byte(`{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{}}]}]}]}`),
 	)
-	resetSink(endpoint)
-	rejectJSON(
+	postJSON(
 		endpoint,
 		"/v1/logs",
-		"null structured AnyValue",
-		[]byte("unexpected JSON type"),
+		"null AnyValue oneof",
+		[]byte(`{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{"stringValue":null}}]}]}]}`),
+	)
+	postJSON(
+		endpoint,
+		"/v1/logs",
+		"populated AnyValue with null alternative",
+		[]byte(`{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{"stringValue":"ok","intValue":null}}]}]}]}`),
+	)
+	postJSON(
+		endpoint,
+		"/v1/logs",
+		"null structured AnyValue oneof",
 		[]byte(`{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{"arrayValue":null}}]}]}]}`),
 	)
+	resetSink(endpoint)
 	rejectJSON(
 		endpoint,
 		"/v1/logs",
@@ -835,6 +846,11 @@ func main() {
 	invalidStatusResponse.Body.Close()
 	if readErr != nil || invalidStatusResponse.StatusCode != http.StatusOK {
 		fatal(fmt.Errorf("send invalid-status candidate trace: HTTP %d: %s: %v", invalidStatusResponse.StatusCode, invalidStatusBody, readErr))
+	}
+	if output, status, err := validateScheme(endpoint, []byte(`(import (scheme base)) #t`)); err != nil {
+		fatal(err)
+	} else if status != http.StatusConflict || !bytes.Contains(output, []byte("invalid span status")) {
+		fatal(fmt.Errorf("invalid-status contract validation returned HTTP %d: %s", status, output))
 	}
 	freezeCapture(endpoint, "/dump", "invalid-status candidate capture")
 	invalidStatusCandidate, err := http.Get(endpoint + "/candidate?app=custom-app")

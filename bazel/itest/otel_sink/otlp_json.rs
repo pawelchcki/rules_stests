@@ -253,16 +253,17 @@ fn validate_any_value(value: &Value) -> Result<(), String> {
     let fields = value
         .as_object()
         .ok_or_else(|| String::from("invalid OTLP AnyValue: expected object"))?;
-    if fields.len() > 1 {
+    let populated_fields = fields.values().filter(|item| !item.is_null()).count();
+    if populated_fields > 1 {
         return Err(format!(
             "invalid OTLP AnyValue: expected at most one variant, got {}",
-            fields.len()
+            populated_fields
         ));
     }
-    if fields.is_empty() {
+    if populated_fields == 0 {
         return Ok(());
     }
-    let (name, item) = fields.iter().next().unwrap();
+    let (name, item) = fields.iter().find(|(_, item)| !item.is_null()).unwrap();
     let valid = match name.as_str() {
         "string_value" | "stringValue" => item.is_string(),
         "bytes_value" | "bytesValue" => item
