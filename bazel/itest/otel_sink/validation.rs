@@ -1695,7 +1695,7 @@ fn json_double(value: &Value) -> Option<f64> {
         "NaN" => Some(f64::NAN),
         "Infinity" => Some(f64::INFINITY),
         "-Infinity" => Some(f64::NEG_INFINITY),
-        _ => None,
+        value => value.parse::<f64>().ok().filter(|value| value.is_finite()),
     })
 }
 

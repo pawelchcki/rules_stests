@@ -134,14 +134,30 @@ func removeDanglingSymlinks(root string) error {
 				return fmt.Errorf("inspect OCI symlink directory %s: %w", path, err)
 			}
 			if len(children) == 0 {
-				marker := filepath.Join(path, treeArtifactDirectoryMarker)
-				if err := os.WriteFile(marker, nil, 0o444); err != nil {
-					return fmt.Errorf("preserve empty OCI symlink target %s: %w", path, err)
-				}
+				return preserveEmptySymlinkTarget(path, target)
 			}
 		}
 		return nil
 	})
+}
+
+func preserveEmptySymlinkTarget(path string, target os.FileInfo) (result error) {
+	mode := target.Mode().Perm()
+	if mode&0o200 == 0 {
+		if err := os.Chmod(path, mode|0o200); err != nil {
+			return fmt.Errorf("make empty OCI symlink target writable %s: %w", path, err)
+		}
+		defer func() {
+			if err := os.Chmod(path, mode); err != nil && result == nil {
+				result = fmt.Errorf("restore empty OCI symlink target mode %s: %w", path, err)
+			}
+		}()
+	}
+	marker := filepath.Join(path, treeArtifactDirectoryMarker)
+	if err := os.WriteFile(marker, nil, 0o444); err != nil {
+		return fmt.Errorf("preserve empty OCI symlink target %s: %w", path, err)
+	}
+	return nil
 }
 
 func runApp(instance, rootArg, otelRootArg, command string, args []string) error {

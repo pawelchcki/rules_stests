@@ -79,6 +79,13 @@ func main() {
 	)
 	rejectJSON(
 		endpoint,
+		"/v1/traces",
+		"quoted span enum",
+		[]byte("unexpected JSON type"),
+		[]byte(`{"resourceSpans":[{"scopeSpans":[{"spans":[{"kind":"2"}]}]}]}`),
+	)
+	rejectJSON(
+		endpoint,
 		"/v1/metrics",
 		"non-object repeated message",
 		[]byte("expected object"),
@@ -416,7 +423,7 @@ func main() {
 			0x00, 0x00, 0x00, 0x00, 0x00, 0x21, 0x00, 0x00,
 			0x00, 0x00, 0x00, 0x00, 0xf8, 0x7f,
 		}, "metric-protobuf"},
-		{"logs", "application/json; charset=utf-8", []byte(`{"resourceLogs":[{"resource":{"attributes":[]},"scopeLogs":[{"scope":{"name":"probe-log","version":"4.5.6","attributes":[],"droppedAttributesCount":0},"logRecords":[{"timeUnixNano":"1","observedTimeUnixNano":"2","severityNumber":9,"severityText":"INFO","body":{"arrayValue":{"values":[{"bytesValue":"AQID/w=="},{"kvlistValue":{"values":[{"key":"nested","value":{"stringValue":"present"}}]}},{"doubleValue":"NaN"}]}},"attributes":[{"key":"probe.attribute","value":{"stringValue":"present"}}]}]}]}]}`), "log-json"},
+		{"logs", "application/json; charset=utf-8", []byte(`{"resourceLogs":[{"resource":{"attributes":[]},"scopeLogs":[{"scope":{"name":"probe-log","version":"4.5.6","attributes":[],"droppedAttributesCount":0},"logRecords":[{"timeUnixNano":"1","observedTimeUnixNano":"2","severityNumber":9,"severityText":"INFO","body":{"arrayValue":{"values":[{"bytesValue":"AQID/w=="},{"kvlistValue":{"values":[{"key":"nested","value":{"stringValue":"present"}}]}},{"doubleValue":"NaN"},{"doubleValue":"1.5"}]}},"attributes":[{"key":"probe.attribute","value":{"stringValue":"present"}}]}]}]}]}`), "log-json"},
 	}
 	for _, item := range requests {
 		req, err := http.NewRequest(http.MethodPost, endpoint+"/v1/"+item.signal, bytes.NewReader(item.body))
@@ -540,7 +547,8 @@ func main() {
                  (equal? (cadr (assq 'body (car logs)))
                          '(array ((bytes (1 2 3 255))
                                   (kvlist (("nested" (string "present"))))
-                                  (double "NaN"))))
+                                  (double "NaN")
+                                  (double "1.5"))))
                  (= (length (cadr (assq 'attributes (car logs)))) 1))
             (display "standalone validation passed\n")
             (error "canonical OTLP JSON shape changed"))))))

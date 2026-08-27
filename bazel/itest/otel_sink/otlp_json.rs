@@ -173,8 +173,16 @@ fn i32_scalar(value: &Value) -> bool {
             .is_some_and(|value| value.parse::<i32>().is_ok())
 }
 
+fn enum_scalar(value: &Value) -> bool {
+    value.as_i64().is_some() || value.as_u64().is_some()
+}
+
 fn double_scalar(value: &Value) -> bool {
-    value.is_number() || matches!(value.as_str(), Some("NaN" | "Infinity" | "-Infinity"))
+    value.is_number()
+        || value.as_str().is_some_and(|value| {
+            matches!(value, "NaN" | "Infinity" | "-Infinity")
+                || value.parse::<f64>().is_ok_and(f64::is_finite)
+        })
 }
 
 fn validate_resource(value: &Value) -> Result<(), String> {
@@ -278,7 +286,7 @@ fn validate_any_value(value: &Value) -> Result<(), String> {
                     .is_some_and(|value| value.parse::<i64>().is_ok())
         }
         "double_value" | "doubleValue" => {
-            item.is_number() || matches!(item.as_str(), Some("NaN" | "Infinity" | "-Infinity"))
+            double_scalar(item)
         }
         "array_value" | "arrayValue" => {
             if item.is_object() {
@@ -377,6 +385,7 @@ fn validate_span(value: &Value) -> Result<(), String> {
     validate_array_field(value, "attributes", "attributes", validate_key_value)?;
     validate_array_field(value, "events", "events", validate_span_event)?;
     validate_array_field(value, "links", "links", validate_span_link)?;
+    validate_scalar_field(value, "kind", "kind", "span", enum_scalar)?;
     validate_object_field(value, "status", "status", validate_status)
 }
 
@@ -417,7 +426,9 @@ fn validate_span_link(value: &Value) -> Result<(), String> {
 }
 
 fn validate_status(value: &Value) -> Result<(), String> {
-    reject_unknown(value, "span status", &["message", "code"])
+    reject_unknown(value, "span status", &["message", "code"])?;
+    validate_scalar_field(value, "message", "message", "span status", Value::is_string)?;
+    validate_scalar_field(value, "code", "code", "span status", enum_scalar)
 }
 
 fn validate_resource_metrics(value: &Value) -> Result<(), String> {
@@ -518,7 +529,7 @@ fn validate_sum(value: &Value) -> Result<(), String> {
         "aggregation_temporality",
         "aggregationTemporality",
         "sum",
-        integer_scalar,
+        enum_scalar,
     )?;
     validate_scalar_field(
         value,
@@ -551,7 +562,7 @@ fn validate_histogram(value: &Value) -> Result<(), String> {
         "aggregation_temporality",
         "aggregationTemporality",
         "histogram",
-        integer_scalar,
+        enum_scalar,
     )?;
     validate_array_field(
         value,
@@ -577,7 +588,7 @@ fn validate_exponential_histogram(value: &Value) -> Result<(), String> {
         "aggregation_temporality",
         "aggregationTemporality",
         "exponential histogram",
-        integer_scalar,
+        enum_scalar,
     )?;
     validate_array_field(
         value,
@@ -925,6 +936,13 @@ fn validate_log_record(value: &Value) -> Result<(), String> {
     )?;
     validate_object_field(value, "body", "body", validate_any_value)?;
     validate_array_field(value, "attributes", "attributes", validate_key_value)?;
+    validate_scalar_field(
+        value,
+        "severity_number",
+        "severityNumber",
+        "log record",
+        enum_scalar,
+    )?;
     validate_scalar_field(value, "flags", "flags", "log record", trace_flags_scalar)
 }
 

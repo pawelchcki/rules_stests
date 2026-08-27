@@ -50,3 +50,35 @@ func TestRemoveDanglingSymlinksRemovesMissingTarget(t *testing.T) {
 		t.Fatalf("dangling symlink still exists: %v", err)
 	}
 }
+
+func TestRemoveDanglingSymlinksPreservesReadOnlyEmptyTarget(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(target, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink("target", link); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := removeDanglingSymlinks(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(target, treeArtifactDirectoryMarker)); err != nil {
+		t.Fatalf("read-only symlink target has no tree-artifact marker: %v", err)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o555 {
+		t.Fatalf("target mode = %o, want 555", got)
+	}
+	if err := os.Chmod(target, 0o755); err != nil {
+		t.Fatalf("make target removable: %v", err)
+	}
+}

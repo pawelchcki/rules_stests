@@ -141,8 +141,8 @@ fn collect_json(payload: &Value, output: &mut Vec<RawSpan>) -> Result<(), String
                 .and_then(Value::as_str)
                 .unwrap_or("");
             for span in array(group.get("spans")) {
-                let kind = integer_or_default(span.get("kind"), "span kind")?;
-                let status = integer_or_default(
+                let kind = enum_or_default(span.get("kind"), "span kind")?;
+                let status = enum_or_default(
                     span.get("status").and_then(|status| status.get("code")),
                     "span status",
                 )?;
@@ -463,10 +463,14 @@ fn integer(value: Option<&Value>, label: &str) -> Result<i128, String> {
         .ok_or_else(|| format!("invalid {label}"))
 }
 
-fn integer_or_default(value: Option<&Value>, label: &str) -> Result<i128, String> {
+fn enum_or_default(value: Option<&Value>, label: &str) -> Result<i128, String> {
     match value {
         None | Some(Value::Null) => Ok(0),
-        Some(value) => integer(Some(value), label),
+        Some(value) => value
+            .as_i64()
+            .map(i128::from)
+            .or_else(|| value.as_u64().map(i128::from))
+            .ok_or_else(|| format!("invalid {label}")),
     }
 }
 
