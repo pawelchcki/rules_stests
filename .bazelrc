@@ -1,2 +1,9 @@
 common --enable_bzlmod
 test --test_output=errors
+
+# BuildBuddy Workflows injects the API key and build-event configuration.
+# Keep the remote cache scoped to CI so local Bazel commands remain unchanged.
+build:buildbuddy --remote_cache=grpcs://remote.buildbuddy.io
+build:buildbuddy --remote_download_minimal
+build:buildbuddy --remote_timeout=10m
+build:buildbuddy --jobs=100
