@@ -12,7 +12,12 @@ use stak_vm::{Cons, Error, Memory, Profiler, Value, Vm};
 const COMPILER_BYTECODE: &[u8] = include_bytes!(env!("STAK_COMPILER_BYTECODE"));
 const PRELUDE: &[u8] = include_bytes!(env!("STAK_PRELUDE"));
 const COMPILER_HEAP_CELLS: usize = 1 << 22;
-const VALIDATOR_HEAP_CELLS: usize = 1 << 20;
+// The driver's startup reset clears traces but not metrics or logs, so a
+// capture grows with the test's wall-clock duration: the Python exporter emits
+// another metric batch every OTEL_METRIC_EXPORT_INTERVAL. A heavily parallel
+// run therefore validates a substantially larger capture than a quiet one, and
+// 1 << 20 cells exhausted the heap under a full 90-test CI run.
+const VALIDATOR_HEAP_CELLS: usize = 1 << 22;
 const COMPILER_CALL_BUDGET: usize = 100_000_000;
 const VALIDATOR_CALL_BUDGET: usize = 50_000_000;
 const VM_OUTPUT_BUDGET: usize = 1 << 20;

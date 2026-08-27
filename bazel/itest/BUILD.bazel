@@ -1,23 +1,11 @@
+load("@aspect_bazel_lib//lib:copy_file.bzl", "copy_file")
 load("@crates//:defs.bzl", "aliases", "all_crate_deps")
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("@rules_itest//:itest.bzl", "itest_service", "service_test")
 load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
-load(":hurl_test.bzl", "realworld_hurl_test_suite")
-load(":oci_rootfs.bzl", "oci_rootfs")
+load("//rules:oci_rootfs.bzl", "oci_rootfs")
 
 package(default_visibility = ["//visibility:public"])
-
-_OTEL_SINK_ENV = {
-    "OTEL_BLRP_SCHEDULE_DELAY": "100",
-    "OTEL_BSP_SCHEDULE_DELAY": "100",
-    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:$${@@//bazel/itest:otel_sink_service}",
-    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
-    "OTEL_LOGS_EXPORTER": "otlp",
-    "OTEL_METRICS_EXPORTER": "otlp",
-    "OTEL_METRIC_EXPORT_INTERVAL": "1000",
-    "OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED": "true",
-    "OTEL_TRACES_EXPORTER": "otlp",
-}
 
 rust_binary(
     name = "otel_sink",
@@ -55,10 +43,18 @@ rust_binary(
     deps = all_crate_deps(normal = True),
 )
 
+# rules_go embedsrcs cannot reference files outside the Go package directory,
+# so the corpus copy is staged next to otel_sink_probe.go.
+copy_file(
+    name = "embedded_trace_shape",
+    src = "//corpus:otel/trace_shape.scm",
+    out = "goldens/trace_shape.scm",
+)
+
 go_library(
     name = "otel_sink_probe_lib",
-    embedsrcs = ["//bazel/itest/goldens:trace_shape.scm"],
     srcs = ["otel_sink_probe.go"],
+    embedsrcs = [":embedded_trace_shape"],
     importpath = "github.com/pawelchcki/rules_stests/bazel/itest/otel_sink_probe",
     visibility = ["//visibility:private"],
 )
@@ -144,18 +140,6 @@ go_test(
 )
 
 oci_rootfs(
-    name = "aiohttp_rootfs",
-    image = "@aiohttp_realworld_linux_amd64",
-    single_payload = True,
-)
-
-oci_rootfs(
-    name = "django_rootfs",
-    image = "@django_ninja_realworld_linux_amd64",
-    single_payload = True,
-)
-
-oci_rootfs(
     name = "hurl_rootfs",
     image = "@hurl_tool_linux_amd64",
 )
@@ -163,187 +147,4 @@ oci_rootfs(
 oci_rootfs(
     name = "otel_python_rootfs",
     image = "@otel_python_linux_amd64",
-)
-
-itest_service(
-    name = "aiohttp_service",
-    args = [
-        "app",
-        "aiohttp",
-        "$(rootpath :aiohttp_rootfs)",
-        "serve",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        "$${PORT}",
-    ],
-    autoassign_port = True,
-    data = [":aiohttp_rootfs"],
-    exe = ":oci_bundle",
-    expected_start_duration = "3s",
-    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
-    so_reuseport_aware = True,
-    shutdown_timeout = "10s",
-)
-
-service_test(
-    name = "aiohttp_test",
-    timeout = "moderate",
-    args = ["--service-suffix=//bazel/itest:aiohttp_service"],
-    services = [":aiohttp_service"],
-    test = ":api_probe",
-)
-
-realworld_hurl_test_suite(
-    name = "aiohttp_hurl_test",
-    timeout = "moderate",
-    service = ":aiohttp_service",
-)
-
-itest_service(
-    name = "aiohttp_otel_service",
-    args = [
-        "app-otel",
-        "aiohttp-otel",
-        "$(rootpath :aiohttp_rootfs)",
-        "$(rootpath :otel_python_rootfs)",
-        "serve",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        "$${PORT}",
-    ],
-    autoassign_port = True,
-    data = [
-        ":aiohttp_rootfs",
-        ":otel_python_rootfs",
-    ],
-    env = _OTEL_SINK_ENV,
-    exe = ":oci_bundle",
-    expected_start_duration = "3s",
-    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
-    so_reuseport_aware = True,
-    shutdown_timeout = "10s",
-    deps = [":otel_sink_service"],
-)
-
-service_test(
-    name = "aiohttp_otel_test",
-    timeout = "moderate",
-    args = ["--service-suffix=//bazel/itest:aiohttp_otel_service"],
-    services = [":aiohttp_otel_service"],
-    test = ":api_probe",
-)
-
-realworld_hurl_test_suite(
-    name = "aiohttp_otel_hurl_test",
-    timeout = "moderate",
-    otel_app = "aiohttp",
-    otel_flaky_cases = {
-        "errors_profiles": "a late startup /api/tags export can cross the trace-only reset boundary",
-    },
-    otel_sink = ":otel_sink_service",
-    service = ":aiohttp_otel_service",
-)
-
-realworld_hurl_test_suite(
-    name = "aiohttp_otel_contract_test",
-    timeout = "moderate",
-    otel_app = "aiohttp",
-    otel_candidates = False,
-    otel_exact = False,
-    otel_sink = ":otel_sink_service",
-    service = ":aiohttp_otel_service",
-    tags = ["manual"],
-)
-
-itest_service(
-    name = "django_service",
-    args = [
-        "app",
-        "django",
-        "$(rootpath :django_rootfs)",
-        "serve",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        "$${PORT}",
-    ],
-    autoassign_port = True,
-    data = [":django_rootfs"],
-    exe = ":oci_bundle",
-    expected_start_duration = "3s",
-    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
-    so_reuseport_aware = True,
-    shutdown_timeout = "10s",
-)
-
-service_test(
-    name = "django_test",
-    timeout = "moderate",
-    args = ["--service-suffix=//bazel/itest:django_service"],
-    services = [":django_service"],
-    test = ":api_probe",
-)
-
-realworld_hurl_test_suite(
-    name = "django_hurl_test",
-    timeout = "moderate",
-    service = ":django_service",
-)
-
-itest_service(
-    name = "django_otel_service",
-    args = [
-        "app-otel",
-        "django-otel",
-        "$(rootpath :django_rootfs)",
-        "$(rootpath :otel_python_rootfs)",
-        "serve",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        "$${PORT}",
-    ],
-    autoassign_port = True,
-    data = [
-        ":django_rootfs",
-        ":otel_python_rootfs",
-    ],
-    env = _OTEL_SINK_ENV,
-    exe = ":oci_bundle",
-    expected_start_duration = "3s",
-    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
-    so_reuseport_aware = True,
-    shutdown_timeout = "10s",
-    deps = [":otel_sink_service"],
-)
-
-service_test(
-    name = "django_otel_test",
-    timeout = "moderate",
-    args = ["--service-suffix=//bazel/itest:django_otel_service"],
-    services = [":django_otel_service"],
-    test = ":api_probe",
-)
-
-realworld_hurl_test_suite(
-    name = "django_otel_hurl_test",
-    timeout = "moderate",
-    otel_app = "django",
-    otel_flaky_reason = "the Python metric aggregator can emit a point whose start timestamp follows its collection timestamp under parallel load",
-    otel_sink = ":otel_sink_service",
-    service = ":django_otel_service",
-)
-
-realworld_hurl_test_suite(
-    name = "django_otel_contract_test",
-    timeout = "moderate",
-    otel_app = "django",
-    otel_candidates = False,
-    otel_exact = False,
-    otel_flaky_reason = "the Python metric aggregator can emit a point whose start timestamp follows its collection timestamp under parallel load",
-    otel_sink = ":otel_sink_service",
-    service = ":django_otel_service",
-    tags = ["manual"],
 )

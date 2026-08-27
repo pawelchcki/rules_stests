@@ -1,22 +1,26 @@
 """Sharded RealWorld Hurl contract tests for rules_itest services."""
 
 load("@rules_itest//:itest.bzl", "service_test")
+load(
+    "//corpus:defs.bzl",
+    _CASES = "REALWORLD_HURL_CASES",
+    _contract_bundle = "contract_bundle",
+    _exact_bundle = "exact_bundle",
+    _profile_library = "profile_library",
+)
 
-REALWORLD_HURL_CASES = [
-    "articles",
-    "auth",
-    "comments",
-    "errors_articles",
-    "errors_auth",
-    "errors_authorization",
-    "errors_comments",
-    "errors_profiles",
-    "favorites",
-    "feed",
-    "pagination",
-    "profiles",
-    "tags",
-]
+# Labels resolved in this module's repository. `service_test` args go through
+# Bazel's native location expansion, which resolves labels in the *consumer's*
+# repo mapping, so every label owned by this module must be a canonical `Label`.
+_HURL_ROOTFS = Label("//bazel/itest:hurl_rootfs")
+_DRIVER = Label("//bazel/itest:realworld_hurl")
+_SPEC_ANCHOR = Label("@realworld_api_specs//:hurl_all")
+
+# Re-exported for consumers that already load it from here.
+REALWORLD_HURL_CASES = _CASES
+
+def _rootpath(label):
+    return "$(rootpath {})".format(str(label))
 
 def _realworld_hurl_case_test(
         name,
@@ -33,14 +37,14 @@ def _realworld_hurl_case_test(
         flaky = False,
         tags = [],
         **kwargs):
-    spec = "@realworld_api_specs//:hurl/{}.hurl".format(case)
+    spec = _SPEC_ANCHOR.same_package_label("hurl/{}.hurl".format(case))
     args = [
         "--service-suffix=" + service,
         "--jobs=1",
-        "--hurl-rootfs=$(rootpath //bazel/itest:hurl_rootfs)",
+        "--hurl-rootfs=" + _rootpath(_HURL_ROOTFS),
     ]
     data = [
-        "//bazel/itest:hurl_rootfs",
+        _HURL_ROOTFS,
         spec,
     ]
     if otel_sink:
@@ -52,16 +56,16 @@ def _realworld_hurl_case_test(
         if otel_profile:
             args.append("--otel-profile=" + otel_profile)
         for library in otel_libraries:
-            args.append("--otel-library=$(rootpath {})".format(library))
+            args.append("--otel-library=" + _rootpath(library))
         for library in otel_imports:
             args.append("--otel-import=" + library)
         if otel_program:
-            args.append("--otel-program=$(rootpath {})".format(otel_program))
+            args.append("--otel-program=" + _rootpath(otel_program))
             data.append(otel_program)
         if otel_xfail:
             args.append("--otel-xfail=" + otel_xfail)
         data.extend(otel_libraries)
-    args.append("$(rootpath {})".format(spec))
+    args.append(_rootpath(spec))
     service_test(
         name = name,
         args = args,
@@ -69,7 +73,7 @@ def _realworld_hurl_case_test(
         services = [service],
         flaky = flaky,
         tags = tags,
-        test = "//bazel/itest:realworld_hurl",
+        test = _DRIVER,
         **kwargs
     )
 
@@ -95,6 +99,28 @@ def realworld_hurl_test_suite(
     OTLP validation selects a portable scenario from a shared library and
     combines it with a named implementation profile. Contract mode permits
     implementation-specific non-server spans.
+
+    Args:
+        name: name of the generated `test_suite`; each case test is `<name>_<case>`.
+        service: the `itest_service` under test (consumer-relative label).
+        otel_sink: OTLP sink service to validate against; enables OTLP checks.
+        otel_app: short application name, used for candidate paths and the
+            default profile. Required with `otel_sink`.
+        otel_profile: implementation profile name; defaults to
+            `python-<otel_app>-auto-v0-65b0`.
+        otel_profile_library: overrides the profile `.scm`; defaults to the
+            corpus profile library for `otel_profile`.
+        otel_runtime_libraries: overrides the language-runtime `.scm` libraries.
+        otel_trace_shape_library_prefix: overrides where per-case goldens live;
+            the case name and `/golden.scm` are appended.
+        otel_exact: validate the exact trace shape against a checked-in golden.
+        otel_candidates: also generate `manual` golden-candidate targets.
+        otel_flaky_reason: marks every case flaky with this reason.
+        otel_flaky_cases: per-case flaky reasons.
+        otel_xfails: per-case expected-failure reasons.
+        flaky: marks every generated test flaky.
+        tags: tags applied to every generated target.
+        **kwargs: forwarded to each `service_test`.
     """
     if bool(otel_sink) != bool(otel_app):
         fail("otel_sink and otel_app must be supplied together")
@@ -111,15 +137,13 @@ def realworld_hurl_test_suite(
     overlapping_cases = [case for case in otel_xfails if case in otel_flaky_cases]
     if overlapping_cases:
         fail("cases cannot be both flaky and xfail: {}".format(", ".join(sorted(overlapping_cases))))
+
+    profile = ""
     if otel_sink:
         profile = otel_profile or "python-{}-auto-v0-65b0".format(otel_app)
-        profile_library = otel_profile_library or "//bazel/itest/goldens:{}/common.scm".format(otel_app)
-        runtime_libraries = otel_runtime_libraries if otel_runtime_libraries != None else ["//bazel/itest/goldens:python.scm"]
-        trace_shape_library_prefix = otel_trace_shape_library_prefix or "//bazel/itest/goldens:details/{}/".format(profile)
-    else:
-        profile = ""
-        profile_library = None
-        runtime_libraries = []
+        if otel_profile_library == None:
+            otel_profile_library = _profile_library(profile)
+
     tests = []
     candidates = []
     for case in REALWORLD_HURL_CASES:
@@ -135,34 +159,29 @@ def realworld_hurl_test_suite(
         libraries = []
         imports = []
         program = None
+        contract = None
         if otel_sink:
-            libraries = [
-                "//bazel/itest/goldens:common.scm",
-                "//bazel/itest/goldens:realworld.scm",
-            ] + runtime_libraries + [
-                profile_library,
-            ]
-            imports = [
-                "otel.validation",
-                "realworld.contract",
-                "realworld.scenarios",
-                "realworld.profile.{}".format(profile),
-            ]
-            candidate_libraries = list(libraries)
-            candidate_imports = list(imports)
+            contract = _contract_bundle(
+                profile,
+                profile_library_label = otel_profile_library,
+                runtime_libraries = otel_runtime_libraries,
+            )
             if otel_exact:
-                detail_library = trace_shape_library_prefix + case + "/golden.scm"
-                libraries.extend([
-                    "//bazel/itest/goldens:trace_shape.scm",
-                    detail_library,
-                ])
-                imports.extend([
-                    "otel.trace-shape",
-                    "realworld.detail.{}.{}".format(profile, case),
-                ])
-                program = "//bazel/itest/goldens:validate.scm"
+                golden = None
+                if otel_trace_shape_library_prefix:
+                    golden = otel_trace_shape_library_prefix + case + "/golden.scm"
+                bundle = _exact_bundle(
+                    profile,
+                    case,
+                    golden_library_label = golden,
+                    profile_library_label = otel_profile_library,
+                    runtime_libraries = otel_runtime_libraries,
+                )
             else:
-                program = "//bazel/itest/goldens:validate_contract.scm"
+                bundle = contract
+            libraries = bundle.libraries
+            imports = bundle.imports
+            program = bundle.program
         _realworld_hurl_case_test(
             name = test_name,
             case = case,
@@ -188,9 +207,9 @@ def realworld_hurl_test_suite(
                 otel_sink = otel_sink,
                 otel_app = otel_app,
                 otel_profile = profile,
-                otel_libraries = candidate_libraries,
-                otel_imports = candidate_imports,
-                otel_program = "//bazel/itest/goldens:validate_contract.scm",
+                otel_libraries = contract.libraries,
+                otel_imports = contract.imports,
+                otel_program = contract.program,
                 otel_mode = "candidate",
                 tags = tags + ["manual"],
                 **kwargs
