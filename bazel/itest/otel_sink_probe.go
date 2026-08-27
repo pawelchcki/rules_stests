@@ -100,6 +100,34 @@ func main() {
 	)
 	rejectJSON(
 		endpoint,
+		"/v1/traces",
+		"quoted span-link flags",
+		[]byte("unexpected JSON type"),
+		[]byte(`{"resourceSpans":[{"scopeSpans":[{"spans":[{"links":[{"flags":"256"}]}]}]}]}`),
+	)
+	rejectJSON(
+		endpoint,
+		"/v1/traces",
+		"numeric resource schema URL",
+		[]byte("unexpected JSON type"),
+		[]byte(`{"resourceSpans":[{"schemaUrl":0}]}`),
+	)
+	rejectJSON(
+		endpoint,
+		"/v1/traces",
+		"quoted resource dropped-attribute count",
+		[]byte("unexpected JSON type"),
+		[]byte(`{"resourceSpans":[{"resource":{"droppedAttributesCount":"0"}}]}`),
+	)
+	rejectJSON(
+		endpoint,
+		"/v1/traces",
+		"out-of-range span dropped-event count",
+		[]byte("unexpected JSON type"),
+		[]byte(`{"resourceSpans":[{"scopeSpans":[{"spans":[{"droppedEventsCount":4294967296}]}]}]}`),
+	)
+	rejectJSON(
+		endpoint,
 		"/v1/metrics",
 		"non-object repeated message",
 		[]byte("expected object"),

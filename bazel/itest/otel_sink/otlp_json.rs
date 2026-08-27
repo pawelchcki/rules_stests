@@ -194,6 +194,25 @@ fn double_scalar(value: &Value) -> bool {
         })
 }
 
+fn validate_schema_url(value: &Value, context: &str) -> Result<(), String> {
+    validate_scalar_field(
+        value,
+        "schema_url",
+        "schemaUrl",
+        context,
+        Value::is_string,
+    )
+}
+
+fn validate_dropped_count(
+    value: &Value,
+    snake: &str,
+    camel: &str,
+    context: &str,
+) -> Result<(), String> {
+    validate_scalar_field(value, snake, camel, context, u32_scalar)
+}
+
 fn validate_resource(value: &Value) -> Result<(), String> {
     reject_unknown(
         value,
@@ -207,6 +226,12 @@ fn validate_resource(value: &Value) -> Result<(), String> {
         ],
     )?;
     validate_array_field(value, "attributes", "attributes", validate_key_value)?;
+    validate_dropped_count(
+        value,
+        "dropped_attributes_count",
+        "droppedAttributesCount",
+        "resource",
+    )?;
     validate_array_field(value, "entity_refs", "entityRefs", validate_entity_ref)
 }
 
@@ -223,7 +248,8 @@ fn validate_entity_ref(value: &Value) -> Result<(), String> {
             "description_keys",
             "descriptionKeys",
         ],
-    )
+    )?;
+    validate_schema_url(value, "entity reference")
 }
 
 fn validate_scope(value: &Value) -> Result<(), String> {
@@ -238,7 +264,13 @@ fn validate_scope(value: &Value) -> Result<(), String> {
             "droppedAttributesCount",
         ],
     )?;
-    validate_array_field(value, "attributes", "attributes", validate_key_value)
+    validate_array_field(value, "attributes", "attributes", validate_key_value)?;
+    validate_dropped_count(
+        value,
+        "dropped_attributes_count",
+        "droppedAttributesCount",
+        "instrumentation scope",
+    )
 }
 
 fn validate_key_value(value: &Value) -> Result<(), String> {
@@ -346,7 +378,8 @@ fn validate_resource_spans(value: &Value) -> Result<(), String> {
         ],
     )?;
     validate_object_field(value, "resource", "resource", validate_resource)?;
-    validate_array_field(value, "scope_spans", "scopeSpans", validate_scope_spans)
+    validate_array_field(value, "scope_spans", "scopeSpans", validate_scope_spans)?;
+    validate_schema_url(value, "ResourceSpans")
 }
 
 fn validate_scope_spans(value: &Value) -> Result<(), String> {
@@ -356,7 +389,8 @@ fn validate_scope_spans(value: &Value) -> Result<(), String> {
         &["scope", "spans", "schema_url", "schemaUrl"],
     )?;
     validate_object_field(value, "scope", "scope", validate_scope)?;
-    validate_array_field(value, "spans", "spans", validate_span)
+    validate_array_field(value, "spans", "spans", validate_span)?;
+    validate_schema_url(value, "ScopeSpans")
 }
 
 fn validate_span(value: &Value) -> Result<(), String> {
@@ -396,6 +430,24 @@ fn validate_span(value: &Value) -> Result<(), String> {
     validate_array_field(value, "links", "links", validate_span_link)?;
     validate_scalar_field(value, "kind", "kind", "span", enum_scalar)?;
     validate_scalar_field(value, "flags", "flags", "span", u32_scalar)?;
+    validate_dropped_count(
+        value,
+        "dropped_attributes_count",
+        "droppedAttributesCount",
+        "span",
+    )?;
+    validate_dropped_count(
+        value,
+        "dropped_events_count",
+        "droppedEventsCount",
+        "span",
+    )?;
+    validate_dropped_count(
+        value,
+        "dropped_links_count",
+        "droppedLinksCount",
+        "span",
+    )?;
     validate_object_field(value, "status", "status", validate_status)
 }
 
@@ -413,7 +465,12 @@ fn validate_span_event(value: &Value) -> Result<(), String> {
         ],
     )?;
     validate_array_field(value, "attributes", "attributes", validate_key_value)?;
-    validate_scalar_field(value, "flags", "flags", "span link", u32_scalar)
+    validate_dropped_count(
+        value,
+        "dropped_attributes_count",
+        "droppedAttributesCount",
+        "span event",
+    )
 }
 
 fn validate_span_link(value: &Value) -> Result<(), String> {
@@ -433,7 +490,14 @@ fn validate_span_link(value: &Value) -> Result<(), String> {
             "flags",
         ],
     )?;
-    validate_array_field(value, "attributes", "attributes", validate_key_value)
+    validate_array_field(value, "attributes", "attributes", validate_key_value)?;
+    validate_dropped_count(
+        value,
+        "dropped_attributes_count",
+        "droppedAttributesCount",
+        "span link",
+    )?;
+    validate_scalar_field(value, "flags", "flags", "span link", u32_scalar)
 }
 
 fn validate_status(value: &Value) -> Result<(), String> {
@@ -460,7 +524,8 @@ fn validate_resource_metrics(value: &Value) -> Result<(), String> {
         "scope_metrics",
         "scopeMetrics",
         validate_scope_metrics,
-    )
+    )?;
+    validate_schema_url(value, "ResourceMetrics")
 }
 
 fn validate_scope_metrics(value: &Value) -> Result<(), String> {
@@ -470,7 +535,8 @@ fn validate_scope_metrics(value: &Value) -> Result<(), String> {
         &["scope", "metrics", "schema_url", "schemaUrl"],
     )?;
     validate_object_field(value, "scope", "scope", validate_scope)?;
-    validate_array_field(value, "metrics", "metrics", validate_metric)
+    validate_array_field(value, "metrics", "metrics", validate_metric)?;
+    validate_schema_url(value, "ScopeMetrics")
 }
 
 fn validate_metric(value: &Value) -> Result<(), String> {
@@ -900,7 +966,8 @@ fn validate_resource_logs(value: &Value) -> Result<(), String> {
         ],
     )?;
     validate_object_field(value, "resource", "resource", validate_resource)?;
-    validate_array_field(value, "scope_logs", "scopeLogs", validate_scope_logs)
+    validate_array_field(value, "scope_logs", "scopeLogs", validate_scope_logs)?;
+    validate_schema_url(value, "ResourceLogs")
 }
 
 fn validate_scope_logs(value: &Value) -> Result<(), String> {
@@ -916,7 +983,8 @@ fn validate_scope_logs(value: &Value) -> Result<(), String> {
         ],
     )?;
     validate_object_field(value, "scope", "scope", validate_scope)?;
-    validate_array_field(value, "log_records", "logRecords", validate_log_record)
+    validate_array_field(value, "log_records", "logRecords", validate_log_record)?;
+    validate_schema_url(value, "ScopeLogs")
 }
 
 fn validate_log_record(value: &Value) -> Result<(), String> {
@@ -953,6 +1021,12 @@ fn validate_log_record(value: &Value) -> Result<(), String> {
         "severityNumber",
         "log record",
         enum_scalar,
+    )?;
+    validate_dropped_count(
+        value,
+        "dropped_attributes_count",
+        "droppedAttributesCount",
+        "log record",
     )?;
     validate_scalar_field(value, "flags", "flags", "log record", trace_flags_scalar)
 }
