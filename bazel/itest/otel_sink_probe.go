@@ -93,9 +93,16 @@ func main() {
 		endpoint,
 		"/v1/logs",
 		"multiple AnyValue variants",
-		[]byte("expected exactly one variant"),
+		[]byte("expected at most one variant"),
 		[]byte(`{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{"stringValue":"ok","intValue":"5"}}]}]}]}`),
 	)
+	postJSON(
+		endpoint,
+		"/v1/logs",
+		"unset AnyValue oneof",
+		[]byte(`{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{}}]}]}]}`),
+	)
+	resetSink(endpoint)
 	rejectJSON(
 		endpoint,
 		"/v1/logs",
@@ -137,6 +144,13 @@ func main() {
 		"out-of-range signed metric value",
 		[]byte("unexpected JSON type"),
 		[]byte(`{"resourceMetrics":[{"scopeMetrics":[{"metrics":[{"name":"bad-int","gauge":{"dataPoints":[{"timeUnixNano":"1","asInt":"18446744073709551615"}]}}]}]}]}`),
+	)
+	rejectJSON(
+		endpoint,
+		"/v1/metrics",
+		"out-of-range exponential histogram offset",
+		[]byte("unexpected JSON type"),
+		[]byte(`{"resourceMetrics":[{"scopeMetrics":[{"metrics":[{"name":"bad-offset","exponentialHistogram":{"dataPoints":[{"positive":{"offset":"2147483648","bucketCounts":[]}}]}}]}]}]}`),
 	)
 	rejectJSON(
 		endpoint,
@@ -533,10 +547,10 @@ func main() {
   (display "]]" (current-error-port))
   (display message (current-error-port))
   (error "OTLP contract sentinel"))
-(contract-error "intentional rejection")`)
+(contract-error "intentional réjection")`)
 	if output, status, err := validateScheme(endpoint, structuredContractRule); err != nil {
 		fatal(err)
-	} else if status != http.StatusConflict || !bytes.Contains(output, []byte("intentional rejection")) {
+	} else if status != http.StatusConflict || !bytes.Contains(output, []byte("intentional réjection")) {
 		fatal(fmt.Errorf("contract-rejecting Scheme rule returned HTTP %d: %s", status, output))
 	}
 	forgedContractRule := []byte(`(import (scheme base) (scheme write))

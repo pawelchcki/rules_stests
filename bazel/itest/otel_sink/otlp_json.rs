@@ -161,6 +161,18 @@ fn signed_integer_scalar(value: &Value) -> bool {
             .is_some_and(|value| value.parse::<i64>().is_ok())
 }
 
+fn i32_scalar(value: &Value) -> bool {
+    value
+        .as_i64()
+        .is_some_and(|value| i32::try_from(value).is_ok())
+        || value
+            .as_u64()
+            .is_some_and(|value| i32::try_from(value).is_ok())
+        || value
+            .as_str()
+            .is_some_and(|value| value.parse::<i32>().is_ok())
+}
+
 fn double_scalar(value: &Value) -> bool {
     value.is_number() || matches!(value.as_str(), Some("NaN" | "Infinity" | "-Infinity"))
 }
@@ -241,11 +253,14 @@ fn validate_any_value(value: &Value) -> Result<(), String> {
     let fields = value
         .as_object()
         .ok_or_else(|| String::from("invalid OTLP AnyValue: expected object"))?;
-    if fields.len() != 1 {
+    if fields.len() > 1 {
         return Err(format!(
-            "invalid OTLP AnyValue: expected exactly one variant, got {}",
+            "invalid OTLP AnyValue: expected at most one variant, got {}",
             fields.len()
         ));
+    }
+    if fields.is_empty() {
+        return Ok(());
     }
     let (name, item) = fields.iter().next().unwrap();
     let valid = match name.as_str() {
@@ -744,7 +759,7 @@ fn validate_buckets(value: &Value) -> Result<(), String> {
         "offset",
         "offset",
         "exponential histogram buckets",
-        integer_scalar,
+        i32_scalar,
     )
 }
 

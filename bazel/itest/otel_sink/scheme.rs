@@ -227,10 +227,16 @@ fn contract_message(error_output: &[u8]) -> Option<String> {
         .parse::<usize>()
         .ok()?;
     let payload = &framed[separator + CONTRACT_FRAME_SEPARATOR.len()..];
-    if payload.len() < length {
+    let payload_text = core::str::from_utf8(payload).ok()?;
+    let message_end = payload_text
+        .char_indices()
+        .map(|(index, _)| index)
+        .nth(length)
+        .unwrap_or(payload.len());
+    if payload_text[..message_end].chars().count() != length {
         return None;
     }
-    let (message, remainder) = payload.split_at(length);
+    let (message, remainder) = payload.split_at(message_end);
     let trailing = remainder.strip_prefix(CONTRACT_FRAME_SUFFIX)?;
     if !trailing.iter().all(u8::is_ascii_whitespace) {
         return None;
