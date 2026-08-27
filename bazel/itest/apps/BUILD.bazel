@@ -216,3 +216,127 @@ realworld_hurl_test_suite(
     service = ":django_otel_service",
     tags = ["manual"],
 )
+
+# The Gin fixture ships two binaries in one image: an uninstrumented build and
+# one built with opentelemetry-go-compile-instrumentation. Its instrumentation
+# is linked into the binary rather than injected by a sidecar rootfs, so the
+# plain and OTLP services differ only by binary path and environment.
+#
+# Every target here is `manual` until CI publishes the image and fills in the
+# `gin_realworld` digest in bazel/oci_images.lock.bzl; the placeholder digest
+# would otherwise fail every wildcard build.
+_GIN_MANUAL = ["manual"]
+
+# The Go build exports traces and metrics. The tool's log support only
+# correlates trace IDs into the application's own logger, so no OTLP log
+# exporter exists and asking for one would stall the driver's quiescence gate.
+_GIN_OTEL_SINK_ENV = {
+    "OTEL_BSP_SCHEDULE_DELAY": "100",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:$${@@//bazel/itest:otel_sink_service}",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+    "OTEL_LOGS_EXPORTER": "none",
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_METRIC_EXPORT_INTERVAL": "1000",
+    "OTEL_SERVICE_NAME": "gin-otel",
+    "OTEL_TRACES_EXPORTER": "otlp",
+}
+
+oci_rootfs(
+    name = "gin_rootfs",
+    image = "@gin_realworld_linux_amd64",
+    single_payload = True,
+    tags = _GIN_MANUAL,
+)
+
+# Gin's listener does not set SO_REUSEPORT, so unlike the Python fixtures this
+# service cannot be started before its assigned port is free.
+itest_service(
+    name = "gin_service",
+    args = [
+        "app-exec",
+        "gin",
+        "$(rootpath :gin_rootfs)",
+        "opt/app/bin/realworld-gin",
+        "serve",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "$${PORT}",
+    ],
+    autoassign_port = True,
+    data = [":gin_rootfs"],
+    exe = "//bazel/itest:oci_bundle",
+    expected_start_duration = "3s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    shutdown_timeout = "10s",
+    tags = _GIN_MANUAL,
+)
+
+service_test(
+    name = "gin_smoke",
+    timeout = "moderate",
+    args = ["--service-suffix=//bazel/itest/apps:gin_service"],
+    services = [":gin_service"],
+    tags = _GIN_MANUAL,
+    test = "//bazel/itest:api_probe",
+)
+
+realworld_hurl_test_suite(
+    name = "gin_hurl_test",
+    timeout = "moderate",
+    service = ":gin_service",
+    tags = _GIN_MANUAL,
+)
+
+itest_service(
+    name = "gin_otel_service",
+    args = [
+        "app-exec",
+        "gin-otel",
+        "$(rootpath :gin_rootfs)",
+        "opt/app/bin/realworld-gin-otel",
+        "serve",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "$${PORT}",
+    ],
+    autoassign_port = True,
+    data = [":gin_rootfs"],
+    env = _GIN_OTEL_SINK_ENV,
+    exe = "//bazel/itest:oci_bundle",
+    expected_start_duration = "3s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    shutdown_timeout = "10s",
+    tags = _GIN_MANUAL,
+    deps = ["//bazel/itest:otel_sink_service"],
+)
+
+service_test(
+    name = "gin_otel_smoke",
+    timeout = "moderate",
+    args = ["--service-suffix=//bazel/itest/apps:gin_otel_service"],
+    services = [":gin_otel_service"],
+    tags = _GIN_MANUAL,
+    test = "//bazel/itest:api_probe",
+)
+
+# Contract-only bring-up: the exact trace shape is not pinned until goldens are
+# captured from a published image.
+realworld_hurl_test_suite(
+    name = "gin_otel_contract_test",
+    timeout = "moderate",
+    otel_app = "gin",
+    otel_candidates = False,
+    otel_exact = False,
+    otel_profile = "go-gin-otelbuild-v1-1-0",
+    otel_profile_library = "//corpus:realworld/profiles/go-gin-otelbuild-v1-1-0.scm",
+    otel_runtime_libraries = ["//corpus:realworld/profiles/go.scm"],
+    otel_signals = [
+        "traces",
+        "metrics",
+    ],
+    otel_sink = "//bazel/itest:otel_sink_service",
+    service = ":gin_otel_service",
+    tags = _GIN_MANUAL,
+)

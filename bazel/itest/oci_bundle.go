@@ -60,7 +60,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: oci_bundle extract <oci-layout> <rootfs> <single|multi> | app <instance> <rootfs> <command> [arguments...] | app-otel <instance> <rootfs> <otel-rootfs> <command> [arguments...]")
+		return errors.New("usage: oci_bundle extract <oci-layout> <rootfs> <single|multi> | app <instance> <rootfs> <command> [arguments...] | app-otel <instance> <rootfs> <otel-rootfs> <command> [arguments...] | app-exec <instance> <rootfs> <relative-binary> [arguments...]")
 	}
 	switch args[0] {
 	case "extract":
@@ -78,6 +78,11 @@ func run(args []string) error {
 			return errors.New("usage: oci_bundle app-otel <instance> <rootfs> <otel-rootfs> <command> [arguments...]")
 		}
 		return runApp(args[1], args[2], args[3], args[4], args[5:])
+	case "app-exec":
+		if len(args) < 4 {
+			return errors.New("usage: oci_bundle app-exec <instance> <rootfs> <relative-binary> [arguments...]")
+		}
+		return runAppExec(args[1], args[2], args[3], args[4:])
 	default:
 		return fmt.Errorf("unsupported mode %q", args[0])
 	}
@@ -179,6 +184,49 @@ func runApp(instance, rootArg, otelRootArg, command string, args []string) error
 		}
 	}
 	return execApp(root, otelRoot, instance, command, args)
+}
+
+// runAppExec launches a self-contained binary from an app image. Unlike
+// runApp it interposes no language runtime: the image supplies a static
+// executable, and the per-instance state directory becomes its working
+// directory so relative database paths stay inside the instance.
+func runAppExec(instance, rootArg, relative string, args []string) error {
+	if !validInstance(instance) {
+		return fmt.Errorf("unsafe instance name %q", instance)
+	}
+	root, err := resolveDirectory(rootArg)
+	if err != nil {
+		return err
+	}
+	if err := prepareAppState(root, instance); err != nil {
+		return err
+	}
+	binary, err := safePath(root, relative)
+	if err != nil {
+		return fmt.Errorf("resolve app binary: %w", err)
+	}
+	if info, err := os.Stat(binary); err != nil {
+		return fmt.Errorf("inspect app binary %s: %w", relative, err)
+	} else if info.IsDir() {
+		return fmt.Errorf("app binary %s is a directory", relative)
+	}
+	state := os.Getenv("APP_STATE_DIR")
+	if err := os.Chdir(state); err != nil {
+		return fmt.Errorf("enter app state directory: %w", err)
+	}
+
+	environment := os.Environ()
+	present := make(map[string]bool, len(environment))
+	for _, entry := range environment {
+		key, _, _ := strings.Cut(entry, "=")
+		present[key] = true
+	}
+	environment = appendDefaultEnvironment(environment, present, "OTEL_SERVICE_NAME", instance)
+
+	if err := syscall.Exec(binary, append([]string{binary}, args...), environment); err != nil {
+		return fmt.Errorf("execute app binary %s: %w", relative, err)
+	}
+	return nil
 }
 
 func validInstance(value string) bool {

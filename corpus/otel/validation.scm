@@ -265,6 +265,8 @@
        (and (tagged-value? 'integer value) (>= (cadr value) 100) (<= (cadr value) 599)))
       ((eq? kind 'one-of)
        (and (tagged-value? 'string value) (member (cadr value) (cdr matcher))))
+      ((eq? kind 'nonempty-array)
+       (and (tagged-value? 'array value) (pair? (cadr value))))
       (else (error "unknown value matcher" kind)))))
 
 (define (attribute attributes key)
@@ -278,12 +280,24 @@
   (let ((value (attribute attributes key)))
     (if (tagged-value? 'integer value) (cadr value) 'absent)))
 
-(define (validate-requests requests)
+; A profile declares the signals its implementation emits by declaring scopes
+; for them. Traces are mandatory; an implementation with no metric or log scopes
+; must neither send nor be required to send those signals.
+(define (expected-signals expected-metric-scopes expected-log-scopes)
+  (append '(traces)
+          (if (null? expected-metric-scopes) '() '(metrics))
+          (if (null? expected-log-scopes) '() '(logs))))
+
+(define (validate-requests signals requests)
   (for-each
     (lambda (signal)
       (check (> (count (lambda (request) (eq? (field 'signal request) signal)) requests) 0)
              "missing OTLP signal request"))
-    '(traces metrics logs))
+    signals)
+  (for-each
+    (lambda (request)
+      (check (memq (field 'signal request) signals) "unexpected OTLP signal request"))
+    requests)
   (for-each
     (lambda (request)
       (let* ((signal (field 'signal request))
@@ -527,13 +541,22 @@
      (and (string-prefix? (cadr matcher) name) (string-suffix? (third matcher) name)))
     (else (error "unknown span name matcher" (car matcher)))))
 
+; HTTP instrumentations name the response status after the semantic convention
+; version they target. Which key a profile permits is pinned by its scope
+; declaration, so bucketing accepts whichever one the span actually carries.
+(define (span-http-status attributes)
+  (let ((current (attribute-integer attributes "http.response.status_code")))
+    (if (eq? current 'absent)
+        (attribute-integer attributes "http.status_code")
+        current)))
+
 (define (span-matches-bucket? span bucket expected-scopes spans)
   (and (eq? (scope-alias expected-scopes (field 'scope span)) (list-ref bucket 1))
        (eq? (kind-name (field 'kind span)) (list-ref bucket 2))
        (eq? (status-name (field 'status-code span)) (list-ref bucket 3))
        (matches-name? (list-ref bucket 4) (field 'name span))
        (eq? (field 'parent-class span) (list-ref bucket 5))
-       (equal? (attribute-integer (field 'attributes span) "http.status_code") (list-ref bucket 6))))
+       (equal? (span-http-status (field 'attributes span)) (list-ref bucket 6))))
 
 (define (validate-buckets buckets expected-scopes spans)
   (check (= (sum (map car buckets)) (length spans)) "golden span total changed")
@@ -653,7 +676,7 @@
         #t)))
 
 (define (validate-metrics expected-scopes expected-descriptors expected-aggregation expected-point-schemas metrics)
-  (check (> (length metrics) 0) "capture contains no metrics")
+  (check (or (null? expected-scopes) (> (length metrics) 0)) "capture contains no metrics")
   (validate-signal-scopes expected-scopes metrics)
   (for-each
     (lambda (metric)
@@ -714,7 +737,7 @@
     attributes))
 
 (define (validate-logs expected-scopes policy logs)
-  (check (> (length logs) 0) "capture contains no logs")
+  (check (or (null? expected-scopes) (> (length logs) 0)) "capture contains no logs")
   (validate-signal-scopes expected-scopes logs)
   (for-each
     (lambda (log)
@@ -780,7 +803,7 @@
            "malformed OTLP JSON collection")
     (check (field 'json-strings-valid capture)
            "malformed OTLP JSON string field")
-    (validate-requests requests)
+    (validate-requests (expected-signals expected-metric-scopes expected-log-scopes) requests)
     (validate-resources expected-resource-attributes expected-resource-schema-url resources)
     (validate-scopes expected-scopes scopes)
     (validate-spans expected-scopes event-policy expected-span-flags expected-trace-state error-message-policy spans)

@@ -23,6 +23,7 @@ REALWORLD_HURL_CASES = [
 ]
 
 REALWORLD_PROFILES = [
+    "go-gin-otelbuild-v1-1-0",
     "python-aiohttp-auto-v0-65b0",
     "python-django-auto-v0-65b0",
 ]
@@ -31,6 +32,7 @@ OTEL_VALIDATION_LIB = Label("//corpus:otel/validation.scm")
 TRACE_SHAPE_LIB = Label("//corpus:otel/trace_shape.scm")
 REALWORLD_CONTRACT_LIB = Label("//corpus:realworld/contract.scm")
 PYTHON_RUNTIME_LIB = Label("//corpus:realworld/profiles/python.scm")
+GO_RUNTIME_LIB = Label("//corpus:realworld/profiles/go.scm")
 VALIDATE_PROGRAM = Label("//corpus:realworld/programs/validate.scm")
 VALIDATE_CONTRACT_PROGRAM = Label("//corpus:realworld/programs/validate_contract.scm")
 
