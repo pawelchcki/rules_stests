@@ -66,9 +66,21 @@ type ArticlesSerializer struct {
 	Articles []ArticleModel
 }
 
-func (s *ArticleSerializer) Response() ArticleResponse {
+func (s *ArticleSerializer) Response() (ArticleResponse, error) {
 	body := s.Body
 	myUserModel := s.C.MustGet("my_user_model").(users.UserModel)
+	articleUserModel, err := GetArticleUserModel(myUserModel)
+	if err != nil {
+		return ArticleResponse{}, err
+	}
+	favorited, err := s.isFavoriteBy(articleUserModel)
+	if err != nil {
+		return ArticleResponse{}, err
+	}
+	favoritesCount, err := s.favoritesCount()
+	if err != nil {
+		return ArticleResponse{}, err
+	}
 	authorSerializer := ArticleUserSerializer{C: s.C, ArticleUserModel: s.Author}
 	response := ArticleResponse{
 		ID:          s.ID,
@@ -80,8 +92,8 @@ func (s *ArticleSerializer) Response() ArticleResponse {
 		//UpdatedAt:      s.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		UpdatedAt:      s.UpdatedAt.UTC().Format("2006-01-02T15:04:05.999Z"),
 		Author:         authorSerializer.Response(),
-		Favorite:       s.isFavoriteBy(GetArticleUserModel(myUserModel)),
-		FavoritesCount: s.favoritesCount(),
+		Favorite:       favorited,
+		FavoritesCount: favoritesCount,
 	}
 	response.Tags = make([]string, 0)
 	for _, tag := range s.Tags {
@@ -89,7 +101,7 @@ func (s *ArticleSerializer) Response() ArticleResponse {
 		response.Tags = append(response.Tags, serializer.Response())
 	}
 	sort.Strings(response.Tags)
-	return response
+	return response, nil
 }
 
 // ResponseWithPreloaded creates response using preloaded favorite data to avoid N+1 queries
@@ -115,10 +127,10 @@ func (s *ArticleSerializer) ResponseWithPreloaded(favorited bool, favoritesCount
 	return response
 }
 
-func (s *ArticlesSerializer) Response() []ArticleResponse {
+func (s *ArticlesSerializer) Response() ([]ArticleResponse, error) {
 	response := []ArticleResponse{}
 	if len(s.Articles) == 0 {
-		return response
+		return response, nil
 	}
 
 	// Batch fetch favorite counts and status
@@ -127,11 +139,20 @@ func (s *ArticlesSerializer) Response() []ArticleResponse {
 		articleIDs = append(articleIDs, article.ID)
 	}
 
-	favoriteCounts := BatchGetFavoriteCounts(articleIDs)
+	favoriteCounts, err := BatchGetFavoriteCounts(articleIDs)
+	if err != nil {
+		return nil, err
+	}
 
 	myUserModel := s.C.MustGet("my_user_model").(users.UserModel)
-	articleUserModel := GetArticleUserModel(myUserModel)
-	favoriteStatus := BatchGetFavoriteStatus(articleIDs, articleUserModel.ID)
+	articleUserModel, err := GetArticleUserModel(myUserModel)
+	if err != nil {
+		return nil, err
+	}
+	favoriteStatus, err := BatchGetFavoriteStatus(articleIDs, articleUserModel.ID)
+	if err != nil {
+		return nil, err
+	}
 
 	for _, article := range s.Articles {
 		serializer := ArticleSerializer{C: s.C, ArticleModel: article}
@@ -139,7 +160,7 @@ func (s *ArticlesSerializer) Response() []ArticleResponse {
 		count := favoriteCounts[article.ID]
 		response = append(response, serializer.ResponseWithPreloaded(favorited, count))
 	}
-	return response
+	return response, nil
 }
 
 type CommentSerializer struct {

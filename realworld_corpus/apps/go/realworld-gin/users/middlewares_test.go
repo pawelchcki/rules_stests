@@ -123,6 +123,17 @@ func TestUserValidatorHashesSentinelLiteralWhenSupplied(t *testing.T) {
 	}
 }
 
+func TestUserValidatorRejectsUsernameContainingPathSeparator(t *testing.T) {
+	payload := `{"user":{"username":"bad/name","email":"bad@example.test","password":"password0"}}`
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Request = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(payload))
+	context.Request.Header.Set("Content-Type", "application/json")
+	validator := NewUserModelValidator()
+	if err := validator.Bind(context); err == nil {
+		t.Fatal("username containing slash unexpectedly validated")
+	}
+}
+
 func TestSetPasswordPropagatesBcryptLengthError(t *testing.T) {
 	var user UserModel
 	if err := user.setPassword(strings.Repeat("a", 73)); err == nil {

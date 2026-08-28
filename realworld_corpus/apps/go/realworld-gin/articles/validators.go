@@ -50,7 +50,11 @@ func (s *ArticleModelValidator) bindWithDB(c *gin.Context, db *gorm.DB) error {
 	s.articleModel.Title = s.Article.Title
 	s.articleModel.Description = s.Article.Description
 	s.articleModel.Body = s.Article.Body
-	s.articleModel.Author = getArticleUserModel(db, myUserModel)
+	articleUserModel, err := getArticleUserModel(db, myUserModel)
+	if err != nil {
+		return err
+	}
+	s.articleModel.Author = articleUserModel
 	if s.Article.Tags != nil {
 		if err := s.articleModel.setTagsWithDB(db, *s.Article.Tags); err != nil {
 			return err
@@ -78,6 +82,10 @@ func (s *CommentModelValidator) Bind(c *gin.Context) error {
 		return err
 	}
 	s.commentModel.Body = s.Comment.Body
-	s.commentModel.Author = GetArticleUserModel(myUserModel)
+	articleUserModel, err := GetArticleUserModel(myUserModel)
+	if err != nil {
+		return err
+	}
+	s.commentModel.Author = articleUserModel
 	return nil
 }

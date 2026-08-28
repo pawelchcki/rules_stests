@@ -54,47 +54,74 @@ type CommentModel struct {
 	Body      string `gorm:"size:2048"`
 }
 
-func GetArticleUserModel(userModel users.UserModel) ArticleUserModel {
+func parsePagination(limit, offset string) (int, int) {
+	limitInt, err := strconv.Atoi(limit)
+	if err != nil || limitInt < 0 {
+		limitInt = 20
+	}
+	offsetInt, err := strconv.Atoi(offset)
+	if err != nil || offsetInt < 0 {
+		offsetInt = 0
+	}
+	return limitInt, offsetInt
+}
+
+func GetArticleUserModel(userModel users.UserModel) (ArticleUserModel, error) {
 	return getArticleUserModel(common.GetDB(), userModel)
 }
 
-func getArticleUserModel(db *gorm.DB, userModel users.UserModel) ArticleUserModel {
+func getArticleUserModel(db *gorm.DB, userModel users.UserModel) (ArticleUserModel, error) {
 	var articleUserModel ArticleUserModel
 	if userModel.ID == 0 {
-		return articleUserModel
+		return articleUserModel, nil
 	}
-	db.Clauses(clause.OnConflict{
+	if err := db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "user_model_id"}},
 		DoNothing: true,
-	}).Create(&ArticleUserModel{UserModelID: userModel.ID})
-	db.Where(&ArticleUserModel{UserModelID: userModel.ID}).First(&articleUserModel)
+	}).Create(&ArticleUserModel{UserModelID: userModel.ID}).Error; err != nil {
+		return articleUserModel, err
+	}
+	if err := db.Where(&ArticleUserModel{UserModelID: userModel.ID}).First(&articleUserModel).Error; err != nil {
+		return articleUserModel, err
+	}
 	articleUserModel.UserModel = userModel
-	return articleUserModel
+	return articleUserModel, nil
 }
 
-func (article ArticleModel) favoritesCount() uint {
+func (article ArticleModel) favoritesCount() (uint, error) {
 	db := common.GetDB()
 	var count int64
-	db.Model(&FavoriteModel{}).Where(FavoriteModel{
+	if err := db.Model(&FavoriteModel{}).Where(FavoriteModel{
 		FavoriteID: article.ID,
-	}).Count(&count)
-	return uint(count)
+	}).Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return uint(count), nil
 }
 
-func (article ArticleModel) isFavoriteBy(user ArticleUserModel) bool {
+func (article ArticleModel) isFavoriteBy(user ArticleUserModel) (bool, error) {
+	if user.ID == 0 {
+		return false, nil
+	}
 	db := common.GetDB()
 	var favorite FavoriteModel
-	db.Where(FavoriteModel{
+	err := db.Where(FavoriteModel{
 		FavoriteID:   article.ID,
 		FavoriteByID: user.ID,
-	}).First(&favorite)
-	return favorite.ID != 0
+	}).First(&favorite).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // BatchGetFavoriteCounts returns a map of article ID to favorite count
-func BatchGetFavoriteCounts(articleIDs []uint) map[uint]uint {
+func BatchGetFavoriteCounts(articleIDs []uint) (map[uint]uint, error) {
 	if len(articleIDs) == 0 {
-		return make(map[uint]uint)
+		return make(map[uint]uint), nil
 	}
 	db := common.GetDB()
 
@@ -103,34 +130,38 @@ func BatchGetFavoriteCounts(articleIDs []uint) map[uint]uint {
 		Count      uint
 	}
 	var results []result
-	db.Model(&FavoriteModel{}).
+	if err := db.Model(&FavoriteModel{}).
 		Select("favorite_id, COUNT(*) as count").
 		Where("favorite_id IN ?", articleIDs).
 		Group("favorite_id").
-		Find(&results)
+		Find(&results).Error; err != nil {
+		return nil, err
+	}
 
 	countMap := make(map[uint]uint)
 	for _, r := range results {
 		countMap[r.FavoriteID] = r.Count
 	}
-	return countMap
+	return countMap, nil
 }
 
 // BatchGetFavoriteStatus returns a map of article ID to whether the user favorited it
-func BatchGetFavoriteStatus(articleIDs []uint, userID uint) map[uint]bool {
+func BatchGetFavoriteStatus(articleIDs []uint, userID uint) (map[uint]bool, error) {
 	if len(articleIDs) == 0 || userID == 0 {
-		return make(map[uint]bool)
+		return make(map[uint]bool), nil
 	}
 	db := common.GetDB()
 
 	var favorites []FavoriteModel
-	db.Where("favorite_id IN ? AND favorite_by_id = ?", articleIDs, userID).Find(&favorites)
+	if err := db.Where("favorite_id IN ? AND favorite_by_id = ?", articleIDs, userID).Find(&favorites).Error; err != nil {
+		return nil, err
+	}
 
 	statusMap := make(map[uint]bool)
 	for _, f := range favorites {
 		statusMap[f.FavoriteID] = true
 	}
-	return statusMap
+	return statusMap, nil
 }
 
 func (article ArticleModel) favoriteBy(user ArticleUserModel) error {
@@ -190,15 +221,7 @@ func FindManyArticle(tag, author, limit, offset, favorited string) ([]ArticleMod
 	db := common.GetDB()
 	models := make([]ArticleModel, 0)
 
-	offset_int, errOffset := strconv.Atoi(offset)
-	if errOffset != nil {
-		offset_int = 0
-	}
-
-	limit_int, errLimit := strconv.Atoi(limit)
-	if errLimit != nil {
-		limit_int = 20
-	}
+	limit_int, offset_int := parsePagination(limit, offset)
 
 	query := db.Model(&ArticleModel{})
 	if tag != "" {
@@ -239,14 +262,7 @@ func (self *ArticleUserModel) GetArticleFeed(limit, offset string) ([]ArticleMod
 	models := make([]ArticleModel, 0)
 	var count int
 
-	offset_int, errOffset := strconv.Atoi(offset)
-	if errOffset != nil {
-		offset_int = 0
-	}
-	limit_int, errLimit := strconv.Atoi(limit)
-	if errLimit != nil {
-		limit_int = 20
-	}
+	limit_int, offset_int := parsePagination(limit, offset)
 
 	tx := db.Begin()
 	if tx.Error != nil {

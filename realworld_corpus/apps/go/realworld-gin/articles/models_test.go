@@ -193,8 +193,14 @@ func TestArticleUserMappingIsUniqueAndStable(t *testing.T) {
 	if err := db.Create(&user).Error; err != nil {
 		t.Fatal(err)
 	}
-	first := GetArticleUserModel(user)
-	second := GetArticleUserModel(user)
+	first, err := GetArticleUserModel(user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := GetArticleUserModel(user)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if first.ID == 0 || second.ID != first.ID {
 		t.Fatalf("mapping IDs = %d and %d", first.ID, second.ID)
 	}
@@ -204,6 +210,45 @@ func TestArticleUserMappingIsUniqueAndStable(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("mapping count=%d, want 1", count)
+	}
+}
+
+func TestParsePaginationRejectsNegativeValues(t *testing.T) {
+	limit, offset := parsePagination("-1", "-9")
+	if limit != 20 || offset != 0 {
+		t.Fatalf("pagination=(%d, %d), want (20, 0)", limit, offset)
+	}
+}
+
+func TestArticleUserMappingPropagatesDatabaseErrors(t *testing.T) {
+	db := articleTestDB(t, "article-user-errors")
+	user := users.UserModel{ID: 42}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := GetArticleUserModel(user); err == nil {
+		t.Fatal("closed database mapping unexpectedly succeeded")
+	}
+}
+
+func TestFavoriteBatchReadsPropagateDatabaseErrors(t *testing.T) {
+	db := articleTestDB(t, "favorite-read-errors")
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BatchGetFavoriteCounts([]uint{1}); err == nil {
+		t.Fatal("favorite count query on closed database unexpectedly succeeded")
+	}
+	if _, err := BatchGetFavoriteStatus([]uint{1}, 1); err == nil {
+		t.Fatal("favorite status query on closed database unexpectedly succeeded")
 	}
 }
 

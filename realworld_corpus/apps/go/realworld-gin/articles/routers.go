@@ -54,7 +54,12 @@ func ArticleCreate(c *gin.Context) {
 		return
 	}
 	serializer := ArticleSerializer{c, articleModelValidator.articleModel}
-	c.JSON(http.StatusCreated, gin.H{"article": serializer.Response()})
+	response, err := serializer.Response()
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"article": response})
 }
 
 func ArticleList(c *gin.Context) {
@@ -70,7 +75,12 @@ func ArticleList(c *gin.Context) {
 		return
 	}
 	serializer := ArticlesSerializer{c, articleModels}
-	c.JSON(http.StatusOK, gin.H{"articles": serializer.Response(), "articlesCount": modelCount})
+	response, err := serializer.Response()
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"articles": response, "articlesCount": modelCount})
 }
 
 func ArticleFeed(c *gin.Context) {
@@ -81,14 +91,23 @@ func ArticleFeed(c *gin.Context) {
 		c.AbortWithError(http.StatusUnauthorized, errors.New("{error : \"Require auth!\"}"))
 		return
 	}
-	articleUserModel := GetArticleUserModel(myUserModel)
+	articleUserModel, err := GetArticleUserModel(myUserModel)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+		return
+	}
 	articleModels, modelCount, err := articleUserModel.GetArticleFeed(limit, offset)
 	if err != nil {
 		c.JSON(http.StatusNotFound, common.NewError("article", errors.New("not found")))
 		return
 	}
 	serializer := ArticlesSerializer{c, articleModels}
-	c.JSON(http.StatusOK, gin.H{"articles": serializer.Response(), "articlesCount": modelCount})
+	response, err := serializer.Response()
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"articles": response, "articlesCount": modelCount})
 }
 
 func ArticleRetrieve(c *gin.Context) {
@@ -99,7 +118,12 @@ func ArticleRetrieve(c *gin.Context) {
 		return
 	}
 	serializer := ArticleSerializer{c, articleModel}
-	c.JSON(http.StatusOK, gin.H{"article": serializer.Response()})
+	response, err := serializer.Response()
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"article": response})
 }
 
 func ArticleUpdate(c *gin.Context) {
@@ -111,7 +135,11 @@ func ArticleUpdate(c *gin.Context) {
 	}
 	// Check if current user is the author
 	myUserModel := c.MustGet("my_user_model").(users.UserModel)
-	articleUserModel := GetArticleUserModel(myUserModel)
+	articleUserModel, err := GetArticleUserModel(myUserModel)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+		return
+	}
 	if articleModel.AuthorID != articleUserModel.ID {
 		c.JSON(http.StatusForbidden, common.NewError("article", errors.New("forbidden")))
 		return
@@ -165,7 +193,12 @@ func ArticleUpdate(c *gin.Context) {
 		return
 	}
 	serializer := ArticleSerializer{c, articleModel}
-	c.JSON(http.StatusOK, gin.H{"article": serializer.Response()})
+	response, err := serializer.Response()
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"article": response})
 }
 
 func ArticleDelete(c *gin.Context) {
@@ -176,7 +209,11 @@ func ArticleDelete(c *gin.Context) {
 		return
 	}
 	myUserModel := c.MustGet("my_user_model").(users.UserModel)
-	articleUserModel := GetArticleUserModel(myUserModel)
+	articleUserModel, err := GetArticleUserModel(myUserModel)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+		return
+	}
 	if articleModel.AuthorID != articleUserModel.ID {
 		c.JSON(http.StatusForbidden, common.NewError("article", errors.New("forbidden")))
 		return
@@ -197,12 +234,22 @@ func ArticleFavorite(c *gin.Context) {
 		return
 	}
 	myUserModel := c.MustGet("my_user_model").(users.UserModel)
-	if err = articleModel.favoriteBy(GetArticleUserModel(myUserModel)); err != nil {
+	articleUserModel, err := GetArticleUserModel(myUserModel)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+		return
+	}
+	if err = articleModel.favoriteBy(articleUserModel); err != nil {
 		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
 		return
 	}
 	serializer := ArticleSerializer{c, articleModel}
-	c.JSON(http.StatusOK, gin.H{"article": serializer.Response()})
+	response, err := serializer.Response()
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"article": response})
 }
 
 func ArticleUnfavorite(c *gin.Context) {
@@ -213,12 +260,22 @@ func ArticleUnfavorite(c *gin.Context) {
 		return
 	}
 	myUserModel := c.MustGet("my_user_model").(users.UserModel)
-	if err = articleModel.unFavoriteBy(GetArticleUserModel(myUserModel)); err != nil {
+	articleUserModel, err := GetArticleUserModel(myUserModel)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+		return
+	}
+	if err = articleModel.unFavoriteBy(articleUserModel); err != nil {
 		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
 		return
 	}
 	serializer := ArticleSerializer{c, articleModel}
-	c.JSON(http.StatusOK, gin.H{"article": serializer.Response()})
+	response, err := serializer.Response()
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"article": response})
 }
 
 func ArticleCommentCreate(c *gin.Context) {
@@ -264,7 +321,11 @@ func ArticleCommentDelete(c *gin.Context) {
 		return
 	}
 	myUserModel := c.MustGet("my_user_model").(users.UserModel)
-	articleUserModel := GetArticleUserModel(myUserModel)
+	articleUserModel, err := GetArticleUserModel(myUserModel)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+		return
+	}
 	if commentModel.AuthorID != articleUserModel.ID {
 		c.JSON(http.StatusForbidden, common.NewError("comment", errors.New("forbidden")))
 		return

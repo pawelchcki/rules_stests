@@ -266,7 +266,12 @@
       ((eq? kind 'one-of)
        (and (tagged-value? 'string value) (member (cadr value) (cdr matcher))))
       ((eq? kind 'nonempty-array)
-       (and (tagged-value? 'array value) (pair? (cadr value))))
+       (and (tagged-value? 'array value)
+            (pair? (cadr value))
+            (every (lambda (item)
+                     (and (tagged-value? 'string item)
+                          (string? (cadr item))))
+                   (cadr value))))
       (else (error "unknown value matcher" kind)))))
 
 (define (attribute attributes key)
