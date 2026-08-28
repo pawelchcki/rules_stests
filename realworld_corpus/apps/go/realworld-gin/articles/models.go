@@ -7,6 +7,7 @@ import (
 	"github.com/gothinkster/golang-gin-realworld-example-app/common"
 	"github.com/gothinkster/golang-gin-realworld-example-app/users"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type ArticleModel struct {
@@ -32,9 +33,9 @@ type ArticleUserModel struct {
 type FavoriteModel struct {
 	gorm.Model
 	Favorite     ArticleModel
-	FavoriteID   uint
+	FavoriteID   uint `gorm:"uniqueIndex:idx_favorite_user"`
 	FavoriteBy   ArticleUserModel
-	FavoriteByID uint
+	FavoriteByID uint `gorm:"uniqueIndex:idx_favorite_user"`
 }
 
 type TagModel struct {
@@ -128,17 +129,21 @@ func BatchGetFavoriteStatus(articleIDs []uint, userID uint) map[uint]bool {
 
 func (article ArticleModel) favoriteBy(user ArticleUserModel) error {
 	db := common.GetDB()
-	var favorite FavoriteModel
-	err := db.FirstOrCreate(&favorite, &FavoriteModel{
+	favorite := FavoriteModel{
 		FavoriteID:   article.ID,
 		FavoriteByID: user.ID,
-	}).Error
-	return err
+	}
+	return db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "favorite_id"}, {Name: "favorite_by_id"}},
+		DoNothing: true,
+	}).Create(&favorite).Error
 }
 
 func (article ArticleModel) unFavoriteBy(user ArticleUserModel) error {
 	db := common.GetDB()
-	err := db.Where("favorite_id = ? AND favorite_by_id = ?", article.ID, user.ID).Delete(&FavoriteModel{}).Error
+	// Favorites are relationships, not retained records. A hard delete permits
+	// the same unique pair to be created again after an unfavorite.
+	err := db.Unscoped().Where("favorite_id = ? AND favorite_by_id = ?", article.ID, user.ID).Delete(&FavoriteModel{}).Error
 	return err
 }
 
@@ -177,8 +182,7 @@ func getAllTags() ([]TagModel, error) {
 
 func FindManyArticle(tag, author, limit, offset, favorited string) ([]ArticleModel, int, error) {
 	db := common.GetDB()
-	var models []ArticleModel
-	var count int
+	models := make([]ArticleModel, 0)
 
 	offset_int, errOffset := strconv.Atoi(offset)
 	if errOffset != nil {
@@ -190,70 +194,38 @@ func FindManyArticle(tag, author, limit, offset, favorited string) ([]ArticleMod
 		limit_int = 20
 	}
 
-	tx := db.Begin()
+	query := db.Model(&ArticleModel{})
 	if tag != "" {
-		var tagModel TagModel
-		tx.Where(TagModel{Tag: tag}).First(&tagModel)
-		if tagModel.ID != 0 {
-			// Get article IDs via association
-			var tempModels []ArticleModel
-			if err := tx.Model(&tagModel).Offset(offset_int).Limit(limit_int).Association("ArticleModels").Find(&tempModels); err != nil {
-				tx.Rollback()
-				return models, count, err
-			}
-			count = int(tx.Model(&tagModel).Association("ArticleModels").Count())
-			// Fetch articles with preloaded associations in single query, ordered by updated_at desc
-			if len(tempModels) > 0 {
-				var ids []uint
-				for _, m := range tempModels {
-					ids = append(ids, m.ID)
-				}
-				tx.Preload("Author.UserModel").Preload("Tags").Where("id IN ?", ids).Order("updated_at desc").Find(&models)
-			}
-		}
-	} else if author != "" {
-		var userModel users.UserModel
-		tx.Where(users.UserModel{Username: author}).First(&userModel)
-		articleUserModel := GetArticleUserModel(userModel)
-
-		if articleUserModel.ID != 0 {
-			count = int(tx.Model(&articleUserModel).Association("ArticleModels").Count())
-			// Paging must be applied to the ordered result, so the author's
-			// articles are queried directly rather than through the
-			// association, whose Find ignores the ordering above it.
-			tx.Preload("Author.UserModel").Preload("Tags").
-				Where("author_id = ?", articleUserModel.ID).
-				Order("updated_at desc").Offset(offset_int).Limit(limit_int).Find(&models)
-		}
-	} else if favorited != "" {
-		var userModel users.UserModel
-		tx.Where(users.UserModel{Username: favorited}).First(&userModel)
-		articleUserModel := GetArticleUserModel(userModel)
-		if articleUserModel.ID != 0 {
-			var favoriteModels []FavoriteModel
-			tx.Where(FavoriteModel{
-				FavoriteByID: articleUserModel.ID,
-			}).Offset(offset_int).Limit(limit_int).Find(&favoriteModels)
-
-			count = int(tx.Model(&articleUserModel).Association("FavoriteModels").Count())
-			// Batch fetch articles to avoid N+1 query
-			if len(favoriteModels) > 0 {
-				var ids []uint
-				for _, favorite := range favoriteModels {
-					ids = append(ids, favorite.FavoriteID)
-				}
-				tx.Preload("Author.UserModel").Preload("Tags").Where("id IN ?", ids).Order("updated_at desc").Find(&models)
-			}
-		}
-	} else {
-		var count64 int64
-		tx.Model(&ArticleModel{}).Count(&count64)
-		count = int(count64)
-		tx.Offset(offset_int).Limit(limit_int).Preload("Author.UserModel").Preload("Tags").Find(&models)
+		query = query.
+			Joins("JOIN article_tags ON article_tags.article_model_id = article_models.id").
+			Joins("JOIN tag_models ON tag_models.id = article_tags.tag_model_id AND tag_models.deleted_at IS NULL").
+			Where("tag_models.tag = ?", tag)
+	}
+	if author != "" {
+		query = query.
+			Joins("JOIN article_user_models AS authors ON authors.id = article_models.author_id AND authors.deleted_at IS NULL").
+			Joins("JOIN user_models AS author_users ON author_users.id = authors.user_model_id").
+			Where("author_users.username = ?", author)
+	}
+	if favorited != "" {
+		query = query.
+			Joins("JOIN favorite_models AS favorites ON favorites.favorite_id = article_models.id AND favorites.deleted_at IS NULL").
+			Joins("JOIN article_user_models AS favoriters ON favoriters.id = favorites.favorite_by_id AND favoriters.deleted_at IS NULL").
+			Joins("JOIN user_models AS favoriter_users ON favoriter_users.id = favoriters.user_model_id").
+			Where("favoriter_users.username = ?", favorited)
 	}
 
-	err := tx.Commit().Error
-	return models, count, err
+	var count64 int64
+	if err := query.Distinct("article_models.id").Count(&count64).Error; err != nil {
+		return models, 0, err
+	}
+	if err := query.Distinct("article_models.*").
+		Preload("Author.UserModel").Preload("Tags").
+		Order("article_models.updated_at DESC").
+		Offset(offset_int).Limit(limit_int).Find(&models).Error; err != nil {
+		return models, 0, err
+	}
+	return models, int(count64), nil
 }
 
 func (self *ArticleUserModel) GetArticleFeed(limit, offset string) ([]ArticleModel, int, error) {

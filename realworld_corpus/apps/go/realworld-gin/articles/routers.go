@@ -226,7 +226,8 @@ func ArticleCommentCreate(c *gin.Context) {
 }
 
 func ArticleCommentDelete(c *gin.Context) {
-	if _, err := FindOneArticle(&ArticleModel{Slug: c.Param("slug")}); err != nil {
+	articleModel, err := FindOneArticle(&ArticleModel{Slug: c.Param("slug")})
+	if err != nil {
 		c.JSON(http.StatusNotFound, common.NewError("article", errors.New("not found")))
 		return
 	}
@@ -236,7 +237,10 @@ func ArticleCommentDelete(c *gin.Context) {
 		return
 	}
 	id := uint(id64)
-	commentModel, err := FindOneComment(&CommentModel{Model: gorm.Model{ID: id}})
+	commentModel, err := FindOneComment(&CommentModel{
+		Model:     gorm.Model{ID: id},
+		ArticleID: articleModel.ID,
+	})
 	if err != nil {
 		c.JSON(http.StatusNotFound, common.NewError("comment", errors.New("not found")))
 		return

@@ -1,0 +1,98 @@
+package users
+
+import (
+	"errors"
+	"math"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/gothinkster/golang-gin-realworld-example-app/common"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+)
+
+func TestClaimUserIDRejectsMalformedValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		value interface{}
+		want  bool
+	}{
+		{name: "missing", want: false},
+		{name: "null", value: nil, want: false},
+		{name: "string", value: "1", want: false},
+		{name: "zero", value: float64(0), want: false},
+		{name: "fractional", value: 1.5, want: false},
+		{name: "nan", value: math.NaN(), want: false},
+		{name: "infinite", value: math.Inf(1), want: false},
+		{name: "valid", value: float64(1), want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			claims := jwt.MapClaims{}
+			if test.name != "missing" {
+				claims["id"] = test.value
+			}
+			_, ok := claimUserID(claims)
+			if ok != test.want {
+				t.Fatalf("valid=%v, want %v", ok, test.want)
+			}
+		})
+	}
+}
+
+func TestAuthMiddlewareRejectsSignedTokenWithMalformedID(t *testing.T) {
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"id":  "not-a-number",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+	signed, err := token.SignedString([]byte(common.JWTSecret))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(AuthMiddleware(true))
+	router.GET("/", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.Header.Set("Authorization", "Token "+signed)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d, want 401", recorder.Code)
+	}
+}
+
+func TestDuplicateUsernameConstraintKeepsConflictResponse(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:duplicate-user?mode=memory&cache=shared"), &gorm.Config{TranslateError: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	common.DB = db
+	if err := db.AutoMigrate(&UserModel{}); err != nil {
+		t.Fatal(err)
+	}
+	first := UserModel{Username: "same", Email: "first@example.test", PasswordHash: "unused"}
+	if err := db.Create(&first).Error; err != nil {
+		t.Fatal(err)
+	}
+	duplicate := UserModel{Username: "same", Email: "second@example.test", PasswordHash: "unused"}
+	writeErr := db.Create(&duplicate).Error
+	if !errors.Is(writeErr, gorm.ErrDuplicatedKey) {
+		t.Fatalf("error=%v, want duplicated key", writeErr)
+	}
+
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	if !writeIdentityConflict(context, duplicate, 0, writeErr) {
+		t.Fatal("duplicate was not handled as an identity conflict")
+	}
+	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), `"username"`) {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}

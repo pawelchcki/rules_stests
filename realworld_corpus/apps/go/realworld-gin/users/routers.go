@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gothinkster/golang-gin-realworld-example-app/common"
+	"gorm.io/gorm"
 	"net/http"
 )
 
@@ -84,13 +85,16 @@ func UsersRegistration(c *gin.Context) {
 		return
 	}
 
-	// Username has no unique index, and a duplicate of either identity is a
-	// conflict rather than a validation failure under the RealWorld contract.
+	// A duplicate of either identity is a conflict rather than a validation
+	// failure under the RealWorld contract.
 	if taken, field := identityTaken(userModelValidator.userModel, 0); taken {
 		c.JSON(http.StatusConflict, common.NewError(field, errors.New("has already been taken")))
 		return
 	}
 	if err := SaveOne(&userModelValidator.userModel); err != nil {
+		if writeIdentityConflict(c, userModelValidator.userModel, 0, err) {
+			return
+		}
 		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
 		return
 	}
@@ -160,6 +164,9 @@ func UserUpdate(c *gin.Context) {
 		return
 	}
 	if err := myUserModel.Update(userModelValidator.userModel); err != nil {
+		if writeIdentityConflict(c, userModelValidator.userModel, myUserModel.ID, err) {
+			return
+		}
 		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
 		return
 	}
@@ -200,4 +207,17 @@ func identityTaken(candidate UserModel, selfID uint) (bool, string) {
 		return true, "email"
 	}
 	return false, ""
+}
+
+// writeIdentityConflict handles the race where another request claims an
+// identity after the precheck but before this request writes it.
+func writeIdentityConflict(c *gin.Context, candidate UserModel, selfID uint, err error) bool {
+	if !errors.Is(err, gorm.ErrDuplicatedKey) {
+		return false
+	}
+	if taken, field := identityTaken(candidate, selfID); taken {
+		c.JSON(http.StatusConflict, common.NewError(field, errors.New("has already been taken")))
+		return true
+	}
+	return false
 }

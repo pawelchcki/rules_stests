@@ -59,8 +59,10 @@ rather than expressed as expected failures.
 4. **Nullable profile fields.** An unset `bio` or `image` serializes as `null`,
    and setting either to `""` or `null` clears it. A struct update skips empty
    values, so the columns are written directly.
-5. **Duplicate identities** are a `409` naming `username` or `email`. Username
-   has no unique index upstream, so both identities are checked explicitly.
+5. **Duplicate identities** are a `409` naming `username` or `email`. Both
+   identities have database unique indexes; explicit checks provide the field
+   name in the normal path, and translated constraint errors preserve the same
+   response when concurrent requests race the checks.
 6. **Explicit nulls.** `PUT /api/user` rejects a `null` username, email or
    password, and `PUT /api/articles/{slug}` rejects a `null` `tagList`. Because
    the validators are pre-filled from stored state, an explicit null is
@@ -72,9 +74,18 @@ rather than expressed as expected failures.
 8. **Unique slugs.** Two articles sharing a title receive distinct slugs, and an
    article keeps its slug across updates.
 9. **Multiple-articles responses omit `body`.**
-10. **Author-filtered listings** are paged over the ordered query rather than
-    over an association find, which ignored the ordering and returned the wrong
-    page.
+10. **Article listings** combine every supplied filter and order matching
+    articles newest-first before applying pagination. The upstream association
+    finds selected unordered pages and its mutually exclusive branches ignored
+    later filters.
+11. **Comment deletion** scopes the comment ID to the article named in the URL,
+    so a comment cannot be deleted through a different article's route.
+12. **JWT identity claims** are type-, range- and integer-checked before
+    conversion; malformed but correctly signed tokens are rejected rather than
+    panicking in middleware.
+13. **Favorites** have an atomic composite uniqueness invariant. Conflict-safe
+    inserts keep repeated or concurrent favorite requests idempotent, and
+    unfavorite hard-deletes the relationship so it can be created again.
 
 ## Telemetry
 
