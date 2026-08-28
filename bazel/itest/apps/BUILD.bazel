@@ -221,11 +221,6 @@ realworld_hurl_test_suite(
 # one built with opentelemetry-go-compile-instrumentation. Its instrumentation
 # is linked into the binary rather than injected by a sidecar rootfs, so the
 # plain and OTLP services differ only by binary path and environment.
-#
-# Every target here is `manual` until CI publishes the image and fills in the
-# `gin_realworld` digest in bazel/oci_images.lock.bzl; the placeholder digest
-# would otherwise fail every wildcard build.
-_GIN_MANUAL = ["manual"]
 
 # The Go build exports traces and metrics. The tool's log support only
 # correlates trace IDs into the application's own logger, so no OTLP log
@@ -245,7 +240,6 @@ oci_rootfs(
     name = "gin_rootfs",
     image = "@gin_realworld_linux_amd64",
     single_payload = True,
-    tags = _GIN_MANUAL,
 )
 
 # Gin's listener does not set SO_REUSEPORT, so unlike the Python fixtures this
@@ -269,7 +263,6 @@ itest_service(
     expected_start_duration = "3s",
     http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
     shutdown_timeout = "10s",
-    tags = _GIN_MANUAL,
 )
 
 service_test(
@@ -277,7 +270,6 @@ service_test(
     timeout = "moderate",
     args = ["--service-suffix=//bazel/itest/apps:gin_service"],
     services = [":gin_service"],
-    tags = _GIN_MANUAL,
     test = "//bazel/itest:api_probe",
 )
 
@@ -285,7 +277,6 @@ realworld_hurl_test_suite(
     name = "gin_hurl_test",
     timeout = "moderate",
     service = ":gin_service",
-    tags = _GIN_MANUAL,
 )
 
 itest_service(
@@ -308,7 +299,6 @@ itest_service(
     expected_start_duration = "3s",
     http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
     shutdown_timeout = "10s",
-    tags = _GIN_MANUAL,
     deps = ["//bazel/itest:otel_sink_service"],
 )
 
@@ -317,7 +307,6 @@ service_test(
     timeout = "moderate",
     args = ["--service-suffix=//bazel/itest/apps:gin_otel_service"],
     services = [":gin_otel_service"],
-    tags = _GIN_MANUAL,
     test = "//bazel/itest:api_probe",
 )
 
@@ -338,5 +327,5 @@ realworld_hurl_test_suite(
     ],
     otel_sink = "//bazel/itest:otel_sink_service",
     service = ":gin_otel_service",
-    tags = _GIN_MANUAL,
+    tags = ["manual"],
 )

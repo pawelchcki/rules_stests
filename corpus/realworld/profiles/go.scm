@@ -34,7 +34,11 @@
 ; survives; only the constant values are pinned exactly, and the
 ; environment-derived ones are pinned by shape.
 (define go-resource-attributes
-  '(("host.name" (nonempty))
+  '(; The container detector contributes an ID only where the process's cgroup
+    ; identifies one, which differs between a container runtime and a build
+    ; sandbox, so it is permitted rather than required.
+    ("container.id" (nonempty) optional)
+    ("host.name" (nonempty))
     ("os.type" (exact "linux"))
     ("os.description" (nonempty))
     ("process.pid" (positive-integer))

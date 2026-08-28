@@ -144,6 +144,8 @@ use_repo(
     "aiohttp_realworld_linux_amd64",
     "django_ninja_realworld",
     "django_ninja_realworld_linux_amd64",
+    "gin_realworld",
+    "gin_realworld_linux_amd64",
 )
 
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")

@@ -328,6 +328,12 @@
                "content-encoding header is not unique")))
     requests))
 
+; A resource rule is (key matcher) or (key matcher optional). An optional rule
+; describes an attribute a detector only contributes in some environments, such
+; as a container ID; it must still match wherever it appears.
+(define (optional-resource-rule? rule)
+  (and (pair? (cdr (cdr rule))) (eq? (third rule) 'optional)))
+
 (define (validate-resources expected expected-schema-url resources)
   (check (> (length resources) 0) "capture contains no resources")
   (for-each
@@ -340,12 +346,21 @@
             (check (string=? (field 'schema-url resource) expected-schema-url)
                    "resource schema URL changed")
             #t)
-        (check (= (length attributes) (length expected)) "resource attribute set changed")
+        (check (every (lambda (entry)
+                        (find (lambda (rule) (string=? (car rule) (car entry))) expected))
+                      attributes)
+               "unexpected resource attribute")
         (for-each
           (lambda (rule)
             (let ((key (car rule)) (matcher (cadr rule)))
-              (check (= (attribute-count attributes key) 1) "resource attribute missing or duplicated")
-              (check (matches-value? matcher (attribute attributes key)) "resource attribute mismatch")))
+              (if (and (optional-resource-rule? rule)
+                       (= (attribute-count attributes key) 0))
+                  #t
+                  (begin
+                    (check (= (attribute-count attributes key) 1)
+                           "resource attribute missing or duplicated")
+                    (check (matches-value? matcher (attribute attributes key))
+                           "resource attribute mismatch")))))
           expected)))
     resources)
   (let ((instance-rule (assoc "service.instance.id" expected)))

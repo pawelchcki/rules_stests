@@ -85,6 +85,9 @@ spans for the GORM queries). Two consequences are pinned in the corpus profile:
 - Database spans are **root spans**, not children of the server span that
   caused them; the instrumentation does not propagate the request context into
   the driver.
+- The resource is whatever the SDK's default detectors find, and carries no
+  `telemetry.sdk.*` attributes. `container.id` appears only where the process's
+  cgroup identifies a container, so the profile permits rather than requires it.
 - The build exports **traces and metrics only**. Metrics come solely from
   `go.opentelemetry.io/contrib/instrumentation/runtime`; there are no HTTP or
   database metrics, and no OTLP log exporter is installed.
