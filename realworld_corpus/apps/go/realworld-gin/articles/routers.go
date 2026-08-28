@@ -1,6 +1,7 @@
 package articles
 
 import (
+	"encoding/json"
 	"errors"
 	"github.com/gin-gonic/gin"
 	"github.com/gothinkster/golang-gin-realworld-example-app/common"
@@ -37,9 +38,14 @@ func TagsAnonymousRegister(router *gin.RouterGroup) {
 
 func ArticleCreate(c *gin.Context) {
 	articleModelValidator := NewArticleModelValidator()
+	supplied, err := common.SuppliedFields(c, "article")
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, common.NewError("body", errors.New("is invalid")))
+		return
+	}
 	var bindErr error
-	err := common.GetDB().Transaction(func(tx *gorm.DB) error {
-		bindErr = articleModelValidator.bindWithDB(c, tx)
+	err = common.GetDB().Transaction(func(tx *gorm.DB) error {
+		bindErr = articleModelValidator.bindWithDB(c, tx, supplied)
 		if bindErr != nil {
 			return bindErr
 		}
@@ -164,20 +170,19 @@ func ArticleUpdate(c *gin.Context) {
 	articleModelValidator := NewArticleModelValidatorFillWith(articleModel)
 	var bindErr error
 	err = common.GetDB().Transaction(func(tx *gorm.DB) error {
-		bindErr = articleModelValidator.bindWithDB(c, tx)
+		bindErr = articleModelValidator.bindWithDB(c, tx, supplied)
 		if bindErr != nil {
 			return bindErr
 		}
 
-		articleModelValidator.articleModel.ID = articleModel.ID
-		// The slug identifies the article for the rest of the contract, so an
-		// update keeps the one the article was created with.
-		articleModelValidator.articleModel.Slug = articleModel.Slug
-		updatedTags := articleModelValidator.articleModel.Tags
-		if err := tx.Model(&articleModel).Updates(articleModelValidator.articleModel).Error; err != nil {
+		updates := articleUpdateValues(articleModelValidator, supplied)
+		if err := tx.Model(&articleModel).Updates(updates).Error; err != nil {
 			return err
 		}
-		return tx.Model(&articleModel).Association("Tags").Replace(updatedTags)
+		if _, ok := supplied["tagList"]; ok {
+			return tx.Model(&articleModel).Association("Tags").Replace(articleModelValidator.articleModel.Tags)
+		}
+		return nil
 	})
 	if err != nil {
 		if bindErr != nil {
@@ -199,6 +204,20 @@ func ArticleUpdate(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"article": response})
+}
+
+func articleUpdateValues(validator ArticleModelValidator, supplied map[string]json.RawMessage) map[string]interface{} {
+	updates := make(map[string]interface{}, 3)
+	if _, ok := supplied["title"]; ok {
+		updates["title"] = validator.Article.Title
+	}
+	if _, ok := supplied["description"]; ok {
+		updates["description"] = validator.Article.Description
+	}
+	if _, ok := supplied["body"]; ok {
+		updates["body"] = validator.Article.Body
+	}
+	return updates
 }
 
 func ArticleDelete(c *gin.Context) {

@@ -1,6 +1,7 @@
 package articles
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -221,6 +222,20 @@ func TestParsePaginationRejectsNegativeValues(t *testing.T) {
 	limit, offset := parsePagination("-1", "-9")
 	if limit != 20 || offset != 0 {
 		t.Fatalf("pagination=(%d, %d), want (20, 0)", limit, offset)
+	}
+}
+
+func TestArticleUpdateValuesContainOnlySuppliedFields(t *testing.T) {
+	validator := NewArticleModelValidatorFillWith(ArticleModel{
+		Title:       "old title",
+		Description: "old description",
+		Body:        "old body",
+		Tags:        []TagModel{{Tag: "old"}},
+	})
+	validator.Article.Title = "new title"
+	updates := articleUpdateValues(validator, map[string]json.RawMessage{"title": json.RawMessage(`"new title"`)})
+	if len(updates) != 1 || updates["title"] != "new title" {
+		t.Fatalf("updates=%v, want only the supplied title", updates)
 	}
 }
 

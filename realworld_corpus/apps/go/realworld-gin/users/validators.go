@@ -1,6 +1,8 @@
 package users
 
 import (
+	"encoding/json"
+
 	"github.com/gin-gonic/gin"
 	"github.com/gothinkster/golang-gin-realworld-example-app/common"
 )
@@ -18,6 +20,7 @@ type UserModelValidator struct {
 		Image    string `form:"image" json:"image" binding:"omitempty,url"`
 	} `json:"user"`
 	userModel UserModel `json:"-"`
+	supplied  map[string]json.RawMessage
 }
 
 // There are some difference when you create or update a model, you need to fill the DataModel before
@@ -31,16 +34,23 @@ func (self *UserModelValidator) Bind(c *gin.Context) error {
 	if err := common.Bind(c, self); err != nil {
 		return err
 	}
-	self.userModel.Username = self.User.Username
-	self.userModel.Email = self.User.Email
-	self.userModel.Bio = self.User.Bio
+	self.supplied = supplied
+	if _, ok := supplied["username"]; ok {
+		self.userModel.Username = self.User.Username
+	}
+	if _, ok := supplied["email"]; ok {
+		self.userModel.Email = self.User.Email
+	}
+	if _, ok := supplied["bio"]; ok {
+		self.userModel.Bio = self.User.Bio
+	}
 
 	if _, passwordSupplied := supplied["password"]; passwordSupplied {
 		if err := self.userModel.setPassword(self.User.Password); err != nil {
 			return err
 		}
 	}
-	if self.User.Image != "" {
+	if _, imageSupplied := supplied["image"]; imageSupplied && self.User.Image != "" {
 		self.userModel.Image = &self.User.Image
 	}
 	return nil
@@ -54,6 +64,7 @@ func NewUserModelValidator() UserModelValidator {
 
 func NewUserModelValidatorFillWith(userModel UserModel) UserModelValidator {
 	userModelValidator := NewUserModelValidator()
+	userModelValidator.userModel = userModel
 	userModelValidator.User.Username = userModel.Username
 	userModelValidator.User.Email = userModel.Email
 	userModelValidator.User.Bio = userModel.Bio

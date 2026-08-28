@@ -1,6 +1,8 @@
 package articles
 
 import (
+	"encoding/json"
+
 	"github.com/gin-gonic/gin"
 	"github.com/gothinkster/golang-gin-realworld-example-app/common"
 	"github.com/gothinkster/golang-gin-realworld-example-app/users"
@@ -17,6 +19,7 @@ type ArticleModelValidator struct {
 		Tags *[]string `form:"tagList" json:"tagList" binding:"omitempty,dive,required"`
 	} `json:"article"`
 	articleModel ArticleModel `json:"-"`
+	supplied     map[string]json.RawMessage
 }
 
 func NewArticleModelValidator() ArticleModelValidator {
@@ -37,25 +40,36 @@ func NewArticleModelValidatorFillWith(articleModel ArticleModel) ArticleModelVal
 }
 
 func (s *ArticleModelValidator) Bind(c *gin.Context) error {
-	return s.bindWithDB(c, common.GetDB())
+	supplied, err := common.SuppliedFields(c, "article")
+	if err != nil {
+		return err
+	}
+	return s.bindWithDB(c, common.GetDB(), supplied)
 }
 
-func (s *ArticleModelValidator) bindWithDB(c *gin.Context, db *gorm.DB) error {
+func (s *ArticleModelValidator) bindWithDB(c *gin.Context, db *gorm.DB, supplied map[string]json.RawMessage) error {
 	myUserModel := c.MustGet("my_user_model").(users.UserModel)
 
 	err := common.Bind(c, s)
 	if err != nil {
 		return err
 	}
-	s.articleModel.Title = s.Article.Title
-	s.articleModel.Description = s.Article.Description
-	s.articleModel.Body = s.Article.Body
+	s.supplied = supplied
+	if _, ok := supplied["title"]; ok {
+		s.articleModel.Title = s.Article.Title
+	}
+	if _, ok := supplied["description"]; ok {
+		s.articleModel.Description = s.Article.Description
+	}
+	if _, ok := supplied["body"]; ok {
+		s.articleModel.Body = s.Article.Body
+	}
 	articleUserModel, err := getArticleUserModel(db, myUserModel)
 	if err != nil {
 		return err
 	}
 	s.articleModel.Author = articleUserModel
-	if s.Article.Tags != nil {
+	if _, ok := supplied["tagList"]; ok && s.Article.Tags != nil {
 		if err := s.articleModel.setTagsWithDB(db, *s.Article.Tags); err != nil {
 			return err
 		}

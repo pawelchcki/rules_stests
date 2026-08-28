@@ -179,22 +179,8 @@ func UserUpdate(c *gin.Context) {
 		return
 	}
 	err = common.GetDB().Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&myUserModel).Updates(userModelValidator.userModel).Error; err != nil {
-			return err
-		}
-		// A struct update skips empty values. Nullable bio and image clears need
-		// explicit column writes in the same transaction as the scalar update.
-		if cleared(supplied, "bio") {
-			if err := tx.Model(&myUserModel).Update("bio", "").Error; err != nil {
-				return err
-			}
-		}
-		if cleared(supplied, "image") {
-			if err := tx.Model(&myUserModel).Update("image", nil).Error; err != nil {
-				return err
-			}
-		}
-		return nil
+		updates := userUpdateValues(userModelValidator, supplied)
+		return tx.Model(&myUserModel).Updates(updates).Error
 	})
 	if err != nil {
 		if writeIdentityConflict(c, userModelValidator.userModel, myUserModel.ID, err) {
@@ -206,6 +192,32 @@ func UserUpdate(c *gin.Context) {
 	UpdateContextUserModel(c, myUserModel.ID)
 	serializer := UserSerializer{c}
 	c.JSON(http.StatusOK, gin.H{"user": serializer.Response()})
+}
+
+func userUpdateValues(validator UserModelValidator, supplied map[string]json.RawMessage) map[string]interface{} {
+	updates := make(map[string]interface{}, len(supplied))
+	if _, ok := supplied["username"]; ok {
+		updates["username"] = validator.userModel.Username
+	}
+	if _, ok := supplied["email"]; ok {
+		updates["email"] = validator.userModel.Email
+	}
+	if _, ok := supplied["password"]; ok {
+		updates["password"] = validator.userModel.PasswordHash
+	}
+	if _, ok := supplied["bio"]; ok {
+		updates["bio"] = validator.userModel.Bio
+		if cleared(supplied, "bio") {
+			updates["bio"] = ""
+		}
+	}
+	if _, ok := supplied["image"]; ok {
+		updates["image"] = validator.userModel.Image
+		if cleared(supplied, "image") {
+			updates["image"] = nil
+		}
+	}
+	return updates
 }
 
 // cleared reports whether the request asked to empty a nullable field, which

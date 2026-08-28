@@ -69,7 +69,7 @@ def contract_bundle(profile, profile_library_label = None, runtime_libraries = N
         profile_library_label: overrides the profile `.scm`; defaults to
             `profile_library(profile)`. May be a consumer-relative label string.
         runtime_libraries: overrides the language-runtime libraries; defaults to
-            the Python runtime profile.
+            the runtime matching the selected public profile.
 
     Returns:
         A struct with `libraries` (labels) and `imports` (Scheme library names).
@@ -77,7 +77,7 @@ def contract_bundle(profile, profile_library_label = None, runtime_libraries = N
     if profile_library_label == None:
         profile_library_label = profile_library(profile)
     if runtime_libraries == None:
-        runtime_libraries = [PYTHON_RUNTIME_LIB]
+        runtime_libraries = [GO_RUNTIME_LIB] if profile.startswith("go-") else [PYTHON_RUNTIME_LIB]
     return struct(
         libraries = [
             OTEL_VALIDATION_LIB,

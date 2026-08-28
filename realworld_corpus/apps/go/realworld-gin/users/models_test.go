@@ -1,6 +1,7 @@
 package users
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -72,6 +73,21 @@ func TestFollowingStatusPropagatesDatabaseErrors(t *testing.T) {
 	}
 }
 
+func TestUserUpdateValuesContainOnlySuppliedFields(t *testing.T) {
+	image := "https://example.test/new.png"
+	validator := NewUserModelValidatorFillWith(UserModel{
+		ID:       1,
+		Username: "original",
+		Email:    "original@example.test",
+		Bio:      "original bio",
+	})
+	validator.userModel.Image = &image
+	updates := userUpdateValues(validator, map[string]json.RawMessage{"image": json.RawMessage(`"https://example.test/new.png"`)})
+	if len(updates) != 1 || updates["image"] != validator.userModel.Image {
+		t.Fatalf("updates=%v, want only the supplied image", updates)
+	}
+}
+
 func TestUserUpdateRollsBackScalarChangeWhenNullableClearFails(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:user-update-transaction?mode=memory&cache=shared"), &gorm.Config{TranslateError: true})
 	if err != nil {
@@ -86,13 +102,9 @@ func TestUserUpdateRollsBackScalarChangeWhenNullableClearFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantErr := errors.New("forced nullable clear failure")
-	updateCalls := 0
 	if err := db.Callback().Update().Before("gorm:update").Register("test:fail-nullable-clear", func(tx *gorm.DB) {
 		if tx.Statement.Table == "user_models" {
-			updateCalls++
-			if updateCalls == 2 {
-				tx.AddError(wantErr)
-			}
+			tx.AddError(wantErr)
 		}
 	}); err != nil {
 		t.Fatal(err)
