@@ -33,6 +33,7 @@ def _realworld_hurl_case_test(
         otel_imports = [],
         otel_program = None,
         otel_mode = "validate",
+        otel_signals = None,
         otel_xfail = "",
         flaky = False,
         tags = [],
@@ -53,6 +54,8 @@ def _realworld_hurl_case_test(
             "--otel-mode=" + otel_mode,
             "--otel-case={}/{}".format(otel_app, case),
         ])
+        if otel_signals:
+            args.append("--otel-signals=" + ",".join(otel_signals))
         if otel_profile:
             args.append("--otel-profile=" + otel_profile)
         for library in otel_libraries:
@@ -86,6 +89,7 @@ def realworld_hurl_test_suite(
         otel_profile_library = None,
         otel_runtime_libraries = None,
         otel_trace_shape_library_prefix = None,
+        otel_signals = None,
         otel_exact = True,
         otel_candidates = True,
         otel_flaky_reason = "",
@@ -113,6 +117,8 @@ def realworld_hurl_test_suite(
         otel_runtime_libraries: overrides the language-runtime `.scm` libraries.
         otel_trace_shape_library_prefix: overrides where per-case goldens live;
             the case name and `/golden.scm` are appended.
+        otel_signals: OTLP signals the implementation exports; defaults to all
+            three. Must agree with the profile's declared metric and log scopes.
         otel_exact: validate the exact trace shape against a checked-in golden.
         otel_candidates: also generate `manual` golden-candidate targets.
         otel_flaky_reason: marks every case flaky with this reason.
@@ -192,6 +198,7 @@ def realworld_hurl_test_suite(
             otel_libraries = libraries,
             otel_imports = imports,
             otel_program = program,
+            otel_signals = otel_signals,
             otel_xfail = xfail_reason,
             flaky = case_is_flaky,
             tags = case_tags,
@@ -210,6 +217,7 @@ def realworld_hurl_test_suite(
                 otel_libraries = contract.libraries,
                 otel_imports = contract.imports,
                 otel_program = contract.program,
+                otel_signals = otel_signals,
                 otel_mode = "candidate",
                 tags = tags + ["manual"],
                 **kwargs

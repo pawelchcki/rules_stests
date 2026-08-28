@@ -35,7 +35,7 @@ func main() {
 	host := flag.String("host", "127.0.0.1", "API host when --port is used")
 	portFlag := flag.Int("port", 0, "API port (alternative to --base-url)")
 	serviceSuffix := flag.String("service-suffix", "", "rules_itest service label suffix used to discover an assigned port")
-	otelSinkSuffix := flag.String("otel-sink-suffix", "", "OTLP sink service suffix whose decoded trace, metric, and log dump must become non-empty")
+	otelSinkSuffix := flag.String("otel-sink-suffix", "", "OTLP sink service suffix whose decoded telemetry dump must become non-empty")
 	flag.Var(&otelLibraries, "otel-library", "Scheme define-library source to include; repeatable")
 	flag.Var(&otelImports, "otel-import", "dot-separated Scheme library name to import; repeatable")
 	otelProgram := flag.String("otel-program", "", "Scheme validation program evaluated after importing the libraries")
@@ -43,6 +43,7 @@ func main() {
 	otelCase := flag.String("otel-case", "", "OTLP golden identity in app/case form")
 	otelProfile := flag.String("otel-profile", "", "Scheme implementation profile name used by golden candidates")
 	otelXFail := flag.String("otel-xfail", "", "reason this case is expected to violate its OTLP contract")
+	otelSignals := flag.String("otel-signals", "traces,metrics,logs", "comma-separated OTLP signals the implementation is expected to export")
 	hurlRootfs := flag.String("hurl-rootfs", "bazel/itest/hurl_rootfs", "Hurl OCI rootfs in runfiles")
 	jobs := flag.Int("jobs", 4, "number of Hurl files to execute concurrently")
 	uid := flag.String("uid", "", "unique suffix used for API objects")
@@ -122,7 +123,11 @@ func main() {
 		fatal(fmt.Errorf("RealWorld Hurl suite failed: %w", err))
 	}
 	if *otelSinkSuffix != "" {
-		validationErr := requireExportedTelemetry(*otelSinkSuffix, *otelMode, *otelCase, *otelProfile, otelLibraries, otelImports, *otelProgram)
+		signals, err := parseOTLPSignals(*otelSignals)
+		if err != nil {
+			fatal(err)
+		}
+		validationErr := requireExportedTelemetry(*otelSinkSuffix, *otelMode, *otelCase, *otelProfile, otelLibraries, otelImports, *otelProgram, signals)
 		if err := classifyOTLPValidation(validationErr, *otelXFail, *otelCase, os.Stderr); err != nil {
 			fatal(err)
 		}
@@ -221,7 +226,29 @@ func resetStartupTelemetry(serviceSuffix string) error {
 	return nil
 }
 
-func requireExportedTelemetry(serviceSuffix, mode, goldenCase, profile string, libraries, imports []string, program string) error {
+// parseOTLPSignals reads the set of signals an implementation is expected to
+// export. Traces are always required; implementations whose instrumentation
+// covers no metrics or logs declare a narrower set so quiescence does not wait
+// for exports that will never arrive.
+func parseOTLPSignals(value string) (map[string]bool, error) {
+	signals := map[string]bool{}
+	for _, name := range strings.Split(value, ",") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if name != "traces" && name != "metrics" && name != "logs" {
+			return nil, fmt.Errorf("unknown OTLP signal %q in --otel-signals", name)
+		}
+		signals[name] = true
+	}
+	if !signals["traces"] {
+		return nil, errors.New("--otel-signals must include traces")
+	}
+	return signals, nil
+}
+
+func requireExportedTelemetry(serviceSuffix, mode, goldenCase, profile string, libraries, imports []string, program string, signals map[string]bool) error {
 	if mode != "validate" && mode != "candidate" {
 		return fmt.Errorf("invalid --otel-mode %q", mode)
 	}
@@ -266,13 +293,15 @@ func requireExportedTelemetry(serviceSuffix, mode, goldenCase, profile string, l
 					lastStats = stats
 					lastRequestError = "none"
 				}
-				if stats.TraceSpans > 0 && stats.MetricRequests > 0 && stats.LogRequests > 0 {
+				if stats.TraceSpans > 0 &&
+					(!signals["metrics"] || stats.MetricRequests > 0) &&
+					(!signals["logs"] || stats.LogRequests > 0) {
 					if stats.TraceRequests != lastTraceRequests || stats.TraceSpans != lastTraceSpans {
 						lastTraceRequests = stats.TraceRequests
 						lastTraceSpans = stats.TraceSpans
 						stableSince = time.Now()
 					} else if !stableSince.IsZero() && time.Since(stableSince) >= 2*time.Second {
-						return validateTelemetryDump(http.Client{Timeout: time.Minute}, baseURL, mode, goldenCase, profile, libraries, imports, program, stats)
+						return validateTelemetryDump(http.Client{Timeout: time.Minute}, baseURL, mode, goldenCase, profile, libraries, imports, program, stats, signals)
 					}
 				}
 			}
@@ -284,7 +313,7 @@ func requireExportedTelemetry(serviceSuffix, mode, goldenCase, profile string, l
 	}
 }
 
-func validateTelemetryDump(client http.Client, baseURL, mode, goldenCase, profile string, libraries, imports []string, program string, stats sinkStats) error {
+func validateTelemetryDump(client http.Client, baseURL, mode, goldenCase, profile string, libraries, imports []string, program string, stats sinkStats, signals map[string]bool) error {
 	response, err := client.Get(baseURL + "/dump")
 	if err != nil {
 		return fmt.Errorf("read quiescent OTLP dump: %w", err)
@@ -307,9 +336,11 @@ func validateTelemetryDump(client http.Client, baseURL, mode, goldenCase, profil
 			seen[record.Signal] = true
 		}
 	}
-	if !seen["traces"] || !seen["metrics"] || !seen["logs"] {
-		emitFailedCapture(goldenCase, contents)
-		return &otlpAssertionFailure{cause: fmt.Errorf("OTLP dump at %s lacks traces, metrics, or logs with service.name", baseURL)}
+	for signal := range signals {
+		if !seen[signal] {
+			emitFailedCapture(goldenCase, contents)
+			return &otlpAssertionFailure{cause: fmt.Errorf("OTLP dump at %s lacks %s with service.name", baseURL, signal)}
+		}
 	}
 	source, err := readSchemeBundle(libraries, imports, program, goldenCase)
 	if err != nil {
@@ -344,10 +375,10 @@ func validateTelemetryDump(client http.Client, baseURL, mode, goldenCase, profil
 		if err := emitGoldenCandidate(client, baseURL, goldenCase, profile, contents); err != nil {
 			return err
 		}
-		fmt.Printf("Validated OTLP contract and emitted golden candidate for %s: %d spans in %d trace requests, plus metrics and logs\n", goldenCase, stats.TraceSpans, stats.TraceRequests)
+		fmt.Printf("Validated OTLP contract and emitted golden candidate for %s: %d spans in %d trace requests, plus the declared non-trace signals\n", goldenCase, stats.TraceSpans, stats.TraceRequests)
 		return nil
 	}
-	fmt.Printf("Verified quiescent OTLP Scheme golden: %d spans in %d trace requests, plus metrics and logs (%s): %s", stats.TraceSpans, stats.TraceRequests, baseURL, validationOutput)
+	fmt.Printf("Verified quiescent OTLP Scheme golden: %d spans in %d trace requests, plus the declared non-trace signals (%s): %s", stats.TraceSpans, stats.TraceRequests, baseURL, validationOutput)
 	return nil
 }
 
