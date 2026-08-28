@@ -450,6 +450,61 @@ func TestArticleCreateRejectsEmptyTagName(t *testing.T) {
 	}
 }
 
+func TestArticleCreateRejectsNullTagList(t *testing.T) {
+	db := articleTestDB(t, "article-create-null-tag-list")
+	user, _ := articleTestUser(t, db, "null-tag-list-author")
+	recorder := httptest.NewRecorder()
+	gin.SetMode(gin.TestMode)
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/api/articles",
+		strings.NewReader(`{"article":{"title":"Valid title","description":"description","body":"body","tagList":null}}`),
+	)
+	context.Request.Header.Set("Content-Type", "application/json")
+	context.Set("my_user_model", user)
+
+	ArticleCreate(context)
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status=%d body=%s, want 422", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"tagList"`) {
+		t.Fatalf("body=%s, want tagList validation error", recorder.Body.String())
+	}
+	var articleCount int64
+	if err := db.Model(&ArticleModel{}).Count(&articleCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if articleCount != 0 {
+		t.Fatalf("article count=%d, want 0", articleCount)
+	}
+}
+
+func TestArticleListPropagatesDatabaseErrors(t *testing.T) {
+	db := articleTestDB(t, "article-list-database-error")
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	gin.SetMode(gin.TestMode)
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/articles", nil)
+	context.Set("my_user_model", users.UserModel{})
+
+	ArticleList(context)
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status=%d body=%s, want 422", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"database"`) {
+		t.Fatalf("body=%s, want database error", recorder.Body.String())
+	}
+}
+
 func TestSetTagsDeduplicatesInput(t *testing.T) {
 	db := articleTestDB(t, "deduplicate-tags")
 	existing := TagModel{Tag: "go"}

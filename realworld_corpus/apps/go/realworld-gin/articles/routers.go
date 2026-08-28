@@ -43,6 +43,10 @@ func ArticleCreate(c *gin.Context) {
 		c.JSON(http.StatusUnprocessableEntity, common.NewError("body", errors.New("is invalid")))
 		return
 	}
+	if common.IsExplicitNull(supplied, "tagList") {
+		c.JSON(http.StatusUnprocessableEntity, common.BlankFieldError("tagList"))
+		return
+	}
 	var bindErr error
 	var response ArticleResponse
 	err = common.GetDB().Transaction(func(tx *gorm.DB) error {
@@ -77,7 +81,7 @@ func ArticleList(c *gin.Context) {
 	offset := c.Query("offset")
 	articleModels, modelCount, err := FindManyArticle(tag, author, limit, offset, favorited)
 	if err != nil {
-		c.JSON(http.StatusNotFound, common.NewError("article", errors.New("not found")))
+		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
 		return
 	}
 	serializer := ArticlesSerializer{c, articleModels}
@@ -104,7 +108,7 @@ func ArticleFeed(c *gin.Context) {
 	}
 	articleModels, modelCount, err := articleUserModel.GetArticleFeed(limit, offset)
 	if err != nil {
-		c.JSON(http.StatusNotFound, common.NewError("article", errors.New("not found")))
+		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
 		return
 	}
 	serializer := ArticlesSerializer{c, articleModels}

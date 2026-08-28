@@ -3,9 +3,9 @@ package users
 import (
 	"encoding/json"
 	"errors"
-	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -26,11 +26,11 @@ func TestClaimUserIDRejectsMalformedValues(t *testing.T) {
 		{name: "missing", want: false},
 		{name: "null", value: nil, want: false},
 		{name: "string", value: "1", want: false},
-		{name: "zero", value: float64(0), want: false},
-		{name: "fractional", value: 1.5, want: false},
-		{name: "nan", value: math.NaN(), want: false},
-		{name: "infinite", value: math.Inf(1), want: false},
-		{name: "valid", value: float64(1), want: true},
+		{name: "float", value: float64(1), want: false},
+		{name: "zero", value: json.Number("0"), want: false},
+		{name: "fractional", value: json.Number("1.5"), want: false},
+		{name: "exponent", value: json.Number("1e3"), want: false},
+		{name: "valid", value: json.Number("1"), want: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -43,6 +43,49 @@ func TestClaimUserIDRejectsMalformedValues(t *testing.T) {
 				t.Fatalf("valid=%v, want %v", ok, test.want)
 			}
 		})
+	}
+}
+
+func TestAuthMiddlewarePreservesUserIDAboveJSONFloatPrecision(t *testing.T) {
+	if strconv.IntSize != 64 {
+		t.Skip("requires 64-bit uint")
+	}
+	const roundedID uint = 9007199254740992
+	const exactID uint = 9007199254740993
+	db, err := gorm.Open(sqlite.Open("file:large-token-user-id?mode=memory&cache=shared"), &gorm.Config{TranslateError: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	common.DB = db
+	if err := db.AutoMigrate(&UserModel{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, user := range []UserModel{
+		{ID: roundedID, Username: "rounded-user", Email: "rounded@example.test", PasswordHash: "unused"},
+		{ID: exactID, Username: "exact-user", Email: "exact@example.test", PasswordHash: "unused"},
+	} {
+		if err := db.Create(&user).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(AuthMiddleware(true))
+	router.GET("/", func(c *gin.Context) {
+		user := c.MustGet("my_user_model").(UserModel)
+		if user.ID != exactID {
+			c.Status(http.StatusConflict)
+			return
+		}
+		c.Status(http.StatusNoContent)
+	})
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.Header.Set("Authorization", "Token "+common.GenToken(exactID))
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s, want exact user authentication", recorder.Code, recorder.Body.String())
 	}
 }
 

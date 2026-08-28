@@ -1,8 +1,8 @@
 package users
 
 import (
+	"encoding/json"
 	"errors"
-	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -73,7 +73,7 @@ func AuthMiddleware(auto401 bool) gin.HandlerFunc {
 				return nil, jwt.ErrSignatureInvalid
 			}
 			return []byte(common.JWTSecret), nil
-		})
+		}, jwt.WithJSONNumber())
 
 		if err != nil {
 			if auto401 {
@@ -105,12 +105,13 @@ func AuthMiddleware(auto401 bool) gin.HandlerFunc {
 }
 
 func claimUserID(claims jwt.MapClaims) (uint, bool) {
-	value, ok := claims["id"].(float64)
-	if !ok || value < 1 || math.IsNaN(value) || math.IsInf(value, 0) || math.Trunc(value) != value {
+	value, ok := claims["id"].(json.Number)
+	if !ok {
 		return 0, false
 	}
-	if (strconv.IntSize == 32 && value >= 1<<32) || (strconv.IntSize == 64 && value >= 1<<64) {
+	id, err := strconv.ParseUint(value.String(), 10, strconv.IntSize)
+	if err != nil || id == 0 {
 		return 0, false
 	}
-	return uint(value), true
+	return uint(id), true
 }
