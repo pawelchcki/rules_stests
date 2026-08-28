@@ -250,7 +250,7 @@ func FindManyArticle(tag, author, limit, offset, favorited string) ([]ArticleMod
 	}
 	if err := query.Distinct("article_models.*").
 		Preload("Author.UserModel").Preload("Tags").
-		Order("article_models.updated_at DESC").
+		Order("article_models.created_at DESC, article_models.id DESC").
 		Offset(offset_int).Limit(limit_int).Find(&models).Error; err != nil {
 		return models, 0, err
 	}
@@ -300,7 +300,7 @@ func (self *ArticleUserModel) GetArticleFeed(limit, offset string) ([]ArticleMod
 				return rollback(err)
 			}
 			count = int(count64)
-			if err := tx.Preload("Author.UserModel").Preload("Tags").Where("author_id IN ?", authorIDs).Order("updated_at desc").Offset(offset_int).Limit(limit_int).Find(&models).Error; err != nil {
+			if err := tx.Preload("Author.UserModel").Preload("Tags").Where("author_id IN ?", authorIDs).Order("created_at DESC, id DESC").Offset(offset_int).Limit(limit_int).Find(&models).Error; err != nil {
 				return rollback(err)
 			}
 		}

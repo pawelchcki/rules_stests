@@ -35,7 +35,7 @@ type ArticleUserSerializer struct {
 	ArticleUserModel
 }
 
-func (s *ArticleUserSerializer) Response() users.ProfileResponse {
+func (s *ArticleUserSerializer) Response() (users.ProfileResponse, error) {
 	response := users.ProfileSerializer{C: s.C, UserModel: s.ArticleUserModel.UserModel}
 	return response.Response()
 }
@@ -82,6 +82,10 @@ func (s *ArticleSerializer) Response() (ArticleResponse, error) {
 		return ArticleResponse{}, err
 	}
 	authorSerializer := ArticleUserSerializer{C: s.C, ArticleUserModel: s.Author}
+	author, err := authorSerializer.Response()
+	if err != nil {
+		return ArticleResponse{}, err
+	}
 	response := ArticleResponse{
 		ID:          s.ID,
 		Slug:        s.Slug,
@@ -91,7 +95,7 @@ func (s *ArticleSerializer) Response() (ArticleResponse, error) {
 		CreatedAt:   s.CreatedAt.UTC().Format("2006-01-02T15:04:05.999Z"),
 		//UpdatedAt:      s.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		UpdatedAt:      s.UpdatedAt.UTC().Format("2006-01-02T15:04:05.999Z"),
-		Author:         authorSerializer.Response(),
+		Author:         author,
 		Favorite:       favorited,
 		FavoritesCount: favoritesCount,
 	}
@@ -105,8 +109,12 @@ func (s *ArticleSerializer) Response() (ArticleResponse, error) {
 }
 
 // ResponseWithPreloaded creates response using preloaded favorite data to avoid N+1 queries
-func (s *ArticleSerializer) ResponseWithPreloaded(favorited bool, favoritesCount uint) ArticleResponse {
+func (s *ArticleSerializer) ResponseWithPreloaded(favorited bool, favoritesCount uint) (ArticleResponse, error) {
 	authorSerializer := ArticleUserSerializer{C: s.C, ArticleUserModel: s.Author}
+	author, err := authorSerializer.Response()
+	if err != nil {
+		return ArticleResponse{}, err
+	}
 	response := ArticleResponse{
 		ID:             s.ID,
 		Slug:           s.Slug,
@@ -114,7 +122,7 @@ func (s *ArticleSerializer) ResponseWithPreloaded(favorited bool, favoritesCount
 		Description:    s.Description,
 		CreatedAt:      s.CreatedAt.UTC().Format("2006-01-02T15:04:05.999Z"),
 		UpdatedAt:      s.UpdatedAt.UTC().Format("2006-01-02T15:04:05.999Z"),
-		Author:         authorSerializer.Response(),
+		Author:         author,
 		Favorite:       favorited,
 		FavoritesCount: favoritesCount,
 	}
@@ -124,7 +132,7 @@ func (s *ArticleSerializer) ResponseWithPreloaded(favorited bool, favoritesCount
 		response.Tags = append(response.Tags, serializer.Response())
 	}
 	sort.Strings(response.Tags)
-	return response
+	return response, nil
 }
 
 func (s *ArticlesSerializer) Response() ([]ArticleResponse, error) {
@@ -158,7 +166,11 @@ func (s *ArticlesSerializer) Response() ([]ArticleResponse, error) {
 		serializer := ArticleSerializer{C: s.C, ArticleModel: article}
 		favorited := favoriteStatus[article.ID]
 		count := favoriteCounts[article.ID]
-		response = append(response, serializer.ResponseWithPreloaded(favorited, count))
+		articleResponse, err := serializer.ResponseWithPreloaded(favorited, count)
+		if err != nil {
+			return nil, err
+		}
+		response = append(response, articleResponse)
 	}
 	return response, nil
 }
@@ -181,23 +193,31 @@ type CommentResponse struct {
 	Author    users.ProfileResponse `json:"author"`
 }
 
-func (s *CommentSerializer) Response() CommentResponse {
+func (s *CommentSerializer) Response() (CommentResponse, error) {
 	authorSerializer := ArticleUserSerializer{C: s.C, ArticleUserModel: s.Author}
+	author, err := authorSerializer.Response()
+	if err != nil {
+		return CommentResponse{}, err
+	}
 	response := CommentResponse{
 		ID:        s.ID,
 		Body:      s.Body,
 		CreatedAt: s.CreatedAt.UTC().Format("2006-01-02T15:04:05.999Z"),
 		UpdatedAt: s.UpdatedAt.UTC().Format("2006-01-02T15:04:05.999Z"),
-		Author:    authorSerializer.Response(),
+		Author:    author,
 	}
-	return response
+	return response, nil
 }
 
-func (s *CommentsSerializer) Response() []CommentResponse {
+func (s *CommentsSerializer) Response() ([]CommentResponse, error) {
 	response := []CommentResponse{}
 	for _, comment := range s.Comments {
 		serializer := CommentSerializer{C: s.C, CommentModel: comment}
-		response = append(response, serializer.Response())
+		commentResponse, err := serializer.Response()
+		if err != nil {
+			return nil, err
+		}
+		response = append(response, commentResponse)
 	}
-	return response
+	return response, nil
 }

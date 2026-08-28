@@ -14,7 +14,7 @@ type ArticleModelValidator struct {
 		Body        string `form:"body" json:"body" binding:"required,max=2048"`
 		// A pointer distinguishes "tagList omitted" (leave tags alone) from
 		// "tagList: []" (remove every tag), which the contract separates.
-		Tags *[]string `form:"tagList" json:"tagList"`
+		Tags *[]string `form:"tagList" json:"tagList" binding:"omitempty,dive,required"`
 	} `json:"article"`
 	articleModel ArticleModel `json:"-"`
 }

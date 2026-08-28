@@ -297,7 +297,12 @@ func ArticleCommentCreate(c *gin.Context) {
 		return
 	}
 	serializer := CommentSerializer{c, commentModelValidator.commentModel}
-	c.JSON(http.StatusCreated, gin.H{"comment": serializer.Response()})
+	response, err := serializer.Response()
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"comment": response})
 }
 
 func ArticleCommentDelete(c *gin.Context) {
@@ -351,7 +356,12 @@ func ArticleCommentList(c *gin.Context) {
 		return
 	}
 	serializer := CommentsSerializer{c, articleModel.Comments}
-	c.JSON(http.StatusOK, gin.H{"comments": serializer.Response()})
+	response, err := serializer.Response()
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"comments": response})
 }
 func TagList(c *gin.Context) {
 	tagModels, err := getAllTags()

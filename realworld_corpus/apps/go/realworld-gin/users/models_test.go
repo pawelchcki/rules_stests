@@ -51,6 +51,27 @@ func TestUnfollowHardDeletesRelationship(t *testing.T) {
 	}
 }
 
+func TestFollowingStatusPropagatesDatabaseErrors(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:follow-read-error?mode=memory&cache=shared"), &gorm.Config{TranslateError: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	common.DB = db
+	if err := db.AutoMigrate(&UserModel{}, &FollowModel{}); err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (UserModel{ID: 1}).isFollowing(UserModel{ID: 2}); err == nil {
+		t.Fatal("follow-status query on closed database unexpectedly succeeded")
+	}
+}
+
 func TestUserUpdateRollsBackScalarChangeWhenNullableClearFails(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:user-update-transaction?mode=memory&cache=shared"), &gorm.Config{TranslateError: true})
 	if err != nil {

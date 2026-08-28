@@ -30,8 +30,12 @@ func nullableText(value string) *string {
 }
 
 // Put your response logic including wrap the userModel here.
-func (self *ProfileSerializer) Response() ProfileResponse {
+func (self *ProfileSerializer) Response() (ProfileResponse, error) {
 	myUserModel := self.C.MustGet("my_user_model").(UserModel)
+	following, err := myUserModel.isFollowing(self.UserModel)
+	if err != nil {
+		return ProfileResponse{}, err
+	}
 	image := ""
 	if self.Image != nil {
 		image = *self.Image
@@ -41,9 +45,9 @@ func (self *ProfileSerializer) Response() ProfileResponse {
 		Username:  self.Username,
 		Bio:       nullableText(self.Bio),
 		Image:     nullableText(image),
-		Following: myUserModel.isFollowing(self.UserModel),
+		Following: following,
 	}
-	return profile
+	return profile, nil
 }
 
 type UserSerializer struct {

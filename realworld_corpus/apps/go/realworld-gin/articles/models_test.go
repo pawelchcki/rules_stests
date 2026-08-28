@@ -59,7 +59,7 @@ func articleTestUser(t *testing.T, db *gorm.DB, username string) (users.UserMode
 func articleTestArticle(t *testing.T, db *gorm.DB, author ArticleUserModel, title string, updatedAt time.Time, tags ...TagModel) ArticleModel {
 	t.Helper()
 	article := ArticleModel{
-		Model:       gorm.Model{UpdatedAt: updatedAt},
+		Model:       gorm.Model{CreatedAt: updatedAt, UpdatedAt: updatedAt},
 		Slug:        title,
 		Title:       title,
 		Description: "description",
@@ -101,6 +101,10 @@ func TestFindManyArticleCombinesFiltersAndOrdersBeforePaging(t *testing.T) {
 	newerTag := articleTestArticle(t, db, bob, "newer-tag", base.Add(4*time.Minute), goTag)
 	newerAuthor := articleTestArticle(t, db, alice, "newer-author", base.Add(3*time.Minute), rustTag)
 	newest := articleTestArticle(t, db, alice, "newest", base.Add(5*time.Minute), goTag)
+	// Editing the oldest article must not move it to the first list page.
+	if err := db.Model(&match).UpdateColumn("updated_at", base.Add(10*time.Minute)).Error; err != nil {
+		t.Fatal(err)
+	}
 
 	for _, article := range []ArticleModel{match, newerTag, newerAuthor} {
 		if err := article.favoriteBy(carol); err != nil {
@@ -328,6 +332,33 @@ func TestArticleCreateRollsBackTagsWhenSlugIsRejected(t *testing.T) {
 	}
 	if tagCount != 0 {
 		t.Fatalf("orphan tag count=%d, want 0", tagCount)
+	}
+}
+
+func TestArticleCreateRejectsEmptyTagName(t *testing.T) {
+	db := articleTestDB(t, "article-create-empty-tag")
+	user, _ := articleTestUser(t, db, "empty-tag-author")
+	recorder := httptest.NewRecorder()
+	gin.SetMode(gin.TestMode)
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/api/articles",
+		strings.NewReader(`{"article":{"title":"Valid title","description":"description","body":"body","tagList":[""]}}`),
+	)
+	context.Request.Header.Set("Content-Type", "application/json")
+	context.Set("my_user_model", user)
+
+	ArticleCreate(context)
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status=%d body=%s, want 422", recorder.Code, recorder.Body.String())
+	}
+	var tagCount int64
+	if err := db.Unscoped().Model(&TagModel{}).Count(&tagCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if tagCount != 0 {
+		t.Fatalf("tag count=%d, want 0", tagCount)
 	}
 }
 

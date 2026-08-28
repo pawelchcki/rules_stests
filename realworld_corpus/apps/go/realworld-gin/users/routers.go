@@ -40,7 +40,12 @@ func ProfileRetrieve(c *gin.Context) {
 		return
 	}
 	profileSerializer := ProfileSerializer{c, userModel}
-	c.JSON(http.StatusOK, gin.H{"profile": profileSerializer.Response()})
+	response, err := profileSerializer.Response()
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"profile": response})
 }
 
 func ProfileFollow(c *gin.Context) {
@@ -57,7 +62,12 @@ func ProfileFollow(c *gin.Context) {
 		return
 	}
 	serializer := ProfileSerializer{c, userModel}
-	c.JSON(http.StatusOK, gin.H{"profile": serializer.Response()})
+	response, err := serializer.Response()
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"profile": response})
 }
 
 func ProfileUnfollow(c *gin.Context) {
@@ -75,7 +85,12 @@ func ProfileUnfollow(c *gin.Context) {
 		return
 	}
 	serializer := ProfileSerializer{c, userModel}
-	c.JSON(http.StatusOK, gin.H{"profile": serializer.Response()})
+	response, err := serializer.Response()
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"profile": response})
 }
 
 func UsersRegistration(c *gin.Context) {
