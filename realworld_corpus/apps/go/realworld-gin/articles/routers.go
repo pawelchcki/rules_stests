@@ -9,7 +9,10 @@ import (
 	"gorm.io/gorm"
 	"net/http"
 	"strconv"
+	"sync"
 )
+
+var articleCreateMutex sync.Mutex
 
 func ArticlesRegister(router *gin.RouterGroup) {
 	router.GET("/feed", ArticleFeed)
@@ -49,6 +52,8 @@ func ArticleCreate(c *gin.Context) {
 	}
 	var bindErr error
 	var response ArticleResponse
+	articleCreateMutex.Lock()
+	defer articleCreateMutex.Unlock()
 	err = common.GetDB().Transaction(func(tx *gorm.DB) error {
 		bindErr = articleModelValidator.bindWithDB(c, tx, supplied)
 		if bindErr != nil {
@@ -386,7 +391,7 @@ func ArticleCommentList(c *gin.Context) {
 	}
 	err = articleModel.getComments()
 	if err != nil {
-		c.JSON(http.StatusNotFound, common.NewError("article", errors.New("not found")))
+		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
 		return
 	}
 	serializer := CommentsSerializer{c, articleModel.Comments}

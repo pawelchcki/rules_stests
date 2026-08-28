@@ -13,20 +13,13 @@ import (
 	"gorm.io/gorm"
 )
 
-// Extract token from Authorization header or query parameter
+// Extract the token only from the Authorization header. Query parameters are
+// exported as url.query by HTTP instrumentation and must not carry credentials.
 func extractToken(c *gin.Context) string {
-	// Check Authorization header first
 	bearerToken := c.GetHeader("Authorization")
 	if len(bearerToken) > 6 && strings.ToUpper(bearerToken[0:6]) == "TOKEN " {
 		return bearerToken[6:]
 	}
-
-	// Check query parameter
-	token := c.Query("access_token")
-	if token != "" {
-		return token
-	}
-
 	return ""
 }
 

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -322,6 +323,56 @@ func TestSaveArticleWithUniqueSlugAdvancesSuffix(t *testing.T) {
 	}
 }
 
+func TestConcurrentArticleCreatesAllocateDistinctSlugs(t *testing.T) {
+	db := articleTestDB(t, "concurrent-article-create")
+	user, _ := articleTestUser(t, db, "concurrent-create-author")
+	gin.SetMode(gin.TestMode)
+	const requestCount = 8
+	recorders := make([]*httptest.ResponseRecorder, requestCount)
+	start := make(chan struct{})
+	var wait sync.WaitGroup
+	for index := range recorders {
+		wait.Add(1)
+		go func(index int) {
+			defer wait.Done()
+			recorder := httptest.NewRecorder()
+			recorders[index] = recorder
+			context, _ := gin.CreateTestContext(recorder)
+			context.Request = httptest.NewRequest(
+				http.MethodPost,
+				"/api/articles",
+				strings.NewReader(`{"article":{"title":"Concurrent title","description":"description","body":"body"}}`),
+			)
+			context.Request.Header.Set("Content-Type", "application/json")
+			context.Set("my_user_model", user)
+			<-start
+			ArticleCreate(context)
+		}(index)
+	}
+	close(start)
+	wait.Wait()
+
+	for index, recorder := range recorders {
+		if recorder.Code != http.StatusCreated {
+			t.Fatalf("request %d status=%d body=%s, want 201", index, recorder.Code, recorder.Body.String())
+		}
+	}
+	var slugs []string
+	if err := db.Model(&ArticleModel{}).Order("slug").Pluck("slug", &slugs).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(slugs) != requestCount {
+		t.Fatalf("slugs=%v, want %d distinct articles", slugs, requestCount)
+	}
+	seen := make(map[string]struct{}, requestCount)
+	for _, value := range slugs {
+		if _, duplicate := seen[value]; duplicate {
+			t.Fatalf("duplicate slug %q in %v", value, slugs)
+		}
+		seen[value] = struct{}{}
+	}
+}
+
 func TestSaveArticleWithUniqueSlugAccountsForDeletedArticles(t *testing.T) {
 	db := articleTestDB(t, "deleted-unique-slug")
 	_, author := articleTestUser(t, db, "deleted-slug-author")
@@ -588,6 +639,35 @@ func TestCommentCreateRollsBackWhenResponseReadFails(t *testing.T) {
 	}
 	if commentCount != 0 {
 		t.Fatalf("comment count=%d, want rollback", commentCount)
+	}
+}
+
+func TestCommentListPropagatesDatabaseErrors(t *testing.T) {
+	db := articleTestDB(t, "comment-list-database-error")
+	user, author := articleTestUser(t, db, "comment-list-error-author")
+	article := articleTestArticle(t, db, author, "comment-list-error-article", time.Now())
+	wantErr := errors.New("forced comment list failure")
+	if err := db.Callback().Query().Before("gorm:query").Register("test:fail-comment-list", func(tx *gorm.DB) {
+		if tx.Statement.Table == "comment_models" {
+			tx.AddError(wantErr)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	gin.SetMode(gin.TestMode)
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/articles/"+article.Slug+"/comments", nil)
+	context.Params = gin.Params{{Key: "slug", Value: article.Slug}}
+	context.Set("my_user_model", user)
+
+	ArticleCommentList(context)
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status=%d body=%s, want 422", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"database"`) {
+		t.Fatalf("body=%s, want database error", recorder.Body.String())
 	}
 }
 

@@ -232,6 +232,9 @@ _GIN_OTEL_SINK_ENV = {
     "OTEL_LOGS_EXPORTER": "none",
     "OTEL_METRICS_EXPORTER": "otlp",
     "OTEL_METRIC_EXPORT_INTERVAL": "1000",
+    # app-exec cannot switch to the OCI numeric USER inside a Bazel sandbox.
+    # Stabilize the required resource attribute to the image's passwd identity.
+    "OTEL_RESOURCE_ATTRIBUTES": "process.owner=nonroot",
     "OTEL_SERVICE_NAME": "gin-otel",
     "OTEL_TRACES_EXPORTER": "otlp",
 }

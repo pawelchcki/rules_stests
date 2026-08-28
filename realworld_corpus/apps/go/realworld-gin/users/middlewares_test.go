@@ -146,6 +146,19 @@ func TestAuthMiddlewareRejectsSignedTokenWithMalformedID(t *testing.T) {
 	}
 }
 
+func TestAuthMiddlewareRejectsQueryParameterToken(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(AuthMiddleware(true))
+	router.GET("/", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	request := httptest.NewRequest(http.MethodGet, "/?access_token="+common.GenToken(1), nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d, want query token rejected with 401", recorder.Code)
+	}
+}
+
 func TestAuthMiddlewareRejectsSignedTokenForMissingUser(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:missing-token-user?mode=memory&cache=shared"), &gorm.Config{TranslateError: true})
 	if err != nil {
