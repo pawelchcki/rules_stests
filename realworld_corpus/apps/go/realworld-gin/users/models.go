@@ -6,6 +6,7 @@ import (
 	"github.com/gothinkster/golang-gin-realworld-example-app/common"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Models should only be concerned with database schema, more strict checking should be put in validator.
@@ -36,17 +37,14 @@ type UserModel struct {
 type FollowModel struct {
 	gorm.Model
 	Following    UserModel
-	FollowingID  uint
+	FollowingID  uint `gorm:"uniqueIndex:idx_follow_edge"`
 	FollowedBy   UserModel
-	FollowedByID uint
+	FollowedByID uint `gorm:"uniqueIndex:idx_follow_edge"`
 }
 
 // Migrate the schema of database if needed
-func AutoMigrate() {
-	db := common.GetDB()
-
-	db.AutoMigrate(&UserModel{})
-	db.AutoMigrate(&FollowModel{})
+func AutoMigrate(db *gorm.DB) error {
+	return db.AutoMigrate(&UserModel{}, &FollowModel{})
 }
 
 // What's bcrypt? https://en.wikipedia.org/wiki/Bcrypt
@@ -122,12 +120,14 @@ func (model *UserModel) ClearImage() error {
 //	err = userModel1.following(userModel2)
 func (u UserModel) following(v UserModel) error {
 	db := common.GetDB()
-	var follow FollowModel
-	err := db.FirstOrCreate(&follow, &FollowModel{
+	follow := FollowModel{
 		FollowingID:  v.ID,
 		FollowedByID: u.ID,
-	}).Error
-	return err
+	}
+	return db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "following_id"}, {Name: "followed_by_id"}},
+		DoNothing: true,
+	}).Create(&follow).Error
 }
 
 // You could check whether  userModel1 following userModel2
@@ -148,22 +148,22 @@ func (u UserModel) isFollowing(v UserModel) bool {
 //	err = userModel1.unFollowing(userModel2)
 func (u UserModel) unFollowing(v UserModel) error {
 	db := common.GetDB()
-	err := db.Where("following_id = ? AND followed_by_id = ?", v.ID, u.ID).Delete(&FollowModel{}).Error
+	err := db.Unscoped().Where("following_id = ? AND followed_by_id = ?", v.ID, u.ID).Delete(&FollowModel{}).Error
 	return err
 }
 
-// You could get a following list of userModel
-//
-//	followings := userModel.GetFollowings()
-func (u UserModel) GetFollowings() []UserModel {
-	db := common.GetDB()
+// GetFollowingsWithDB keeps feed reads on the caller's transaction and exposes
+// database failures instead of converting them into an empty following list.
+func (u UserModel) GetFollowingsWithDB(db *gorm.DB) ([]UserModel, error) {
 	var follows []FollowModel
 	var followings []UserModel
-	db.Preload("Following").Where(FollowModel{
+	if err := db.Preload("Following").Where(FollowModel{
 		FollowedByID: u.ID,
-	}).Find(&follows)
+	}).Find(&follows).Error; err != nil {
+		return nil, err
+	}
 	for _, follow := range follows {
 		followings = append(followings, follow.Following)
 	}
-	return followings
+	return followings, nil
 }

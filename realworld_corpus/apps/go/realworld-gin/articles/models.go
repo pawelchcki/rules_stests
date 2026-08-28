@@ -55,11 +55,14 @@ type CommentModel struct {
 }
 
 func GetArticleUserModel(userModel users.UserModel) ArticleUserModel {
+	return getArticleUserModel(common.GetDB(), userModel)
+}
+
+func getArticleUserModel(db *gorm.DB, userModel users.UserModel) ArticleUserModel {
 	var articleUserModel ArticleUserModel
 	if userModel.ID == 0 {
 		return articleUserModel
 	}
-	db := common.GetDB()
 	db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "user_model_id"}},
 		DoNothing: true,
@@ -246,7 +249,17 @@ func (self *ArticleUserModel) GetArticleFeed(limit, offset string) ([]ArticleMod
 	}
 
 	tx := db.Begin()
-	followings := self.UserModel.GetFollowings()
+	if tx.Error != nil {
+		return models, 0, tx.Error
+	}
+	rollback := func(err error) ([]ArticleModel, int, error) {
+		_ = tx.Rollback().Error
+		return models, 0, err
+	}
+	followings, err := self.UserModel.GetFollowingsWithDB(tx)
+	if err != nil {
+		return rollback(err)
+	}
 
 	// Batch get ArticleUserModel IDs to avoid N+1 query
 	if len(followings) > 0 {
@@ -256,7 +269,9 @@ func (self *ArticleUserModel) GetArticleFeed(limit, offset string) ([]ArticleMod
 		}
 
 		var articleUserModels []ArticleUserModel
-		tx.Where("user_model_id IN ?", followingUserIDs).Find(&articleUserModels)
+		if err := tx.Where("user_model_id IN ?", followingUserIDs).Find(&articleUserModels).Error; err != nil {
+			return rollback(err)
+		}
 
 		var authorIDs []uint
 		for _, aum := range articleUserModels {
@@ -265,27 +280,43 @@ func (self *ArticleUserModel) GetArticleFeed(limit, offset string) ([]ArticleMod
 
 		if len(authorIDs) > 0 {
 			var count64 int64
-			tx.Model(&ArticleModel{}).Where("author_id IN ?", authorIDs).Count(&count64)
+			if err := tx.Model(&ArticleModel{}).Where("author_id IN ?", authorIDs).Count(&count64).Error; err != nil {
+				return rollback(err)
+			}
 			count = int(count64)
-			tx.Preload("Author.UserModel").Preload("Tags").Where("author_id IN ?", authorIDs).Order("updated_at desc").Offset(offset_int).Limit(limit_int).Find(&models)
+			if err := tx.Preload("Author.UserModel").Preload("Tags").Where("author_id IN ?", authorIDs).Order("updated_at desc").Offset(offset_int).Limit(limit_int).Find(&models).Error; err != nil {
+				return rollback(err)
+			}
 		}
 	}
 
-	err := tx.Commit().Error
-	return models, count, err
+	if err := tx.Commit().Error; err != nil {
+		return models, 0, err
+	}
+	return models, count, nil
 }
 
-func (model *ArticleModel) setTags(tags []string) error {
+func (model *ArticleModel) setTagsWithDB(db *gorm.DB, tags []string) error {
 	if len(tags) == 0 {
 		model.Tags = []TagModel{}
 		return nil
 	}
 
-	db := common.GetDB()
+	uniqueTags := make([]string, 0, len(tags))
+	seen := make(map[string]struct{}, len(tags))
+	for _, tag := range tags {
+		if _, exists := seen[tag]; exists {
+			continue
+		}
+		seen[tag] = struct{}{}
+		uniqueTags = append(uniqueTags, tag)
+	}
 
 	// Batch fetch existing tags
 	var existingTags []TagModel
-	db.Where("tag IN ?", tags).Find(&existingTags)
+	if err := db.Where("tag IN ?", uniqueTags).Find(&existingTags).Error; err != nil {
+		return err
+	}
 
 	// Create a map for quick lookup
 	existingTagMap := make(map[string]TagModel)
@@ -295,7 +326,7 @@ func (model *ArticleModel) setTags(tags []string) error {
 
 	// Create missing tags and build final list
 	var tagList []TagModel
-	for _, tag := range tags {
+	for _, tag := range uniqueTags {
 		if existing, ok := existingTagMap[tag]; ok {
 			tagList = append(tagList, existing)
 		} else {
@@ -320,16 +351,22 @@ func (model *ArticleModel) setTags(tags []string) error {
 // UniqueSlug derives a slug from a title, appending a counter when an article
 // already owns the derived value. The contract requires two articles that share
 // a title to receive distinct slugs.
-func UniqueSlug(title string) string {
+func UniqueSlug(title string) (string, error) {
 	db := common.GetDB()
 	base := slug.Make(title)
+	if base == "" {
+		return "", errors.New("title must produce a non-empty slug")
+	}
 	candidate := base
 	for attempt := 2; ; attempt++ {
 		var existing ArticleModel
 		// A soft-deleted article still occupies the unique slug index. Include
 		// retired rows so a replacement advances to a free suffix.
 		if err := db.Unscoped().Where(&ArticleModel{Slug: candidate}).First(&existing).Error; err != nil {
-			return candidate
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return candidate, nil
+			}
+			return "", err
 		}
 		candidate = base + "-" + strconv.Itoa(attempt)
 	}
@@ -340,7 +377,11 @@ func UniqueSlug(title string) string {
 // a losing request observes the winner and advances to the next suffix.
 func SaveArticleWithUniqueSlug(model *ArticleModel) error {
 	for {
-		model.Slug = UniqueSlug(model.Title)
+		candidate, err := UniqueSlug(model.Title)
+		if err != nil {
+			return err
+		}
+		model.Slug = candidate
 		if err := SaveOne(model); err != nil {
 			if !errors.Is(err, gorm.ErrDuplicatedKey) {
 				return err
@@ -354,20 +395,6 @@ func SaveArticleWithUniqueSlug(model *ArticleModel) error {
 		}
 		return nil
 	}
-}
-
-// ReplaceTags makes the stored tag set match the supplied one exactly. A struct
-// update only ever adds associations, so removing a tag needs an explicit
-// replacement.
-func (model *ArticleModel) ReplaceTags(tags []TagModel) error {
-	db := common.GetDB()
-	return db.Model(model).Association("Tags").Replace(tags)
-}
-
-func (model *ArticleModel) Update(data interface{}) error {
-	db := common.GetDB()
-	err := db.Model(model).Updates(data).Error
-	return err
 }
 
 func DeleteArticleModel(condition interface{}) error {

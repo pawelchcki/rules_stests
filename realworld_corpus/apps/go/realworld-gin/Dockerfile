@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1.7
 ARG SOURCE_DATE_EPOCH=0
-FROM golang:1.25-alpine@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS builder
+FROM golang:1.25-bookworm@sha256:3b4a11519ad929d1e1d261a12cff056f0c85b735253d7d861346b9c6f8b36437 AS builder
 ARG SOURCE_DATE_EPOCH
 
-# The vendored app keeps upstream's cgo mattn/go-sqlite3 driver, so the builder
-# needs a C toolchain and the binaries are linked statically against musl.
-RUN apk add --no-cache gcc musl-dev git
+# The vendored app keeps upstream's cgo mattn/go-sqlite3 driver. This immutable
+# official Go builder already contains GCC, libc development files, and Git, so
+# rebuilding a source-tree tag does not resolve mutable distro packages.
 
 ENV CGO_ENABLED=1 \
     GOOS=linux \

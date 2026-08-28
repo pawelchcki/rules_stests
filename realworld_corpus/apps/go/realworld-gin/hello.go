@@ -15,13 +15,20 @@ import (
 	"gorm.io/gorm"
 )
 
-func Migrate(db *gorm.DB) {
-	users.AutoMigrate()
-	db.AutoMigrate(&articles.ArticleModel{})
-	db.AutoMigrate(&articles.TagModel{})
-	db.AutoMigrate(&articles.FavoriteModel{})
-	db.AutoMigrate(&articles.ArticleUserModel{})
-	db.AutoMigrate(&articles.CommentModel{})
+func Migrate(db *gorm.DB) error {
+	if err := users.AutoMigrate(db); err != nil {
+		return fmt.Errorf("migrate users: %w", err)
+	}
+	if err := db.AutoMigrate(
+		&articles.ArticleModel{},
+		&articles.TagModel{},
+		&articles.FavoriteModel{},
+		&articles.ArticleUserModel{},
+		&articles.CommentModel{},
+	); err != nil {
+		return fmt.Errorf("migrate articles: %w", err)
+	}
+	return nil
 }
 
 // parseServeAddress reads the corpus launcher convention
@@ -56,8 +63,13 @@ func main() {
 		log.Fatal("usage: realworld-gin serve --host <host> --port <port>: ", err)
 	}
 
-	db := common.Init()
-	Migrate(db)
+	db, err := common.Init()
+	if err != nil {
+		log.Fatal("initialize database: ", err)
+	}
+	if err := Migrate(db); err != nil {
+		log.Fatal("initialize schema: ", err)
+	}
 	sqlDB, err := db.DB()
 	if err != nil {
 		log.Println("failed to get sql.DB:", err)

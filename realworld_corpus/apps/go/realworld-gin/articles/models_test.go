@@ -1,6 +1,7 @@
 package articles
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -24,6 +25,7 @@ func articleTestDB(t *testing.T, name string) *gorm.DB {
 	common.DB = db
 	if err := db.AutoMigrate(
 		&users.UserModel{},
+		&users.FollowModel{},
 		&ArticleUserModel{},
 		&ArticleModel{},
 		&TagModel{},
@@ -137,6 +139,29 @@ func TestFindManyArticleCombinesFiltersAndOrdersBeforePaging(t *testing.T) {
 	}
 }
 
+func TestGetArticleFeedPropagatesQueryFailure(t *testing.T) {
+	db := articleTestDB(t, "article-feed-error")
+	reader, readerProfile := articleTestUser(t, db, "feed-reader")
+	author, authorProfile := articleTestUser(t, db, "feed-author")
+	if err := db.Create(&users.FollowModel{FollowingID: author.ID, FollowedByID: reader.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	articleTestArticle(t, db, authorProfile, "feed-article", time.Now())
+
+	wantErr := errors.New("forced feed query failure")
+	if err := db.Callback().Query().Before("gorm:query").Register("test:fail-feed-query", func(tx *gorm.DB) {
+		if tx.Statement.Table == "article_models" {
+			tx.AddError(wantErr)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := readerProfile.GetArticleFeed("20", "0"); !errors.Is(err, wantErr) {
+		t.Fatalf("GetArticleFeed error=%v, want %v", err, wantErr)
+	}
+}
+
 func TestFavoriteIsIdempotentAndCanBeRecreated(t *testing.T) {
 	db := articleTestDB(t, "favorite")
 	_, author := articleTestUser(t, db, "author")
@@ -216,6 +241,37 @@ func TestSaveArticleWithUniqueSlugAccountsForDeletedArticles(t *testing.T) {
 	}
 }
 
+func TestSaveArticleRejectsEmptyGeneratedSlug(t *testing.T) {
+	db := articleTestDB(t, "empty-slug")
+	_, author := articleTestUser(t, db, "empty-slug-author")
+	article := ArticleModel{Title: "!!!!", AuthorID: author.ID}
+	if err := SaveArticleWithUniqueSlug(&article); err == nil {
+		t.Fatal("article with an empty generated slug unexpectedly succeeded")
+	}
+	var count int64
+	if err := db.Model(&ArticleModel{}).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("article count=%d, want 0", count)
+	}
+}
+
+func TestSetTagsDeduplicatesInput(t *testing.T) {
+	db := articleTestDB(t, "deduplicate-tags")
+	existing := TagModel{Tag: "go"}
+	if err := db.Create(&existing).Error; err != nil {
+		t.Fatal(err)
+	}
+	var article ArticleModel
+	if err := article.setTagsWithDB(db, []string{"go", "go", "gin", "gin"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(article.Tags) != 2 || article.Tags[0].Tag != "go" || article.Tags[1].Tag != "gin" {
+		t.Fatalf("tags=%v, want [go gin]", article.Tags)
+	}
+}
+
 func TestCommentDeleteRequiresCommentToBelongToArticle(t *testing.T) {
 	db := articleTestDB(t, "comment-delete")
 	user, author := articleTestUser(t, db, "commenter")
@@ -274,6 +330,55 @@ func TestArticleUpdateRejectsExplicitNullRequiredFields(t *testing.T) {
 				t.Fatalf("response %s does not name %q", recorder.Body.String(), field)
 			}
 		})
+	}
+}
+
+func TestArticleUpdateRollsBackScalarChangesWhenTagReplacementFails(t *testing.T) {
+	db := articleTestDB(t, "article-update-transaction")
+	user, author := articleTestUser(t, db, "transaction-author")
+	oldTag := TagModel{Tag: "old"}
+	newTag := TagModel{Tag: "new"}
+	if err := db.Create(&oldTag).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&newTag).Error; err != nil {
+		t.Fatal(err)
+	}
+	article := articleTestArticle(t, db, author, "transaction-article", time.Now(), oldTag)
+	wantErr := errors.New("forced association replacement failure")
+	if err := db.Callback().Create().Before("gorm:create").Register("test:fail-article-tags", func(tx *gorm.DB) {
+		if tx.Statement.Table == "article_tags" {
+			tx.AddError(wantErr)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	gin.SetMode(gin.TestMode)
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(
+		http.MethodPut,
+		"/api/articles/"+article.Slug,
+		strings.NewReader(`{"article":{"title":"Changed title","tagList":["new"]}}`),
+	)
+	context.Request.Header.Set("Content-Type", "application/json")
+	context.Params = gin.Params{{Key: "slug", Value: article.Slug}}
+	context.Set("my_user_model", user)
+
+	ArticleUpdate(context)
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status=%d body=%s, want 422", recorder.Code, recorder.Body.String())
+	}
+	var stored ArticleModel
+	if err := db.Preload("Tags").First(&stored, article.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Title != article.Title {
+		t.Fatalf("stored title=%q, want rollback to %q", stored.Title, article.Title)
+	}
+	if len(stored.Tags) != 1 || stored.Tags[0].Tag != "old" {
+		t.Fatalf("stored tags=%v, want [old]", stored.Tags)
 	}
 }
 

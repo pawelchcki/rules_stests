@@ -4,6 +4,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gothinkster/golang-gin-realworld-example-app/common"
 	"github.com/gothinkster/golang-gin-realworld-example-app/users"
+	"gorm.io/gorm"
 )
 
 type ArticleModelValidator struct {
@@ -36,6 +37,10 @@ func NewArticleModelValidatorFillWith(articleModel ArticleModel) ArticleModelVal
 }
 
 func (s *ArticleModelValidator) Bind(c *gin.Context) error {
+	return s.bindWithDB(c, common.GetDB())
+}
+
+func (s *ArticleModelValidator) bindWithDB(c *gin.Context, db *gorm.DB) error {
 	myUserModel := c.MustGet("my_user_model").(users.UserModel)
 
 	err := common.Bind(c, s)
@@ -45,9 +50,9 @@ func (s *ArticleModelValidator) Bind(c *gin.Context) error {
 	s.articleModel.Title = s.Article.Title
 	s.articleModel.Description = s.Article.Description
 	s.articleModel.Body = s.Article.Body
-	s.articleModel.Author = GetArticleUserModel(myUserModel)
+	s.articleModel.Author = getArticleUserModel(db, myUserModel)
 	if s.Article.Tags != nil {
-		if err := s.articleModel.setTags(*s.Article.Tags); err != nil {
+		if err := s.articleModel.setTagsWithDB(db, *s.Article.Tags); err != nil {
 			return err
 		}
 	}

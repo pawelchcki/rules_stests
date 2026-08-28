@@ -128,22 +128,29 @@ func ArticleUpdate(c *gin.Context) {
 	}
 
 	articleModelValidator := NewArticleModelValidatorFillWith(articleModel)
-	if err := articleModelValidator.Bind(c); err != nil {
-		c.JSON(http.StatusUnprocessableEntity, common.NewValidatorError(err))
-		return
-	}
+	var bindErr error
+	err = common.GetDB().Transaction(func(tx *gorm.DB) error {
+		bindErr = articleModelValidator.bindWithDB(c, tx)
+		if bindErr != nil {
+			return bindErr
+		}
 
-	articleModelValidator.articleModel.ID = articleModel.ID
-	// The slug identifies the article for the rest of the contract, so an
-	// update keeps the one the article was created with.
-	articleModelValidator.articleModel.Slug = articleModel.Slug
-	updatedTags := articleModelValidator.articleModel.Tags
-	if err := articleModel.Update(articleModelValidator.articleModel); err != nil {
-		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
-		return
-	}
-	if err := articleModel.ReplaceTags(updatedTags); err != nil {
-		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+		articleModelValidator.articleModel.ID = articleModel.ID
+		// The slug identifies the article for the rest of the contract, so an
+		// update keeps the one the article was created with.
+		articleModelValidator.articleModel.Slug = articleModel.Slug
+		updatedTags := articleModelValidator.articleModel.Tags
+		if err := tx.Model(&articleModel).Updates(articleModelValidator.articleModel).Error; err != nil {
+			return err
+		}
+		return tx.Model(&articleModel).Association("Tags").Replace(updatedTags)
+	})
+	if err != nil {
+		if bindErr != nil {
+			c.JSON(http.StatusUnprocessableEntity, common.NewValidatorError(bindErr))
+		} else {
+			c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+		}
 		return
 	}
 	articleModel, err = FindOneArticle(&ArticleModel{Slug: articleModel.Slug})

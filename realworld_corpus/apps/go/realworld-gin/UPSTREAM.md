@@ -28,9 +28,10 @@ corpus profile name, `go-gin-otelbuild-v1-1-0`.
    `gin`, `validator`, `jwt` and `x/crypto` move to the minimum versions the
    instrumentation tool requires. Without this the tool rewrites those
    requirements itself for the instrumented build only, and the two binaries
-   would no longer differ solely by instrumentation. The builder image is
-   digest-pinned so a source-tree identity always uses the same Go and Alpine
-   toolchain. `stretchr/testify` drops out with the upstream tests.
+   would no longer differ solely by instrumentation. The toolchain-complete
+   Bookworm builder image is digest-pinned, so a source-tree identity never
+   resolves mutable distro packages. `stretchr/testify` drops out with the
+   upstream tests.
 2. **`serve --host --port` argv** in `hello.go`, matching the corpus launcher
    convention. With no arguments the upstream `PORT` behaviour is unchanged.
    The database still lands at `./data/gorm.db`, which the launcher places in
@@ -65,16 +66,19 @@ rather than expressed as expected failures.
    name in the normal path, and translated constraint errors preserve the same
    response when concurrent requests race the checks.
 6. **Explicit nulls.** `PUT /api/user` rejects a `null` username, email or
-   password, and `PUT /api/articles/{slug}` rejects a `null` `tagList`. Because
-   the validators are pre-filled from stored state, an explicit null is
-   otherwise indistinguishable from an omitted field; `common.SuppliedFields`
-   inspects the raw body to tell them apart.
+   password, and `PUT /api/articles/{slug}` rejects a `null` title,
+   description, body or `tagList`. Because the validators are pre-filled from
+   stored state, an explicit null is otherwise indistinguishable from an
+   omitted field; `common.SuppliedFields` inspects the raw body to tell them
+   apart.
 7. **`tagList` semantics.** The field becomes a pointer so an omitted list
-   leaves tags untouched while `[]` removes them, and the update replaces the
-   association explicitly because a struct update only ever adds to it.
+   leaves tags untouched while `[]` removes them. Repeated names are
+   deduplicated, database failures are returned, and article scalar changes,
+   tag creation and association replacement share one transaction.
 8. **Unique slugs.** Two articles sharing a title receive distinct slugs, even
-   when creations race the unique index, and an article keeps its slug across
-   updates.
+   when creations race the unique index or an older matching article was soft
+   deleted. Titles that cannot produce a routable non-empty slug are rejected,
+   and an article keeps its slug across updates.
 9. **Multiple-articles responses omit `body`.**
 10. **Article listings** combine every supplied filter and order matching
     articles newest-first before applying pagination. The upstream association
@@ -95,6 +99,12 @@ rather than expressed as expected failures.
 15. **Passwords** use raw-field presence rather than a reserved sentinel to
     distinguish update omission from user input, and bcrypt length errors are
     returned instead of storing an unusable empty hash.
+16. **Following relationships** have a composite unique index, conflict-safe
+    creation and hard deletion, so follow/unfollow cycles remain idempotent
+    without accumulating soft-deleted rows.
+17. **Database failures** propagate from feed reads, startup initialization and
+    every schema migration. The process cannot become healthy with a partial
+    schema, and a failed feed query cannot masquerade as an empty success.
 
 ## Telemetry
 

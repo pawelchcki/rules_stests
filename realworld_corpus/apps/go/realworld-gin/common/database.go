@@ -46,26 +46,25 @@ func ensureDir(filePath string) error {
 }
 
 // Opening a database and save the reference to `Database` struct.
-func Init() *gorm.DB {
+func Init() (*gorm.DB, error) {
 	dbPath := GetDBPath()
 
 	// Ensure the directory exists
 	if err := ensureDir(dbPath); err != nil {
-		fmt.Println("db err: (Init - create dir) ", err)
+		return nil, fmt.Errorf("create database directory: %w", err)
 	}
 
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{TranslateError: true})
 	if err != nil {
-		fmt.Println("db err: (Init) ", err)
+		return nil, fmt.Errorf("open database: %w", err)
 	}
 	sqlDB, err := db.DB()
 	if err != nil {
-		fmt.Println("db err: (Init - get sql.DB) ", err)
-	} else {
-		sqlDB.SetMaxIdleConns(10)
+		return nil, fmt.Errorf("get sql database: %w", err)
 	}
+	sqlDB.SetMaxIdleConns(10)
 	DB = db
-	return DB
+	return DB, nil
 }
 
 // This function will create a temporarily database for running testing cases
