@@ -169,6 +169,7 @@ func ArticleUpdate(c *gin.Context) {
 
 	articleModelValidator := NewArticleModelValidatorFillWith(articleModel)
 	var bindErr error
+	var response ArticleResponse
 	err = common.GetDB().Transaction(func(tx *gorm.DB) error {
 		bindErr = articleModelValidator.bindWithDB(c, tx, supplied)
 		if bindErr != nil {
@@ -180,9 +181,17 @@ func ArticleUpdate(c *gin.Context) {
 			return err
 		}
 		if _, ok := supplied["tagList"]; ok {
-			return tx.Model(&articleModel).Association("Tags").Replace(articleModelValidator.articleModel.Tags)
+			if err := tx.Model(&articleModel).Association("Tags").Replace(articleModelValidator.articleModel.Tags); err != nil {
+				return err
+			}
 		}
-		return nil
+		updatedArticle, err := findOneArticle(tx, &ArticleModel{Slug: articleModel.Slug})
+		if err != nil {
+			return err
+		}
+		serializer := ArticleSerializer{c, updatedArticle}
+		response, err = serializer.ResponseWithDB(tx)
+		return err
 	})
 	if err != nil {
 		if bindErr != nil {
@@ -190,17 +199,6 @@ func ArticleUpdate(c *gin.Context) {
 		} else {
 			c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
 		}
-		return
-	}
-	articleModel, err = FindOneArticle(&ArticleModel{Slug: articleModel.Slug})
-	if err != nil {
-		c.JSON(http.StatusNotFound, common.NewError("article", errors.New("not found")))
-		return
-	}
-	serializer := ArticleSerializer{c, articleModel}
-	response, err := serializer.Response()
-	if err != nil {
-		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"article": response})

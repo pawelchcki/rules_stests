@@ -607,6 +607,43 @@ func TestArticleUpdateRollsBackScalarChangesWhenTagReplacementFails(t *testing.T
 	}
 }
 
+func TestArticleUpdateRollsBackWhenResponseReadFails(t *testing.T) {
+	db := articleTestDB(t, "article-update-response-transaction")
+	user, author := articleTestUser(t, db, "update-response-author")
+	article := articleTestArticle(t, db, author, "update-response-article", time.Now())
+	wantErr := errors.New("forced update response read failure")
+	if err := db.Callback().Query().Before("gorm:query").Register("test:fail-update-response-read", func(tx *gorm.DB) {
+		if tx.Statement.Table == "favorite_models" {
+			tx.AddError(wantErr)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	gin.SetMode(gin.TestMode)
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(
+		http.MethodPut,
+		"/api/articles/"+article.Slug,
+		strings.NewReader(`{"article":{"title":"Changed title"}}`),
+	)
+	context.Request.Header.Set("Content-Type", "application/json")
+	context.Params = gin.Params{{Key: "slug", Value: article.Slug}}
+	context.Set("my_user_model", user)
+
+	ArticleUpdate(context)
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status=%d body=%s, want 422", recorder.Code, recorder.Body.String())
+	}
+	var stored ArticleModel
+	if err := db.First(&stored, article.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Title != article.Title {
+		t.Fatalf("stored title=%q, want rollback to %q", stored.Title, article.Title)
+	}
+}
+
 func articleIDs(models []ArticleModel) []uint {
 	ids := make([]uint, len(models))
 	for index, model := range models {

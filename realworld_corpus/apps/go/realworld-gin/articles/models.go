@@ -197,7 +197,10 @@ func SaveOne(data interface{}) error {
 }
 
 func FindOneArticle(condition interface{}) (ArticleModel, error) {
-	db := common.GetDB()
+	return findOneArticle(common.GetDB(), condition)
+}
+
+func findOneArticle(db *gorm.DB, condition interface{}) (ArticleModel, error) {
 	var model ArticleModel
 	err := db.Preload("Author.UserModel").Preload("Tags").Where(condition).First(&model).Error
 	return model, err

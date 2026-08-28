@@ -46,6 +46,40 @@ func TestClaimUserIDRejectsMalformedValues(t *testing.T) {
 	}
 }
 
+func TestOptionalAuthPropagatesUserLookupDatabaseError(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:optional-auth-database-error?mode=memory&cache=shared"), &gorm.Config{TranslateError: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	common.DB = db
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(AuthMiddleware(false))
+	handlerCalled := false
+	router.GET("/", func(c *gin.Context) {
+		handlerCalled = true
+		c.Status(http.StatusNoContent)
+	})
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.Header.Set("Authorization", "Token "+common.GenToken(1))
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status=%d body=%s, want 422", recorder.Code, recorder.Body.String())
+	}
+	if handlerCalled {
+		t.Fatal("optional-auth handler ran after an operational user lookup failure")
+	}
+}
+
 func TestAuthMiddlewareRejectsSignedTokenWithMalformedID(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"id":  "not-a-number",

@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gothinkster/golang-gin-realworld-example-app/common"
+	"gorm.io/gorm"
 )
 
 // Extract token from Authorization header or query parameter
@@ -30,19 +31,19 @@ func extractToken(c *gin.Context) string {
 }
 
 // A helper to write user_id and user_model to the context
-func UpdateContextUserModel(c *gin.Context, my_user_id uint) bool {
+func UpdateContextUserModel(c *gin.Context, my_user_id uint) error {
 	var myUserModel UserModel
 	if my_user_id != 0 {
 		db := common.GetDB()
 		if err := db.First(&myUserModel, my_user_id).Error; err != nil {
 			c.Set("my_user_id", uint(0))
 			c.Set("my_user_model", UserModel{})
-			return false
+			return err
 		}
 	}
 	c.Set("my_user_id", my_user_id)
 	c.Set("my_user_model", myUserModel)
-	return true
+	return nil
 }
 
 // The RealWorld contract describes a rejected request with the same error
@@ -56,7 +57,7 @@ func abortUnauthorized(c *gin.Context) {
 //	r.Use(AuthMiddleware(true))
 func AuthMiddleware(auto401 bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		UpdateContextUserModel(c, 0)
+		_ = UpdateContextUserModel(c, 0)
 		tokenString := extractToken(c)
 
 		if tokenString == "" {
@@ -89,9 +90,13 @@ func AuthMiddleware(auto401 bool) gin.HandlerFunc {
 				}
 				return
 			}
-			if !UpdateContextUserModel(c, myUserID) {
-				if auto401 {
-					abortUnauthorized(c)
+			if err := UpdateContextUserModel(c, myUserID); err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					if auto401 {
+						abortUnauthorized(c)
+					}
+				} else {
+					c.AbortWithStatusJSON(http.StatusUnprocessableEntity, common.NewError("database", err))
 				}
 				return
 			}
