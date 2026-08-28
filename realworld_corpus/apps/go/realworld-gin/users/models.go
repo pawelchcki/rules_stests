@@ -103,18 +103,6 @@ func (model *UserModel) Update(data interface{}) error {
 	return err
 }
 
-// ClearBio and ClearImage empty the nullable profile columns. A struct update
-// skips empty values, so they have to be written directly.
-func (model *UserModel) ClearBio() error {
-	db := common.GetDB()
-	return db.Model(model).Update("bio", "").Error
-}
-
-func (model *UserModel) ClearImage() error {
-	db := common.GetDB()
-	return db.Model(model).Update("image", nil).Error
-}
-
 // You could add a following relationship as userModel1 following userModel2
 //
 //	err = userModel1.following(userModel2)

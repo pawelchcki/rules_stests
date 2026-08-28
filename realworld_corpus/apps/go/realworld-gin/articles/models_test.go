@@ -59,10 +59,12 @@ func articleTestUser(t *testing.T, db *gorm.DB, username string) (users.UserMode
 func articleTestArticle(t *testing.T, db *gorm.DB, author ArticleUserModel, title string, updatedAt time.Time, tags ...TagModel) ArticleModel {
 	t.Helper()
 	article := ArticleModel{
-		Model:    gorm.Model{UpdatedAt: updatedAt},
-		Slug:     title,
-		Title:    title,
-		AuthorID: author.ID,
+		Model:       gorm.Model{UpdatedAt: updatedAt},
+		Slug:        title,
+		Title:       title,
+		Description: "description",
+		Body:        "body",
+		AuthorID:    author.ID,
 	}
 	if err := db.Create(&article).Error; err != nil {
 		t.Fatal(err)
@@ -257,6 +259,33 @@ func TestSaveArticleRejectsEmptyGeneratedSlug(t *testing.T) {
 	}
 }
 
+func TestArticleCreateRollsBackTagsWhenSlugIsRejected(t *testing.T) {
+	db := articleTestDB(t, "article-create-transaction")
+	user, _ := articleTestUser(t, db, "create-transaction-author")
+	recorder := httptest.NewRecorder()
+	gin.SetMode(gin.TestMode)
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/api/articles",
+		strings.NewReader(`{"article":{"title":"!!!!","description":"description","body":"body","tagList":["orphan"]}}`),
+	)
+	context.Request.Header.Set("Content-Type", "application/json")
+	context.Set("my_user_model", user)
+
+	ArticleCreate(context)
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status=%d body=%s, want 422", recorder.Code, recorder.Body.String())
+	}
+	var tagCount int64
+	if err := db.Unscoped().Model(&TagModel{}).Where("tag = ?", "orphan").Count(&tagCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if tagCount != 0 {
+		t.Fatalf("orphan tag count=%d, want 0", tagCount)
+	}
+}
+
 func TestSetTagsDeduplicatesInput(t *testing.T) {
 	db := articleTestDB(t, "deduplicate-tags")
 	existing := TagModel{Tag: "go"}
@@ -328,6 +357,36 @@ func TestArticleUpdateRejectsExplicitNullRequiredFields(t *testing.T) {
 			}
 			if !strings.Contains(recorder.Body.String(), `"`+field+`"`) {
 				t.Fatalf("response %s does not name %q", recorder.Body.String(), field)
+			}
+		})
+	}
+}
+
+func TestArticleUpdateRequiresEnvelopeButAllowsEmptyUpdate(t *testing.T) {
+	db := articleTestDB(t, "article-update-envelope")
+	user, author := articleTestUser(t, db, "envelope-author")
+	article := articleTestArticle(t, db, author, "envelope-article", time.Now())
+
+	for _, test := range []struct {
+		name string
+		body string
+		want int
+	}{
+		{name: "missing", body: `{}`, want: http.StatusUnprocessableEntity},
+		{name: "empty", body: `{"article":{}}`, want: http.StatusOK},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			gin.SetMode(gin.TestMode)
+			context, _ := gin.CreateTestContext(recorder)
+			context.Request = httptest.NewRequest(http.MethodPut, "/api/articles/"+article.Slug, strings.NewReader(test.body))
+			context.Request.Header.Set("Content-Type", "application/json")
+			context.Params = gin.Params{{Key: "slug", Value: article.Slug}}
+			context.Set("my_user_model", user)
+
+			ArticleUpdate(context)
+			if recorder.Code != test.want {
+				t.Fatalf("status=%d body=%s, want %d", recorder.Code, recorder.Body.String(), test.want)
 			}
 		})
 	}

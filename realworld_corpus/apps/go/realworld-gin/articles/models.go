@@ -352,7 +352,10 @@ func (model *ArticleModel) setTagsWithDB(db *gorm.DB, tags []string) error {
 // already owns the derived value. The contract requires two articles that share
 // a title to receive distinct slugs.
 func UniqueSlug(title string) (string, error) {
-	db := common.GetDB()
+	return uniqueSlugWithDB(common.GetDB(), title)
+}
+
+func uniqueSlugWithDB(db *gorm.DB, title string) (string, error) {
 	base := slug.Make(title)
 	if base == "" {
 		return "", errors.New("title must produce a non-empty slug")
@@ -376,18 +379,22 @@ func UniqueSlug(title string) (string, error) {
 // retryable operation. The unique index decides races between equal titles;
 // a losing request observes the winner and advances to the next suffix.
 func SaveArticleWithUniqueSlug(model *ArticleModel) error {
+	return saveArticleWithUniqueSlugWithDB(common.GetDB(), model)
+}
+
+func saveArticleWithUniqueSlugWithDB(db *gorm.DB, model *ArticleModel) error {
 	for {
-		candidate, err := UniqueSlug(model.Title)
+		candidate, err := uniqueSlugWithDB(db, model.Title)
 		if err != nil {
 			return err
 		}
 		model.Slug = candidate
-		if err := SaveOne(model); err != nil {
+		if err := db.Save(model).Error; err != nil {
 			if !errors.Is(err, gorm.ErrDuplicatedKey) {
 				return err
 			}
 			var existing ArticleModel
-			if lookupErr := common.GetDB().Unscoped().Where("slug = ?", model.Slug).First(&existing).Error; lookupErr != nil {
+			if lookupErr := db.Unscoped().Where("slug = ?", model.Slug).First(&existing).Error; lookupErr != nil {
 				return err
 			}
 			model.ID = 0

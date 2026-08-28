@@ -117,7 +117,7 @@ func SuppliedFields(c *gin.Context, envelope string) (map[string]json.RawMessage
 	}
 	c.Request.Body = io.NopCloser(bytes.NewReader(body))
 	if len(bytes.TrimSpace(body)) == 0 {
-		return map[string]json.RawMessage{}, nil
+		return nil, fmt.Errorf("missing %s envelope", envelope)
 	}
 	var decoded map[string]json.RawMessage
 	if err := json.Unmarshal(body, &decoded); err != nil {
@@ -125,14 +125,14 @@ func SuppliedFields(c *gin.Context, envelope string) (map[string]json.RawMessage
 	}
 	inner, ok := decoded[envelope]
 	if !ok {
-		return map[string]json.RawMessage{}, nil
+		return nil, fmt.Errorf("missing %s envelope", envelope)
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(inner, &fields); err != nil {
 		return nil, err
 	}
 	if fields == nil {
-		return map[string]json.RawMessage{}, nil
+		return nil, fmt.Errorf("missing %s envelope", envelope)
 	}
 	return fields, nil
 }

@@ -37,14 +37,20 @@ func TagsAnonymousRegister(router *gin.RouterGroup) {
 
 func ArticleCreate(c *gin.Context) {
 	articleModelValidator := NewArticleModelValidator()
-	if err := articleModelValidator.Bind(c); err != nil {
-		c.JSON(http.StatusUnprocessableEntity, common.NewValidatorError(err))
-		return
-	}
-	//fmt.Println(articleModelValidator.articleModel.Author.UserModel)
-
-	if err := SaveArticleWithUniqueSlug(&articleModelValidator.articleModel); err != nil {
-		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+	var bindErr error
+	err := common.GetDB().Transaction(func(tx *gorm.DB) error {
+		bindErr = articleModelValidator.bindWithDB(c, tx)
+		if bindErr != nil {
+			return bindErr
+		}
+		return saveArticleWithUniqueSlugWithDB(tx, &articleModelValidator.articleModel)
+	})
+	if err != nil {
+		if bindErr != nil {
+			c.JSON(http.StatusUnprocessableEntity, common.NewValidatorError(bindErr))
+		} else {
+			c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+		}
 		return
 	}
 	serializer := ArticleSerializer{c, articleModelValidator.articleModel}

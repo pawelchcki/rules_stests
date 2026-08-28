@@ -73,8 +73,8 @@ rather than expressed as expected failures.
    apart.
 7. **`tagList` semantics.** The field becomes a pointer so an omitted list
    leaves tags untouched while `[]` removes them. Repeated names are
-   deduplicated, database failures are returned, and article scalar changes,
-   tag creation and association replacement share one transaction.
+   deduplicated, database failures are returned, and article creation or scalar
+   changes, tag creation and association replacement share one transaction.
 8. **Unique slugs.** Two articles sharing a title receive distinct slugs, even
    when creations race the unique index or an older matching article was soft
    deleted. Titles that cannot produce a routable non-empty slug are rejected,
@@ -105,6 +105,11 @@ rather than expressed as expected failures.
 17. **Database failures** propagate from feed reads, startup initialization and
     every schema migration. The process cannot become healthy with a partial
     schema, and a failed feed query cannot masquerade as an empty success.
+18. **Atomic profile updates** commit scalar fields and nullable bio/image
+    clears together, so a failed clear cannot leave a partially applied user.
+19. **Update envelopes** are required even though their fields are optional.
+    `{}` is rejected while `{"user":{}}` and `{"article":{}}` remain valid
+    no-op updates.
 
 ## Telemetry
 

@@ -163,27 +163,30 @@ func UserUpdate(c *gin.Context) {
 		c.JSON(http.StatusConflict, common.NewError(field, errors.New("has already been taken")))
 		return
 	}
-	if err := myUserModel.Update(userModelValidator.userModel); err != nil {
+	err = common.GetDB().Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&myUserModel).Updates(userModelValidator.userModel).Error; err != nil {
+			return err
+		}
+		// A struct update skips empty values. Nullable bio and image clears need
+		// explicit column writes in the same transaction as the scalar update.
+		if cleared(supplied, "bio") {
+			if err := tx.Model(&myUserModel).Update("bio", "").Error; err != nil {
+				return err
+			}
+		}
+		if cleared(supplied, "image") {
+			if err := tx.Model(&myUserModel).Update("image", nil).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		if writeIdentityConflict(c, userModelValidator.userModel, myUserModel.ID, err) {
 			return
 		}
 		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
 		return
-	}
-	// A struct update skips empty values, so clearing the bio needs an
-	// explicit column write.
-	// The bio and image are nullable: both "" and null clear them.
-	if cleared(supplied, "bio") {
-		if err := myUserModel.ClearBio(); err != nil {
-			c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
-			return
-		}
-	}
-	if cleared(supplied, "image") {
-		if err := myUserModel.ClearImage(); err != nil {
-			c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
-			return
-		}
 	}
 	UpdateContextUserModel(c, myUserModel.ID)
 	serializer := UserSerializer{c}
