@@ -326,7 +326,9 @@ func UniqueSlug(title string) string {
 	candidate := base
 	for attempt := 2; ; attempt++ {
 		var existing ArticleModel
-		if err := db.Where(&ArticleModel{Slug: candidate}).First(&existing).Error; err != nil {
+		// A soft-deleted article still occupies the unique slug index. Include
+		// retired rows so a replacement advances to a free suffix.
+		if err := db.Unscoped().Where(&ArticleModel{Slug: candidate}).First(&existing).Error; err != nil {
 			return candidate
 		}
 		candidate = base + "-" + strconv.Itoa(attempt)
@@ -344,7 +346,7 @@ func SaveArticleWithUniqueSlug(model *ArticleModel) error {
 				return err
 			}
 			var existing ArticleModel
-			if lookupErr := common.GetDB().Where("slug = ?", model.Slug).First(&existing).Error; lookupErr != nil {
+			if lookupErr := common.GetDB().Unscoped().Where("slug = ?", model.Slug).First(&existing).Error; lookupErr != nil {
 				return err
 			}
 			model.ID = 0

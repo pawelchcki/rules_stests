@@ -1,8 +1,10 @@
 package articles
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -194,6 +196,26 @@ func TestSaveArticleWithUniqueSlugAdvancesSuffix(t *testing.T) {
 	}
 }
 
+func TestSaveArticleWithUniqueSlugAccountsForDeletedArticles(t *testing.T) {
+	db := articleTestDB(t, "deleted-unique-slug")
+	_, author := articleTestUser(t, db, "deleted-slug-author")
+	deleted := ArticleModel{Title: "Reusable title", AuthorID: author.ID}
+	if err := SaveArticleWithUniqueSlug(&deleted); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteArticleModel(&ArticleModel{Slug: deleted.Slug}); err != nil {
+		t.Fatal(err)
+	}
+
+	replacement := ArticleModel{Title: "Reusable title", AuthorID: author.ID}
+	if err := SaveArticleWithUniqueSlug(&replacement); err != nil {
+		t.Fatal(err)
+	}
+	if replacement.Slug != "reusable-title-2" {
+		t.Fatalf("replacement slug=%q, want %q", replacement.Slug, "reusable-title-2")
+	}
+}
+
 func TestCommentDeleteRequiresCommentToBelongToArticle(t *testing.T) {
 	db := articleTestDB(t, "comment-delete")
 	user, author := articleTestUser(t, db, "commenter")
@@ -222,6 +244,36 @@ func TestCommentDeleteRequiresCommentToBelongToArticle(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("comment count=%d, want 1", count)
+	}
+}
+
+func TestArticleUpdateRejectsExplicitNullRequiredFields(t *testing.T) {
+	db := articleTestDB(t, "article-update-null")
+	user, author := articleTestUser(t, db, "null-author")
+	article := articleTestArticle(t, db, author, "null-article", time.Now())
+
+	for _, field := range []string{"title", "description", "body"} {
+		t.Run(field, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			gin.SetMode(gin.TestMode)
+			context, _ := gin.CreateTestContext(recorder)
+			context.Request = httptest.NewRequest(
+				http.MethodPut,
+				"/api/articles/"+article.Slug,
+				strings.NewReader(`{"article":{"`+field+`":null}}`),
+			)
+			context.Request.Header.Set("Content-Type", "application/json")
+			context.Params = gin.Params{{Key: "slug", Value: article.Slug}}
+			context.Set("my_user_model", user)
+
+			ArticleUpdate(context)
+			if recorder.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("status=%d, want %d", recorder.Code, http.StatusUnprocessableEntity)
+			}
+			if !strings.Contains(recorder.Body.String(), `"`+field+`"`) {
+				t.Fatalf("response %s does not name %q", recorder.Body.String(), field)
+			}
+		})
 	}
 }
 

@@ -116,8 +116,14 @@ func ArticleUpdate(c *gin.Context) {
 		c.JSON(http.StatusUnprocessableEntity, common.NewError("body", errors.New("is invalid")))
 		return
 	}
-	if common.IsExplicitNull(supplied, "tagList") {
-		c.JSON(http.StatusUnprocessableEntity, common.BlankFieldError("tagList"))
+	nullFields := make([]string, 0, 4)
+	for _, field := range []string{"title", "description", "body", "tagList"} {
+		if common.IsExplicitNull(supplied, field) {
+			nullFields = append(nullFields, field)
+		}
+	}
+	if len(nullFields) != 0 {
+		c.JSON(http.StatusUnprocessableEntity, common.BlankFieldError(nullFields...))
 		return
 	}
 
