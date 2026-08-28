@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 ARG SOURCE_DATE_EPOCH=0
-FROM golang:1.25-alpine AS builder
+FROM golang:1.25-alpine@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS builder
 ARG SOURCE_DATE_EPOCH
 
 # The vendored app keeps upstream's cgo mattn/go-sqlite3 driver, so the builder

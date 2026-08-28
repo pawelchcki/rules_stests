@@ -1,6 +1,7 @@
 package users
 
 import (
+	"encoding/json"
 	"errors"
 	"math"
 	"net/http"
@@ -65,6 +66,70 @@ func TestAuthMiddlewareRejectsSignedTokenWithMalformedID(t *testing.T) {
 	router.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d, want 401", recorder.Code)
+	}
+}
+
+func TestAuthMiddlewareRejectsSignedTokenForMissingUser(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:missing-token-user?mode=memory&cache=shared"), &gorm.Config{TranslateError: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	common.DB = db
+	if err := db.AutoMigrate(&UserModel{}); err != nil {
+		t.Fatal(err)
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"id":  float64(999),
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+	signed, err := token.SignedString([]byte(common.JWTSecret))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(AuthMiddleware(true))
+	router.GET("/", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.Header.Set("Authorization", "Token "+signed)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d, want 401", recorder.Code)
+	}
+}
+
+func TestUserValidatorHashesSentinelLiteralWhenSupplied(t *testing.T) {
+	payload, err := json.Marshal(map[string]interface{}{
+		"user": map[string]string{
+			"username": "sentinel-user",
+			"email":    "sentinel@example.test",
+			"password": common.RandomPassword,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Request = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(string(payload)))
+	context.Request.Header.Set("Content-Type", "application/json")
+	validator := NewUserModelValidator()
+	if err := validator.Bind(context); err != nil {
+		t.Fatal(err)
+	}
+	if validator.userModel.PasswordHash == "" || validator.userModel.checkPassword(common.RandomPassword) != nil {
+		t.Fatal("supplied sentinel literal was not hashed")
+	}
+}
+
+func TestSetPasswordPropagatesBcryptLengthError(t *testing.T) {
+	var user UserModel
+	if err := user.setPassword(strings.Repeat("a", 73)); err == nil {
+		t.Fatal("73-byte password unexpectedly succeeded")
+	}
+	if user.PasswordHash != "" {
+		t.Fatal("failed password hashing stored a hash")
 	}
 }
 

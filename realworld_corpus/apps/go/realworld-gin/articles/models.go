@@ -1,6 +1,7 @@
 package articles
 
 import (
+	"errors"
 	"strconv"
 
 	"github.com/gosimple/slug"
@@ -25,7 +26,7 @@ type ArticleModel struct {
 type ArticleUserModel struct {
 	gorm.Model
 	UserModel      users.UserModel
-	UserModelID    uint
+	UserModelID    uint            `gorm:"uniqueIndex"`
 	ArticleModels  []ArticleModel  `gorm:"ForeignKey:AuthorID"`
 	FavoriteModels []FavoriteModel `gorm:"ForeignKey:FavoriteByID"`
 }
@@ -59,9 +60,11 @@ func GetArticleUserModel(userModel users.UserModel) ArticleUserModel {
 		return articleUserModel
 	}
 	db := common.GetDB()
-	db.Where(&ArticleUserModel{
-		UserModelID: userModel.ID,
-	}).FirstOrCreate(&articleUserModel)
+	db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "user_model_id"}},
+		DoNothing: true,
+	}).Create(&ArticleUserModel{UserModelID: userModel.ID})
+	db.Where(&ArticleUserModel{UserModelID: userModel.ID}).First(&articleUserModel)
 	articleUserModel.UserModel = userModel
 	return articleUserModel
 }
@@ -327,6 +330,27 @@ func UniqueSlug(title string) string {
 			return candidate
 		}
 		candidate = base + "-" + strconv.Itoa(attempt)
+	}
+}
+
+// SaveArticleWithUniqueSlug allocates the slug and inserts the article as one
+// retryable operation. The unique index decides races between equal titles;
+// a losing request observes the winner and advances to the next suffix.
+func SaveArticleWithUniqueSlug(model *ArticleModel) error {
+	for {
+		model.Slug = UniqueSlug(model.Title)
+		if err := SaveOne(model); err != nil {
+			if !errors.Is(err, gorm.ErrDuplicatedKey) {
+				return err
+			}
+			var existing ArticleModel
+			if lookupErr := common.GetDB().Where("slug = ?", model.Slug).First(&existing).Error; lookupErr != nil {
+				return err
+			}
+			model.ID = 0
+			continue
+		}
+		return nil
 	}
 }
 

@@ -30,14 +30,19 @@ func extractToken(c *gin.Context) string {
 }
 
 // A helper to write user_id and user_model to the context
-func UpdateContextUserModel(c *gin.Context, my_user_id uint) {
+func UpdateContextUserModel(c *gin.Context, my_user_id uint) bool {
 	var myUserModel UserModel
 	if my_user_id != 0 {
 		db := common.GetDB()
-		db.First(&myUserModel, my_user_id)
+		if err := db.First(&myUserModel, my_user_id).Error; err != nil {
+			c.Set("my_user_id", uint(0))
+			c.Set("my_user_model", UserModel{})
+			return false
+		}
 	}
 	c.Set("my_user_id", my_user_id)
 	c.Set("my_user_model", myUserModel)
+	return true
 }
 
 // The RealWorld contract describes a rejected request with the same error
@@ -84,7 +89,12 @@ func AuthMiddleware(auto401 bool) gin.HandlerFunc {
 				}
 				return
 			}
-			UpdateContextUserModel(c, myUserID)
+			if !UpdateContextUserModel(c, myUserID) {
+				if auto401 {
+					abortUnauthorized(c)
+				}
+				return
+			}
 		}
 	}
 }

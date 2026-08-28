@@ -158,6 +158,42 @@ func TestFavoriteIsIdempotentAndCanBeRecreated(t *testing.T) {
 	assertFavoriteCount(t, db, 1)
 }
 
+func TestArticleUserMappingIsUniqueAndStable(t *testing.T) {
+	db := articleTestDB(t, "article-user")
+	user := users.UserModel{Username: "mapped", Email: "mapped@example.test", PasswordHash: "unused"}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	first := GetArticleUserModel(user)
+	second := GetArticleUserModel(user)
+	if first.ID == 0 || second.ID != first.ID {
+		t.Fatalf("mapping IDs = %d and %d", first.ID, second.ID)
+	}
+	var count int64
+	if err := db.Model(&ArticleUserModel{}).Where("user_model_id = ?", user.ID).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("mapping count=%d, want 1", count)
+	}
+}
+
+func TestSaveArticleWithUniqueSlugAdvancesSuffix(t *testing.T) {
+	db := articleTestDB(t, "unique-slug")
+	_, author := articleTestUser(t, db, "slug-author")
+	first := ArticleModel{Title: "Same title", AuthorID: author.ID}
+	second := ArticleModel{Title: "Same title", AuthorID: author.ID}
+	if err := SaveArticleWithUniqueSlug(&first); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveArticleWithUniqueSlug(&second); err != nil {
+		t.Fatal(err)
+	}
+	if first.Slug != "same-title" || second.Slug != "same-title-2" {
+		t.Fatalf("slugs = %q and %q", first.Slug, second.Slug)
+	}
+}
+
 func TestCommentDeleteRequiresCommentToBelongToArticle(t *testing.T) {
 	db := articleTestDB(t, "comment-delete")
 	user, author := articleTestUser(t, db, "commenter")

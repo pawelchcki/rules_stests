@@ -24,16 +24,21 @@ type UserModelValidator struct {
 // update so that you can use your origin data to cheat the validator.
 // BTW, you can put your general binding logic here such as setting password.
 func (self *UserModelValidator) Bind(c *gin.Context) error {
-	err := common.Bind(c, self)
+	supplied, err := common.SuppliedFields(c, "user")
 	if err != nil {
+		return err
+	}
+	if err := common.Bind(c, self); err != nil {
 		return err
 	}
 	self.userModel.Username = self.User.Username
 	self.userModel.Email = self.User.Email
 	self.userModel.Bio = self.User.Bio
 
-	if self.User.Password != common.RandomPassword {
-		self.userModel.setPassword(self.User.Password)
+	if _, passwordSupplied := supplied["password"]; passwordSupplied {
+		if err := self.userModel.setPassword(self.User.Password); err != nil {
+			return err
+		}
 	}
 	if self.User.Image != "" {
 		self.userModel.Image = &self.User.Image

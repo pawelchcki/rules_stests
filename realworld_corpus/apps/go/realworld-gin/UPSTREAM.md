@@ -28,8 +28,9 @@ corpus profile name, `go-gin-otelbuild-v1-1-0`.
    `gin`, `validator`, `jwt` and `x/crypto` move to the minimum versions the
    instrumentation tool requires. Without this the tool rewrites those
    requirements itself for the instrumented build only, and the two binaries
-   would no longer differ solely by instrumentation. `stretchr/testify` drops
-   out with the upstream tests.
+   would no longer differ solely by instrumentation. The builder image is
+   digest-pinned so a source-tree identity always uses the same Go and Alpine
+   toolchain. `stretchr/testify` drops out with the upstream tests.
 2. **`serve --host --port` argv** in `hello.go`, matching the corpus launcher
    convention. With no arguments the upstream `PORT` behaviour is unchanged.
    The database still lands at `./data/gorm.db`, which the launcher places in
@@ -71,8 +72,9 @@ rather than expressed as expected failures.
 7. **`tagList` semantics.** The field becomes a pointer so an omitted list
    leaves tags untouched while `[]` removes them, and the update replaces the
    association explicitly because a struct update only ever adds to it.
-8. **Unique slugs.** Two articles sharing a title receive distinct slugs, and an
-   article keeps its slug across updates.
+8. **Unique slugs.** Two articles sharing a title receive distinct slugs, even
+   when creations race the unique index, and an article keeps its slug across
+   updates.
 9. **Multiple-articles responses omit `body`.**
 10. **Article listings** combine every supplied filter and order matching
     articles newest-first before applying pagination. The upstream association
@@ -81,11 +83,18 @@ rather than expressed as expected failures.
 11. **Comment deletion** scopes the comment ID to the article named in the URL,
     so a comment cannot be deleted through a different article's route.
 12. **JWT identity claims** are type-, range- and integer-checked before
-    conversion; malformed but correctly signed tokens are rejected rather than
-    panicking in middleware.
+    conversion, and must identify a stored user. Malformed, forged or stale
+    signed tokens are rejected rather than panicking or entering protected
+    handlers as an empty user.
 13. **Favorites** have an atomic composite uniqueness invariant. Conflict-safe
     inserts keep repeated or concurrent favorite requests idempotent, and
     unfavorite hard-deletes the relationship so it can be created again.
+14. **Article-user identities** have one database row per user, created with a
+    conflict-safe insert so concurrent first use cannot split ownership across
+    multiple rows.
+15. **Passwords** use raw-field presence rather than a reserved sentinel to
+    distinguish update omission from user input, and bcrypt length errors are
+    returned instead of storing an unusable empty hash.
 
 ## Telemetry
 

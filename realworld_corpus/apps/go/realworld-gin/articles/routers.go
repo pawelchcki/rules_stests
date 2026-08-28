@@ -43,8 +43,7 @@ func ArticleCreate(c *gin.Context) {
 	}
 	//fmt.Println(articleModelValidator.articleModel.Author.UserModel)
 
-	articleModelValidator.articleModel.Slug = UniqueSlug(articleModelValidator.articleModel.Title)
-	if err := SaveOne(&articleModelValidator.articleModel); err != nil {
+	if err := SaveArticleWithUniqueSlug(&articleModelValidator.articleModel); err != nil {
 		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
 		return
 	}
