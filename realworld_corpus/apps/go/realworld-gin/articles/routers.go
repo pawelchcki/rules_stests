@@ -14,6 +14,14 @@ import (
 
 var articleCreateMutex sync.Mutex
 
+func writeArticleLookupError(c *gin.Context, err error) {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusNotFound, common.NewError("article", errors.New("not found")))
+		return
+	}
+	c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+}
+
 func ArticlesRegister(router *gin.RouterGroup) {
 	router.GET("/feed", ArticleFeed)
 	router.POST("", ArticleCreate)
@@ -129,7 +137,7 @@ func ArticleRetrieve(c *gin.Context) {
 	slug := c.Param("slug")
 	articleModel, err := FindOneArticle(&ArticleModel{Slug: slug})
 	if err != nil {
-		c.JSON(http.StatusNotFound, common.NewError("article", errors.New("not found")))
+		writeArticleLookupError(c, err)
 		return
 	}
 	serializer := ArticleSerializer{c, articleModel}
@@ -145,7 +153,7 @@ func ArticleUpdate(c *gin.Context) {
 	slug := c.Param("slug")
 	articleModel, err := FindOneArticle(&ArticleModel{Slug: slug})
 	if err != nil {
-		c.JSON(http.StatusNotFound, common.NewError("article", errors.New("not found")))
+		writeArticleLookupError(c, err)
 		return
 	}
 	// Check if current user is the author
@@ -231,7 +239,7 @@ func ArticleDelete(c *gin.Context) {
 	slug := c.Param("slug")
 	articleModel, err := FindOneArticle(&ArticleModel{Slug: slug})
 	if err != nil {
-		c.JSON(http.StatusNotFound, common.NewError("article", errors.New("not found")))
+		writeArticleLookupError(c, err)
 		return
 	}
 	myUserModel := c.MustGet("my_user_model").(users.UserModel)
@@ -256,7 +264,7 @@ func ArticleFavorite(c *gin.Context) {
 	slug := c.Param("slug")
 	articleModel, err := FindOneArticle(&ArticleModel{Slug: slug})
 	if err != nil {
-		c.JSON(http.StatusNotFound, common.NewError("article", errors.New("not found")))
+		writeArticleLookupError(c, err)
 		return
 	}
 	myUserModel := c.MustGet("my_user_model").(users.UserModel)
@@ -267,6 +275,11 @@ func ArticleFavorite(c *gin.Context) {
 	}
 	var response ArticleResponse
 	err = common.GetDB().Transaction(func(tx *gorm.DB) error {
+		activeArticle, err := findOneArticle(tx, &ArticleModel{Slug: slug})
+		if err != nil {
+			return err
+		}
+		articleModel = activeArticle
 		if err := articleModel.favoriteByWithDB(tx, articleUserModel); err != nil {
 			return err
 		}
@@ -275,7 +288,7 @@ func ArticleFavorite(c *gin.Context) {
 		return err
 	})
 	if err != nil {
-		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+		writeArticleLookupError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"article": response})
@@ -285,7 +298,7 @@ func ArticleUnfavorite(c *gin.Context) {
 	slug := c.Param("slug")
 	articleModel, err := FindOneArticle(&ArticleModel{Slug: slug})
 	if err != nil {
-		c.JSON(http.StatusNotFound, common.NewError("article", errors.New("not found")))
+		writeArticleLookupError(c, err)
 		return
 	}
 	myUserModel := c.MustGet("my_user_model").(users.UserModel)
@@ -296,6 +309,11 @@ func ArticleUnfavorite(c *gin.Context) {
 	}
 	var response ArticleResponse
 	err = common.GetDB().Transaction(func(tx *gorm.DB) error {
+		activeArticle, err := findOneArticle(tx, &ArticleModel{Slug: slug})
+		if err != nil {
+			return err
+		}
+		articleModel = activeArticle
 		if err := articleModel.unFavoriteByWithDB(tx, articleUserModel); err != nil {
 			return err
 		}
@@ -304,7 +322,7 @@ func ArticleUnfavorite(c *gin.Context) {
 		return err
 	})
 	if err != nil {
-		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+		writeArticleLookupError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"article": response})
@@ -312,20 +330,24 @@ func ArticleUnfavorite(c *gin.Context) {
 
 func ArticleCommentCreate(c *gin.Context) {
 	slug := c.Param("slug")
-	articleModel, err := FindOneArticle(&ArticleModel{Slug: slug})
+	_, err := FindOneArticle(&ArticleModel{Slug: slug})
 	if err != nil {
-		c.JSON(http.StatusNotFound, common.NewError("article", errors.New("not found")))
+		writeArticleLookupError(c, err)
 		return
 	}
 	commentModelValidator := NewCommentModelValidator()
 	var bindErr error
 	var response CommentResponse
 	err = common.GetDB().Transaction(func(tx *gorm.DB) error {
+		activeArticle, err := findOneArticle(tx, &ArticleModel{Slug: slug})
+		if err != nil {
+			return err
+		}
 		bindErr = commentModelValidator.bindWithDB(c, tx)
 		if bindErr != nil {
 			return bindErr
 		}
-		commentModelValidator.commentModel.Article = articleModel
+		commentModelValidator.commentModel.Article = activeArticle
 		if err := tx.Save(&commentModelValidator.commentModel).Error; err != nil {
 			return err
 		}
@@ -337,7 +359,7 @@ func ArticleCommentCreate(c *gin.Context) {
 		if bindErr != nil {
 			c.JSON(http.StatusUnprocessableEntity, common.NewValidatorError(bindErr))
 		} else {
-			c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+			writeArticleLookupError(c, err)
 		}
 		return
 	}
@@ -347,7 +369,7 @@ func ArticleCommentCreate(c *gin.Context) {
 func ArticleCommentDelete(c *gin.Context) {
 	articleModel, err := FindOneArticle(&ArticleModel{Slug: c.Param("slug")})
 	if err != nil {
-		c.JSON(http.StatusNotFound, common.NewError("article", errors.New("not found")))
+		writeArticleLookupError(c, err)
 		return
 	}
 	id64, err := strconv.ParseUint(c.Param("id"), 10, 32)
@@ -386,7 +408,7 @@ func ArticleCommentList(c *gin.Context) {
 	slug := c.Param("slug")
 	articleModel, err := FindOneArticle(&ArticleModel{Slug: slug})
 	if err != nil {
-		c.JSON(http.StatusNotFound, common.NewError("article", errors.New("not found")))
+		writeArticleLookupError(c, err)
 		return
 	}
 	err = articleModel.getComments()
@@ -405,7 +427,7 @@ func ArticleCommentList(c *gin.Context) {
 func TagList(c *gin.Context) {
 	tagModels, err := getAllTags()
 	if err != nil {
-		c.JSON(http.StatusNotFound, common.NewError("article", errors.New("not found")))
+		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
 		return
 	}
 	serializer := TagsSerializer{c, tagModels}

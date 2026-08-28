@@ -559,6 +559,143 @@ func TestArticleListPropagatesDatabaseErrors(t *testing.T) {
 	}
 }
 
+func TestArticleRetrievePropagatesLookupDatabaseErrors(t *testing.T) {
+	db := articleTestDB(t, "article-retrieve-database-error")
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	gin.SetMode(gin.TestMode)
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/articles/example", nil)
+	context.Params = gin.Params{{Key: "slug", Value: "example"}}
+	context.Set("my_user_model", users.UserModel{})
+
+	ArticleRetrieve(context)
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status=%d body=%s, want 422", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"database"`) {
+		t.Fatalf("body=%s, want database error", recorder.Body.String())
+	}
+}
+
+func TestTagListPropagatesDatabaseErrors(t *testing.T) {
+	db := articleTestDB(t, "tag-list-database-error")
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	gin.SetMode(gin.TestMode)
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/tags", nil)
+	context.Set("my_user_model", users.UserModel{})
+
+	TagList(context)
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status=%d body=%s, want 422", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"database"`) {
+		t.Fatalf("body=%s, want database error", recorder.Body.String())
+	}
+}
+
+func TestFavoriteRechecksActiveArticleInsideTransaction(t *testing.T) {
+	db := articleTestDB(t, "favorite-active-article-recheck")
+	user, _ := articleTestUser(t, db, "favorite-recheck-user")
+	_, author := articleTestUser(t, db, "favorite-recheck-author")
+	article := articleTestArticle(t, db, author, "favorite-recheck-article", time.Now())
+	articleQueries := 0
+	if err := db.Callback().Query().After("gorm:query").Register("test:delete-after-article-lookup", func(tx *gorm.DB) {
+		if tx.Statement.Table != "article_models" {
+			return
+		}
+		articleQueries++
+		if articleQueries == 1 {
+			result := tx.Session(&gorm.Session{NewDB: true, SkipHooks: true}).
+				Model(&ArticleModel{}).
+				Where("id = ?", article.ID).
+				UpdateColumn("deleted_at", time.Now())
+			if result.Error != nil {
+				tx.AddError(result.Error)
+			}
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	gin.SetMode(gin.TestMode)
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodPost, "/api/articles/"+article.Slug+"/favorite", nil)
+	context.Params = gin.Params{{Key: "slug", Value: article.Slug}}
+	context.Set("my_user_model", user)
+
+	ArticleFavorite(context)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s, want 404 after deletion", recorder.Code, recorder.Body.String())
+	}
+	assertFavoriteCount(t, db, 0)
+}
+
+func TestCommentCreateRechecksActiveArticleInsideTransaction(t *testing.T) {
+	db := articleTestDB(t, "comment-active-article-recheck")
+	user, author := articleTestUser(t, db, "comment-recheck-user")
+	article := articleTestArticle(t, db, author, "comment-recheck-article", time.Now())
+	articleQueries := 0
+	if err := db.Callback().Query().After("gorm:query").Register("test:delete-before-comment-transaction", func(tx *gorm.DB) {
+		if tx.Statement.Table != "article_models" {
+			return
+		}
+		articleQueries++
+		if articleQueries == 1 {
+			result := tx.Session(&gorm.Session{NewDB: true, SkipHooks: true}).
+				Model(&ArticleModel{}).
+				Where("id = ?", article.ID).
+				UpdateColumn("deleted_at", time.Now())
+			if result.Error != nil {
+				tx.AddError(result.Error)
+			}
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	gin.SetMode(gin.TestMode)
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/api/articles/"+article.Slug+"/comments",
+		strings.NewReader(`{"comment":{"body":"transactional comment"}}`),
+	)
+	context.Request.Header.Set("Content-Type", "application/json")
+	context.Params = gin.Params{{Key: "slug", Value: article.Slug}}
+	context.Set("my_user_model", user)
+
+	ArticleCommentCreate(context)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s, want 404 after deletion", recorder.Code, recorder.Body.String())
+	}
+	var commentCount int64
+	if err := db.Model(&CommentModel{}).Count(&commentCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if commentCount != 0 {
+		t.Fatalf("comment count=%d, want 0", commentCount)
+	}
+}
+
 func TestSetTagsDeduplicatesInput(t *testing.T) {
 	db := articleTestDB(t, "deduplicate-tags")
 	existing := TagModel{Tag: "go"}

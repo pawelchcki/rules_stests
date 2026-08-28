@@ -73,6 +73,36 @@ func TestFollowingStatusPropagatesDatabaseErrors(t *testing.T) {
 	}
 }
 
+func TestProfileRetrievePropagatesLookupDatabaseErrors(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:profile-retrieve-database-error?mode=memory&cache=shared"), &gorm.Config{TranslateError: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	common.DB = db
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := httptest.NewRecorder()
+	gin.SetMode(gin.TestMode)
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/profiles/example", nil)
+	context.Params = gin.Params{{Key: "username", Value: "example"}}
+	context.Set("my_user_model", UserModel{})
+
+	ProfileRetrieve(context)
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status=%d body=%s, want 422", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"database"`) {
+		t.Fatalf("body=%s, want database error", recorder.Body.String())
+	}
+}
+
 func TestFollowChangesRollBackWhenResponseReadFails(t *testing.T) {
 	for _, test := range []struct {
 		name      string

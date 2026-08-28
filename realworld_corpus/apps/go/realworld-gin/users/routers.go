@@ -32,11 +32,19 @@ func ProfileRegister(router *gin.RouterGroup) {
 	router.DELETE("/:username/follow", ProfileUnfollow)
 }
 
+func writeProfileLookupError(c *gin.Context, err error) {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusNotFound, common.NewError("profile", errors.New("not found")))
+		return
+	}
+	c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+}
+
 func ProfileRetrieve(c *gin.Context) {
 	username := c.Param("username")
 	userModel, err := FindOneUser(&UserModel{Username: username})
 	if err != nil {
-		c.JSON(http.StatusNotFound, common.NewError("profile", errors.New("not found")))
+		writeProfileLookupError(c, err)
 		return
 	}
 	profileSerializer := ProfileSerializer{c, userModel}
@@ -52,7 +60,7 @@ func ProfileFollow(c *gin.Context) {
 	username := c.Param("username")
 	userModel, err := FindOneUser(&UserModel{Username: username})
 	if err != nil {
-		c.JSON(http.StatusNotFound, common.NewError("profile", errors.New("not found")))
+		writeProfileLookupError(c, err)
 		return
 	}
 	myUserModel := c.MustGet("my_user_model").(UserModel)
@@ -76,7 +84,7 @@ func ProfileUnfollow(c *gin.Context) {
 	username := c.Param("username")
 	userModel, err := FindOneUser(&UserModel{Username: username})
 	if err != nil {
-		c.JSON(http.StatusNotFound, common.NewError("profile", errors.New("not found")))
+		writeProfileLookupError(c, err)
 		return
 	}
 	myUserModel := c.MustGet("my_user_model").(UserModel)
