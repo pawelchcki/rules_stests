@@ -171,7 +171,10 @@ func BatchGetFavoriteStatus(articleIDs []uint, userID uint) (map[uint]bool, erro
 }
 
 func (article ArticleModel) favoriteBy(user ArticleUserModel) error {
-	db := common.GetDB()
+	return article.favoriteByWithDB(common.GetDB(), user)
+}
+
+func (article ArticleModel) favoriteByWithDB(db *gorm.DB, user ArticleUserModel) error {
 	favorite := FavoriteModel{
 		FavoriteID:   article.ID,
 		FavoriteByID: user.ID,
@@ -183,7 +186,10 @@ func (article ArticleModel) favoriteBy(user ArticleUserModel) error {
 }
 
 func (article ArticleModel) unFavoriteBy(user ArticleUserModel) error {
-	db := common.GetDB()
+	return article.unFavoriteByWithDB(common.GetDB(), user)
+}
+
+func (article ArticleModel) unFavoriteByWithDB(db *gorm.DB, user ArticleUserModel) error {
 	// Favorites are relationships, not retained records. A hard delete permits
 	// the same unique pair to be created again after an unfavorite.
 	err := db.Unscoped().Where("favorite_id = ? AND favorite_by_id = ?", article.ID, user.ID).Delete(&FavoriteModel{}).Error
@@ -229,38 +235,40 @@ func getAllTags() ([]TagModel, error) {
 func FindManyArticle(tag, author, limit, offset, favorited string) ([]ArticleModel, int, error) {
 	db := common.GetDB()
 	models := make([]ArticleModel, 0)
-
-	limit_int, offset_int := parsePagination(limit, offset)
-
-	query := db.Model(&ArticleModel{})
-	if tag != "" {
-		query = query.
-			Joins("JOIN article_tags ON article_tags.article_model_id = article_models.id").
-			Joins("JOIN tag_models ON tag_models.id = article_tags.tag_model_id AND tag_models.deleted_at IS NULL").
-			Where("tag_models.tag = ?", tag)
-	}
-	if author != "" {
-		query = query.
-			Joins("JOIN article_user_models AS authors ON authors.id = article_models.author_id AND authors.deleted_at IS NULL").
-			Joins("JOIN user_models AS author_users ON author_users.id = authors.user_model_id").
-			Where("author_users.username = ?", author)
-	}
-	if favorited != "" {
-		query = query.
-			Joins("JOIN favorite_models AS favorites ON favorites.favorite_id = article_models.id AND favorites.deleted_at IS NULL").
-			Joins("JOIN article_user_models AS favoriters ON favoriters.id = favorites.favorite_by_id AND favoriters.deleted_at IS NULL").
-			Joins("JOIN user_models AS favoriter_users ON favoriter_users.id = favoriters.user_model_id").
-			Where("favoriter_users.username = ?", favorited)
-	}
-
 	var count64 int64
-	if err := query.Distinct("article_models.id").Count(&count64).Error; err != nil {
-		return models, 0, err
-	}
-	if err := query.Distinct("article_models.*").
-		Preload("Author.UserModel").Preload("Tags").
-		Order("article_models.created_at DESC, article_models.id DESC").
-		Offset(offset_int).Limit(limit_int).Find(&models).Error; err != nil {
+	err := db.Transaction(func(tx *gorm.DB) error {
+		limitInt, offsetInt := parsePagination(limit, offset)
+
+		query := tx.Model(&ArticleModel{})
+		if tag != "" {
+			query = query.
+				Joins("JOIN article_tags ON article_tags.article_model_id = article_models.id").
+				Joins("JOIN tag_models ON tag_models.id = article_tags.tag_model_id AND tag_models.deleted_at IS NULL").
+				Where("tag_models.tag = ?", tag)
+		}
+		if author != "" {
+			query = query.
+				Joins("JOIN article_user_models AS authors ON authors.id = article_models.author_id AND authors.deleted_at IS NULL").
+				Joins("JOIN user_models AS author_users ON author_users.id = authors.user_model_id").
+				Where("author_users.username = ?", author)
+		}
+		if favorited != "" {
+			query = query.
+				Joins("JOIN favorite_models AS favorites ON favorites.favorite_id = article_models.id AND favorites.deleted_at IS NULL").
+				Joins("JOIN article_user_models AS favoriters ON favoriters.id = favorites.favorite_by_id AND favoriters.deleted_at IS NULL").
+				Joins("JOIN user_models AS favoriter_users ON favoriter_users.id = favoriters.user_model_id").
+				Where("favoriter_users.username = ?", favorited)
+		}
+
+		if err := query.Distinct("article_models.id").Count(&count64).Error; err != nil {
+			return err
+		}
+		return query.Distinct("article_models.*").
+			Preload("Author.UserModel").Preload("Tags").
+			Order("article_models.created_at DESC, article_models.id DESC").
+			Offset(offsetInt).Limit(limitInt).Find(&models).Error
+	})
+	if err != nil {
 		return models, 0, err
 	}
 	return models, int(count64), nil

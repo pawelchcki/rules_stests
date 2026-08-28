@@ -256,12 +256,15 @@ func ArticleFavorite(c *gin.Context) {
 		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
 		return
 	}
-	if err = articleModel.favoriteBy(articleUserModel); err != nil {
-		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
-		return
-	}
-	serializer := ArticleSerializer{c, articleModel}
-	response, err := serializer.Response()
+	var response ArticleResponse
+	err = common.GetDB().Transaction(func(tx *gorm.DB) error {
+		if err := articleModel.favoriteByWithDB(tx, articleUserModel); err != nil {
+			return err
+		}
+		serializer := ArticleSerializer{c, articleModel}
+		response, err = serializer.ResponseWithDB(tx)
+		return err
+	})
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
 		return
@@ -282,12 +285,15 @@ func ArticleUnfavorite(c *gin.Context) {
 		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
 		return
 	}
-	if err = articleModel.unFavoriteBy(articleUserModel); err != nil {
-		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
-		return
-	}
-	serializer := ArticleSerializer{c, articleModel}
-	response, err := serializer.Response()
+	var response ArticleResponse
+	err = common.GetDB().Transaction(func(tx *gorm.DB) error {
+		if err := articleModel.unFavoriteByWithDB(tx, articleUserModel); err != nil {
+			return err
+		}
+		serializer := ArticleSerializer{c, articleModel}
+		response, err = serializer.ResponseWithDB(tx)
+		return err
+	})
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
 		return

@@ -1,6 +1,7 @@
 package articles
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -143,6 +144,40 @@ func TestFindManyArticleCombinesFiltersAndOrdersBeforePaging(t *testing.T) {
 				t.Fatalf("got %v, want [%d]", articleIDs(page), test.want)
 			}
 		})
+	}
+}
+
+func TestFindManyArticleReadsCountAndPageInOneTransaction(t *testing.T) {
+	db := articleTestDB(t, "article-list-transaction")
+	_, author := articleTestUser(t, db, "transactional-list-author")
+	articleTestArticle(t, db, author, "transactional-list-article", time.Now())
+
+	articleQueries := 0
+	outsideTransaction := false
+	if err := db.Callback().Query().Before("gorm:query").Register("test:verify-list-transaction", func(tx *gorm.DB) {
+		if tx.Statement.Table != "article_models" {
+			return
+		}
+		articleQueries++
+		if _, ok := tx.Statement.ConnPool.(*sql.Tx); !ok {
+			outsideTransaction = true
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	models, count, err := FindManyArticle("", "", "20", "0", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || len(models) != 1 {
+		t.Fatalf("count=%d models=%v, want one article", count, articleIDs(models))
+	}
+	if articleQueries != 2 {
+		t.Fatalf("article query count=%d, want count and page queries", articleQueries)
+	}
+	if outsideTransaction {
+		t.Fatal("article count or page query ran outside the shared transaction")
 	}
 }
 
@@ -641,6 +676,55 @@ func TestArticleUpdateRollsBackWhenResponseReadFails(t *testing.T) {
 	}
 	if stored.Title != article.Title {
 		t.Fatalf("stored title=%q, want rollback to %q", stored.Title, article.Title)
+	}
+}
+
+func TestFavoriteChangesRollBackWhenResponseReadFails(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		handler   func(*gin.Context)
+		seedCount int64
+	}{
+		{name: "favorite", handler: ArticleFavorite, seedCount: 0},
+		{name: "unfavorite", handler: ArticleUnfavorite, seedCount: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db := articleTestDB(t, "favorite-response-transaction-"+test.name)
+			user, favoriter := articleTestUser(t, db, "favorite-response-user-"+test.name)
+			_, author := articleTestUser(t, db, "favorite-response-author-"+test.name)
+			article := articleTestArticle(t, db, author, "favorite-response-article-"+test.name, time.Now())
+			if test.seedCount == 1 {
+				if err := article.favoriteBy(favoriter); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			wantErr := errors.New("forced favorite response read failure")
+			callbackName := "test:fail-favorite-response-read-" + test.name
+			if err := db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+				if tx.Statement.Table == "favorite_models" {
+					tx.AddError(wantErr)
+				}
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			recorder := httptest.NewRecorder()
+			gin.SetMode(gin.TestMode)
+			context, _ := gin.CreateTestContext(recorder)
+			context.Request = httptest.NewRequest(http.MethodPost, "/api/articles/"+article.Slug+"/favorite", nil)
+			context.Params = gin.Params{{Key: "slug", Value: article.Slug}}
+			context.Set("my_user_model", user)
+
+			test.handler(context)
+			if recorder.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("status=%d body=%s, want 422", recorder.Code, recorder.Body.String())
+			}
+			if err := db.Callback().Query().Remove(callbackName); err != nil {
+				t.Fatal(err)
+			}
+			assertFavoriteCount(t, db, test.seedCount)
+		})
 	}
 }
 
