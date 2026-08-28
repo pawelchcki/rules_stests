@@ -4,7 +4,9 @@ import (
 	"sort"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gothinkster/golang-gin-realworld-example-app/common"
 	"github.com/gothinkster/golang-gin-realworld-example-app/users"
+	"gorm.io/gorm"
 )
 
 type TagSerializer struct {
@@ -36,8 +38,12 @@ type ArticleUserSerializer struct {
 }
 
 func (s *ArticleUserSerializer) Response() (users.ProfileResponse, error) {
+	return s.ResponseWithDB(common.GetDB())
+}
+
+func (s *ArticleUserSerializer) ResponseWithDB(db *gorm.DB) (users.ProfileResponse, error) {
 	response := users.ProfileSerializer{C: s.C, UserModel: s.ArticleUserModel.UserModel}
-	return response.Response()
+	return response.ResponseWithDB(db)
 }
 
 type ArticleSerializer struct {
@@ -67,22 +73,26 @@ type ArticlesSerializer struct {
 }
 
 func (s *ArticleSerializer) Response() (ArticleResponse, error) {
+	return s.ResponseWithDB(common.GetDB())
+}
+
+func (s *ArticleSerializer) ResponseWithDB(db *gorm.DB) (ArticleResponse, error) {
 	body := s.Body
 	myUserModel := s.C.MustGet("my_user_model").(users.UserModel)
-	articleUserModel, err := GetArticleUserModel(myUserModel)
+	articleUserModel, err := getArticleUserModel(db, myUserModel)
 	if err != nil {
 		return ArticleResponse{}, err
 	}
-	favorited, err := s.isFavoriteBy(articleUserModel)
+	favorited, err := s.isFavoriteByWithDB(db, articleUserModel)
 	if err != nil {
 		return ArticleResponse{}, err
 	}
-	favoritesCount, err := s.favoritesCount()
+	favoritesCount, err := s.favoritesCountWithDB(db)
 	if err != nil {
 		return ArticleResponse{}, err
 	}
 	authorSerializer := ArticleUserSerializer{C: s.C, ArticleUserModel: s.Author}
-	author, err := authorSerializer.Response()
+	author, err := authorSerializer.ResponseWithDB(db)
 	if err != nil {
 		return ArticleResponse{}, err
 	}

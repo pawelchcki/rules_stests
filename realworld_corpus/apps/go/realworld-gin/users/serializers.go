@@ -4,6 +4,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/gothinkster/golang-gin-realworld-example-app/common"
+	"gorm.io/gorm"
 )
 
 type ProfileSerializer struct {
@@ -31,8 +32,12 @@ func nullableText(value string) *string {
 
 // Put your response logic including wrap the userModel here.
 func (self *ProfileSerializer) Response() (ProfileResponse, error) {
+	return self.ResponseWithDB(common.GetDB())
+}
+
+func (self *ProfileSerializer) ResponseWithDB(db *gorm.DB) (ProfileResponse, error) {
 	myUserModel := self.C.MustGet("my_user_model").(UserModel)
-	following, err := myUserModel.isFollowing(self.UserModel)
+	following, err := myUserModel.isFollowingWithDB(db, self.UserModel)
 	if err != nil {
 		return ProfileResponse{}, err
 	}

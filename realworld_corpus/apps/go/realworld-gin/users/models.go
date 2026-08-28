@@ -122,10 +122,13 @@ func (u UserModel) following(v UserModel) error {
 //
 //	followingBool, err = myUserModel.isFollowing(self.UserModel)
 func (u UserModel) isFollowing(v UserModel) (bool, error) {
+	return u.isFollowingWithDB(common.GetDB(), v)
+}
+
+func (u UserModel) isFollowingWithDB(db *gorm.DB, v UserModel) (bool, error) {
 	if u.ID == 0 {
 		return false, nil
 	}
-	db := common.GetDB()
 	var follow FollowModel
 	err := db.Where(FollowModel{
 		FollowingID:  v.ID,

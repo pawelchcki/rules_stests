@@ -89,7 +89,10 @@ func getArticleUserModel(db *gorm.DB, userModel users.UserModel) (ArticleUserMod
 }
 
 func (article ArticleModel) favoritesCount() (uint, error) {
-	db := common.GetDB()
+	return article.favoritesCountWithDB(common.GetDB())
+}
+
+func (article ArticleModel) favoritesCountWithDB(db *gorm.DB) (uint, error) {
 	var count int64
 	if err := db.Model(&FavoriteModel{}).Where(FavoriteModel{
 		FavoriteID: article.ID,
@@ -100,10 +103,13 @@ func (article ArticleModel) favoritesCount() (uint, error) {
 }
 
 func (article ArticleModel) isFavoriteBy(user ArticleUserModel) (bool, error) {
+	return article.isFavoriteByWithDB(common.GetDB(), user)
+}
+
+func (article ArticleModel) isFavoriteByWithDB(db *gorm.DB, user ArticleUserModel) (bool, error) {
 	if user.ID == 0 {
 		return false, nil
 	}
-	db := common.GetDB()
 	var favorite FavoriteModel
 	err := db.Where(FavoriteModel{
 		FavoriteID:   article.ID,

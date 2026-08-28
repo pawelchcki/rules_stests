@@ -44,12 +44,18 @@ func ArticleCreate(c *gin.Context) {
 		return
 	}
 	var bindErr error
+	var response ArticleResponse
 	err = common.GetDB().Transaction(func(tx *gorm.DB) error {
 		bindErr = articleModelValidator.bindWithDB(c, tx, supplied)
 		if bindErr != nil {
 			return bindErr
 		}
-		return saveArticleWithUniqueSlugWithDB(tx, &articleModelValidator.articleModel)
+		if err := saveArticleWithUniqueSlugWithDB(tx, &articleModelValidator.articleModel); err != nil {
+			return err
+		}
+		serializer := ArticleSerializer{c, articleModelValidator.articleModel}
+		response, err = serializer.ResponseWithDB(tx)
+		return err
 	})
 	if err != nil {
 		if bindErr != nil {
@@ -57,12 +63,6 @@ func ArticleCreate(c *gin.Context) {
 		} else {
 			c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
 		}
-		return
-	}
-	serializer := ArticleSerializer{c, articleModelValidator.articleModel}
-	response, err := serializer.Response()
-	if err != nil {
-		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{"article": response})

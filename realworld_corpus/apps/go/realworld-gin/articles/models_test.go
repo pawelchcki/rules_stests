@@ -350,6 +350,44 @@ func TestArticleCreateRollsBackTagsWhenSlugIsRejected(t *testing.T) {
 	}
 }
 
+func TestArticleCreateRollsBackWhenResponseReadFails(t *testing.T) {
+	db := articleTestDB(t, "article-create-response-transaction")
+	user, _ := articleTestUser(t, db, "response-transaction-author")
+	wantErr := errors.New("forced favorite read failure")
+	if err := db.Callback().Query().Before("gorm:query").Register("test:fail-favorite-read", func(tx *gorm.DB) {
+		if tx.Statement.Table == "favorite_models" {
+			tx.AddError(wantErr)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	gin.SetMode(gin.TestMode)
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/api/articles",
+		strings.NewReader(`{"article":{"title":"Transactional response","description":"description","body":"body","tagList":["rollback"]}}`),
+	)
+	context.Request.Header.Set("Content-Type", "application/json")
+	context.Set("my_user_model", user)
+
+	ArticleCreate(context)
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status=%d body=%s, want 422", recorder.Code, recorder.Body.String())
+	}
+	var articleCount, tagCount int64
+	if err := db.Model(&ArticleModel{}).Count(&articleCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&TagModel{}).Count(&tagCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if articleCount != 0 || tagCount != 0 {
+		t.Fatalf("article count=%d tag count=%d, want rollback", articleCount, tagCount)
+	}
+}
+
 func TestArticleCreateRejectsEmptyTagName(t *testing.T) {
 	db := articleTestDB(t, "article-create-empty-tag")
 	user, _ := articleTestUser(t, db, "empty-tag-author")

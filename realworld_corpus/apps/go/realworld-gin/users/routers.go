@@ -135,7 +135,10 @@ func UsersLogin(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, common.NewError("credentials", errors.New("invalid")))
 		return
 	}
-	UpdateContextUserModel(c, userModel.ID)
+	// Login already loaded the authenticated user; avoid a redundant lookup
+	// that could fail after the credentials were accepted.
+	c.Set("my_user_id", userModel.ID)
+	c.Set("my_user_model", userModel)
 	serializer := UserSerializer{c}
 	c.JSON(http.StatusOK, gin.H{"user": serializer.Response()})
 }
@@ -174,6 +177,7 @@ func UserUpdate(c *gin.Context) {
 	}
 
 	userModelValidator.userModel.ID = myUserModel.ID
+	updatedUserModel := userAfterUpdate(myUserModel, userModelValidator, supplied)
 	if taken, field := identityTaken(userModelValidator.userModel, myUserModel.ID); taken {
 		c.JSON(http.StatusConflict, common.NewError(field, errors.New("has already been taken")))
 		return
@@ -189,7 +193,8 @@ func UserUpdate(c *gin.Context) {
 		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
 		return
 	}
-	UpdateContextUserModel(c, myUserModel.ID)
+	c.Set("my_user_id", updatedUserModel.ID)
+	c.Set("my_user_model", updatedUserModel)
 	serializer := UserSerializer{c}
 	c.JSON(http.StatusOK, gin.H{"user": serializer.Response()})
 }
@@ -218,6 +223,31 @@ func userUpdateValues(validator UserModelValidator, supplied map[string]json.Raw
 		}
 	}
 	return updates
+}
+
+func userAfterUpdate(current UserModel, validator UserModelValidator, supplied map[string]json.RawMessage) UserModel {
+	if _, ok := supplied["username"]; ok {
+		current.Username = validator.userModel.Username
+	}
+	if _, ok := supplied["email"]; ok {
+		current.Email = validator.userModel.Email
+	}
+	if _, ok := supplied["password"]; ok {
+		current.PasswordHash = validator.userModel.PasswordHash
+	}
+	if _, ok := supplied["bio"]; ok {
+		current.Bio = validator.userModel.Bio
+		if cleared(supplied, "bio") {
+			current.Bio = ""
+		}
+	}
+	if _, ok := supplied["image"]; ok {
+		current.Image = validator.userModel.Image
+		if cleared(supplied, "image") {
+			current.Image = nil
+		}
+	}
+	return current
 }
 
 // cleared reports whether the request asked to empty a nullable field, which
