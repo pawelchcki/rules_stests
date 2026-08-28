@@ -89,6 +89,10 @@ func NewCommentModelValidator() CommentModelValidator {
 }
 
 func (s *CommentModelValidator) Bind(c *gin.Context) error {
+	return s.bindWithDB(c, common.GetDB())
+}
+
+func (s *CommentModelValidator) bindWithDB(c *gin.Context, db *gorm.DB) error {
 	myUserModel := c.MustGet("my_user_model").(users.UserModel)
 
 	err := common.Bind(c, s)
@@ -96,7 +100,7 @@ func (s *CommentModelValidator) Bind(c *gin.Context) error {
 		return err
 	}
 	s.commentModel.Body = s.Comment.Body
-	articleUserModel, err := GetArticleUserModel(myUserModel)
+	articleUserModel, err := getArticleUserModel(db, myUserModel)
 	if err != nil {
 		return err
 	}

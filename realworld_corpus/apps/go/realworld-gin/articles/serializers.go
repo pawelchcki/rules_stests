@@ -204,8 +204,12 @@ type CommentResponse struct {
 }
 
 func (s *CommentSerializer) Response() (CommentResponse, error) {
+	return s.ResponseWithDB(common.GetDB())
+}
+
+func (s *CommentSerializer) ResponseWithDB(db *gorm.DB) (CommentResponse, error) {
 	authorSerializer := ArticleUserSerializer{C: s.C, ArticleUserModel: s.Author}
-	author, err := authorSerializer.Response()
+	author, err := authorSerializer.ResponseWithDB(db)
 	if err != nil {
 		return CommentResponse{}, err
 	}

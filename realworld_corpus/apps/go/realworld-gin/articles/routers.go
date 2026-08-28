@@ -305,20 +305,27 @@ func ArticleCommentCreate(c *gin.Context) {
 		return
 	}
 	commentModelValidator := NewCommentModelValidator()
-	if err := commentModelValidator.Bind(c); err != nil {
-		c.JSON(http.StatusUnprocessableEntity, common.NewValidatorError(err))
-		return
-	}
-	commentModelValidator.commentModel.Article = articleModel
-
-	if err := SaveOne(&commentModelValidator.commentModel); err != nil {
-		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
-		return
-	}
-	serializer := CommentSerializer{c, commentModelValidator.commentModel}
-	response, err := serializer.Response()
+	var bindErr error
+	var response CommentResponse
+	err = common.GetDB().Transaction(func(tx *gorm.DB) error {
+		bindErr = commentModelValidator.bindWithDB(c, tx)
+		if bindErr != nil {
+			return bindErr
+		}
+		commentModelValidator.commentModel.Article = articleModel
+		if err := tx.Save(&commentModelValidator.commentModel).Error; err != nil {
+			return err
+		}
+		serializer := CommentSerializer{c, commentModelValidator.commentModel}
+		response, err = serializer.ResponseWithDB(tx)
+		return err
+	})
 	if err != nil {
-		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+		if bindErr != nil {
+			c.JSON(http.StatusUnprocessableEntity, common.NewValidatorError(bindErr))
+		} else {
+			c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
+		}
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{"comment": response})

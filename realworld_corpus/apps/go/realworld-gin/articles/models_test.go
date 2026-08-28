@@ -461,6 +461,43 @@ func TestCommentDeleteRequiresCommentToBelongToArticle(t *testing.T) {
 	}
 }
 
+func TestCommentCreateRollsBackWhenResponseReadFails(t *testing.T) {
+	db := articleTestDB(t, "comment-create-response-transaction")
+	user, author := articleTestUser(t, db, "comment-response-author")
+	article := articleTestArticle(t, db, author, "comment-response-article", time.Now())
+	wantErr := errors.New("forced follow read failure")
+	if err := db.Callback().Query().Before("gorm:query").Register("test:fail-comment-follow-read", func(tx *gorm.DB) {
+		if tx.Statement.Table == "follow_models" {
+			tx.AddError(wantErr)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	gin.SetMode(gin.TestMode)
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/api/articles/"+article.Slug+"/comments",
+		strings.NewReader(`{"comment":{"body":"transactional comment"}}`),
+	)
+	context.Request.Header.Set("Content-Type", "application/json")
+	context.Params = gin.Params{{Key: "slug", Value: article.Slug}}
+	context.Set("my_user_model", user)
+
+	ArticleCommentCreate(context)
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status=%d body=%s, want 422", recorder.Code, recorder.Body.String())
+	}
+	var commentCount int64
+	if err := db.Model(&CommentModel{}).Count(&commentCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if commentCount != 0 {
+		t.Fatalf("comment count=%d, want rollback", commentCount)
+	}
+}
+
 func TestArticleUpdateRejectsExplicitNullRequiredFields(t *testing.T) {
 	db := articleTestDB(t, "article-update-null")
 	user, author := articleTestUser(t, db, "null-author")
