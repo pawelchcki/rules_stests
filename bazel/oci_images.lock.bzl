@@ -15,8 +15,8 @@ OTEL_PYTHON = struct(
 OCI_IMAGES = {
     "gin_realworld": struct(
         repository = "ghcr.io/pawelchcki/rules_stest_apps",
-        digest = "sha256:1496c2f366d16dbb184637f4ae1f724a9fb230cb2961f47060925d57f70421be",
-        tree = "bd1a9efbe5ac6a60f11b22dc6d986cf34a45f770",
+        digest = "sha256:4f61726d04e852a618a2db22202d7a7d3a4849ed2dc91009850846a174d6448b",
+        tree = "420f2db6816e8f9409660dfa1fd438dc04bad43c",
     ),
     "django_ninja_realworld": struct(
         repository = "ghcr.io/pawelchcki/rules_stest_apps",
