@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"reflect"
 	"strings"
 	"time"
 
@@ -45,6 +46,18 @@ func RandInt() int {
 const JWTSecret = "A String Very Very Very Strong!!@##$!@#$"      // #nosec G101
 const RandomPassword = "A String Very Very Very Random!!@##$!@#4" // #nosec G101
 
+func init() {
+	if validate, ok := binding.Validator.Engine().(*validator.Validate); ok {
+		validate.RegisterTagNameFunc(func(field reflect.StructField) string {
+			name := strings.SplitN(field.Tag.Get("json"), ",", 2)[0]
+			if name == "-" {
+				return ""
+			}
+			return name
+		})
+	}
+}
+
 // A Util function to generate jwt_token which can be used in the request header
 func GenToken(id uint) string {
 	jwt_token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
@@ -80,7 +93,13 @@ func NewValidatorError(err error) CommonError {
 		return res
 	}
 	for _, v := range errs {
-		field := strings.ToLower(v.Field())
+		field := v.Field()
+		if index := strings.IndexByte(field, '['); index >= 0 {
+			field = field[:index]
+		}
+		if field != "" {
+			field = strings.ToLower(field[:1]) + field[1:]
+		}
 		message := "is invalid"
 		if isBlankValue(v.Value()) {
 			message = "can't be blank"

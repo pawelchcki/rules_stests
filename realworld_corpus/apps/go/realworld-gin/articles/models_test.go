@@ -441,6 +441,9 @@ func TestArticleCreateRejectsEmptyTagName(t *testing.T) {
 	if recorder.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status=%d body=%s, want 422", recorder.Code, recorder.Body.String())
 	}
+	if !strings.Contains(recorder.Body.String(), `"tagList"`) || strings.Contains(recorder.Body.String(), `"tags[`) {
+		t.Fatalf("body=%s, want normalized tagList validation error", recorder.Body.String())
+	}
 	var tagCount int64
 	if err := db.Unscoped().Model(&TagModel{}).Count(&tagCount).Error; err != nil {
 		t.Fatal(err)
