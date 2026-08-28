@@ -269,8 +269,13 @@
        (and (tagged-value? 'array value)
             (pair? (cadr value))
             (every (lambda (item)
-                     (and (tagged-value? 'string item)
-                          (string? (cadr item))))
+                     (or (and (tagged-value? 'string item)
+                              (string? (cadr item)))
+                         ; The capture deliberately summarizes strings over
+                         ; 256 bytes by their positive length.
+                         (and (tagged-value? 'long-string item)
+                              (integer? (cadr item))
+                              (> (cadr item) 0))))
                    (cadr value))))
       (else (error "unknown value matcher" kind)))))
 
