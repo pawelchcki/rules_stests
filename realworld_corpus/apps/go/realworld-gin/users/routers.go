@@ -56,13 +56,15 @@ func ProfileFollow(c *gin.Context) {
 		return
 	}
 	myUserModel := c.MustGet("my_user_model").(UserModel)
-	err = myUserModel.following(userModel)
-	if err != nil {
-		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
-		return
-	}
-	serializer := ProfileSerializer{c, userModel}
-	response, err := serializer.Response()
+	var response ProfileResponse
+	err = common.GetDB().Transaction(func(tx *gorm.DB) error {
+		if err := myUserModel.followingWithDB(tx, userModel); err != nil {
+			return err
+		}
+		serializer := ProfileSerializer{c, userModel}
+		response, err = serializer.ResponseWithDB(tx)
+		return err
+	})
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
 		return
@@ -78,14 +80,15 @@ func ProfileUnfollow(c *gin.Context) {
 		return
 	}
 	myUserModel := c.MustGet("my_user_model").(UserModel)
-
-	err = myUserModel.unFollowing(userModel)
-	if err != nil {
-		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
-		return
-	}
-	serializer := ProfileSerializer{c, userModel}
-	response, err := serializer.Response()
+	var response ProfileResponse
+	err = common.GetDB().Transaction(func(tx *gorm.DB) error {
+		if err := myUserModel.unFollowingWithDB(tx, userModel); err != nil {
+			return err
+		}
+		serializer := ProfileSerializer{c, userModel}
+		response, err = serializer.ResponseWithDB(tx)
+		return err
+	})
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, common.NewError("database", err))
 		return

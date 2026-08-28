@@ -107,7 +107,10 @@ func (model *UserModel) Update(data interface{}) error {
 //
 //	err = userModel1.following(userModel2)
 func (u UserModel) following(v UserModel) error {
-	db := common.GetDB()
+	return u.followingWithDB(common.GetDB(), v)
+}
+
+func (u UserModel) followingWithDB(db *gorm.DB, v UserModel) error {
 	follow := FollowModel{
 		FollowingID:  v.ID,
 		FollowedByID: u.ID,
@@ -147,7 +150,10 @@ func (u UserModel) isFollowingWithDB(db *gorm.DB, v UserModel) (bool, error) {
 //
 //	err = userModel1.unFollowing(userModel2)
 func (u UserModel) unFollowing(v UserModel) error {
-	db := common.GetDB()
+	return u.unFollowingWithDB(common.GetDB(), v)
+}
+
+func (u UserModel) unFollowingWithDB(db *gorm.DB, v UserModel) error {
 	err := db.Unscoped().Where("following_id = ? AND followed_by_id = ?", v.ID, u.ID).Delete(&FollowModel{}).Error
 	return err
 }

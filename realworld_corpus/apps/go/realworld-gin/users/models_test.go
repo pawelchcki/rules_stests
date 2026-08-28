@@ -73,6 +73,74 @@ func TestFollowingStatusPropagatesDatabaseErrors(t *testing.T) {
 	}
 }
 
+func TestFollowChangesRollBackWhenResponseReadFails(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		method    string
+		handler   func(*gin.Context)
+		seedCount int64
+	}{
+		{name: "follow", method: http.MethodPost, handler: ProfileFollow, seedCount: 0},
+		{name: "unfollow", method: http.MethodDelete, handler: ProfileUnfollow, seedCount: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db, err := gorm.Open(sqlite.Open("file:follow-response-transaction-"+test.name+"?mode=memory&cache=shared"), &gorm.Config{TranslateError: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			common.DB = db
+			if err := db.AutoMigrate(&UserModel{}, &FollowModel{}); err != nil {
+				t.Fatal(err)
+			}
+			follower := UserModel{Username: "follower-" + test.name, Email: "follower-" + test.name + "@example.test", PasswordHash: "unused"}
+			followed := UserModel{Username: "followed-" + test.name, Email: "followed-" + test.name + "@example.test", PasswordHash: "unused"}
+			if err := db.Create(&follower).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Create(&followed).Error; err != nil {
+				t.Fatal(err)
+			}
+			if test.seedCount == 1 {
+				if err := follower.following(followed); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			wantErr := errors.New("forced follow response read failure")
+			callbackName := "test:fail-follow-response-read-" + test.name
+			if err := db.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+				if tx.Statement.Table == "follow_models" {
+					tx.AddError(wantErr)
+				}
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			recorder := httptest.NewRecorder()
+			gin.SetMode(gin.TestMode)
+			context, _ := gin.CreateTestContext(recorder)
+			context.Request = httptest.NewRequest(test.method, "/api/profiles/"+followed.Username+"/follow", nil)
+			context.Params = gin.Params{{Key: "username", Value: followed.Username}}
+			context.Set("my_user_model", follower)
+
+			test.handler(context)
+			if recorder.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("status=%d body=%s, want 422", recorder.Code, recorder.Body.String())
+			}
+			if err := db.Callback().Query().Remove(callbackName); err != nil {
+				t.Fatal(err)
+			}
+			var count int64
+			if err := db.Model(&FollowModel{}).Count(&count).Error; err != nil {
+				t.Fatal(err)
+			}
+			if count != test.seedCount {
+				t.Fatalf("follow count=%d, want rollback to %d", count, test.seedCount)
+			}
+		})
+	}
+}
+
 func TestUserUpdateValuesContainOnlySuppliedFields(t *testing.T) {
 	image := "https://example.test/new.png"
 	validator := NewUserModelValidatorFillWith(UserModel{
