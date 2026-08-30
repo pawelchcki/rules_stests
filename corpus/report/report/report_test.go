@@ -83,4 +83,7 @@ func TestRenderHTMLIsSelfContainedAndEscapesData(t *testing.T) {
 	if strings.Contains(text, "<link rel=") || strings.Contains(text, "<script src=") {
 		t.Fatal("report depends on external assets")
 	}
+	if !strings.Contains(text, "const manifests=lang?data.manifests.filter(m=>m.language===lang):data.manifests") {
+		t.Fatal("verification filtering is not scoped to the selected language")
+	}
 }
