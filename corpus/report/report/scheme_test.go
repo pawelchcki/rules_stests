@@ -90,13 +90,13 @@ func TestParseGoldenAcceptsZeroRepeat(t *testing.T) {
 func TestParseGoldenPreservesPartialSpanMatchers(t *testing.T) {
 	input := `(define expected-trace-shapes
   (traces (trace (coverage 'complete)
-    (unordered (span (name "request"))))))`
+	(unordered (span (name (one-of (exact "GET /a") (exact "GET /b"))))))))`
 	golden, err := ParseGolden("profile", "case", "source", input)
 	if err != nil {
 		t.Fatal(err)
 	}
 	span := golden.Traces[0].Roots[0].Span
-	if span.Name != "request" || span.Scope != "" || span.Kind != "" || span.Status != "" || span.HTTPStatus != "" {
+	if span.Name != "one of: GET /a | GET /b" || span.Scope != "" || span.Kind != "" || span.Status != "" || span.HTTPStatus != "" {
 		t.Fatalf("omitted matchers should remain unconstrained: %#v", span)
 	}
 	if !golden.ExactCounts || golden.SpanCount != 1 || len(golden.Scopes) != 0 || len(golden.Statuses) != 0 {

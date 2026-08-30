@@ -87,3 +87,23 @@ func TestRenderHTMLIsSelfContainedAndEscapesData(t *testing.T) {
 		t.Fatal("verification filtering is not scoped to the selected language")
 	}
 }
+
+func TestPinRepositoryRevisionRewritesReportEvidence(t *testing.T) {
+	const revision = "0123456789abcdef0123456789abcdef01234567"
+	manifests := []Manifest{{
+		ProfileEvidence: []Evidence{{Href: "https://github.com/pawelchcki/rules_stests/blob/main/corpus/profile.scm"}},
+		Verifications:   []Verification{{Evidence: []Evidence{{Href: "https://github.com/pawelchcki/rules_stests/tree/main/corpus/goldens"}}}},
+	}}
+	goldens := []Golden{{Source: "https://github.com/pawelchcki/rules_stests/blob/main/corpus/golden.scm"}}
+	if err := PinRepositoryRevision(manifests, goldens, revision); err != nil {
+		t.Fatal(err)
+	}
+	for _, href := range []string{manifests[0].ProfileEvidence[0].Href, manifests[0].Verifications[0].Evidence[0].Href, goldens[0].Source} {
+		if !strings.Contains(href, revision) || strings.Contains(href, "/main/") {
+			t.Fatalf("evidence was not pinned: %s", href)
+		}
+	}
+	if err := PinRepositoryRevision(nil, nil, "not-a-commit"); err == nil {
+		t.Fatal("expected invalid revision to fail")
+	}
+}

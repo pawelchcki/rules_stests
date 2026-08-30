@@ -14,5 +14,10 @@ actions:
     steps:
       - run: "bazel test --config=buildbuddy --build_tests_only //... //bazel/itest/apps:aiohttp_otel_contract_test //bazel/itest/apps:django_otel_contract_test //bazel/itest/apps:gin_otel_contract_test"
       - run: |
-          bazel build --config=buildbuddy --remote_download_outputs=toplevel //corpus:feature_parity_report
+          REPORT_REVISION="$(git rev-parse HEAD)"
+          # A BuildBuddy-created base merge is not addressable on GitHub; its first parent is the PR head.
+          if [ "$(git show -s --format=%ce HEAD)" = "ci-runner@buildbuddy.io" ]; then
+            REPORT_REVISION="$(git rev-parse HEAD^1)"
+          fi
+          bazel build --config=buildbuddy --remote_download_outputs=toplevel --action_env=REPORT_REVISION="$REPORT_REVISION" //corpus:feature_parity_report
           cp bazel-bin/corpus/feature-parity-report.html "$BUILDBUDDY_ARTIFACTS_DIRECTORY/feature-parity-report.html"

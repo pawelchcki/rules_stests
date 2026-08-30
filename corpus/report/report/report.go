@@ -42,6 +42,36 @@ func DecodeManifest(data []byte) (Manifest, error) {
 	return manifest, nil
 }
 
+func PinRepositoryRevision(manifests []Manifest, goldens []Golden, revision string) error {
+	if revision == "" || revision == "main" {
+		return nil
+	}
+	if len(revision) != 40 {
+		return fmt.Errorf("repository revision must be main or a 40-character commit SHA")
+	}
+	if _, err := hex.DecodeString(revision); err != nil {
+		return fmt.Errorf("repository revision must be main or a 40-character commit SHA")
+	}
+	pin := func(href string) string {
+		href = strings.Replace(href, "https://github.com/pawelchcki/rules_stests/blob/main/", "https://github.com/pawelchcki/rules_stests/blob/"+revision+"/", 1)
+		return strings.Replace(href, "https://github.com/pawelchcki/rules_stests/tree/main/", "https://github.com/pawelchcki/rules_stests/tree/"+revision+"/", 1)
+	}
+	for i := range manifests {
+		for j := range manifests[i].ProfileEvidence {
+			manifests[i].ProfileEvidence[j].Href = pin(manifests[i].ProfileEvidence[j].Href)
+		}
+		for j := range manifests[i].Verifications {
+			for k := range manifests[i].Verifications[j].Evidence {
+				manifests[i].Verifications[j].Evidence[k].Href = pin(manifests[i].Verifications[j].Evidence[k].Href)
+			}
+		}
+	}
+	for i := range goldens {
+		goldens[i].Source = pin(goldens[i].Source)
+	}
+	return nil
+}
+
 func VerifyMatrixDigest(markdown []byte, expected string) error {
 	digest := sha256.Sum256(markdown)
 	actual := hex.EncodeToString(digest[:])

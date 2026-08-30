@@ -333,15 +333,21 @@ func renderMatcher(expr sexpr) string {
 	}
 	values := make([]string, 0, len(expr.list)-1)
 	for _, item := range expr.list[1:] {
-		values = append(values, atomValue(item))
+		values = append(values, renderMatcher(item))
 	}
 	if len(values) == 0 {
 		return head(expr)
 	}
-	if head(expr) == "exact" {
+	switch head(expr) {
+	case "exact":
 		return values[0]
+	case "one-of":
+		return "one of: " + strings.Join(values, " | ")
+	case "prefix-suffix":
+		return strings.Join(values, " … ")
+	default:
+		return head(expr) + ": " + strings.Join(values, " … ")
 	}
-	return head(expr) + ": " + strings.Join(values, " … ")
 }
 
 func secondValue(expr sexpr) string {

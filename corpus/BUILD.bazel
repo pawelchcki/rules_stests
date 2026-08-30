@@ -166,6 +166,7 @@ genrule(
         "--metadata=$(location report/data/catalog.json)",
         "--profiles={}".format(",".join(_REPORT_PROFILES)),
         "--scenarios={}".format(",".join(_REPORT_SCENARIOS)),
+        "--repository-revision=$${REPORT_REVISION:-main}",
     ] + [
         "--manifest=$(location {})".format(manifest)
         for manifest in _REPORT_MANIFESTS
