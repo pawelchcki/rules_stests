@@ -1,0 +1,14 @@
+### Feature parity report
+# Select the `local` environment after starting the "FP Report Service" run
+# configuration, or `tailscale` from a device on the same tailnet. For "FP
+# Report Public", copy its printed trycloudflare.com URL into a private
+# environment as fpReportBaseUrl.
+GET {{fpReportBaseUrl}}/feature-parity-report.html
+Accept: text/html
+
+> {%
+  client.test("feature parity report is available", function () {
+    client.assert(response.status === 200, "expected HTTP 200");
+    client.assert(response.contentType.mimeType === "text/html", "expected HTML response");
+  });
+%}

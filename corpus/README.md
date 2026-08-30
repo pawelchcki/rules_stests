@@ -79,3 +79,74 @@ the implementation actually emitted. Promoting one without reading it converts
 a live defect into a checked-in expectation. When telemetry is wrong but known,
 record it in the suite's `otel_xfails` (or `otel_flaky_cases`) instead of
 weakening the golden.
+
+## Feature parity report
+
+Build the deterministic, single-file OpenTelemetry feature and corpus coverage
+dashboard with:
+
+```bash
+bazel build //corpus:feature_parity_report
+# Open bazel-bin/corpus/feature-parity-report.html
+```
+
+For an HTTP workflow, run the checked-in JetBrains Bazel configuration **FP
+Report Service**, or start the same target directly:
+
+```bash
+bazel run //corpus:feature_parity_http_server
+```
+
+The report is a data dependency of the server target, so this single Bazel
+command builds it and starts the loopback service at
+`http://127.0.0.1:8765/feature-parity-report.html`.
+
+For a temporary public preview, run the JetBrains Bazel configuration **FP
+Report Public**, or start its target directly:
+
+```bash
+bazel run //corpus:feature_parity_public_report
+```
+
+It prints a random `https://...trycloudflare.com` URL. The URL needs no account
+or token, is reachable from the public internet, and exists only while the
+target is running. The target uses a SHA-256-pinned cloudflared binary; Bazel
+downloads it rather than relying on a host installation. This target currently
+selects the matching pinned binary for Linux and macOS on x86-64 or ARM64, and
+Windows on x86-64.
+
+Open `http/feature-parity-report.http` in the JetBrains HTTP Client and select
+one of the public environments from `http/http-client.env.json`:
+
+- `local` uses the loopback service started by the run configuration.
+- `tailscale` uses
+  `https://bazzite.lamancha-minor.ts.net/feature-parity-report.html` and is
+  reachable only from the configured tailnet.
+
+To exercise a public preview in the HTTP Client, copy the URL printed by **FP
+Report Public** into `fpReportBaseUrl` in a private HTTP Client environment.
+
+Both routes serve the same Bazel output. The local server reopens the output on
+each request, so rebuilding the report does not require restarting the service.
+
+The report distinguishes upstream Go/Python support from repository evidence.
+It also distinguishes exact goldens, portable contract-only coverage, and
+unavailable coverage. The comparison view reports trace-shape count and content
+differences without computing a similarity score or a parity verdict.
+
+The upstream compliance matrix is a reviewed snapshot pinned by commit and
+SHA-256 in `report/data/catalog.json`; report builds do not use the network.
+Refreshing it is an explicit source-tree update from a selected 40-character
+OpenTelemetry specification commit:
+
+```bash
+bazel run //corpus:update_feature_catalog -- \
+  --revision=<opentelemetry-specification-commit>
+bazel test //corpus:feature_parity_test
+bazel build //corpus:feature_parity_report
+```
+
+Review the resulting matrix, metadata, stable feature IDs, and implementation
+manifest evidence before committing an update. Signal maturity is maintained in
+the catalog from the official OpenTelemetry language status page because it is
+not part of the compliance matrix.

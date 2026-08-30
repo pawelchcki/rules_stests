@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "revision": "8057bf6d5cf0ab10891b9e6f7b928cded76ab2f7",
+    "url": "https://github.com/open-telemetry/opentelemetry-specification/blob/8057bf6d5cf0ab10891b9e6f7b928cded76ab2f7/spec-compliance-matrix.md",
+    "rawUrl": "https://raw.githubusercontent.com/open-telemetry/opentelemetry-specification/8057bf6d5cf0ab10891b9e6f7b928cded76ab2f7/spec-compliance-matrix.md",
+    "sha256": "3143cf4195b136ecc31ef1969ba6580d6999cf4ef51933271742e0b29628914b"
+  },
+  "maturitySource": "https://opentelemetry.io/docs/languages/",
+  "maturity": {
+    "go": {
+      "traces": "stable",
+      "metrics": "stable",
+      "logs": "beta"
+    },
+    "python": {
+      "traces": "stable",
+      "metrics": "stable",
+      "logs": "development"
+    }
+  }
+}

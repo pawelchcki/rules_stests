@@ -1,3 +1,196 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
 package(default_visibility = ["//visibility:public"])
 
 exports_files(glob(["**/*.scm"]))
+
+config_setting(
+    name = "cloudflared_linux_amd64",
+    constraint_values = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+    ],
+)
+
+config_setting(
+    name = "cloudflared_linux_arm64",
+    constraint_values = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:linux",
+    ],
+)
+
+config_setting(
+    name = "cloudflared_darwin_amd64",
+    constraint_values = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:osx",
+    ],
+)
+
+config_setting(
+    name = "cloudflared_darwin_arm64",
+    constraint_values = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:osx",
+    ],
+)
+
+config_setting(
+    name = "cloudflared_windows_amd64",
+    constraint_values = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+    ],
+)
+
+_REPORT_PROFILES = [
+    "go-gin-otelbuild-v1-1-0",
+    "python-aiohttp-auto-v0-65b0",
+    "python-django-auto-v0-65b0",
+]
+
+_REPORT_SCENARIOS = [
+    "articles",
+    "auth",
+    "comments",
+    "errors_articles",
+    "errors_auth",
+    "errors_authorization",
+    "errors_comments",
+    "errors_profiles",
+    "favorites",
+    "feed",
+    "pagination",
+    "profiles",
+    "tags",
+]
+
+_REPORT_EXACT_PROFILES = _REPORT_PROFILES[1:]
+_REPORT_MANIFESTS = ["report/manifests/{}.json".format(profile) for profile in _REPORT_PROFILES]
+_REPORT_GOLDENS = [
+    "realworld/goldens/{}/{}/golden.scm".format(profile, scenario)
+    for profile in _REPORT_EXACT_PROFILES
+    for scenario in _REPORT_SCENARIOS
+]
+_REPORT_EVIDENCE = [
+    "otel/validation.scm",
+    "realworld/contract.scm",
+    "realworld/programs/validate.scm",
+    "realworld/programs/validate_contract.scm",
+] + ["realworld/profiles/{}.scm".format(profile) for profile in _REPORT_PROFILES] + _REPORT_GOLDENS
+
+go_library(
+    name = "feature_parity_lib",
+    srcs = glob(
+        ["report/report/*.go"],
+        exclude = ["report/report/*_test.go"],
+    ),
+    importpath = "github.com/pawelchcki/rules_stests/corpus/report",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "feature_parity_generator",
+    srcs = ["report/cmd/main.go"],
+    deps = [":feature_parity_lib"],
+)
+
+go_binary(
+    name = "update_feature_catalog",
+    srcs = ["report/updater/main.go"],
+    tags = ["manual"],
+    deps = [":feature_parity_lib"],
+)
+
+go_library(
+    name = "feature_parity_http_server_lib",
+    srcs = ["report/server/server.go"],
+    importpath = "github.com/pawelchcki/rules_stests/corpus/report/server",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "feature_parity_http_server",
+    srcs = ["report/server/cmd/main.go"],
+    args = ["--file=$(rootpath :feature_parity_report)"],
+    data = [":feature_parity_report"],
+    deps = [":feature_parity_http_server_lib"],
+)
+
+go_binary(
+    name = "feature_parity_public_report",
+    srcs = ["report/server/cmd/main.go"],
+    args = ["--file=$(rootpath :feature_parity_report)"] + select(
+        {
+            ":cloudflared_linux_amd64": ["--cloudflared=$(rootpath @cloudflared_linux_amd64//file)"],
+            ":cloudflared_linux_arm64": ["--cloudflared=$(rootpath @cloudflared_linux_arm64//file)"],
+            ":cloudflared_darwin_amd64": ["--cloudflared=$(rootpath @cloudflared_darwin_amd64//:cloudflared)"],
+            ":cloudflared_darwin_arm64": ["--cloudflared=$(rootpath @cloudflared_darwin_arm64//:cloudflared)"],
+            ":cloudflared_windows_amd64": ["--cloudflared=$(rootpath @cloudflared_windows_amd64//file)"],
+        },
+        no_match_error = "feature_parity_public_report supports Linux/macOS on x86-64/ARM64 and Windows on x86-64",
+    ),
+    data = [":feature_parity_report"] + select(
+        {
+            ":cloudflared_linux_amd64": ["@cloudflared_linux_amd64//file"],
+            ":cloudflared_linux_arm64": ["@cloudflared_linux_arm64//file"],
+            ":cloudflared_darwin_amd64": ["@cloudflared_darwin_amd64//:cloudflared"],
+            ":cloudflared_darwin_arm64": ["@cloudflared_darwin_arm64//:cloudflared"],
+            ":cloudflared_windows_amd64": ["@cloudflared_windows_amd64//file"],
+        },
+        no_match_error = "feature_parity_public_report supports Linux/macOS on x86-64/ARM64 and Windows on x86-64",
+    ),
+    deps = [":feature_parity_http_server_lib"],
+)
+
+go_test(
+    name = "feature_parity_http_server_test",
+    srcs = ["report/server/server_test.go"],
+    embed = [":feature_parity_http_server_lib"],
+)
+
+go_test(
+    name = "feature_parity_test",
+    srcs = glob(["report/report/*_test.go"]),
+    args = [
+        "$(rootpath report/data/catalog.json)",
+        "$(rootpath report/data/spec-compliance-matrix.md)",
+    ],
+    data = [
+        "report/data/catalog.json",
+        "report/data/spec-compliance-matrix.md",
+    ],
+    embed = [":feature_parity_lib"],
+)
+
+genrule(
+    name = "feature_parity_report",
+    srcs = [
+        "report/data/catalog.json",
+        "report/data/spec-compliance-matrix.md",
+    ] + _REPORT_MANIFESTS + _REPORT_EVIDENCE,
+    outs = ["feature-parity-report.html"],
+    cmd = " ".join([
+        "$(location :feature_parity_generator)",
+        "--matrix=$(location report/data/spec-compliance-matrix.md)",
+        "--metadata=$(location report/data/catalog.json)",
+        "--profiles={}".format(",".join(_REPORT_PROFILES)),
+        "--scenarios={}".format(",".join(_REPORT_SCENARIOS)),
+    ] + [
+        "--manifest=$(location {})".format(manifest)
+        for manifest in _REPORT_MANIFESTS
+    ] + [
+        "--evidence-ref={}".format(evidence)
+        for evidence in _REPORT_EVIDENCE
+    ] + [
+        "--golden='{profile},{scenario},$(location {golden}),https://github.com/pawelchcki/rules_stests/blob/main/corpus/{golden}'".format(
+            golden = "realworld/goldens/{}/{}/golden.scm".format(profile, scenario),
+            profile = profile,
+            scenario = scenario,
+        )
+        for profile in _REPORT_EXACT_PROFILES
+        for scenario in _REPORT_SCENARIOS
+    ] + ["--out=$@"]),
+    tools = [":feature_parity_generator"],
+)

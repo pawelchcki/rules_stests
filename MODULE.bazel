@@ -149,6 +149,47 @@ use_repo(
 )
 
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
+
+http_file(
+    name = "cloudflared_linux_amd64",
+    downloaded_file_path = "cloudflared",
+    executable = True,
+    sha256 = "fcfb02b575a52ca1af2e3267af4e1517bcdeb30ac48c834c69abaed3c0576ad2",
+    urls = ["https://github.com/cloudflare/cloudflared/releases/download/2026.8.2/cloudflared-linux-amd64"],
+)
+
+http_file(
+    name = "cloudflared_linux_arm64",
+    downloaded_file_path = "cloudflared",
+    executable = True,
+    sha256 = "7747d94570fb390cf47dcb4f9555c193c6355cda9793f0d878d9049e5d6a7790",
+    urls = ["https://github.com/cloudflare/cloudflared/releases/download/2026.8.2/cloudflared-linux-arm64"],
+)
+
+http_archive(
+    name = "cloudflared_darwin_amd64",
+    build_file_content = "exports_files([\"cloudflared\"])\n",
+    # Cloudflare publishes b0f770... as the extracted binary's checksum.
+    sha256 = "f1727723c586500e2092368ae21871b3df7ddfd2cb097f22d81bee4a9c458bb4",
+    urls = ["https://github.com/cloudflare/cloudflared/releases/download/2026.8.2/cloudflared-darwin-amd64.tgz"],
+)
+
+http_archive(
+    name = "cloudflared_darwin_arm64",
+    build_file_content = "exports_files([\"cloudflared\"])\n",
+    # Cloudflare publishes b61054... as the extracted binary's checksum.
+    sha256 = "9042c2c5d8b2de78e60f313d5fb31b6c5c1cebde787a3caf1f2c9588084ac442",
+    urls = ["https://github.com/cloudflare/cloudflared/releases/download/2026.8.2/cloudflared-darwin-arm64.tgz"],
+)
+
+http_file(
+    name = "cloudflared_windows_amd64",
+    downloaded_file_path = "cloudflared.exe",
+    executable = True,
+    sha256 = "c29eee2b121f5436a642eed69fd9767da7e7b8c510fa50aaa130337f931357b5",
+    urls = ["https://github.com/cloudflare/cloudflared/releases/download/2026.8.2/cloudflared-windows-amd64.exe"],
+)
 
 http_archive(
     name = "stak_compiler_assets",
