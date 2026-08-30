@@ -64,6 +64,24 @@ func TestImportMatrixRejectsDuplicateFeatureIDs(t *testing.T) {
 	}
 }
 
+func TestImportMatrixPreservesEscapedPipes(t *testing.T) {
+	matrix := `## Traces
+| Feature | Optional | Go | Python |
+| --- | --- | --- | --- |
+| Emit A \| B | | + | - |
+`
+	features, err := ImportMatrix(matrix, testSource())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(features) != 1 || features[0].Name != "Emit A | B" {
+		t.Fatalf("escaped pipe changed the feature cell: %#v", features)
+	}
+	if features[0].Support["go"] != "supported" || features[0].Support["python"] != "unsupported" {
+		t.Fatalf("escaped pipe shifted support columns: %#v", features[0].Support)
+	}
+}
+
 func TestCheckedInCatalogImportsEveryCategory(t *testing.T) {
 	args := flag.Args()
 	if len(args) != 2 {

@@ -67,13 +67,27 @@ func update(revision, matrixPath, metadataPath string) error {
 		return err
 	}
 	encoded = append(encoded, '\n')
-	if err := atomicWrite(matrixPath, matrix); err != nil {
-		return err
-	}
-	if err := atomicWrite(metadataPath, encoded); err != nil {
+	if err := atomicWritePair(matrixPath, matrix, metadataPath, encoded); err != nil {
 		return err
 	}
 	fmt.Printf("updated %s to %s (%s)\n", matrixPath, revision, metadata.Source.SHA256)
+	return nil
+}
+
+func atomicWritePair(firstPath string, firstData []byte, secondPath string, secondData []byte) error {
+	originalFirst, err := os.ReadFile(firstPath)
+	if err != nil {
+		return fmt.Errorf("read original %s: %w", firstPath, err)
+	}
+	if err := atomicWrite(firstPath, firstData); err != nil {
+		return err
+	}
+	if err := atomicWrite(secondPath, secondData); err != nil {
+		if restoreErr := atomicWrite(firstPath, originalFirst); restoreErr != nil {
+			return fmt.Errorf("write %s: %v; restore %s: %w", secondPath, err, firstPath, restoreErr)
+		}
+		return err
+	}
 	return nil
 }
 

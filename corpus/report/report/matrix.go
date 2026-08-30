@@ -123,10 +123,32 @@ func slug(value string) string {
 }
 
 func splitMarkdownRow(line string) []string {
-	line = strings.TrimSpace(strings.Trim(line, "|"))
-	raw := strings.Split(line, "|")
+	line = strings.TrimSpace(line)
+	raw := []string{}
+	var cell strings.Builder
+	escaped := false
+	for _, character := range line {
+		if character == '|' && !escaped {
+			raw = append(raw, cell.String())
+			cell.Reset()
+		} else {
+			cell.WriteRune(character)
+		}
+		if character == '\\' {
+			escaped = !escaped
+		} else {
+			escaped = false
+		}
+	}
+	raw = append(raw, cell.String())
 	for i := range raw {
 		raw[i] = strings.TrimSpace(raw[i])
+	}
+	if len(raw) > 0 && raw[0] == "" {
+		raw = raw[1:]
+	}
+	if len(raw) > 0 && raw[len(raw)-1] == "" {
+		raw = raw[:len(raw)-1]
 	}
 	return raw
 }

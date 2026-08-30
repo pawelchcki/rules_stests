@@ -48,12 +48,11 @@ config_setting(
 _REPORT_PROFILES = REALWORLD_PROFILES
 _REPORT_SCENARIOS = REALWORLD_HURL_CASES
 
-_REPORT_EXACT_PROFILES = _REPORT_PROFILES[1:]
 _REPORT_MANIFESTS = ["report/manifests/{}.json".format(profile) for profile in _REPORT_PROFILES]
 _REPORT_GOLDENS = [
-    "realworld/goldens/{}/{}/golden.scm".format(profile, scenario)
-    for profile in _REPORT_EXACT_PROFILES
-    for scenario in _REPORT_SCENARIOS
+    golden
+    for golden in glob(["realworld/goldens/*/*/golden.scm"])
+    if golden.split("/")[2] in _REPORT_PROFILES and golden.split("/")[3] in _REPORT_SCENARIOS
 ]
 _REPORT_EVIDENCE = [
     "otel/validation.scm",
@@ -178,12 +177,11 @@ genrule(
         for evidence in _REPORT_EVIDENCE_REFS
     ] + [
         "--golden='{profile},{scenario},$(location {golden}),https://github.com/pawelchcki/rules_stests/blob/main/corpus/{golden}'".format(
-            golden = "realworld/goldens/{}/{}/golden.scm".format(profile, scenario),
-            profile = profile,
-            scenario = scenario,
+            golden = golden,
+            profile = golden.split("/")[2],
+            scenario = golden.split("/")[3],
         )
-        for profile in _REPORT_EXACT_PROFILES
-        for scenario in _REPORT_SCENARIOS
+        for golden in _REPORT_GOLDENS
     ] + ["--out=$@"]),
     tools = [":feature_parity_generator"],
 )
