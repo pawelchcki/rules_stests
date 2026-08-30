@@ -18,7 +18,6 @@
     {"featureId": "resource.create-from-attributes", "state": "verified", "evidence": [{"label": "resource assertions", "href": "https://github.com/pawelchcki/rules_stests/blob/main/corpus/realworld/profiles/python-django-auto-v0-65b0.scm", "path": "realworld/profiles/python-django-auto-v0-65b0.scm"}]},
     {"featureId": "metrics.a-specified-resource-can-be-associated-with-all-the-produced-metrics-from-any-meter-from-the-meterprovider", "state": "verified", "evidence": [{"label": "metric resource validator", "href": "https://github.com/pawelchcki/rules_stests/blob/main/corpus/otel/validation.scm", "path": "otel/validation.scm"}]},
     {"featureId": "logs.logger-emit-logrecord", "state": "verified", "evidence": [{"label": "log policy", "href": "https://github.com/pawelchcki/rules_stests/blob/main/corpus/realworld/profiles/python-django-auto-v0-65b0.scm", "path": "realworld/profiles/python-django-auto-v0-65b0.scm"}]},
-    {"featureId": "logs.trace-context-injection", "state": "verified", "evidence": [{"label": "log enrichment validation", "href": "https://github.com/pawelchcki/rules_stests/blob/main/corpus/otel/validation.scm", "path": "otel/validation.scm"}]},
     {"featureId": "exporters.otlp.otlp-http-binary-protobuf-exporter", "state": "verified", "evidence": [{"label": "OTLP protobuf test environment", "href": "https://github.com/pawelchcki/rules_stests/blob/main/bazel/itest/apps/BUILD.bazel", "path": "bazel/itest/apps/BUILD.bazel"}]}
   ]
 }

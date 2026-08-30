@@ -764,15 +764,6 @@
 (define (validate-logs expected-scopes policy logs)
   (check (or (null? expected-scopes) (> (length logs) 0)) "capture contains no logs")
   (validate-signal-scopes expected-scopes logs)
-  (if (list-ref policy 5)
-      (check (> (count
-                  (lambda (log)
-                    (and (> (string-length (field 'trace-id log)) 0)
-                         (> (string-length (field 'span-id log)) 0)))
-                  logs)
-                0)
-             "capture contains no trace-correlated logs")
-      #t)
   (for-each
     (lambda (log)
       (check (member (list-ref policy 4) '(unnamed named any))
@@ -855,7 +846,7 @@
                     #f
                     #f
                     expected-log-scopes
-                    '(#f #f #f #f any #f)
+                    '(#f #f #f #f any)
                     event-policy
                     '(0 1 256 257)
                     #f

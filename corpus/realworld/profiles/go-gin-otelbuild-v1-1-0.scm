@@ -31,7 +31,7 @@
 
 ; This build exports no logs, so the log policy is never consulted. It is
 ; declared for symmetry with the profiles that do.
-(define expected-log-policy '(#f #f #f #f any #f))
+(define expected-log-policy '(#f #f #f #f any))
 
 (define expected-resource-attributes
   (go-service-resource-attributes "gin-otel"))
