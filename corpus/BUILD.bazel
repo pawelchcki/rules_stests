@@ -1,3 +1,185 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("//corpus:defs.bzl", "REALWORLD_HURL_CASES", "REALWORLD_PROFILES")
+
 package(default_visibility = ["//visibility:public"])
 
 exports_files(glob(["**/*.scm"]))
+
+config_setting(
+    name = "cloudflared_linux_amd64",
+    constraint_values = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+    ],
+)
+
+config_setting(
+    name = "cloudflared_linux_arm64",
+    constraint_values = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:linux",
+    ],
+)
+
+config_setting(
+    name = "cloudflared_darwin_amd64",
+    constraint_values = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:osx",
+    ],
+)
+
+config_setting(
+    name = "cloudflared_darwin_arm64",
+    constraint_values = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:osx",
+    ],
+)
+
+config_setting(
+    name = "cloudflared_windows_amd64",
+    constraint_values = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+    ],
+)
+
+_REPORT_PROFILES = REALWORLD_PROFILES
+_REPORT_SCENARIOS = REALWORLD_HURL_CASES
+
+_REPORT_MANIFESTS = ["report/manifests/{}.json".format(profile) for profile in _REPORT_PROFILES]
+_REPORT_GOLDENS = [
+    golden
+    for golden in glob(["realworld/goldens/*/*/golden.scm"])
+    if golden.split("/")[2] in _REPORT_PROFILES and golden.split("/")[3] in _REPORT_SCENARIOS
+]
+_REPORT_EVIDENCE = [
+    "otel/validation.scm",
+    "realworld/contract.scm",
+    "realworld/programs/validate.scm",
+    "realworld/programs/validate_contract.scm",
+] + ["realworld/profiles/{}.scm".format(profile) for profile in _REPORT_PROFILES] + _REPORT_GOLDENS
+go_library(
+    name = "feature_parity_lib",
+    srcs = glob(
+        ["report/report/*.go"],
+        exclude = ["report/report/*_test.go"],
+    ),
+    importpath = "github.com/pawelchcki/rules_stests/corpus/report",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "feature_parity_generator",
+    srcs = ["report/cmd/main.go"],
+    deps = [":feature_parity_lib"],
+)
+
+go_binary(
+    name = "update_feature_catalog",
+    srcs = ["report/updater/main.go"],
+    tags = ["manual"],
+    deps = [":feature_parity_lib"],
+)
+
+go_library(
+    name = "feature_parity_http_server_lib",
+    srcs = ["report/server/server.go"],
+    importpath = "github.com/pawelchcki/rules_stests/corpus/report/server",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "feature_parity_http_server",
+    srcs = ["report/server/cmd/main.go"],
+    args = ["--file=$(rootpath :feature_parity_report)"],
+    data = [":feature_parity_report"],
+    deps = [":feature_parity_http_server_lib"],
+)
+
+go_binary(
+    name = "feature_parity_public_report",
+    srcs = ["report/server/cmd/main.go"],
+    args = ["--file=$(rootpath :feature_parity_report)"] + select(
+        {
+            ":cloudflared_linux_amd64": ["--cloudflared=$(rootpath @cloudflared_linux_amd64//file)"],
+            ":cloudflared_linux_arm64": ["--cloudflared=$(rootpath @cloudflared_linux_arm64//file)"],
+            ":cloudflared_darwin_amd64": ["--cloudflared=$(rootpath @cloudflared_darwin_amd64//:cloudflared)"],
+            ":cloudflared_darwin_arm64": ["--cloudflared=$(rootpath @cloudflared_darwin_arm64//:cloudflared)"],
+            ":cloudflared_windows_amd64": ["--cloudflared=$(rootpath @cloudflared_windows_amd64//file)"],
+        },
+        no_match_error = "feature_parity_public_report supports Linux/macOS on x86-64/ARM64 and Windows on x86-64",
+    ),
+    data = [":feature_parity_report"] + select(
+        {
+            ":cloudflared_linux_amd64": ["@cloudflared_linux_amd64//file"],
+            ":cloudflared_linux_arm64": ["@cloudflared_linux_arm64//file"],
+            ":cloudflared_darwin_amd64": ["@cloudflared_darwin_amd64//:cloudflared"],
+            ":cloudflared_darwin_arm64": ["@cloudflared_darwin_arm64//:cloudflared"],
+            ":cloudflared_windows_amd64": ["@cloudflared_windows_amd64//file"],
+        },
+        no_match_error = "feature_parity_public_report supports Linux/macOS on x86-64/ARM64 and Windows on x86-64",
+    ),
+    deps = [":feature_parity_http_server_lib"],
+)
+
+go_test(
+    name = "feature_parity_http_server_test",
+    srcs = ["report/server/server_test.go"],
+    embed = [":feature_parity_http_server_lib"],
+)
+
+go_test(
+    name = "feature_parity_test",
+    srcs = glob(["report/report/*_test.go"]),
+    args = [
+        "$(rootpath report/data/catalog.json)",
+        "$(rootpath report/data/spec-compliance-matrix.md)",
+    ],
+    data = [
+        "report/data/catalog.json",
+        "report/data/spec-compliance-matrix.md",
+    ],
+    embed = [":feature_parity_lib"],
+)
+
+go_test(
+    name = "update_feature_catalog_test",
+    srcs = [
+        "report/updater/main.go",
+        "report/updater/main_test.go",
+    ],
+    deps = [":feature_parity_lib"],
+)
+
+genrule(
+    name = "feature_parity_report",
+    srcs = [
+        "report/data/catalog.json",
+        "report/data/spec-compliance-matrix.md",
+    ] + _REPORT_MANIFESTS + _REPORT_EVIDENCE,
+    outs = ["feature-parity-report.html"],
+    cmd = " ".join([
+        "$(location :feature_parity_generator)",
+        "--matrix=$(location report/data/spec-compliance-matrix.md)",
+        "--metadata=$(location report/data/catalog.json)",
+        "--profiles={}".format(",".join(_REPORT_PROFILES)),
+        "--scenarios={}".format(",".join(_REPORT_SCENARIOS)),
+        "--repository-revision=$${REPORT_REVISION:-main}",
+    ] + [
+        "--manifest=$(location {})".format(manifest)
+        for manifest in _REPORT_MANIFESTS
+    ] + [
+        "--evidence-ref={}".format(evidence)
+        for evidence in _REPORT_EVIDENCE
+    ] + [
+        "--golden='{profile},{scenario},$(location {golden}),https://github.com/pawelchcki/rules_stests/blob/main/corpus/{golden}'".format(
+            golden = golden,
+            profile = golden.split("/")[2],
+            scenario = golden.split("/")[3],
+        )
+        for golden in _REPORT_GOLDENS
+    ] + ["--out=$@"]),
+    tools = [":feature_parity_generator"],
+)

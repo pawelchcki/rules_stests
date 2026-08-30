@@ -51,7 +51,6 @@ htmlcov/
 .env.*
 !.env.example
 !**/.env.example
-
 # Runtime databases and service state
 *.db
 *.db-journal
