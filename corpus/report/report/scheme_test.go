@@ -87,6 +87,23 @@ func TestParseGoldenAcceptsZeroRepeat(t *testing.T) {
 	}
 }
 
+func TestParseGoldenPreservesPartialSpanMatchers(t *testing.T) {
+	input := `(define expected-trace-shapes
+  (traces (trace (coverage 'complete)
+    (unordered (span (name "request"))))))`
+	golden, err := ParseGolden("profile", "case", "source", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	span := golden.Traces[0].Roots[0].Span
+	if span.Name != "request" || span.Scope != "" || span.Kind != "" || span.Status != "" || span.HTTPStatus != "" {
+		t.Fatalf("omitted matchers should remain unconstrained: %#v", span)
+	}
+	if !golden.ExactCounts || golden.SpanCount != 1 || len(golden.Scopes) != 0 || len(golden.Statuses) != 0 {
+		t.Fatalf("unexpected partial matcher aggregates: %#v", golden)
+	}
+}
+
 func TestParseGoldenRejectsMissingDefinition(t *testing.T) {
 	if _, err := ParseGolden("p", "s", "broken.scm", "(define x 1)"); err == nil || !strings.Contains(err.Error(), "missing expected-trace-shapes") {
 		t.Fatalf("expected missing definition error, got %v", err)

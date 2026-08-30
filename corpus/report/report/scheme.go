@@ -184,7 +184,7 @@ func parseSpanGroup(expr sexpr) (SpanGroup, error) {
 }
 
 func parseSpan(expr sexpr) (SpanNode, error) {
-	span := SpanNode{HTTPStatus: "absent"}
+	span := SpanNode{}
 	for _, property := range expr.list[1:] {
 		switch head(property) {
 		case "scope":
@@ -211,9 +211,6 @@ func parseSpan(expr sexpr) (SpanNode, error) {
 				span.Children = append(span.Children, child)
 			}
 		}
-	}
-	if span.Scope == "" || span.Kind == "" || span.Status == "" || span.Name == "" {
-		return span, fmt.Errorf("span is missing scope, kind, status, or name")
 	}
 	return span, nil
 }
@@ -316,8 +313,12 @@ func accumulateSpan(group SpanGroup, parentMultiplier int, golden *Golden) bool 
 	}
 	multiplier := parentMultiplier * group.Count
 	golden.SpanCount += multiplier
-	golden.Scopes[group.Span.Scope] += multiplier
-	golden.Statuses[group.Span.Status] += multiplier
+	if group.Span.Scope != "" {
+		golden.Scopes[group.Span.Scope] += multiplier
+	}
+	if group.Span.Status != "" {
+		golden.Statuses[group.Span.Status] += multiplier
+	}
 	for _, child := range group.Span.Children {
 		if !accumulateSpan(child, multiplier, golden) {
 			return false
