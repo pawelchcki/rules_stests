@@ -51,8 +51,6 @@ htmlcov/
 .env.*
 !.env.example
 !**/.env.example
-http-client.private.env.json
-
 # Runtime databases and service state
 *.db
 *.db-journal

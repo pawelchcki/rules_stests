@@ -90,8 +90,7 @@ bazel build //corpus:feature_parity_report
 # Open bazel-bin/corpus/feature-parity-report.html
 ```
 
-For an HTTP workflow, run the checked-in JetBrains Bazel configuration **FP
-Report Service**, or start the same target directly:
+For an HTTP workflow, start the report server directly:
 
 ```bash
 bazel run //corpus:feature_parity_http_server
@@ -101,8 +100,7 @@ The report is a data dependency of the server target, so this single Bazel
 command builds it and starts the loopback service at
 `http://127.0.0.1:8765/feature-parity-report.html`.
 
-For a temporary public preview, run the JetBrains Bazel configuration **FP
-Report Public**, or start its target directly:
+For a temporary public preview, run its target directly:
 
 ```bash
 bazel run //corpus:feature_parity_public_report
@@ -115,19 +113,9 @@ downloads it rather than relying on a host installation. This target currently
 selects the matching pinned binary for Linux and macOS on x86-64 or ARM64, and
 Windows on x86-64.
 
-Open `http/feature-parity-report.http` in the JetBrains HTTP Client and select
-one of the public environments from `http/http-client.env.json`:
-
-- `local` uses the loopback service started by the run configuration.
-- `tailscale` uses
-  `https://bazzite.lamancha-minor.ts.net/feature-parity-report.html` and is
-  reachable only from the configured tailnet.
-
-To exercise a public preview in the HTTP Client, copy the URL printed by **FP
-Report Public** into `fpReportBaseUrl` in a private HTTP Client environment.
-
-Both routes serve the same Bazel output. The local server reopens the output on
-each request, so rebuilding the report does not require restarting the service.
+Both server targets serve the same Bazel output. The local server reopens the
+output on each request, so rebuilding the report does not require restarting the
+service.
 
 The report distinguishes upstream Go/Python support from repository evidence.
 It also distinguishes exact goldens, portable contract-only coverage, and
