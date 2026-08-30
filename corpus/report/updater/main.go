@@ -17,6 +17,8 @@ import (
 
 var revisionPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
+const maxMatrixBytes = 4 << 20
+
 func main() {
 	var revision, matrixPath, metadataPath string
 	flag.StringVar(&revision, "revision", "", "40-character opentelemetry-specification commit")
@@ -51,7 +53,7 @@ func update(revision, matrixPath, metadataPath string) error {
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("download %s: %s", rawURL, response.Status)
 	}
-	matrix, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
+	matrix, err := readMatrix(response.Body)
 	if err != nil {
 		return err
 	}
@@ -73,6 +75,17 @@ func update(revision, matrixPath, metadataPath string) error {
 	}
 	fmt.Printf("updated %s to %s (%s)\n", matrixPath, revision, metadata.Source.SHA256)
 	return nil
+}
+
+func readMatrix(reader io.Reader) ([]byte, error) {
+	matrix, err := io.ReadAll(io.LimitReader(reader, maxMatrixBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(matrix) > maxMatrixBytes {
+		return nil, fmt.Errorf("matrix download exceeds %d bytes", maxMatrixBytes)
+	}
+	return matrix, nil
 }
 
 func atomicWrite(path string, data []byte) error {

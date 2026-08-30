@@ -1,4 +1,5 @@
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("//corpus:defs.bzl", "REALWORLD_HURL_CASES", "REALWORLD_PROFILES")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -44,27 +45,8 @@ config_setting(
     ],
 )
 
-_REPORT_PROFILES = [
-    "go-gin-otelbuild-v1-1-0",
-    "python-aiohttp-auto-v0-65b0",
-    "python-django-auto-v0-65b0",
-]
-
-_REPORT_SCENARIOS = [
-    "articles",
-    "auth",
-    "comments",
-    "errors_articles",
-    "errors_auth",
-    "errors_authorization",
-    "errors_comments",
-    "errors_profiles",
-    "favorites",
-    "feed",
-    "pagination",
-    "profiles",
-    "tags",
-]
+_REPORT_PROFILES = REALWORLD_PROFILES
+_REPORT_SCENARIOS = REALWORLD_HURL_CASES
 
 _REPORT_EXACT_PROFILES = _REPORT_PROFILES[1:]
 _REPORT_MANIFESTS = ["report/manifests/{}.json".format(profile) for profile in _REPORT_PROFILES]
@@ -79,6 +61,8 @@ _REPORT_EVIDENCE = [
     "realworld/programs/validate.scm",
     "realworld/programs/validate_contract.scm",
 ] + ["realworld/profiles/{}.scm".format(profile) for profile in _REPORT_PROFILES] + _REPORT_GOLDENS
+_REPORT_EXTERNAL_EVIDENCE = ["//bazel/itest/apps:BUILD.bazel"]
+_REPORT_EVIDENCE_REFS = _REPORT_EVIDENCE + ["bazel/itest/apps/BUILD.bazel"]
 
 go_library(
     name = "feature_parity_lib",
@@ -164,12 +148,21 @@ go_test(
     embed = [":feature_parity_lib"],
 )
 
+go_test(
+    name = "update_feature_catalog_test",
+    srcs = [
+        "report/updater/main.go",
+        "report/updater/main_test.go",
+    ],
+    deps = [":feature_parity_lib"],
+)
+
 genrule(
     name = "feature_parity_report",
     srcs = [
         "report/data/catalog.json",
         "report/data/spec-compliance-matrix.md",
-    ] + _REPORT_MANIFESTS + _REPORT_EVIDENCE,
+    ] + _REPORT_MANIFESTS + _REPORT_EVIDENCE + _REPORT_EXTERNAL_EVIDENCE,
     outs = ["feature-parity-report.html"],
     cmd = " ".join([
         "$(location :feature_parity_generator)",
@@ -182,7 +175,7 @@ genrule(
         for manifest in _REPORT_MANIFESTS
     ] + [
         "--evidence-ref={}".format(evidence)
-        for evidence in _REPORT_EVIDENCE
+        for evidence in _REPORT_EVIDENCE_REFS
     ] + [
         "--golden='{profile},{scenario},$(location {golden}),https://github.com/pawelchcki/rules_stests/blob/main/corpus/{golden}'".format(
             golden = "realworld/goldens/{}/{}/golden.scm".format(profile, scenario),
