@@ -60,9 +60,6 @@ _REPORT_EVIDENCE = [
     "realworld/programs/validate.scm",
     "realworld/programs/validate_contract.scm",
 ] + ["realworld/profiles/{}.scm".format(profile) for profile in _REPORT_PROFILES] + _REPORT_GOLDENS
-_REPORT_EXTERNAL_EVIDENCE = ["//bazel/itest/apps:BUILD.bazel"]
-_REPORT_EVIDENCE_REFS = _REPORT_EVIDENCE + ["bazel/itest/apps/BUILD.bazel"]
-
 go_library(
     name = "feature_parity_lib",
     srcs = glob(
@@ -161,7 +158,7 @@ genrule(
     srcs = [
         "report/data/catalog.json",
         "report/data/spec-compliance-matrix.md",
-    ] + _REPORT_MANIFESTS + _REPORT_EVIDENCE + _REPORT_EXTERNAL_EVIDENCE,
+    ] + _REPORT_MANIFESTS + _REPORT_EVIDENCE,
     outs = ["feature-parity-report.html"],
     cmd = " ".join([
         "$(location :feature_parity_generator)",
@@ -174,7 +171,7 @@ genrule(
         for manifest in _REPORT_MANIFESTS
     ] + [
         "--evidence-ref={}".format(evidence)
-        for evidence in _REPORT_EVIDENCE_REFS
+        for evidence in _REPORT_EVIDENCE
     ] + [
         "--golden='{profile},{scenario},$(location {golden}),https://github.com/pawelchcki/rules_stests/blob/main/corpus/{golden}'".format(
             golden = golden,
