@@ -155,7 +155,7 @@ func BuildModel(metadata CatalogMetadata, features []Feature, manifests []Manife
 			for _, scenario := range scenarios {
 				comparison := Comparison{LeftProfile: profiles[left], RightProfile: profiles[right], Scenario: scenario, ScopeDelta: map[string]int{}, StatusDelta: map[string]int{}}
 				leftGolden, rightGolden := goldenIndex[profiles[left]+"\x00"+scenario], goldenIndex[profiles[right]+"\x00"+scenario]
-				if leftGolden != nil && rightGolden != nil {
+				if leftGolden != nil && rightGolden != nil && leftGolden.ExactCounts && rightGolden.ExactCounts {
 					comparison.Available = true
 					comparison.TraceDelta -= leftGolden.TraceCount
 					comparison.SpanDelta -= leftGolden.SpanCount

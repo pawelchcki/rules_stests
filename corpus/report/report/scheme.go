@@ -35,27 +35,81 @@ func ParseGolden(profile, scenario, source, input string) (Golden, error) {
 	if head(*value) != "traces" {
 		return Golden{}, fmt.Errorf("%s: expected trace shapes must use traces", source)
 	}
-	golden := Golden{Profile: profile, Scenario: scenario, Source: source, Scopes: map[string]int{}, Statuses: map[string]int{}}
+	golden := Golden{Profile: profile, Scenario: scenario, Source: source, ExactCounts: true, Scopes: map[string]int{}, Statuses: map[string]int{}}
 	for _, item := range value.list[1:] {
-		count, traceExpr, err := unwrapRepeat(item, "trace")
+		trace, err := parseTraceGroup(item)
 		if err != nil {
 			return Golden{}, fmt.Errorf("%s: %w", source, err)
 		}
-		trace, err := parseTrace(traceExpr)
-		if err != nil {
-			return Golden{}, fmt.Errorf("%s: %w", source, err)
-		}
-		trace.Count = count
 		golden.Traces = append(golden.Traces, trace)
-		golden.TraceCount += count
-		for _, root := range trace.Roots {
-			accumulateSpan(root, count, &golden)
-		}
+		golden.ExactCounts = golden.ExactCounts && trace.ExactCount
 	}
-	if golden.TraceCount == 0 {
+	if len(golden.Traces) == 0 {
 		return Golden{}, fmt.Errorf("%s: golden contains no traces", source)
 	}
+	if golden.ExactCounts {
+		for _, trace := range golden.Traces {
+			golden.TraceCount += trace.Count
+			for _, root := range trace.Roots {
+				if !accumulateSpan(root, trace.Count, &golden) {
+					golden.ExactCounts = false
+					break
+				}
+			}
+			if !golden.ExactCounts {
+				break
+			}
+		}
+	}
+	if !golden.ExactCounts {
+		golden.TraceCount, golden.SpanCount = 0, 0
+		golden.Scopes, golden.Statuses = map[string]int{}, map[string]int{}
+	}
 	return golden, nil
+}
+
+func parseTraceGroup(expr sexpr) (TraceGroup, error) {
+	switch head(expr) {
+	case "trace":
+		trace, err := parseTrace(expr)
+		if err != nil {
+			return TraceGroup{}, err
+		}
+		trace.Count, trace.MinCount, trace.MaxCount, trace.ExactCount = 1, 1, 1, true
+		return trace, nil
+	case "repeat", "between", "optional":
+		minimum, maximum, value, err := parseCardinality(expr)
+		if err != nil {
+			return TraceGroup{}, err
+		}
+		group, err := parseTraceGroup(value)
+		if err != nil {
+			return TraceGroup{}, err
+		}
+		return applyTraceCardinality(group, head(expr), minimum, maximum), nil
+	case "one-of":
+		if len(expr.list) < 2 {
+			return TraceGroup{}, fmt.Errorf("one-of trace requires an alternative")
+		}
+		group := TraceGroup{Cardinality: "one_of"}
+		for _, value := range expr.list[1:] {
+			alternative, err := parseTraceGroup(value)
+			if err != nil {
+				return TraceGroup{}, err
+			}
+			group.Alternatives = append(group.Alternatives, alternative)
+			minimum, maximum := traceBounds(alternative)
+			if len(group.Alternatives) == 1 || minimum < group.MinCount {
+				group.MinCount = minimum
+			}
+			if maximum > group.MaxCount {
+				group.MaxCount = maximum
+			}
+		}
+		return group, nil
+	default:
+		return TraceGroup{}, fmt.Errorf("expected trace or trace cardinality, got %s", head(expr))
+	}
 }
 
 func parseTrace(expr sexpr) (TraceGroup, error) {
@@ -87,15 +141,46 @@ func parseTrace(expr sexpr) (TraceGroup, error) {
 }
 
 func parseSpanGroup(expr sexpr) (SpanGroup, error) {
-	count, spanExpr, err := unwrapRepeat(expr, "span")
-	if err != nil {
-		return SpanGroup{}, err
+	switch head(expr) {
+	case "span":
+		span, err := parseSpan(expr)
+		if err != nil {
+			return SpanGroup{}, err
+		}
+		return SpanGroup{Count: 1, ExactCount: true, MinCount: 1, MaxCount: 1, Span: span}, nil
+	case "repeat", "between", "optional":
+		minimum, maximum, value, err := parseCardinality(expr)
+		if err != nil {
+			return SpanGroup{}, err
+		}
+		group, err := parseSpanGroup(value)
+		if err != nil {
+			return SpanGroup{}, err
+		}
+		return applySpanCardinality(group, head(expr), minimum, maximum), nil
+	case "one-of":
+		if len(expr.list) < 2 {
+			return SpanGroup{}, fmt.Errorf("one-of span requires an alternative")
+		}
+		group := SpanGroup{Cardinality: "one_of"}
+		for _, value := range expr.list[1:] {
+			alternative, err := parseSpanGroup(value)
+			if err != nil {
+				return SpanGroup{}, err
+			}
+			group.Alternatives = append(group.Alternatives, alternative)
+			minimum, maximum := spanBounds(alternative)
+			if len(group.Alternatives) == 1 || minimum < group.MinCount {
+				group.MinCount = minimum
+			}
+			if maximum > group.MaxCount {
+				group.MaxCount = maximum
+			}
+		}
+		return group, nil
+	default:
+		return SpanGroup{}, fmt.Errorf("expected span or span cardinality, got %s", head(expr))
 	}
-	span, err := parseSpan(spanExpr)
-	if err != nil {
-		return SpanGroup{}, err
-	}
-	return SpanGroup{Count: count, Span: span}, nil
 }
 
 func parseSpan(expr sexpr) (SpanNode, error) {
@@ -133,28 +218,112 @@ func parseSpan(expr sexpr) (SpanNode, error) {
 	return span, nil
 }
 
-func unwrapRepeat(expr sexpr, wanted string) (int, sexpr, error) {
-	if head(expr) == wanted {
-		return 1, expr, nil
+func parseCardinality(expr sexpr) (int, int, sexpr, error) {
+	parseCount := func(value sexpr) (int, error) {
+		count, err := strconv.Atoi(atomValue(value))
+		if err != nil || count < 0 {
+			return 0, fmt.Errorf("invalid %s count", head(expr))
+		}
+		return count, nil
 	}
-	if head(expr) != "repeat" || len(expr.list) != 3 || head(expr.list[2]) != wanted {
-		return 0, sexpr{}, fmt.Errorf("expected %s or repeat %s", wanted, wanted)
+	switch head(expr) {
+	case "repeat":
+		if len(expr.list) != 3 {
+			return 0, 0, sexpr{}, fmt.Errorf("repeat requires count and value")
+		}
+		count, err := parseCount(expr.list[1])
+		return count, count, expr.list[2], err
+	case "between":
+		if len(expr.list) != 4 {
+			return 0, 0, sexpr{}, fmt.Errorf("between requires minimum, maximum, and value")
+		}
+		minimum, err := parseCount(expr.list[1])
+		if err != nil {
+			return 0, 0, sexpr{}, err
+		}
+		maximum, err := parseCount(expr.list[2])
+		if err != nil || maximum < minimum {
+			return 0, 0, sexpr{}, fmt.Errorf("invalid between range")
+		}
+		return minimum, maximum, expr.list[3], nil
+	case "optional":
+		if len(expr.list) != 2 {
+			return 0, 0, sexpr{}, fmt.Errorf("optional requires a value")
+		}
+		return 0, 1, expr.list[1], nil
+	default:
+		return 0, 0, sexpr{}, fmt.Errorf("unsupported cardinality %s", head(expr))
 	}
-	count, err := strconv.Atoi(atomValue(expr.list[1]))
-	if err != nil || count < 1 {
-		return 0, sexpr{}, fmt.Errorf("invalid repeat count")
-	}
-	return count, expr.list[2], nil
 }
 
-func accumulateSpan(group SpanGroup, parentMultiplier int, golden *Golden) {
+func applyTraceCardinality(group TraceGroup, cardinality string, minimum, maximum int) TraceGroup {
+	groupMinimum, groupMaximum := traceBounds(group)
+	if len(group.Alternatives) == 0 {
+		group.MinCount, group.MaxCount = minimum*groupMinimum, maximum*groupMaximum
+		group.ExactCount = minimum == maximum && group.ExactCount
+		if group.ExactCount {
+			group.Count = group.MinCount
+		} else {
+			group.Count, group.Cardinality = 0, cardinality
+		}
+		return group
+	}
+	return TraceGroup{
+		Cardinality:  cardinality,
+		MinCount:     minimum * groupMinimum,
+		MaxCount:     maximum * groupMaximum,
+		Alternatives: []TraceGroup{group},
+	}
+}
+
+func applySpanCardinality(group SpanGroup, cardinality string, minimum, maximum int) SpanGroup {
+	groupMinimum, groupMaximum := spanBounds(group)
+	if len(group.Alternatives) == 0 {
+		group.MinCount, group.MaxCount = minimum*groupMinimum, maximum*groupMaximum
+		group.ExactCount = minimum == maximum && group.ExactCount
+		if group.ExactCount {
+			group.Count = group.MinCount
+		} else {
+			group.Count, group.Cardinality = 0, cardinality
+		}
+		return group
+	}
+	return SpanGroup{
+		Cardinality:  cardinality,
+		MinCount:     minimum * groupMinimum,
+		MaxCount:     maximum * groupMaximum,
+		Alternatives: []SpanGroup{group},
+	}
+}
+
+func traceBounds(group TraceGroup) (int, int) {
+	if group.ExactCount {
+		return group.Count, group.Count
+	}
+	return group.MinCount, group.MaxCount
+}
+
+func spanBounds(group SpanGroup) (int, int) {
+	if group.ExactCount {
+		return group.Count, group.Count
+	}
+	return group.MinCount, group.MaxCount
+}
+
+func accumulateSpan(group SpanGroup, parentMultiplier int, golden *Golden) bool {
+	if !group.ExactCount || len(group.Alternatives) != 0 {
+		return false
+	}
 	multiplier := parentMultiplier * group.Count
 	golden.SpanCount += multiplier
 	golden.Scopes[group.Span.Scope] += multiplier
 	golden.Statuses[group.Span.Status] += multiplier
 	for _, child := range group.Span.Children {
-		accumulateSpan(child, multiplier, golden)
+		if !accumulateSpan(child, multiplier, golden) {
+			return false
+		}
 	}
+	return true
 }
 
 func renderMatcher(expr sexpr) string {

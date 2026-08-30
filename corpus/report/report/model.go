@@ -56,25 +56,36 @@ type Manifest struct {
 }
 
 type Golden struct {
-	Profile    string         `json:"profile"`
-	Scenario   string         `json:"scenario"`
-	Source     string         `json:"source"`
-	Traces     []TraceGroup   `json:"traces"`
-	TraceCount int            `json:"traceCount"`
-	SpanCount  int            `json:"spanCount"`
-	Scopes     map[string]int `json:"scopes"`
-	Statuses   map[string]int `json:"statuses"`
+	Profile     string         `json:"profile"`
+	Scenario    string         `json:"scenario"`
+	Source      string         `json:"source"`
+	Traces      []TraceGroup   `json:"traces"`
+	ExactCounts bool           `json:"exactCounts"`
+	TraceCount  int            `json:"traceCount"`
+	SpanCount   int            `json:"spanCount"`
+	Scopes      map[string]int `json:"scopes"`
+	Statuses    map[string]int `json:"statuses"`
 }
 
 type TraceGroup struct {
-	Count    int         `json:"count"`
-	Coverage string      `json:"coverage"`
-	Roots    []SpanGroup `json:"roots"`
+	Count        int          `json:"count"`
+	ExactCount   bool         `json:"exactCount"`
+	MinCount     int          `json:"minCount,omitempty"`
+	MaxCount     int          `json:"maxCount,omitempty"`
+	Cardinality  string       `json:"cardinality,omitempty"`
+	Alternatives []TraceGroup `json:"alternatives,omitempty"`
+	Coverage     string       `json:"coverage,omitempty"`
+	Roots        []SpanGroup  `json:"roots,omitempty"`
 }
 
 type SpanGroup struct {
-	Count int      `json:"count"`
-	Span  SpanNode `json:"span"`
+	Count        int         `json:"count"`
+	ExactCount   bool        `json:"exactCount"`
+	MinCount     int         `json:"minCount,omitempty"`
+	MaxCount     int         `json:"maxCount,omitempty"`
+	Cardinality  string      `json:"cardinality,omitempty"`
+	Alternatives []SpanGroup `json:"alternatives,omitempty"`
+	Span         SpanNode    `json:"span,omitempty"`
 }
 
 type SpanNode struct {
