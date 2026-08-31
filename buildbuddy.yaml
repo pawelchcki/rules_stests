@@ -12,4 +12,24 @@ actions:
         branches:
           - "*"
     steps:
-      - run: "OTEL_TEST_REVISION=$(git rev-parse HEAD) bazel test --config=buildbuddy --build_tests_only --test_env=OTEL_TEST_REVISION //... //bazel/itest/apps:gin_otel_contract_test"
+      - run: |
+          set -euo pipefail
+          REPORT_REVISION="$(git rev-parse HEAD)"
+          # BuildBuddy checks pull requests out at a synthetic merge whose first parent is the PR head.
+          if [ "$(git show -s --format=%ce HEAD)" = "ci-runner@buildbuddy.io" ]; then
+            REPORT_REVISION="$(git rev-parse HEAD^1)"
+          fi
+          OTEL_TEST_REVISION="$REPORT_REVISION" bazel test \
+            --config=buildbuddy \
+            --build_tests_only \
+            --nocache_test_results \
+            --test_env=OTEL_TEST_REVISION \
+            --build_event_json_file=otel-profile.bep.json \
+            --remote_download_outputs=toplevel \
+            //... \
+            //bazel/itest/apps:gin_otel_contract_test
+          REPORT_BAZEL_CONFIG=buildbuddy \
+            REPORT_REPOSITORY=pawelchcki/rules_stests \
+            REPORT_REVISION="$REPORT_REVISION" \
+            tools/assemble_otel_report.sh
+          cp feature-parity-report.html "$BUILDBUDDY_ARTIFACTS_DIRECTORY/feature-parity-report.html"
