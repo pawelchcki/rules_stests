@@ -12,4 +12,4 @@ actions:
         branches:
           - "*"
     steps:
-      - run: "OTEL_TEST_REVISION=$(git rev-parse HEAD) bazel test --config=buildbuddy --build_tests_only --test_env=OTEL_TEST_REVISION //..."
+      - run: "OTEL_TEST_REVISION=$(git rev-parse HEAD) bazel test --config=buildbuddy --build_tests_only --test_env=OTEL_TEST_REVISION //... //bazel/itest/apps:gin_otel_contract_test"
