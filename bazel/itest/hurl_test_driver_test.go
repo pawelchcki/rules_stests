@@ -49,6 +49,7 @@ func TestValidateProofSetMatchesNormalizedPlanExactly(t *testing.T) {
 func TestEmitValidationReceiptRequiresRevisionAndWritesDigests(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("TEST_UNDECLARED_OUTPUTS_DIR", root)
+	t.Setenv("OTEL_TEST_REVISION", "")
 	profile := atomicProfile{ID: "python-test", Scenario: "articles", ValidationMode: "exact", Plan: []byte("plan\n"), Shape: []byte("shape\n")}
 	proofs := []receiptProof{{FeatureID: "traces.span.end", Assertion: "span/all-completed", Basis: "observed", Result: "pass"}}
 	if err := emitValidationReceipt(profile, []byte("capture\n"), proofs); err == nil {
