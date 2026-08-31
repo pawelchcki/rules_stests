@@ -16,6 +16,9 @@ automations:
                   - "*"
           status:
             context: Full test suite
+            creator:
+              login: buildbuddy-io[bot]
+              id: 130678843
             target_url:
               scheme: https
               host: pawel.buildbuddy.io
@@ -27,7 +30,7 @@ automations:
         uses: buildbuddy.workflow-artifact@v1
         with:
           invocation_url: "{{ event.target_url }}"
-          artifact: command-0/opentelemetry-proof-report.html
+          artifact: opentelemetry-proof-report.html
           expected:
             media_type: text/html
             max_bytes: 5242880
@@ -38,7 +41,6 @@ automations:
         with:
           source: opentelemetry-proof-report
           destination: public-artifacts
-          key: "{{ repository.full_name }}/opentelemetry-proof-report/{{ commit.sha }}/opentelemetry-proof-report.html"
           immutable: true
           visibility: public
           content_disposition: inline

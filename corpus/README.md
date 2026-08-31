@@ -62,3 +62,10 @@ remain `not_exercised`.
 The exact invocation is maintained in `buildbuddy.yaml`. The report servers no
 longer build or infer a report; pass the explicitly assembled HTML file with
 `--file`.
+
+BuildBuddy publishes the assembled HTML as `opentelemetry-proof-report.html`.
+The repository-owned `.ci-toolkit.yml` binds that artifact to the trusted
+`Full test suite` status for the exact pull-request head, requests a public
+untrusted-HTML copy for 90 days, and defines the marker-based PR comment. The
+toolkit owns storage keys and platform trust limits; this repository declares
+only behavior it can actually vary.
