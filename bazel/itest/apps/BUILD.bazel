@@ -107,23 +107,12 @@ service_test(
 realworld_hurl_test_suite(
     name = "aiohttp_otel_hurl_test",
     timeout = "moderate",
-    otel_app = "aiohttp",
     otel_flaky_cases = {
         "errors_profiles": "a late startup /api/tags export can cross the trace-only reset boundary",
     },
+    otel_profile = "//corpus:python_aiohttp_profile",
     otel_sink = "//bazel/itest:otel_sink_service",
     service = ":aiohttp_otel_service",
-)
-
-realworld_hurl_test_suite(
-    name = "aiohttp_otel_contract_test",
-    timeout = "moderate",
-    otel_app = "aiohttp",
-    otel_candidates = False,
-    otel_exact = False,
-    otel_sink = "//bazel/itest:otel_sink_service",
-    service = ":aiohttp_otel_service",
-    tags = ["manual"],
 )
 
 itest_service(
@@ -199,22 +188,10 @@ service_test(
 realworld_hurl_test_suite(
     name = "django_otel_hurl_test",
     timeout = "moderate",
-    otel_app = "django",
     otel_flaky_reason = "the Python metric aggregator can emit a point whose start timestamp follows its collection timestamp under parallel load",
+    otel_profile = "//corpus:python_django_profile",
     otel_sink = "//bazel/itest:otel_sink_service",
     service = ":django_otel_service",
-)
-
-realworld_hurl_test_suite(
-    name = "django_otel_contract_test",
-    timeout = "moderate",
-    otel_app = "django",
-    otel_candidates = False,
-    otel_exact = False,
-    otel_flaky_reason = "the Python metric aggregator can emit a point whose start timestamp follows its collection timestamp under parallel load",
-    otel_sink = "//bazel/itest:otel_sink_service",
-    service = ":django_otel_service",
-    tags = ["manual"],
 )
 
 # The Gin fixture ships two binaries in one image: an uninstrumented build and
@@ -313,21 +290,11 @@ service_test(
     test = "//bazel/itest:api_probe",
 )
 
-# Contract-only bring-up: the exact trace shape is not pinned until goldens are
-# captured from a published image.
 realworld_hurl_test_suite(
     name = "gin_otel_contract_test",
     timeout = "moderate",
-    otel_app = "gin",
     otel_candidates = False,
-    otel_exact = False,
-    otel_profile = "go-gin-otelbuild-v1-1-0",
-    otel_profile_library = "//corpus:realworld/profiles/go-gin-otelbuild-v1-1-0.scm",
-    otel_runtime_libraries = ["//corpus:realworld/profiles/go.scm"],
-    otel_signals = [
-        "traces",
-        "metrics",
-    ],
+    otel_profile = "//corpus:go_gin_profile",
     otel_sink = "//bazel/itest:otel_sink_service",
     service = ":gin_otel_service",
     tags = ["manual"],

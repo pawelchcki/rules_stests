@@ -23,6 +23,58 @@ func TestEmitFailedCapture(t *testing.T) {
 	}
 }
 
+func TestValidateProofSetMatchesNormalizedPlanExactly(t *testing.T) {
+	expected := []proofPlanProof{
+		{FeatureID: "traces.span.end", Assertion: "span/all-completed", Basis: "observed"},
+		{FeatureID: "traces.tracer.create-a-new-span", Assertion: "span/present", Basis: "corroborated"},
+	}
+	output := []byte("[[OTLP-PROOF-V1|traces.span.end|span/all-completed|observed]]\n[[OTLP-PROOF-V1|traces.tracer.create-a-new-span|span/present|corroborated]]\n")
+	proofs, err := validateProofSet(expected, output)
+	if err != nil || len(proofs) != 2 || proofs[0].Result != "pass" {
+		t.Fatalf("valid proof set rejected: %#v, %v", proofs, err)
+	}
+	for name, invalid := range map[string][]byte{
+		"missing":    output[:bytes.IndexByte(output, '\n')+1],
+		"unexpected": bytes.Replace(output, []byte("traces.span.end"), []byte("traces.span.unknown"), 1),
+		"duplicate":  append(append([]byte(nil), output...), output...),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := validateProofSet(expected, invalid); err == nil {
+				t.Fatal("invalid proof set accepted")
+			}
+		})
+	}
+}
+
+func TestEmitValidationReceiptRequiresRevisionAndWritesDigests(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("TEST_UNDECLARED_OUTPUTS_DIR", root)
+	profile := atomicProfile{ID: "python-test", Scenario: "articles", ValidationMode: "exact", Plan: []byte("plan\n"), Shape: []byte("shape\n")}
+	proofs := []receiptProof{{FeatureID: "traces.span.end", Assertion: "span/all-completed", Basis: "observed", Result: "pass"}}
+	if err := emitValidationReceipt(profile, []byte("capture\n"), proofs); err == nil {
+		t.Fatal("receipt emitted without a revision")
+	}
+	t.Setenv("OTEL_TEST_REVISION", strings.Repeat("a", 40))
+	if err := emitValidationReceipt(profile, []byte("capture\n"), proofs); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "receipts", "python-test", "articles.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var receipt validationReceipt
+	if err := json.Unmarshal(data, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.ValidationMode != "exact" || len(receipt.ProofPlanSHA256) != 64 || len(receipt.CaptureSHA256) != 64 || len(receipt.ScenarioShapeSHA256) != 64 {
+		t.Fatalf("malformed emitted receipt: %#v", receipt)
+	}
+	capture, err := os.ReadFile(filepath.Join(root, "receipts", "python-test", "articles.capture.json"))
+	if err != nil || string(capture) != "capture\n" {
+		t.Fatalf("accepted capture was not emitted: %q, %v", capture, err)
+	}
+}
+
 func TestClassifyOTLPValidation(t *testing.T) {
 	assertion := &otlpAssertionFailure{cause: errors.New("span shape changed")}
 	infrastructure := errors.New("sink unavailable")
@@ -71,25 +123,6 @@ func TestSchemeIdentifier(t *testing.T) {
 	}
 }
 
-func TestGoldenCandidateParts(t *testing.T) {
-	app, scenario, err := goldenCandidateParts("aiohttp/errors_profiles")
-	if err != nil || app != "aiohttp" || scenario != "errors_profiles" {
-		t.Fatalf("goldenCandidateParts(valid) = %q, %q, %v", app, scenario, err)
-	}
-	for _, value := range []string{
-		"aiohttp/../../../tmp",
-		"aiohttp/errors/profiles",
-		"../aiohttp/articles",
-		"aiohttp/.",
-		"aiohttp/",
-		"/articles",
-	} {
-		if _, _, err := goldenCandidateParts(value); err == nil {
-			t.Errorf("goldenCandidateParts(%q) unexpectedly succeeded", value)
-		}
-	}
-}
-
 func TestSchemeValidationFailureClassification(t *testing.T) {
 	contractFailure := schemeValidationFailure(409, []byte("OTLP contract assertion: changed"))
 	var assertion *otlpAssertionFailure
@@ -99,20 +132,6 @@ func TestSchemeValidationFailureClassification(t *testing.T) {
 	validatorFailure := schemeValidationFailure(422, []byte("Stak compilation failed"))
 	if errors.As(validatorFailure, &assertion) {
 		t.Fatalf("HTTP 422 validator fault was classified as a contract assertion: %v", validatorFailure)
-	}
-}
-
-func TestImplementationProfile(t *testing.T) {
-	profile, err := implementationProfile("custom-app", "go-realworld-v1")
-	if err != nil || profile != "go-realworld-v1" {
-		t.Fatalf("custom profile = %q, %v", profile, err)
-	}
-	if _, err := implementationProfile("custom-app", "not/a-symbol"); err == nil {
-		t.Fatal("invalid custom profile unexpectedly succeeded")
-	}
-	profile, err = implementationProfile("aiohttp", "")
-	if err != nil || profile != "python-aiohttp-auto-v0-65b0" {
-		t.Fatalf("default profile = %q, %v", profile, err)
 	}
 }
 

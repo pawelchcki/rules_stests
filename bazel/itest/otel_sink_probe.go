@@ -17,8 +17,115 @@ import (
 	"time"
 )
 
-//go:embed goldens/trace_shape.scm
+//go:embed scheme/trace_shape.scm
 var traceShapeLibrary []byte
+
+//go:embed scheme/capture_shapes.scm
+var captureShapesLibrary []byte
+
+const syntheticFeatureCapture = `((requests (
+  ((signal traces) (method "POST") (path "/v1/traces") (content-type "application/x-protobuf"))
+  ((signal metrics) (method "POST") (path "/v1/metrics") (content-type "application/x-protobuf"))
+  ((signal logs) (method "POST") (path "/v1/logs") (content-type "application/x-protobuf"))))
+ (resources (
+  ((signal metrics) (attributes (("process.runtime.name" (string "go")))) (schema-url "https://opentelemetry.io/schemas/1.43.0"))))
+ (scopes (
+  ((name "trace.scope") (schema-url "https://opentelemetry.io/schemas/1.11.0"))))
+ (spans (
+  ((scope "trace.scope") (parent-class root) (parent-span-id "") (parent-valid #t)
+   (start 1) (end 4) (attributes (("string.key" (string "value")) ("integer.key" (integer 7))))
+   (events (
+    ((name "exception") (attributes (("exception.type" (string "ValueError")) ("exception.message" (string "bad")) ("exception.stacktrace" (long-string 300)) ("exception.escaped" (string "False")))))
+    ((name "exception") (attributes (("exception.type" (string "KeyError")) ("exception.message" (string "missing")) ("exception.stacktrace" (long-string 400)) ("exception.escaped" (string "True"))))))))
+  ((scope "trace.scope") (parent-class child) (parent-span-id "1111111111111111") (parent-valid #t)
+   (start 2) (end 3) (attributes (("string.key" (string "child")) ("integer.key" (integer 8)))) (events ()))))
+ (metrics (
+  ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "counter") (description "counter description") (unit "{item}") (data-type sum) (monotonic #t))
+  ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "updown") (description "updown description") (unit "{item}") (data-type sum) (monotonic #f))
+  ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "histogram") (description "histogram description") (unit "ms") (data-type histogram) (monotonic absent))
+  ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "gauge") (description "gauge description") (unit "1") (data-type gauge) (monotonic absent))))
+ (logs (
+  ((scope "logger.scope")))))`
+
+var syntheticFeatureIDs = []string{
+	"traces.tracerprovider.get-a-tracer",
+	"traces.tracerprovider.get-a-tracer-with-schema-url",
+	"traces.tracerprovider.associate-tracer-with-instrumentationscope",
+	"traces.tracer.create-a-new-span",
+	"traces.span.create-root-span",
+	"traces.span.create-with-default-parent-active-span",
+	"traces.span.create-with-parent-from-context",
+	"traces.span.end",
+	"traces.span-attributes.string-type",
+	"traces.span-attributes.signed-int64-type",
+	"traces.span-exceptions.recordexception",
+	"traces.span-exceptions.recordexception-with-extra-parameters",
+	"metrics.meterprovider-provides-a-way-to-get-a-meter",
+	"metrics.get-meter-accepts-name-version-and-schema-url",
+	"metrics.associate-meter-with-instrumentationscope",
+	"metrics.counter-instrument-is-supported",
+	"metrics.asynchronouscounter-instrument-is-supported",
+	"metrics.histogram-instrument-is-supported",
+	"metrics.asynchronousgauge-instrument-is-supported",
+	"metrics.updowncounter-instrument-is-supported",
+	"metrics.asynchronousupdowncounter-instrument-is-supported",
+	"metrics.instruments-have-name",
+	"metrics.instruments-have-kind",
+	"metrics.instruments-have-an-optional-unit-of-measure",
+	"metrics.instruments-have-an-optional-description",
+	"metrics.a-specified-resource-can-be-associated-with-all-the-produced-metrics-from-any-meter-from-the-meterprovider",
+	"metrics.the-supplied-name-version-and-schema-url-arguments-passed-to-the-meterprovider-are-used-to-create-an-instrumentationscope-instance-stored-in-the-meter",
+	"metrics.the-sum-aggregation-is-available",
+	"metrics.the-lastvalue-aggregation-is-available",
+	"metrics.the-explicitbuckethistogram-aggregation-is-available",
+	"logs.loggerprovider-get-logger",
+	"logs.logger-emit-logrecord",
+	"logs.otlp-http-exporter",
+	"resource.create-from-attributes",
+	"resource.resource-detector-interface-mechanism",
+	"resource.resource-detectors-populate-schema-url",
+	"exporters.otlp.otlp-http-binary-protobuf-exporter",
+}
+
+var syntheticShapeByFeature = map[string]string{
+	"traces.tracerprovider.get-a-tracer":                               "trace/scope-associated",
+	"traces.tracerprovider.get-a-tracer-with-schema-url":               "trace/schema-url-present",
+	"traces.tracerprovider.associate-tracer-with-instrumentationscope": "trace/scope-associated",
+	"traces.tracer.create-a-new-span":                                  "span/present",
+	"traces.span.create-root-span":                                     "span/root-present",
+	"traces.span.create-with-default-parent-active-span":               "span/parent-valid-present",
+	"traces.span.create-with-parent-from-context":                      "span/parent-valid-present",
+	"traces.span.end":                                              "span/all-completed",
+	"traces.span-attributes.string-type":                           "span/string-attribute-present",
+	"traces.span-attributes.signed-int64-type":                     "span/int64-attribute-present",
+	"traces.span-exceptions.recordexception":                       "span/exception-events-complete",
+	"traces.span-exceptions.recordexception-with-extra-parameters": "span/exception-events-complete",
+	"metrics.meterprovider-provides-a-way-to-get-a-meter":          "metric/scope-associated",
+	"metrics.get-meter-accepts-name-version-and-schema-url":        "metric/scope-version-schema-present",
+	"metrics.associate-meter-with-instrumentationscope":            "metric/scope-associated",
+	"metrics.counter-instrument-is-supported":                      "metric/monotonic-sum-present",
+	"metrics.asynchronouscounter-instrument-is-supported":          "metric/monotonic-sum-present",
+	"metrics.histogram-instrument-is-supported":                    "metric/histogram-present",
+	"metrics.asynchronousgauge-instrument-is-supported":            "metric/gauge-present",
+	"metrics.updowncounter-instrument-is-supported":                "metric/nonmonotonic-sum-present",
+	"metrics.asynchronousupdowncounter-instrument-is-supported":    "metric/nonmonotonic-sum-present",
+	"metrics.instruments-have-name":                                "metric/names-valid",
+	"metrics.instruments-have-kind":                                "metric/kinds-valid",
+	"metrics.instruments-have-an-optional-unit-of-measure":         "metric/units-valid",
+	"metrics.instruments-have-an-optional-description":             "metric/descriptions-valid",
+	"metrics.a-specified-resource-can-be-associated-with-all-the-produced-metrics-from-any-meter-from-the-meterprovider":                                             "metric/resource-associated",
+	"metrics.the-supplied-name-version-and-schema-url-arguments-passed-to-the-meterprovider-are-used-to-create-an-instrumentationscope-instance-stored-in-the-meter": "metric/scope-version-schema-present",
+	"metrics.the-sum-aggregation-is-available":                     "metric/monotonic-sum-present",
+	"metrics.the-lastvalue-aggregation-is-available":               "metric/gauge-present",
+	"metrics.the-explicitbuckethistogram-aggregation-is-available": "metric/histogram-present",
+	"logs.loggerprovider-get-logger":                               "log/scope-associated",
+	"logs.logger-emit-logrecord":                                   "log/record-present",
+	"logs.otlp-http-exporter":                                      "log/otlp-http-request-present",
+	"resource.create-from-attributes":                              "resource/attributes-present",
+	"resource.resource-detector-interface-mechanism":               "resource/go-detector-present",
+	"resource.resource-detectors-populate-schema-url":              "resource/schema-url-present",
+	"exporters.otlp.otlp-http-binary-protobuf-exporter":            "exporter/binary-protobuf-request",
+}
 
 type sinkRecord struct {
 	Signal   string          `json:"signal"`
@@ -601,6 +708,48 @@ func main() {
 	} else if status != http.StatusOK || !bytes.Contains(output, []byte("standalone validation passed")) {
 		fatal(fmt.Errorf("valid Scheme rule returned HTTP %d: %s", status, output))
 	}
+	for _, featureID := range syntheticFeatureIDs {
+		assertSyntheticShapePass(endpoint, featureID, syntheticShapeByFeature[featureID], syntheticFeatureCapture)
+	}
+	featureFailures := []struct {
+		featureID string
+		capture   string
+	}{
+		{"traces.tracerprovider.get-a-tracer", strings.Replace(syntheticFeatureCapture, `((name "trace.scope")`, `((name "missing.scope")`, 1)},
+		{"traces.tracerprovider.get-a-tracer-with-schema-url", strings.Replace(syntheticFeatureCapture, `(schema-url "https://opentelemetry.io/schemas/1.11.0")`, `(schema-url "")`, 1)},
+		{"traces.tracer.create-a-new-span", strings.Replace(syntheticFeatureCapture, `(spans (`, `(spans ()) (unused-spans (`, 1)},
+		{"traces.span.create-root-span", strings.Replace(syntheticFeatureCapture, `(parent-class root)`, `(parent-class external)`, 1)},
+		{"traces.span.create-with-parent-from-context", strings.Replace(syntheticFeatureCapture, `(parent-class child)`, `(parent-class root)`, 1)},
+		{"traces.span.end", strings.Replace(syntheticFeatureCapture, `(start 1) (end 4)`, `(start 1) (end 0)`, 1)},
+		{"traces.span-attributes.string-type", strings.ReplaceAll(syntheticFeatureCapture, `("string.key" (string `, `("string.key" (bytes `)},
+		{"traces.span-attributes.signed-int64-type", strings.ReplaceAll(syntheticFeatureCapture, `("integer.key" (integer `, `("integer.key" (double `)},
+		{"traces.span-exceptions.recordexception", strings.Replace(syntheticFeatureCapture, `(name "exception")`, `(name "not-exception")`, 1)},
+		{"metrics.meterprovider-provides-a-way-to-get-a-meter", strings.ReplaceAll(syntheticFeatureCapture, `(scope "meter.scope")`, `(scope "")`)},
+		{"metrics.get-meter-accepts-name-version-and-schema-url", strings.ReplaceAll(syntheticFeatureCapture, `(scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0")`, `(scope-version "1.2.3") (schema-url "")`)},
+		{"metrics.counter-instrument-is-supported", strings.Replace(syntheticFeatureCapture, `(data-type sum) (monotonic #t)`, `(data-type summary) (monotonic #t)`, 1)},
+		{"metrics.updowncounter-instrument-is-supported", strings.Replace(syntheticFeatureCapture, `(data-type sum) (monotonic #f)`, `(data-type summary) (monotonic #f)`, 1)},
+		{"metrics.histogram-instrument-is-supported", strings.Replace(syntheticFeatureCapture, `(data-type histogram)`, `(data-type summary)`, 1)},
+		{"metrics.asynchronousgauge-instrument-is-supported", strings.Replace(syntheticFeatureCapture, `(data-type gauge)`, `(data-type summary)`, 1)},
+		{"metrics.instruments-have-name", strings.Replace(syntheticFeatureCapture, `(name "counter")`, `(name "")`, 1)},
+		{"metrics.instruments-have-kind", strings.Replace(syntheticFeatureCapture, `(data-type sum)`, `(data-type 7)`, 1)},
+		{"metrics.instruments-have-an-optional-unit-of-measure", strings.Replace(syntheticFeatureCapture, `(unit "{item}")`, `(unit 7)`, 1)},
+		{"metrics.instruments-have-an-optional-description", strings.Replace(syntheticFeatureCapture, `(description "counter description")`, `(description 7)`, 1)},
+		{"metrics.a-specified-resource-can-be-associated-with-all-the-produced-metrics-from-any-meter-from-the-meterprovider", strings.Replace(syntheticFeatureCapture, `((signal metrics) (attributes`, `((signal traces) (attributes`, 1)},
+		{"metrics.the-sum-aggregation-is-available", strings.ReplaceAll(syntheticFeatureCapture, `(data-type sum)`, `(data-type summary)`)},
+		{"metrics.the-lastvalue-aggregation-is-available", strings.Replace(syntheticFeatureCapture, `(data-type gauge)`, `(data-type summary)`, 1)},
+		{"metrics.the-explicitbuckethistogram-aggregation-is-available", strings.Replace(syntheticFeatureCapture, `(data-type histogram)`, `(data-type summary)`, 1)},
+		{"logs.loggerprovider-get-logger", strings.Replace(syntheticFeatureCapture, " (logs (\n  ((scope \"logger.scope\")))))", " (logs ()))", 1)},
+		{"logs.logger-emit-logrecord", strings.Replace(syntheticFeatureCapture, " (logs (\n  ((scope \"logger.scope\")))))", " (logs ()))", 1)},
+		{"logs.otlp-http-exporter", strings.Replace(syntheticFeatureCapture, `((signal logs) (method "POST")`, `((signal traces) (method "POST")`, 1)},
+		{"resource.create-from-attributes", strings.Replace(syntheticFeatureCapture, `(attributes (("process.runtime.name" (string "go"))))`, `(attributes ())`, 1)},
+		{"resource.resource-detector-interface-mechanism", strings.Replace(syntheticFeatureCapture, `(string "go")`, `(string "rust")`, 1)},
+		{"resource.resource-detectors-populate-schema-url", strings.Replace(syntheticFeatureCapture, `(schema-url "https://opentelemetry.io/schemas/1.43.0")`, `(schema-url "")`, 1)},
+		{"exporters.otlp.otlp-http-binary-protobuf-exporter", strings.Replace(syntheticFeatureCapture, `(content-type "application/x-protobuf")`, `(content-type "application/json")`, 1)},
+	}
+	for _, failure := range featureFailures {
+		assertSyntheticShapeFailure(endpoint, failure.featureID, syntheticShapeByFeature[failure.featureID], failure.capture)
+	}
+	assertSyntheticShapeFailure(endpoint, "unknown.feature", "unknown/shape", syntheticFeatureCapture)
 	structuredContractRule := []byte(`(import (scheme base) (scheme write))
 (define (contract-error message)
   (display "[[OTLP-CONTRACT-V1:" (current-error-port))
@@ -688,7 +837,7 @@ func main() {
 	for _, scope := range wantScopes {
 		scopesPresent = scopesPresent && bytes.Contains(candidateBody, []byte(scope))
 	}
-	if readErr != nil || candidate.StatusCode != http.StatusOK || !scopesPresent || !bytes.Contains(candidateBody, []byte("expected-trace-shapes")) {
+	if readErr != nil || candidate.StatusCode != http.StatusOK || !scopesPresent || !bytes.Contains(candidateBody, []byte("scenario-shape")) {
 		fatal(fmt.Errorf("custom candidate: HTTP %d: %s: %v", candidate.StatusCode, candidateBody, readErr))
 	}
 	resetSink(endpoint)
@@ -1112,6 +1261,36 @@ func validateShape(endpoint, expected string) ([]byte, int, error) {
 	source = append(source, expected...)
 	source = append(source, []byte(")\n(otel-validate-trace-shapes probe-expected (read))\n")...)
 	return validateScheme(endpoint, source)
+}
+
+func validateSyntheticShape(endpoint, featureID, shape, capture string) ([]byte, int, error) {
+	source := make([]byte, 0, len(captureShapesLibrary)+len(capture)+len(featureID)+len(shape)+180)
+	source = append(source, captureShapesLibrary...)
+	source = append(source, []byte("\n(import (scheme base) (otel capture shapes))\n(define probe-capture '")...)
+	source = append(source, capture...)
+	source = append(source, []byte(")\n(assert-capture-shape ")...)
+	source = append(source, []byte(fmt.Sprintf("%q '%s probe-capture)\n", featureID, shape))...)
+	return validateScheme(endpoint, source)
+}
+
+func assertSyntheticShapePass(endpoint, featureID, shape, capture string) {
+	output, status, err := validateSyntheticShape(endpoint, featureID, shape, capture)
+	if err != nil {
+		fatal(err)
+	}
+	if status != http.StatusOK {
+		fatal(fmt.Errorf("passing capture shape returned HTTP %d: %s", status, output))
+	}
+}
+
+func assertSyntheticShapeFailure(endpoint, featureID, shape, capture string) {
+	output, status, err := validateSyntheticShape(endpoint, featureID, shape, capture)
+	if err != nil {
+		fatal(err)
+	}
+	if status != http.StatusConflict || !bytes.Contains(output, []byte(featureID)) || !bytes.Contains(output, []byte(shape)) {
+		fatal(fmt.Errorf("capture shape %s/%s returned HTTP %d: %s", featureID, shape, status, output))
+	}
 }
 
 func validateScheme(endpoint string, source []byte) ([]byte, int, error) {

@@ -1,22 +1,13 @@
 (define-library (realworld profile python-django-auto-v0-65b0)
-  (export implementation-profile
-          expected-resource-attributes
-          expected-resource-schema-url
-          expected-scopes
-          expected-metric-scopes
-          expected-metric-descriptors
-          expected-metric-aggregation
-          expected-metric-point-schemas
-          expected-log-scopes
-          expected-log-policy
-          expected-span-flags
-          expected-trace-state
-          expected-error-status-message-policy
-          event-policy-for
-          server-scope
-          render-server-span-name)
+  (export profile)
   (import (scheme base)
+          (otel profile)
           (otel profile python-auto-v0-65b0)
+          (otel implementation python-sdk-v1.44.0)
+          (otel implementation python-auto-v0.65b0)
+          (otel implementation django-v0.65b0)
+          (otel standard traces) (otel standard metrics)
+          (otel standard logs) (otel standard resource) (otel standard exporters)
           (realworld contract))
   (begin
 
@@ -77,5 +68,53 @@
                  " "
                  (angle-bracket-route
                    (substring canonical-route 1 (string-length canonical-route)))))
+
+(define profile
+  (realworld-profile
+    (id 'python-django-auto-v0-65b0)
+    (implementation (compose python-sdk-v1.44 python-auto-v0.65b0
+                             python-system-metrics-v0.65b0 django-v0.65b0))
+    (service-name "django-otel")
+    (signals 'traces 'metrics 'logs)
+    (capture-contract
+      (list expected-resource-attributes expected-resource-schema-url expected-scopes
+            expected-metric-scopes expected-metric-descriptors expected-metric-aggregation
+            expected-metric-point-schemas expected-log-scopes expected-log-policy
+            event-policy-for expected-span-flags expected-trace-state
+            expected-error-status-message-policy server-scope render-server-span-name))
+    (all (observed span/create-root))
+    (all (observed span/end))
+    (all (observed span/string-attribute))
+    (all (observed span/int64-attribute))
+    (all (observed metric/resource-associated))
+    (all (observed logger/emit))
+    (all (observed log/otlp-http-exporter))
+    (all (observed exporter/otlp-http-binary-protobuf))
+    (all (corroborated (sources django-instrumentation) tracer/get))
+    (all (corroborated (sources python-trace-api) tracer/get-with-schema-url))
+    (all (corroborated (sources python-trace-api) tracer/scope-associated))
+    (all (corroborated (sources python-trace-api) span/create))
+    (all (corroborated (sources python-trace-api) span/create-with-active-parent))
+    (all (corroborated (sources python-trace-api) span/create-with-context-parent))
+    (scenario 'errors_auth
+      (corroborated (sources python-trace-api django-exception-middleware)
+                    span/record-exception
+                    span/record-exception-with-parameters))
+    (all (corroborated (sources python-resource-api) resource/create-from-attributes))
+    (all (corroborated (sources python-meter-api) meter/get))
+    (all (corroborated (sources python-meter-api) meter/get-with-version-schema))
+    (all (corroborated (sources python-meter-sdk) meter/scope-associated))
+    (all (corroborated (sources python-instrument-api) metric/async-counter))
+    (all (corroborated (sources python-instrument-api) metric/histogram))
+    (all (corroborated (sources python-instrument-api) metric/async-gauge))
+    (all (corroborated (sources python-instrument-api) metric/up-down-counter))
+    (all (corroborated (sources python-instrument-api) metric/instrument-name))
+    (all (corroborated (sources python-instrument-api) metric/instrument-kind))
+    (all (corroborated (sources python-instrument-api) metric/instrument-unit))
+    (all (corroborated (sources python-instrument-api) metric/instrument-description))
+    (all (corroborated (sources python-aggregation-api) metric/sum-aggregation))
+    (all (corroborated (sources python-aggregation-api) metric/last-value-aggregation))
+    (all (corroborated (sources python-aggregation-api) metric/explicit-bucket-histogram-aggregation))
+    (all (corroborated (sources python-logger-api) logger/get))))
 
   ))

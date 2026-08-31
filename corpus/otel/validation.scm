@@ -584,12 +584,12 @@
        (equal? (span-http-status (field 'attributes span)) (list-ref bucket 6))))
 
 (define (validate-buckets buckets expected-scopes spans)
-  (check (= (sum (map car buckets)) (length spans)) "golden span total changed")
+  (check (= (sum (map car buckets)) (length spans)) "shape span total changed")
   (for-each
     (lambda (bucket)
       (check (= (car bucket)
                 (count (lambda (span) (span-matches-bucket? span bucket expected-scopes spans)) spans))
-             "golden span bucket count changed"))
+             "shape span bucket count changed"))
     buckets))
 
 (define (validate-contract-buckets buckets expected-scopes spans)
