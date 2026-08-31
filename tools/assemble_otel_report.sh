@@ -39,7 +39,7 @@ args=(
   --plan="python-django-auto-v0-65b0,bazel-bin/corpus/python_django_profile.proof-plan.json,${source_root}/corpus/realworld/profiles/python-django-auto-v0-65b0.scm"
 )
 
-profiles=(python-aiohttp-auto-v0-65b0 python-django-auto-v0-65b0)
+profiles=(go-gin-otelbuild-v1-1-0 python-aiohttp-auto-v0-65b0 python-django-auto-v0-65b0)
 scenarios=(articles auth comments errors_articles errors_auth errors_authorization errors_comments errors_profiles favorites feed pagination profiles tags)
 for profile in "${profiles[@]}"; do
   for scenario in "${scenarios[@]}"; do

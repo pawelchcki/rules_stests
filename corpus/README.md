@@ -53,12 +53,12 @@ Candidate targets use the `_shape_candidate` suffix and write
 
 The report assembler is `//corpus:feature_parity_generator`. It requires a
 Bazel JSON build-event file from an uncached complete 39-scenario run, the three
-normalized plans, all checked-in Python shapes, and the current revision. It
+normalized plans, all checked-in scenario shapes, and the current revision. It
 rejects a build-event file that does not record `--nocache_test_results`, plus
 absent, stale, duplicate, malformed, digest-mismatched, failed, or incomplete
 receipts. Only accepted receipts create `verified` cells; unclaimed matrix rows
 remain `not_exercised`.
 
-The exact invocation is maintained in
-`.github/workflows/otel-report.yml`. The report servers no longer build or infer
-a report; pass the explicitly assembled HTML file with `--file`.
+The exact invocation is maintained in `buildbuddy.yaml`. The report servers no
+longer build or infer a report; pass the explicitly assembled HTML file with
+`--file`.

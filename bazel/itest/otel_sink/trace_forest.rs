@@ -8,6 +8,8 @@ use core::fmt::Write;
 use serde_json::Value;
 
 const MAX_TRACE_DEPTH: usize = 128;
+const CURRENT_HTTP_STATUS_KEY: &str = "http.response.status_code";
+const LEGACY_HTTP_STATUS_KEY: &str = "http.status_code";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SemanticSpan {
@@ -407,41 +409,58 @@ fn trace_fingerprint(coverage: Coverage, roots: &[Group<Node>]) -> String {
 }
 
 fn typed_http_status(attributes: &[proto::KeyValue]) -> Result<Option<i128>, String> {
-    let mut result = None;
-    for attribute in attributes
-        .iter()
-        .filter(|attribute| attribute.key == "http.status_code")
-    {
+    let mut current = None;
+    let mut legacy = None;
+    for attribute in attributes.iter().filter(|attribute| {
+        attribute.key == CURRENT_HTTP_STATUS_KEY || attribute.key == LEGACY_HTTP_STATUS_KEY
+    }) {
+        let result = if attribute.key == CURRENT_HTTP_STATUS_KEY {
+            &mut current
+        } else {
+            &mut legacy
+        };
         if result.is_some() {
-            return Err("duplicate attribute \"http.status_code\"".into());
+            return Err(format!("duplicate attribute {:?}", attribute.key));
         }
         let value = attribute
             .value
             .as_ref()
             .and_then(|value| value.value.as_ref());
         match value {
-            Some(proto::any_value::Value::IntValue(value)) => result = Some(i128::from(*value)),
-            _ => return Err("attribute \"http.status_code\" is not an integer".into()),
+            Some(proto::any_value::Value::IntValue(value)) => {
+                *result = Some(i128::from(*value));
+            }
+            _ => return Err(format!("attribute {:?} is not an integer", attribute.key)),
         }
     }
-    Ok(result)
+    Ok(current.or(legacy))
 }
 
 fn json_http_status(attributes: Option<&Value>) -> Result<Option<i128>, String> {
-    let mut result = None;
+    let mut current = None;
+    let mut legacy = None;
     for attribute in array(attributes).iter().filter(|attribute| {
-        attribute.get("key").and_then(Value::as_str) == Some("http.status_code")
+        attribute
+            .get("key")
+            .and_then(Value::as_str)
+            .is_some_and(|key| key == CURRENT_HTTP_STATUS_KEY || key == LEGACY_HTTP_STATUS_KEY)
     }) {
+        let key = attribute.get("key").and_then(Value::as_str).unwrap();
+        let result = if key == CURRENT_HTTP_STATUS_KEY {
+            &mut current
+        } else {
+            &mut legacy
+        };
         if result.is_some() {
-            return Err("duplicate attribute \"http.status_code\"".into());
+            return Err(format!("duplicate attribute {key:?}"));
         }
         let value = attribute
             .get("value")
             .map(|value| value.get("value").unwrap_or(value))
             .and_then(|value| field(value, "int_value", "intValue"));
-        result = Some(integer(value, "http.status_code attribute")?);
+        *result = Some(integer(value, &format!("{key} attribute"))?);
     }
-    Ok(result)
+    Ok(current.or(legacy))
 }
 
 fn enum_name<'a>(value: i128, names: &'a [&str], label: &str) -> Result<&'a str, String> {
