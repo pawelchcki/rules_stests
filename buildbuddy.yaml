@@ -19,6 +19,7 @@ actions:
           if [ "$(git show -s --format=%ce HEAD)" = "ci-runner@buildbuddy.io" ]; then
             REPORT_REVISION="$(git rev-parse HEAD^1)"
           fi
+          git checkout --detach "$REPORT_REVISION"
           OTEL_TEST_REVISION="$REPORT_REVISION" bazel test \
             --config=buildbuddy \
             --build_tests_only \
