@@ -910,6 +910,18 @@ func main() {
 		fatal(fmt.Errorf("complete policy accepted a partial trace: HTTP %d: %s", status, output))
 	}
 	resetSink(endpoint)
+	dualStatusTrace := []byte(`{"resourceSpans":[{"scopeSpans":[{"scope":{"name":"status-alias.probe"},"spans":[{"traceId":"45454545454545454545454545454545","spanId":"6666666666666666","name":"GET /probe","kind":2,"startTimeUnixNano":"1","endTimeUnixNano":"2","attributes":[{"key":"http.status_code","value":{"intValue":"200"}},{"key":"http.response.status_code","value":{"intValue":"201"}}]}]}]}]}`)
+	postJSON(endpoint, "/v1/traces", "dual HTTP-status aliases", dualStatusTrace)
+	dualStatusCandidate, err := http.Get(endpoint + "/candidate?app=custom-app")
+	if err != nil {
+		fatal(fmt.Errorf("generate dual HTTP-status candidate: %w", err))
+	}
+	dualStatusBody, readErr := io.ReadAll(dualStatusCandidate.Body)
+	dualStatusCandidate.Body.Close()
+	if readErr != nil || dualStatusCandidate.StatusCode != http.StatusOK || !bytes.Contains(dualStatusBody, []byte("(http-status 201)")) {
+		fatal(fmt.Errorf("dual HTTP-status candidate: HTTP %d: %s: %v", dualStatusCandidate.StatusCode, dualStatusBody, readErr))
+	}
+	resetSink(endpoint)
 	selfParentTrace := []byte(`{"resourceSpans":[{"resource":{"attributes":[]},"scopeSpans":[{"scope":{"name":"self-parent.probe"},"spans":[{"traceId":"dddddddddddddddddddddddddddddddd","spanId":"5555555555555555","parentSpanId":"5555555555555555","name":"SELECT","kind":3,"startTimeUnixNano":"1","endTimeUnixNano":"2","status":{"code":0}}]}]}]}`)
 	postJSON(endpoint, "/v1/traces", "self-parent trace", selfParentTrace)
 	freezeCapture(endpoint, "/dump", "self-parent capture")
