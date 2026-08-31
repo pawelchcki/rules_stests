@@ -48,13 +48,22 @@ rust_binary(
 copy_file(
     name = "embedded_trace_shape",
     src = "//corpus:otel/trace_shape.scm",
-    out = "goldens/trace_shape.scm",
+    out = "scheme/trace_shape.scm",
+)
+
+copy_file(
+    name = "embedded_capture_shapes",
+    src = "//corpus:otel/capture/shapes.scm",
+    out = "scheme/capture_shapes.scm",
 )
 
 go_library(
     name = "otel_sink_probe_lib",
     srcs = ["otel_sink_probe.go"],
-    embedsrcs = [":embedded_trace_shape"],
+    embedsrcs = [
+        ":embedded_capture_shapes",
+        ":embedded_trace_shape",
+    ],
     importpath = "github.com/pawelchcki/rules_stests/bazel/itest/otel_sink_probe",
     visibility = ["//visibility:private"],
 )
@@ -81,7 +90,9 @@ itest_service(
 
 service_test(
     name = "otel_sink_test",
-    timeout = "short",
+    # Capture-shape coverage deliberately compiles and executes independent
+    # failing captures so each predicate family proves its HTTP 409 contract.
+    timeout = "long",
     args = ["--service-suffix=//bazel/itest:otel_sink_service"],
     services = [":otel_sink_service"],
     test = ":otel_sink_probe",

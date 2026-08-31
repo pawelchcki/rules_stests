@@ -1,6 +1,7 @@
 package report
 
 import (
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -13,59 +14,105 @@ type sexpr struct {
 	str  bool
 }
 
-func ParseGolden(profile, scenario, source, input string) (Golden, error) {
+func unquote(expr sexpr) sexpr {
+	if len(expr.list) == 2 && head(expr) == "quote" {
+		return expr.list[1]
+	}
+	return expr
+}
+
+func validateImmutableSource(href string) error {
+	if !strings.HasPrefix(href, "https://") {
+		return fmt.Errorf("source evidence must use https")
+	}
+	lower := strings.ToLower(href)
+	for _, mutable := range []string{"/main/", "/master/", "/head/", "/latest/"} {
+		if strings.Contains(lower, mutable) {
+			return fmt.Errorf("source evidence URL is mutable: %q", href)
+		}
+	}
+	if strings.Contains(lower, "github.com/") {
+		marker := "/blob/"
+		if !strings.Contains(lower, marker) {
+			marker = "/tree/"
+		}
+		parts := strings.SplitN(lower, marker, 2)
+		if len(parts) != 2 {
+			return fmt.Errorf("GitHub source evidence must use a commit-pinned blob or tree URL: %q", href)
+		}
+		revision := strings.SplitN(parts[1], "/", 2)[0]
+		if len(revision) != 40 {
+			return fmt.Errorf("GitHub source evidence revision is not a 40-character commit: %q", href)
+		}
+		if _, err := hex.DecodeString(revision); err != nil {
+			return fmt.Errorf("GitHub source evidence revision is not hexadecimal: %q", href)
+		}
+	}
+	return nil
+}
+
+func stringSliceContains(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func ParseScenarioShape(profile, scenario, source, input string) (ScenarioShape, error) {
 	tokens, err := tokenizeScheme(input)
 	if err != nil {
-		return Golden{}, fmt.Errorf("%s: %w", source, err)
+		return ScenarioShape{}, fmt.Errorf("%s: %w", source, err)
 	}
 	forms, err := parseScheme(tokens)
 	if err != nil {
-		return Golden{}, fmt.Errorf("%s: %w", source, err)
+		return ScenarioShape{}, fmt.Errorf("%s: %w", source, err)
 	}
 	var value *sexpr
 	for i := range forms {
-		if found := findDefinition(&forms[i], "expected-trace-shapes"); found != nil {
+		if found := findDefinition(&forms[i], "scenario-shape"); found != nil {
 			value = found
 			break
 		}
 	}
 	if value == nil {
-		return Golden{}, fmt.Errorf("%s: missing expected-trace-shapes definition", source)
+		return ScenarioShape{}, fmt.Errorf("%s: missing scenario-shape definition", source)
 	}
 	if head(*value) != "traces" {
-		return Golden{}, fmt.Errorf("%s: expected trace shapes must use traces", source)
+		return ScenarioShape{}, fmt.Errorf("%s: expected trace shapes must use traces", source)
 	}
-	golden := Golden{Profile: profile, Scenario: scenario, Source: source, ExactCounts: true, Scopes: map[string]int{}, Statuses: map[string]int{}}
+	shape := ScenarioShape{Profile: profile, Scenario: scenario, Source: source, ExactCounts: true, Scopes: map[string]int{}, Statuses: map[string]int{}}
 	for _, item := range value.list[1:] {
 		trace, err := parseTraceGroup(item)
 		if err != nil {
-			return Golden{}, fmt.Errorf("%s: %w", source, err)
+			return ScenarioShape{}, fmt.Errorf("%s: %w", source, err)
 		}
-		golden.Traces = append(golden.Traces, trace)
-		golden.ExactCounts = golden.ExactCounts && trace.ExactCount
+		shape.Traces = append(shape.Traces, trace)
+		shape.ExactCounts = shape.ExactCounts && trace.ExactCount
 	}
-	if len(golden.Traces) == 0 {
-		return Golden{}, fmt.Errorf("%s: golden contains no traces", source)
+	if len(shape.Traces) == 0 {
+		return ScenarioShape{}, fmt.Errorf("%s: shape contains no traces", source)
 	}
-	if golden.ExactCounts {
-		for _, trace := range golden.Traces {
-			golden.TraceCount += trace.Count
+	if shape.ExactCounts {
+		for _, trace := range shape.Traces {
+			shape.TraceCount += trace.Count
 			for _, root := range trace.Roots {
-				if !accumulateSpan(root, trace.Count, &golden) {
-					golden.ExactCounts = false
+				if !accumulateSpan(root, trace.Count, &shape) {
+					shape.ExactCounts = false
 					break
 				}
 			}
-			if !golden.ExactCounts {
+			if !shape.ExactCounts {
 				break
 			}
 		}
 	}
-	if !golden.ExactCounts {
-		golden.TraceCount, golden.SpanCount = 0, 0
-		golden.Scopes, golden.Statuses = map[string]int{}, map[string]int{}
+	if !shape.ExactCounts {
+		shape.TraceCount, shape.SpanCount = 0, 0
+		shape.Scopes, shape.Statuses = map[string]int{}, map[string]int{}
 	}
-	return golden, nil
+	return shape, nil
 }
 
 func parseTraceGroup(expr sexpr) (TraceGroup, error) {
@@ -307,20 +354,20 @@ func spanBounds(group SpanGroup) (int, int) {
 	return group.MinCount, group.MaxCount
 }
 
-func accumulateSpan(group SpanGroup, parentMultiplier int, golden *Golden) bool {
+func accumulateSpan(group SpanGroup, parentMultiplier int, shape *ScenarioShape) bool {
 	if !group.ExactCount || len(group.Alternatives) != 0 {
 		return false
 	}
 	multiplier := parentMultiplier * group.Count
-	golden.SpanCount += multiplier
+	shape.SpanCount += multiplier
 	if group.Span.Scope != "" {
-		golden.Scopes[group.Span.Scope] += multiplier
+		shape.Scopes[group.Span.Scope] += multiplier
 	}
 	if group.Span.Status != "" {
-		golden.Statuses[group.Span.Status] += multiplier
+		shape.Statuses[group.Span.Status] += multiplier
 	}
 	for _, child := range group.Span.Children {
-		if !accumulateSpan(child, multiplier, golden) {
+		if !accumulateSpan(child, multiplier, shape) {
 			return false
 		}
 	}

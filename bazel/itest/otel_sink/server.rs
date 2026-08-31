@@ -155,7 +155,7 @@ fn handle_connection(
     if request.method == "GET" && request.path.starts_with("/candidate?app=") {
         let app = &request.path["/candidate?app=".len()..];
         let snapshot = frozen_records.as_deref().unwrap_or(records);
-        match validation::golden_candidate(snapshot, app) {
+        match validation::scenario_shape_candidate(snapshot, app) {
             Ok(candidate) => respond(connection, 200, "text/x-scheme", &candidate),
             Err(error) => respond(connection, 422, "text/plain", error.as_bytes()),
         }

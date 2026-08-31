@@ -17,10 +17,14 @@ import (
 
 func main() {
 	listen := flag.String("listen", "127.0.0.1:8765", "HTTP listen address")
-	reportFile := flag.String("file", "corpus/feature-parity-report.html", "generated report HTML")
+	reportFile := flag.String("file", "", "explicitly assembled report HTML (required)")
 	cloudflared := flag.String("cloudflared", "", "cloudflared executable for an ephemeral public tunnel")
 	flag.Parse()
 
+	if *reportFile == "" {
+		fmt.Fprintln(os.Stderr, "feature parity HTTP server: --file is required")
+		os.Exit(1)
+	}
 	if err := reportserver.ValidateReport(*reportFile); err != nil {
 		fmt.Fprintln(os.Stderr, "feature parity HTTP server:", err)
 		os.Exit(1)

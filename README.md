@@ -25,7 +25,7 @@ not need Python, uv, a virtual environment, or a container runtime.
 ## Repository structure
 
 ```text
-corpus/       contract data: Scheme libraries, profiles, per-case goldens
+corpus/       standard registry, proof rules, profiles, and scenario shapes
 rules/        reusable Starlark: realworld_hurl_test_suite, oci_rootfs
 bazel/itest/  the harness: Go drivers, the Rust otel_sink, shared services
 bazel/itest/apps/  this repo's own reference services (aiohttp, Django Ninja)
@@ -53,35 +53,15 @@ load("@rules_stests_corpus//rules:hurl_test.bzl", "realworld_hurl_test_suite")
 realworld_hurl_test_suite(
     name = "my_otel",
     service = ":my_service",
-    otel_app = "myimpl",
-    otel_profile = "go-myimpl-v1",
-    otel_profile_library = "//profiles:go-myimpl-v1.scm",
+    otel_profile = "@rules_stests_corpus//corpus:go_gin_profile",
     otel_sink = "@rules_stests_corpus//bazel/itest:otel_sink_service",
 )
 ```
 
 The offered `otel_sink_service`, Hurl rootfs, and driver all come from the
-module, so the only targets you supply are your service and — once you are
-ready to pin exact traces — your own profile and golden libraries.
-
-To drive the corpus from your own runner instead, load the data API and ignore
-`//rules` entirely:
-
-```starlark
-load(
-    "@rules_stests_corpus//corpus:defs.bzl",
-    "REALWORLD_HURL_CASES",
-    "exact_bundle",
-)
-
-filegroup(
-    name = "articles_contract",
-    srcs = exact_bundle("python-django-auto-v0-65b0", "articles").libraries,
-)
-```
-
-`contract_bundle` and `exact_bundle` return the `.scm` labels alongside the
-Scheme `imports` and validation `program` those libraries expect.
+module. OpenTelemetry configuration is one `otel_profile` target: its provider
+owns the implementation layers, normalized proof plan, signals, and exact
+scenario-shape mapping.
 
 ## Bazel integration tests
 
@@ -185,13 +165,13 @@ raw console I/O; `server` routes requests; `http`, `otlp`, `storage`, and
 `scheme`, `validation`, and `proto` remain independent domain modules.
 
 The snapshot is checked by Stak Scheme 0.12.23 inside the same no-std Rust
-binary. Bazel pins the Stak crates, compiler bytecode, and prelude. A golden is
+binary. Bazel pins the Stak crates, compiler bytecode, and prelude. A shape is
 ordinary Scheme source: the embedded compiler reads it in memory for each
 validation and immediately executes the resulting bytecode, so there is no
-golden compilation action, host Scheme installation, subprocess, or magic
+shape compilation action, host Scheme installation, subprocess, or magic
 environment variable. The evaluator uses in-memory input/output and void file,
 process, and clock implementations, plus fixed VM heaps, separate compiler and
-runtime procedure-call budgets, and 1 MiB stdout/stderr caps, keeping golden
+runtime procedure-call budgets, and 1 MiB stdout/stderr caps, keeping shape
 execution sandboxed. The sink can therefore also be run as a standalone OTLP
 validator by ingesting telemetry and posting a rule to `/validate`.
 
@@ -218,7 +198,7 @@ The libraries deliberately separate five layers:
   resource identity, instrumentation libraries and versions, attribute schemas,
   per-scenario event policy, and server-span name rendering.
 - `(otel trace-shape)` defines unordered hierarchical trace matchers, while each
-  `(realworld detail <implementation> <scenario>)` library pins complete trace
+  `(realworld shape <implementation> <scenario>)` library pins complete trace
   topology, scope, kind, status, name, and HTTP status without volatile IDs or
   timestamps. Repeated equivalent traces and children use `repeat`.
 
@@ -264,34 +244,21 @@ A replacement Python tracer likewise gets a new named profile instead of
 weakening or overwriting the auto-instrumentation profile; the old profile
 remains an executable 1:1 specification.
 
-Two validation programs are available. `validate_contract.scm` checks the
-portable HTTP multiset and OTLP/profile invariants while allowing additional
-implementation-specific non-server spans. `validate.scm` adds the generated
-trace-shape library and requires the exact complete parent-child forest as an
-unordered one-to-one multiset. The current contract-only targets are manual
-because the exact targets already imply them:
-
-```bash
-bazel test //bazel/itest/apps:aiohttp_otel_contract_test_articles \
-  //bazel/itest/apps:django_otel_contract_test_articles
-```
-
-`realworld_hurl_test_suite` exposes `otel_profile`,
-`otel_profile_library`, `otel_runtime_libraries`,
-`otel_trace_shape_library_prefix`, and `otel_exact`. A new Go
-implementation can begin with `otel_exact = False` and the shared scenarios,
-then add generated detail libraries once its telemetry is ready to be pinned
-as another exact implementation specification.
+The single validation program calls
+`(validate-profile profile scenario-name capture validation-mode)`. The atomic
+profile provider infers exact mode when it supplies a scenario shape and
+contract mode otherwise. The suite exposes no independent library, signal,
+shape-prefix, or exact-mode switches.
 
 Known telemetry defects belong in the suite's `otel_xfails` dictionary rather
-than in a weakened golden. Each entry maps a topic to a non-empty issue or
+than in a weakened shape. Each entry maps a topic to a non-empty issue or
 reason, for example:
 
 ```starlark
 realworld_hurl_test_suite(
     name = "my_app_otel_test",
     service = ":my_app_otel_service",
-    otel_app = "my_app",
+    otel_profile = ":my_atomic_otel_profile",
     otel_sink = ":otel_sink_service",
     otel_xfails = {
         "comments": "https://example.invalid/issues/123",
@@ -301,9 +268,12 @@ realworld_hurl_test_suite(
 
 The Hurl workload and full OTLP validation still run. A Scheme contract
 rejection is printed as `XFAIL`, tagged `otel-xfail`, and keeps its failed JSON
-capture in undeclared outputs. A validation that starts passing becomes a hard
-`XPASS` failure until the entry is removed. Sink failures, timeouts, validator
-crashes, and other infrastructure errors are never swallowed by an xfail.
+capture in undeclared outputs. Receipt-enabled runs also emit an `xfail`
+receipt carrying the reason and rejected-capture digest, so report assembly can
+show the expected failure without treating that scenario as verified. A
+validation that starts passing becomes a hard `XPASS` failure until the entry
+is removed. Sink failures, timeouts, validator crashes, and other
+infrastructure errors are never swallowed by an xfail.
 Contract rejections use a distinct HTTP 409 response; Scheme compilation, VM,
 heap, call-budget, and output-budget failures remain validator errors and can
 never satisfy an xfail.
@@ -317,7 +287,7 @@ topic to reason. Those targets receive Bazel's `flaky = True` behavior and an
 `otel-flaky` tag: Bazel retries a failing attempt and reports `FLAKY` if a retry
 passes, while exhausting the retries remains red. The aiohttp
 `errors_profiles` topic is marked flaky because a late startup `/api/tags`
-export can cross the explicit trace-only reset boundary; the exact golden is
+export can cross the explicit trace-only reset boundary; the exact shape is
 unchanged, so the race remains visible instead of being accepted as valid
 telemetry.
 
@@ -325,25 +295,25 @@ Random IDs and timestamps remain integrity-checked rather than pinned. The one
 known random path fragment in aiohttp SQLAlchemy span names uses the explicit
 `prefix-suffix` matcher. All other profile dimensions and counts are exact.
 
-Golden generation is a separate manual target, never an update-mode
+Shape generation is a separate manual target, never an update-mode
 environment variable. It preserves both the raw JSON capture and a Scheme
 candidate in Bazel's undeclared test outputs:
 
 ```bash
-bazel test //bazel/itest/apps:aiohttp_otel_hurl_test_articles_golden_candidate \
+bazel test //bazel/itest/apps:aiohttp_otel_hurl_test_articles_shape_candidate \
   --nocache_test_results --test_output=streamed
 
 # Generate every candidate, safely parallelized by Bazel.
-bazel test //bazel/itest/apps:aiohttp_otel_hurl_test_golden_candidates \
-  //bazel/itest/apps:django_otel_hurl_test_golden_candidates \
+bazel test //bazel/itest/apps:aiohttp_otel_hurl_test_shape_candidates \
+  //bazel/itest/apps:django_otel_hurl_test_shape_candidates \
   --jobs=4 --nocache_test_results
 ```
 
 The candidate is a deterministic, importable implementation-detail library for
 inspection. Check it in under
-`corpus/realworld/goldens/<profile>/<scenario>/golden.scm`. Portable HTTP contracts stay
+`corpus/realworld/shapes/<profile>/<scenario>/shape.scm`. Portable HTTP contracts stay
 in the single shared scenario table. Normal validation targets cannot rewrite
-checked-in goldens. The driver reports HTTP wall time,
+checked-in shapes. The driver reports HTTP wall time,
 sink-measured evaluation time, and sink process peak RSS for each validation.
 Configured profile names are propagated into candidate libraries, so a new
 implementation can generate candidates before exact tests import them.

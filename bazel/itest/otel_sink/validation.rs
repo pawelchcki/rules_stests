@@ -1112,13 +1112,13 @@ fn span_key(trace_id: &str, span_id: &str) -> (String, String) {
     (normalized_id(trace_id), normalized_id(span_id))
 }
 
-pub fn golden_candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String> {
+pub fn scenario_shape_candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String> {
     let payloads = records
         .iter()
         .filter(|record| record.signal == "traces")
         .map(|record| {
             serde_json::to_value(&record.payload)
-                .map_err(|error| format!("serialize trace payload for golden: {error}"))
+                .map_err(|error| format!("serialize trace payload for shape: {error}"))
         })
         .collect::<Result<Vec<_>, _>>()?;
     if payloads.iter().any(has_duplicate_json_field_spellings) {
@@ -1134,7 +1134,7 @@ pub fn golden_candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String
     if forest.traces.is_empty() {
         return Err("trace capture contains no spans".into());
     }
-    let mut output = String::from("(define expected-trace-shapes\n  ");
+    let mut output = String::from("(define scenario-shape\n  ");
     write_trace_forest(&mut output, &forest, Some(app));
     output.push_str(")\n");
     Ok(output.into_bytes())

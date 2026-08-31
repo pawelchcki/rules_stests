@@ -39,7 +39,47 @@ type Evidence struct {
 type Verification struct {
 	FeatureID string     `json:"featureId"`
 	State     string     `json:"state"`
+	Basis     string     `json:"basis,omitempty"`
+	Assertion string     `json:"assertion,omitempty"`
+	Scenarios []string   `json:"scenarios,omitempty"`
 	Evidence  []Evidence `json:"evidence"`
+}
+
+type FeatureClaim struct {
+	FeatureID    string
+	Basis        string
+	Assertion    string
+	AllScenarios bool
+	Scenarios    []string
+	Evidence     []Evidence
+}
+
+type ProfileProofCoverage struct {
+	Profile string
+	Source  Evidence
+	Claims  []FeatureClaim
+}
+
+type ProofPlanProof struct {
+	FeatureID      string   `json:"featureId"`
+	Assertion      string   `json:"assertion"`
+	Basis          string   `json:"basis"`
+	EvidencePolicy string   `json:"evidencePolicy"`
+	Scenarios      []string `json:"scenarios,omitempty"`
+	Sources        []string `json:"sources,omitempty"`
+}
+
+type NormalizedProfilePlan struct {
+	SchemaVersion   int               `json:"schemaVersion"`
+	Profile         string            `json:"profile"`
+	DisplayName     string            `json:"displayName"`
+	Language        string            `json:"language"`
+	Framework       string            `json:"framework"`
+	ServiceName     string            `json:"serviceName"`
+	Signals         []string          `json:"signals"`
+	Implementations []string          `json:"implementations"`
+	Sources         map[string]string `json:"sources"`
+	Proofs          []ProofPlanProof  `json:"proofs"`
 }
 
 type Manifest struct {
@@ -55,7 +95,7 @@ type Manifest struct {
 	Verifications          []Verification `json:"verifications"`
 }
 
-type Golden struct {
+type ScenarioShape struct {
 	Profile     string         `json:"profile"`
 	Scenario    string         `json:"scenario"`
 	Source      string         `json:"source"`
@@ -113,8 +153,8 @@ type Comparison struct {
 	ScopeDelta   map[string]int `json:"scopeDelta"`
 	StatusDelta  map[string]int `json:"statusDelta"`
 	CountDelta   int            `json:"countDelta"`
-	Left         *Golden        `json:"left,omitempty"`
-	Right        *Golden        `json:"right,omitempty"`
+	Left         *ScenarioShape `json:"left,omitempty"`
+	Right        *ScenarioShape `json:"right,omitempty"`
 }
 
 type ReportModel struct {
@@ -125,6 +165,7 @@ type ReportModel struct {
 	Verification  map[string]map[string]Verification `json:"verification"`
 	Scenarios     []string                           `json:"scenarios"`
 	Coverage      []CoverageCell                     `json:"coverage"`
-	Goldens       []Golden                           `json:"goldens"`
+	Shapes        []ScenarioShape                    `json:"shapes"`
+	Receipts      []ValidationReceipt                `json:"receipts,omitempty"`
 	Comparisons   []Comparison                       `json:"comparisons"`
 }

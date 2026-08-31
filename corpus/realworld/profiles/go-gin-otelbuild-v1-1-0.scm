@@ -1,26 +1,16 @@
 (define-library (realworld profile go-gin-otelbuild-v1-1-0)
-  (export implementation-profile
-          expected-resource-attributes
-          expected-resource-schema-url
-          expected-scopes
-          expected-metric-scopes
-          expected-metric-descriptors
-          expected-metric-aggregation
-          expected-metric-point-schemas
-          expected-log-scopes
-          expected-log-policy
-          expected-span-flags
-          expected-trace-state
-          expected-error-status-message-policy
-          event-policy-for
-          server-scope
-          render-server-span-name)
+  (export profile)
   (import (scheme base)
+          (otel profile)
           (otel profile go-otelbuild-v0)
+          (otel implementation go-compile-v1.1.0)
+          (otel implementation go-runtime-v0.70.0)
+          (otel standard traces) (otel standard metrics)
+          (otel standard resource) (otel standard exporters)
           (realworld contract))
   (begin
 
-; Exact profile for the gothinkster Gin RealWorld application built with
+; Contract profile for the gothinkster Gin RealWorld application built with
 ; opentelemetry-go-compile-instrumentation v1.1.0.
 (define implementation-profile 'go-gin-otelbuild-v1-1-0)
 
@@ -103,5 +93,42 @@
 
 (define (render-server-span-name method canonical-route)
   (string-append method " " (gin-route canonical-route)))
+
+(define profile
+  (realworld-profile
+    (id 'go-gin-otelbuild-v1-1-0)
+    (display-name "Go Gin (otelbuild v1.1.0)")
+    (language 'go)
+    (framework "Gin")
+    (implementation (compose go-compile-v1.1 go-runtime-v0.70))
+    (service-name "gin-otel")
+    (signals 'traces 'metrics)
+    (capture-contract
+      (list expected-resource-attributes expected-resource-schema-url expected-scopes
+            expected-metric-scopes expected-metric-descriptors expected-metric-aggregation
+            expected-metric-point-schemas expected-log-scopes expected-log-policy
+            event-policy-for expected-span-flags expected-trace-state
+            expected-error-status-message-policy server-scope render-server-span-name))
+    (all (observed span/create-root))
+    (all (observed span/end))
+    (all (observed span/string-attribute))
+    (all (observed span/int64-attribute))
+    (all (observed metric/resource-associated))
+    (all (observed exporter/otlp-http-binary-protobuf))
+    (all (corroborated (sources go-compile-release) tracer/get))
+    (all (corroborated (sources go-compile-release) tracer/scope-associated))
+    (all (corroborated (sources go-compile-release) span/create))
+    (all (corroborated (sources go-compile-release) resource/create-from-attributes))
+    (all (corroborated (sources go-runtime-source) meter/get))
+    (all (corroborated (sources go-runtime-source) meter/scope-associated))
+    (all (corroborated (sources go-runtime-source) metric/async-counter))
+    (all (corroborated (sources go-runtime-source) metric/async-up-down-counter))
+    (all (corroborated (sources go-runtime-source) metric/instrument-name))
+    (all (corroborated (sources go-runtime-source) metric/instrument-kind))
+    (all (corroborated (sources go-runtime-source) metric/instrument-unit))
+    (all (corroborated (sources go-runtime-source) metric/instrument-description))
+    (all (corroborated (sources go-runtime-source) metric/sum-aggregation))
+    (all (corroborated (sources go-compile-release) resource/detector-interface))
+    (all (corroborated (sources go-compile-release) resource/detector-schema-url))))
 
   ))

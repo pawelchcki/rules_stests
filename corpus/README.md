@@ -1,140 +1,64 @@
-# OTLP contract corpus
+# OpenTelemetry proof corpus
 
-Implementation-independent contract data for RealWorld API telemetry. Nothing
-here depends on the Bazel harness in `//bazel/itest`; the files are plain R7RS
-Scheme libraries plus JSON captures, consumable by any runner that can evaluate
-them against an OTLP capture.
+The corpus separates specification features, executable OTLP facts, proof
+rules, implementation metadata, workload contracts, and scenario topology.
+There is no positional profile API and no source-only verification report.
+
+## Layout
 
 ```text
-otel/validation.scm                  (otel validation)     — the validators
-otel/trace_shape.scm                 (otel trace-shape)    — trace shape matchers
-realworld/contract.scm               (realworld contract), (realworld scenarios)
-realworld/programs/validate.scm      exact validation program
-realworld/programs/validate_contract.scm  contract-only validation program
-realworld/profiles/python.scm        (otel profile python-auto-v0-65b0)
-realworld/profiles/<profile>.scm     (realworld profile <profile>)
-realworld/goldens/<profile>/<case>/golden.scm
-                                     (realworld detail <profile> <case>)
+otel/capture/shapes.scm                 named executable OTLP assertions
+otel/proofs/*.scm                       signal-specific feature → assertion tables
+otel/proofs.scm                         combined runtime lookup facade
+otel/profile.scm                        labeled profile record and validator
+otel/implementations/                   immutable version/source layers
+realworld/contract.scm                  language-neutral HTTP workload
+realworld/profiles/                     composed concrete profiles
+realworld/shapes/<profile>/<case>/shape.scm
+profile.bzl                             OtelProfileInfo and atomic targets
+report/report/receipt.go                receipt trust boundary
 ```
 
-## Library naming
+`//corpus:otel_standard_registry` generates signal-specific Scheme standard
+libraries and a JSON registry from the pinned compliance matrix. The registry
+contains all 326 matrix IDs exactly once and assigns each a unique readable
+binding such as `span/end` or `tracer/get`.
 
-A file's path mirrors the Scheme library it defines, so a library name can be
-resolved to a file without consulting a build system. Library names use hyphens
-where paths use underscores (`(otel trace-shape)` lives in `trace_shape.scm`),
-because R7RS library names are symbols and Bazel labels prefer underscores.
+The three public `otel_profile` targets compile their Scheme authoring records
+to normalized proof plans:
 
-`corpus/defs.bzl` is the Bazel-facing view of the same mapping:
-`profile_library(profile)` and `golden_library(profile, case)` return labels,
-and `contract_bundle` / `exact_bundle` return the libraries, the Scheme
-`imports` they satisfy, and the validation program to run against them.
-
-## What is portable and what is not
-
-`realworld/contract.scm` holds the portable layer: the HTTP request multiset
-each scenario produces and the bucketing rules that turn it into expected
-server spans. Every implementation must satisfy it.
-
-A **profile** names one instrumented implementation at one version, for example
-`python-django-auto-v0-65b0`. It declares that implementation's resource
-attributes, scope names, schema URL, and which non-server spans are legitimate.
-`realworld/profiles/python.scm` factors out what all Python runtimes share.
-
-A **golden** pins one profile's exact parent-child span forest for one scenario
-as an unordered one-to-one multiset. Goldens are implementation specifications,
-not portable contracts, which is why they are namespaced by profile.
-
-Random IDs and timestamps stay integrity-checked rather than pinned. Where a
-name genuinely varies (aiohttp's SQLAlchemy span names), use the explicit
-`prefix-suffix` matcher rather than loosening the shape.
-
-## Adding a profile
-
-1. Write `realworld/profiles/<profile>.scm` defining
-   `(realworld profile <profile>)` with the same exports as an existing
-   profile. Start from the closest one.
-2. Run the suite with `otel_exact = False`. Only the portable contract applies,
-   so a new implementation can go green before its traces are pinned.
-3. Generate goldens (below), review them, check them in, then switch to
-   `otel_exact = True`.
-
-## Promoting a golden candidate
-
-Goldens are never rewritten by a passing test run and there is no update-mode
-environment variable. Candidates come from separate `manual` targets that write
-into Bazel's undeclared test outputs:
-
-```bash
-bazel test //bazel/itest/apps:aiohttp_otel_hurl_test_articles_golden_candidate \
-  --nocache_test_results --test_output=streamed
+```text
+//corpus:python_aiohttp_profile
+//corpus:python_django_profile
+//corpus:go_gin_profile
 ```
 
-Each candidate directory holds the raw JSON capture next to the generated
-`golden.scm`. Read the capture to confirm the trace is the one you meant to
-pin, then copy the candidate to
-`realworld/goldens/<profile>/<case>/golden.scm`.
+Consumers pass one of those labels to `realworld_hurl_test_suite` through
+`otel_profile`. The target owns its implementation layers, signals, proof plan,
+and scenario-shape mapping. A scenario is exact when the provider supplies a
+shape and contract-only otherwise.
 
-A candidate is generated under the contract-only program, so it reflects what
-the implementation actually emitted. Promoting one without reading it converts
-a live defect into a checked-in expectation. When telemetry is wrong but known,
-record it in the suite's `otel_xfails` (or `otel_flaky_cases`) instead of
-weakening the golden.
+## Validation receipts
 
-## Feature parity report
+Every successful scenario compares the proofs actually executed by Scheme with
+the normalized plan, then writes a schema-v1 receipt and its accepted capture to
+`TEST_UNDECLARED_OUTPUTS_DIR/receipts/<profile>/`. Failed validation writes only
+a failed capture. Set `OTEL_TEST_REVISION` to the lowercase 40-character current
+commit; validation refuses to emit a receipt without it.
 
-Build the deterministic, single-file OpenTelemetry feature and corpus coverage
-dashboard with:
+Candidate targets use the `_shape_candidate` suffix and write
+`shapes/<profile>/<scenario>/shape.scm` under undeclared test outputs.
 
-```bash
-bazel build //corpus:feature_parity_report
-# Open bazel-bin/corpus/feature-parity-report.html
-```
+## Report assembly
 
-For an HTTP workflow, start the report server directly:
+The report assembler is `//corpus:feature_parity_generator`. It requires a
+Bazel JSON build-event file from an uncached complete 39-scenario run, the three
+normalized plans, all checked-in Python shapes, and the current revision. It
+rejects a build-event file that does not record `--nocache_test_results`, plus
+absent, stale, duplicate, malformed, digest-mismatched, failed, or incomplete
+receipts. Only accepted receipts create `verified` cells; unclaimed matrix rows
+remain `not_exercised`.
 
-```bash
-bazel run //corpus:feature_parity_http_server
-```
-
-The report is a data dependency of the server target, so this single Bazel
-command builds it and starts the loopback service at
-`http://127.0.0.1:8765/feature-parity-report.html`.
-
-For a temporary public preview, run its target directly:
-
-```bash
-bazel run //corpus:feature_parity_public_report
-```
-
-It prints a random `https://...trycloudflare.com` URL. The URL needs no account
-or token, is reachable from the public internet, and exists only while the
-target is running. The target uses a SHA-256-pinned cloudflared binary; Bazel
-downloads it rather than relying on a host installation. This target currently
-selects the matching pinned binary for Linux and macOS on x86-64 or ARM64, and
-Windows on x86-64.
-
-Both server targets serve the same Bazel output. The local server reopens the
-output on each request, so rebuilding the report does not require restarting the
-service.
-
-The report distinguishes upstream Go/Python support from repository evidence.
-It also distinguishes exact goldens, portable contract-only coverage, and
-unavailable coverage. The comparison view reports trace-shape count and content
-differences without computing a similarity score or a parity verdict.
-
-The upstream compliance matrix is a reviewed snapshot pinned by commit and
-SHA-256 in `report/data/catalog.json`; report builds do not use the network.
-Refreshing it is an explicit source-tree update from a selected 40-character
-OpenTelemetry specification commit:
-
-```bash
-bazel run //corpus:update_feature_catalog -- \
-  --revision=<opentelemetry-specification-commit>
-bazel test //corpus:feature_parity_test
-bazel build //corpus:feature_parity_report
-```
-
-Review the resulting matrix, metadata, stable feature IDs, and implementation
-manifest evidence before committing an update. Signal maturity is maintained in
-the catalog from the official OpenTelemetry language status page because it is
-not part of the compliance matrix.
+The exact invocation is maintained in
+`.github/workflows/otel-report.yml`. The report servers no longer build or infer
+a report; pass the explicitly assembled HTML file with `--file`.

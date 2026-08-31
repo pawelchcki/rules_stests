@@ -42,7 +42,7 @@ func DecodeManifest(data []byte) (Manifest, error) {
 	return manifest, nil
 }
 
-func PinRepositoryRevision(manifests []Manifest, goldens []Golden, revision string) error {
+func PinRepositoryRevision(manifests []Manifest, shapes []ScenarioShape, revision string, coverageSets ...[]ProfileProofCoverage) error {
 	if revision == "" || revision == "main" {
 		return nil
 	}
@@ -66,8 +66,18 @@ func PinRepositoryRevision(manifests []Manifest, goldens []Golden, revision stri
 			}
 		}
 	}
-	for i := range goldens {
-		goldens[i].Source = pin(goldens[i].Source)
+	for i := range shapes {
+		shapes[i].Source = pin(shapes[i].Source)
+	}
+	for _, coverages := range coverageSets {
+		for i := range coverages {
+			coverages[i].Source.Href = pin(coverages[i].Source.Href)
+			for j := range coverages[i].Claims {
+				for k := range coverages[i].Claims[j].Evidence {
+					coverages[i].Claims[j].Evidence[k].Href = pin(coverages[i].Claims[j].Evidence[k].Href)
+				}
+			}
+		}
 	}
 	return nil
 }
@@ -81,7 +91,7 @@ func VerifyMatrixDigest(markdown []byte, expected string) error {
 	return nil
 }
 
-func BuildModel(metadata CatalogMetadata, features []Feature, manifests []Manifest, goldens []Golden, profiles, scenarios []string, evidencePaths map[string]bool) (ReportModel, error) {
+func BuildModel(metadata CatalogMetadata, features []Feature, manifests []Manifest, shapes []ScenarioShape, profiles, scenarios []string, evidencePaths map[string]bool, proofCoverages ...ProfileProofCoverage) (ReportModel, error) {
 	model := ReportModel{GeneratedFrom: metadata.Source.Revision, Metadata: metadata, Features: features, Manifests: manifests, Scenarios: append([]string(nil), scenarios...), Verification: map[string]map[string]Verification{}}
 	profileSet, scenarioSet, featureSet := stringSet(profiles), stringSet(scenarios), map[string]bool{}
 	for _, feature := range features {
@@ -89,6 +99,55 @@ func BuildModel(metadata CatalogMetadata, features []Feature, manifests []Manife
 			return model, fmt.Errorf("duplicate feature id %q", feature.ID)
 		}
 		featureSet[feature.ID] = true
+	}
+	coverageClaims := map[string]map[string]FeatureClaim{}
+	for _, coverage := range proofCoverages {
+		if !profileSet[coverage.Profile] {
+			return model, fmt.Errorf("normalized proof plan has unknown profile %q", coverage.Profile)
+		}
+		if coverageClaims[coverage.Profile] != nil {
+			return model, fmt.Errorf("duplicate normalized proof plan profile %q", coverage.Profile)
+		}
+		if err := validateEvidence([]Evidence{coverage.Source}, evidencePaths); err != nil {
+			return model, fmt.Errorf("normalized proof plan %q: %w", coverage.Profile, err)
+		}
+		coverageClaims[coverage.Profile] = map[string]FeatureClaim{}
+		for _, claim := range coverage.Claims {
+			if !featureSet[claim.FeatureID] {
+				return model, fmt.Errorf("normalized proof plan %q references unknown feature id %q", coverage.Profile, claim.FeatureID)
+			}
+			if _, exists := coverageClaims[coverage.Profile][claim.FeatureID]; exists {
+				return model, fmt.Errorf("normalized proof plan %q duplicates feature id %q", coverage.Profile, claim.FeatureID)
+			}
+			if claim.Basis != "observed" && claim.Basis != "corroborated" {
+				return model, fmt.Errorf("normalized proof plan %q feature %q has invalid basis %q", coverage.Profile, claim.FeatureID, claim.Basis)
+			}
+			if claim.Assertion == "" {
+				return model, fmt.Errorf("normalized proof plan %q feature %q has no capture assertion", coverage.Profile, claim.FeatureID)
+			}
+			if claim.AllScenarios == (len(claim.Scenarios) > 0) {
+				return model, fmt.Errorf("normalized proof plan %q feature %q has invalid scenario scope", coverage.Profile, claim.FeatureID)
+			}
+			for _, scenario := range claim.Scenarios {
+				if !scenarioSet[scenario] {
+					return model, fmt.Errorf("normalized proof plan %q feature %q has unknown scenario %q", coverage.Profile, claim.FeatureID, scenario)
+				}
+			}
+			if err := validateEvidence(claim.Evidence, evidencePaths); err != nil {
+				return model, fmt.Errorf("normalized proof plan %q feature %q: %w", coverage.Profile, claim.FeatureID, err)
+			}
+			if claim.Basis == "corroborated" {
+				if len(claim.Evidence) < 2 {
+					return model, fmt.Errorf("normalized proof plan %q corroborated feature %q has no upstream evidence", coverage.Profile, claim.FeatureID)
+				}
+				for _, item := range claim.Evidence[1:] {
+					if err := validateImmutableSource(item.Href); err != nil {
+						return model, fmt.Errorf("normalized proof plan %q feature %q: %w", coverage.Profile, claim.FeatureID, err)
+					}
+				}
+			}
+			coverageClaims[coverage.Profile][claim.FeatureID] = claim
+		}
 	}
 	manifestProfiles := map[string]bool{}
 	for i := range manifests {
@@ -112,6 +171,9 @@ func BuildModel(metadata CatalogMetadata, features []Feature, manifests []Manife
 		if !verificationStates[manifest.DefaultVerification] {
 			return model, fmt.Errorf("manifest %q has invalid default verification %q", manifest.Profile, manifest.DefaultVerification)
 		}
+		if manifest.DefaultVerification == "verified" {
+			return model, fmt.Errorf("manifest %q cannot declare verified as its default; use executable normalized proof plan", manifest.Profile)
+		}
 		if !coverageStates[manifest.BaseCoverage] {
 			return model, fmt.Errorf("manifest %q has invalid base coverage %q", manifest.Profile, manifest.BaseCoverage)
 		}
@@ -130,6 +192,14 @@ func BuildModel(metadata CatalogMetadata, features []Feature, manifests []Manife
 			if !verificationStates[verification.State] {
 				return model, fmt.Errorf("manifest %q feature %q has invalid state %q", manifest.Profile, verification.FeatureID, verification.State)
 			}
+			if verification.State == "verified" {
+				return model, fmt.Errorf("manifest %q feature %q cannot manually declare verified; use executable normalized proof plan", manifest.Profile, verification.FeatureID)
+			}
+			if coverageClaims[manifest.Profile] != nil {
+				if _, claimed := coverageClaims[manifest.Profile][verification.FeatureID]; claimed {
+					return model, fmt.Errorf("manifest %q feature %q contradicts executable normalized proof plan", manifest.Profile, verification.FeatureID)
+				}
+			}
 			if len(verification.Evidence) == 0 {
 				return model, fmt.Errorf("manifest %q feature %q has no evidence", manifest.Profile, verification.FeatureID)
 			}
@@ -142,21 +212,24 @@ func BuildModel(metadata CatalogMetadata, features []Feature, manifests []Manife
 		if !manifestProfiles[profile] {
 			return model, fmt.Errorf("REALWORLD_PROFILES entry %q has no manifest", profile)
 		}
+		if coverageClaims[profile] == nil {
+			return model, fmt.Errorf("REALWORLD_PROFILES entry %q has no executable normalized proof plan", profile)
+		}
 	}
-	goldenIndex := map[string]*Golden{}
-	for i := range goldens {
-		golden := &goldens[i]
-		if !profileSet[golden.Profile] {
-			return model, fmt.Errorf("golden has unknown profile %q", golden.Profile)
+	shapeIndex := map[string]*ScenarioShape{}
+	for i := range shapes {
+		shape := &shapes[i]
+		if !profileSet[shape.Profile] {
+			return model, fmt.Errorf("shape has unknown profile %q", shape.Profile)
 		}
-		if !scenarioSet[golden.Scenario] {
-			return model, fmt.Errorf("golden has unknown scenario %q", golden.Scenario)
+		if !scenarioSet[shape.Scenario] {
+			return model, fmt.Errorf("shape has unknown scenario %q", shape.Scenario)
 		}
-		key := golden.Profile + "\x00" + golden.Scenario
-		if goldenIndex[key] != nil {
-			return model, fmt.Errorf("duplicate golden for %s/%s", golden.Profile, golden.Scenario)
+		key := shape.Profile + "\x00" + shape.Scenario
+		if shapeIndex[key] != nil {
+			return model, fmt.Errorf("duplicate shape for %s/%s", shape.Profile, shape.Scenario)
 		}
-		goldenIndex[key] = golden
+		shapeIndex[key] = shape
 	}
 	for _, feature := range features {
 		model.Verification[feature.ID] = map[string]Verification{}
@@ -168,14 +241,28 @@ func BuildModel(metadata CatalogMetadata, features []Feature, manifests []Manife
 					break
 				}
 			}
+			if claim, ok := coverageClaims[manifest.Profile][feature.ID]; ok {
+				claimScenarios := append([]string(nil), claim.Scenarios...)
+				if claim.AllScenarios {
+					claimScenarios = append([]string(nil), scenarios...)
+				}
+				verification = Verification{
+					FeatureID: feature.ID,
+					State:     "verified",
+					Basis:     claim.Basis,
+					Assertion: claim.Assertion,
+					Scenarios: claimScenarios,
+					Evidence:  append([]Evidence(nil), claim.Evidence...),
+				}
+			}
 			model.Verification[feature.ID][manifest.Profile] = verification
 		}
 	}
 	for _, scenario := range scenarios {
 		for _, manifest := range manifests {
 			state := manifest.BaseCoverage
-			if goldenIndex[manifest.Profile+"\x00"+scenario] != nil {
-				state = "exact_golden"
+			if shapeIndex[manifest.Profile+"\x00"+scenario] != nil {
+				state = "exact_shape"
 			}
 			model.Coverage = append(model.Coverage, CoverageCell{Profile: manifest.Profile, Scenario: scenario, State: state})
 		}
@@ -184,25 +271,25 @@ func BuildModel(metadata CatalogMetadata, features []Feature, manifests []Manife
 		for right := left + 1; right < len(profiles); right++ {
 			for _, scenario := range scenarios {
 				comparison := Comparison{LeftProfile: profiles[left], RightProfile: profiles[right], Scenario: scenario, ScopeDelta: map[string]int{}, StatusDelta: map[string]int{}}
-				leftGolden, rightGolden := goldenIndex[profiles[left]+"\x00"+scenario], goldenIndex[profiles[right]+"\x00"+scenario]
-				if leftGolden != nil && rightGolden != nil && leftGolden.ExactCounts && rightGolden.ExactCounts {
+				leftScenarioShape, rightScenarioShape := shapeIndex[profiles[left]+"\x00"+scenario], shapeIndex[profiles[right]+"\x00"+scenario]
+				if leftScenarioShape != nil && rightScenarioShape != nil && leftScenarioShape.ExactCounts && rightScenarioShape.ExactCounts {
 					comparison.Available = true
-					comparison.TraceDelta -= leftGolden.TraceCount
-					comparison.SpanDelta -= leftGolden.SpanCount
-					comparison.CountDelta -= len(leftGolden.Traces)
-					mergeDelta(comparison.ScopeDelta, leftGolden.Scopes, -1)
-					mergeDelta(comparison.StatusDelta, leftGolden.Statuses, -1)
-					comparison.TraceDelta += rightGolden.TraceCount
-					comparison.SpanDelta += rightGolden.SpanCount
-					comparison.CountDelta += len(rightGolden.Traces)
-					mergeDelta(comparison.ScopeDelta, rightGolden.Scopes, 1)
-					mergeDelta(comparison.StatusDelta, rightGolden.Statuses, 1)
+					comparison.TraceDelta -= leftScenarioShape.TraceCount
+					comparison.SpanDelta -= leftScenarioShape.SpanCount
+					comparison.CountDelta -= len(leftScenarioShape.Traces)
+					mergeDelta(comparison.ScopeDelta, leftScenarioShape.Scopes, -1)
+					mergeDelta(comparison.StatusDelta, leftScenarioShape.Statuses, -1)
+					comparison.TraceDelta += rightScenarioShape.TraceCount
+					comparison.SpanDelta += rightScenarioShape.SpanCount
+					comparison.CountDelta += len(rightScenarioShape.Traces)
+					mergeDelta(comparison.ScopeDelta, rightScenarioShape.Scopes, 1)
+					mergeDelta(comparison.StatusDelta, rightScenarioShape.Statuses, 1)
 				}
 				model.Comparisons = append(model.Comparisons, comparison)
 			}
 		}
 	}
-	model.Manifests, model.Goldens = manifests, goldens
+	model.Manifests, model.Shapes = manifests, shapes
 	return model, nil
 }
 
@@ -265,7 +352,7 @@ func mergeDelta(destination, values map[string]int, sign int) {
 	}
 }
 
-func SortInputs(features []Feature, manifests []Manifest, goldens []Golden) {
+func SortInputs(features []Feature, manifests []Manifest, shapes []ScenarioShape) {
 	sort.Slice(features, func(i, j int) bool {
 		if features[i].Category != features[j].Category {
 			return features[i].Category < features[j].Category
@@ -273,10 +360,10 @@ func SortInputs(features []Feature, manifests []Manifest, goldens []Golden) {
 		return features[i].ID < features[j].ID
 	})
 	sort.Slice(manifests, func(i, j int) bool { return manifests[i].Profile < manifests[j].Profile })
-	sort.Slice(goldens, func(i, j int) bool {
-		if goldens[i].Scenario != goldens[j].Scenario {
-			return goldens[i].Scenario < goldens[j].Scenario
+	sort.Slice(shapes, func(i, j int) bool {
+		if shapes[i].Scenario != shapes[j].Scenario {
+			return shapes[i].Scenario < shapes[j].Scenario
 		}
-		return goldens[i].Profile < goldens[j].Profile
+		return shapes[i].Profile < shapes[j].Profile
 	})
 }

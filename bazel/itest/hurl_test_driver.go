@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -12,38 +13,23 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
 
-type stringList []string
-
-func (values *stringList) String() string {
-	return strings.Join(*values, ",")
-}
-
-func (values *stringList) Set(value string) error {
-	*values = append(*values, value)
-	return nil
-}
-
 func main() {
-	var otelLibraries stringList
-	var otelImports stringList
 	baseURL := flag.String("base-url", "", "API origin to test, for example http://127.0.0.1:8000")
 	host := flag.String("host", "127.0.0.1", "API host when --port is used")
 	portFlag := flag.Int("port", 0, "API port (alternative to --base-url)")
 	serviceSuffix := flag.String("service-suffix", "", "rules_itest service label suffix used to discover an assigned port")
 	otelSinkSuffix := flag.String("otel-sink-suffix", "", "OTLP sink service suffix whose decoded telemetry dump must become non-empty")
-	flag.Var(&otelLibraries, "otel-library", "Scheme define-library source to include; repeatable")
-	flag.Var(&otelImports, "otel-import", "dot-separated Scheme library name to import; repeatable")
-	otelProgram := flag.String("otel-program", "", "Scheme validation program evaluated after importing the libraries")
-	otelMode := flag.String("otel-mode", "validate", "OTLP golden mode: validate or candidate")
-	otelCase := flag.String("otel-case", "", "OTLP golden identity in app/case form")
-	otelProfile := flag.String("otel-profile", "", "Scheme implementation profile name used by golden candidates")
+	otelProfileManifest := flag.String("otel-profile-manifest", "", "atomic OpenTelemetry profile manifest")
+	otelMode := flag.String("otel-mode", "validate", "OTLP profile mode: validate or shape candidate")
+	otelCase := flag.String("otel-case", "", "RealWorld scenario name")
 	otelXFail := flag.String("otel-xfail", "", "reason this case is expected to violate its OTLP contract")
-	otelSignals := flag.String("otel-signals", "traces,metrics,logs", "comma-separated OTLP signals the implementation is expected to export")
 	hurlRootfs := flag.String("hurl-rootfs", "bazel/itest/hurl_rootfs", "Hurl OCI rootfs in runfiles")
 	jobs := flag.Int("jobs", 4, "number of Hurl files to execute concurrently")
 	uid := flag.String("uid", "", "unique suffix used for API objects")
@@ -123,13 +109,22 @@ func main() {
 		fatal(fmt.Errorf("RealWorld Hurl suite failed: %w", err))
 	}
 	if *otelSinkSuffix != "" {
-		signals, err := parseOTLPSignals(*otelSignals)
+		profile, err := loadAtomicProfile(*otelProfileManifest, *otelCase, *otelMode)
 		if err != nil {
 			fatal(err)
 		}
-		validationErr := requireExportedTelemetry(*otelSinkSuffix, *otelMode, *otelCase, *otelProfile, otelLibraries, otelImports, *otelProgram, signals)
+		validationErr := requireExportedTelemetry(*otelSinkSuffix, *otelMode, *otelCase, profile)
 		if err := classifyOTLPValidation(validationErr, *otelXFail, *otelCase, os.Stderr); err != nil {
 			fatal(err)
+		}
+		if validationErr != nil {
+			var assertionFailure *otlpAssertionFailure
+			if !errors.As(validationErr, &assertionFailure) {
+				fatal(errors.New("internal error: accepted OTLP xfail is not an assertion failure"))
+			}
+			if err := emitExpectedFailureReceipt(profile, assertionFailure.capture, *otelXFail); err != nil {
+				fatal(err)
+			}
 		}
 	}
 	fmt.Printf("RealWorld Hurl suite passed against %s (%d files, %d jobs)\n", endpoint, len(specs), *jobs)
@@ -153,8 +148,112 @@ type sinkRecord struct {
 	Payload json.RawMessage `json:"payload"`
 }
 
+type atomicProfileManifest struct {
+	SchemaVersion  int               `json:"schemaVersion"`
+	Profile        string            `json:"profile"`
+	Signals        []string          `json:"signals"`
+	ProofPlan      string            `json:"proofPlan"`
+	Program        string            `json:"program"`
+	Libraries      []string          `json:"libraries"`
+	Imports        []string          `json:"imports"`
+	ScenarioShapes map[string]string `json:"scenarioShapes"`
+}
+
+type proofPlanProof struct {
+	FeatureID      string   `json:"featureId"`
+	Assertion      string   `json:"assertion"`
+	Basis          string   `json:"basis"`
+	EvidencePolicy string   `json:"evidencePolicy"`
+	Scenarios      []string `json:"scenarios"`
+	Sources        []string `json:"sources"`
+}
+
+type normalizedProofPlan struct {
+	SchemaVersion   int               `json:"schemaVersion"`
+	Profile         string            `json:"profile"`
+	DisplayName     string            `json:"displayName"`
+	Language        string            `json:"language"`
+	Framework       string            `json:"framework"`
+	ServiceName     string            `json:"serviceName"`
+	Signals         []string          `json:"signals"`
+	Implementations []string          `json:"implementations"`
+	Sources         map[string]string `json:"sources"`
+	Proofs          []proofPlanProof  `json:"proofs"`
+}
+
+type atomicProfile struct {
+	ID, Scenario, Program, ValidationMode string
+	Signals                               map[string]bool
+	Libraries, Imports                    []string
+	Plan, Shape                           []byte
+	ExpectedProofs                        []proofPlanProof
+}
+
+func loadAtomicProfile(value, scenario, mode string) (atomicProfile, error) {
+	var profile atomicProfile
+	if value == "" {
+		return profile, errors.New("--otel-profile-manifest is required with --otel-sink-suffix")
+	}
+	if err := schemeIdentifier(scenario); err != nil {
+		return profile, fmt.Errorf("invalid OTLP scenario: %w", err)
+	}
+	path, err := resolvePath(value, false)
+	if err != nil {
+		return profile, fmt.Errorf("resolve atomic profile: %w", err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return profile, err
+	}
+	decoder := json.NewDecoder(file)
+	decoder.DisallowUnknownFields()
+	var manifest atomicProfileManifest
+	err = decoder.Decode(&manifest)
+	file.Close()
+	if err != nil {
+		return profile, fmt.Errorf("decode atomic profile: %w", err)
+	}
+	if manifest.SchemaVersion != 1 || manifest.Profile == "" || manifest.ProofPlan == "" || manifest.Program == "" || len(manifest.Libraries) == 0 {
+		return profile, errors.New("atomic profile manifest is incomplete")
+	}
+	if err := schemeIdentifier(manifest.Profile); err != nil {
+		return profile, fmt.Errorf("invalid profile id: %w", err)
+	}
+	profile.ID, profile.Scenario = manifest.Profile, scenario
+	profile.Signals, err = parseOTLPSignals(strings.Join(manifest.Signals, ","))
+	if err != nil {
+		return profile, err
+	}
+	profile.Libraries = append([]string(nil), manifest.Libraries...)
+	profile.Imports = append([]string(nil), manifest.Imports...)
+	profile.Program = manifest.Program
+	profile.Plan = []byte(manifest.ProofPlan)
+	profile.ValidationMode = "contract"
+	if shape := manifest.ScenarioShapes[scenario]; shape != "" && mode != "candidate" {
+		profile.ValidationMode, profile.Shape = "exact", []byte(shape)
+		profile.Libraries = append(profile.Libraries, shape)
+		profile.Imports = append(profile.Imports, "realworld.shape."+manifest.Profile+"."+scenario)
+	}
+	var plan normalizedProofPlan
+	decoder = json.NewDecoder(bytes.NewReader(profile.Plan))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&plan); err != nil {
+		return profile, fmt.Errorf("decode normalized proof plan: %w", err)
+	}
+	if plan.SchemaVersion != 1 || plan.Profile != profile.ID {
+		return profile, errors.New("normalized proof plan does not match profile")
+	}
+	for _, proof := range plan.Proofs {
+		if len(proof.Scenarios) == 0 || containsString(proof.Scenarios, scenario) {
+			profile.ExpectedProofs = append(profile.ExpectedProofs, proof)
+		}
+	}
+	return profile, nil
+}
+
 type otlpAssertionFailure struct {
-	cause error
+	cause   error
+	capture []byte
 }
 
 func (failure *otlpAssertionFailure) Error() string {
@@ -165,18 +264,18 @@ func (failure *otlpAssertionFailure) Unwrap() error {
 	return failure.cause
 }
 
-func classifyOTLPValidation(validationErr error, xfailReason, goldenCase string, output io.Writer) error {
+func classifyOTLPValidation(validationErr error, xfailReason, scenarioName string, output io.Writer) error {
 	if xfailReason == "" {
 		return validationErr
 	}
 	if validationErr == nil {
-		return fmt.Errorf("XPASS: OTLP contract %s unexpectedly passed; remove its xfail (%s)", goldenCase, xfailReason)
+		return fmt.Errorf("XPASS: OTLP contract %s unexpectedly passed; remove its xfail (%s)", scenarioName, xfailReason)
 	}
 	var assertionFailure *otlpAssertionFailure
 	if !errors.As(validationErr, &assertionFailure) {
-		return fmt.Errorf("OTLP xfail %s applies only to contract assertions; infrastructure failed instead: %w", goldenCase, validationErr)
+		return fmt.Errorf("OTLP xfail %s applies only to contract assertions; infrastructure failed instead: %w", scenarioName, validationErr)
 	}
-	fmt.Fprintf(output, "XFAIL: OTLP contract %s violated as expected (%s):\n%v\n", goldenCase, xfailReason, validationErr)
+	fmt.Fprintf(output, "XFAIL: OTLP contract %s violated as expected (%s):\n%v\n", scenarioName, xfailReason, validationErr)
 	return nil
 }
 
@@ -248,17 +347,12 @@ func parseOTLPSignals(value string) (map[string]bool, error) {
 	return signals, nil
 }
 
-func requireExportedTelemetry(serviceSuffix, mode, goldenCase, profile string, libraries, imports []string, program string, signals map[string]bool) error {
+func requireExportedTelemetry(serviceSuffix, mode, scenario string, profile atomicProfile) error {
 	if mode != "validate" && mode != "candidate" {
 		return fmt.Errorf("invalid --otel-mode %q", mode)
 	}
-	if len(libraries) == 0 || len(imports) == 0 || program == "" {
-		return errors.New("--otel-library, --otel-import, and --otel-program are required for OTLP validation")
-	}
-	if mode == "candidate" {
-		if _, _, err := goldenCandidateParts(goldenCase); err != nil {
-			return err
-		}
+	if err := schemeIdentifier(scenario); err != nil {
+		return err
 	}
 	port, err := assignedPort(serviceSuffix)
 	if err != nil {
@@ -294,14 +388,14 @@ func requireExportedTelemetry(serviceSuffix, mode, goldenCase, profile string, l
 					lastRequestError = "none"
 				}
 				if stats.TraceSpans > 0 &&
-					(!signals["metrics"] || stats.MetricRequests > 0) &&
-					(!signals["logs"] || stats.LogRequests > 0) {
+					(!profile.Signals["metrics"] || stats.MetricRequests > 0) &&
+					(!profile.Signals["logs"] || stats.LogRequests > 0) {
 					if stats.TraceRequests != lastTraceRequests || stats.TraceSpans != lastTraceSpans {
 						lastTraceRequests = stats.TraceRequests
 						lastTraceSpans = stats.TraceSpans
 						stableSince = time.Now()
 					} else if !stableSince.IsZero() && time.Since(stableSince) >= 2*time.Second {
-						return validateTelemetryDump(http.Client{Timeout: time.Minute}, baseURL, mode, goldenCase, profile, libraries, imports, program, stats, signals)
+						return validateTelemetryDump(http.Client{Timeout: time.Minute}, baseURL, mode, scenario, profile, stats)
 					}
 				}
 			}
@@ -313,7 +407,7 @@ func requireExportedTelemetry(serviceSuffix, mode, goldenCase, profile string, l
 	}
 }
 
-func validateTelemetryDump(client http.Client, baseURL, mode, goldenCase, profile string, libraries, imports []string, program string, stats sinkStats, signals map[string]bool) error {
+func validateTelemetryDump(client http.Client, baseURL, mode, scenario string, profile atomicProfile, stats sinkStats) error {
 	response, err := client.Get(baseURL + "/dump")
 	if err != nil {
 		return fmt.Errorf("read quiescent OTLP dump: %w", err)
@@ -336,13 +430,13 @@ func validateTelemetryDump(client http.Client, baseURL, mode, goldenCase, profil
 			seen[record.Signal] = true
 		}
 	}
-	for signal := range signals {
+	for signal := range profile.Signals {
 		if !seen[signal] {
-			emitFailedCapture(goldenCase, contents)
-			return &otlpAssertionFailure{cause: fmt.Errorf("OTLP dump at %s lacks %s with service.name", baseURL, signal)}
+			emitFailedCapture(profile.ID+"/"+scenario, contents)
+			return &otlpAssertionFailure{cause: fmt.Errorf("OTLP dump at %s lacks %s with service.name", baseURL, signal), capture: append([]byte(nil), contents...)}
 		}
 	}
-	source, err := readSchemeBundle(libraries, imports, program, goldenCase)
+	source, err := readSchemeBundle(profile.Libraries, profile.Imports, profile.Program, scenario, profile.ValidationMode)
 	if err != nil {
 		return err
 	}
@@ -368,18 +462,163 @@ func validateTelemetryDump(client http.Client, baseURL, mode, goldenCase, profil
 		return fmt.Errorf("read Scheme validation result: %w", readErr)
 	}
 	if validationResponse.StatusCode != http.StatusOK {
-		emitFailedCapture(goldenCase, contents)
-		return schemeValidationFailure(validationResponse.StatusCode, validationOutput)
+		emitFailedCapture(profile.ID+"/"+scenario, contents)
+		failure := schemeValidationFailure(validationResponse.StatusCode, validationOutput)
+		var assertionFailure *otlpAssertionFailure
+		if errors.As(failure, &assertionFailure) {
+			assertionFailure.capture = append([]byte(nil), contents...)
+		}
+		return failure
+	}
+	proofs, err := validateProofSet(profile.ExpectedProofs, validationOutput)
+	if err != nil {
+		emitFailedCapture(profile.ID+"/"+scenario, contents)
+		return &otlpAssertionFailure{cause: err, capture: append([]byte(nil), contents...)}
 	}
 	if mode == "candidate" {
-		if err := emitGoldenCandidate(client, baseURL, goldenCase, profile, contents); err != nil {
+		if err := emitShapeCandidate(client, baseURL, scenario, profile.ID, contents); err != nil {
 			return err
 		}
-		fmt.Printf("Validated OTLP contract and emitted golden candidate for %s: %d spans in %d trace requests, plus the declared non-trace signals\n", goldenCase, stats.TraceSpans, stats.TraceRequests)
+		fmt.Printf("Validated OTLP contract and emitted shape candidate for %s/%s: %d spans in %d trace requests\n", profile.ID, scenario, stats.TraceSpans, stats.TraceRequests)
 		return nil
 	}
-	fmt.Printf("Verified quiescent OTLP Scheme golden: %d spans in %d trace requests, plus the declared non-trace signals (%s): %s", stats.TraceSpans, stats.TraceRequests, baseURL, validationOutput)
+	if err := emitValidationReceipt(profile, contents, proofs); err != nil {
+		return err
+	}
+	fmt.Printf("Verified quiescent OTLP profile: %d spans in %d trace requests (%s): %s", stats.TraceSpans, stats.TraceRequests, baseURL, validationOutput)
 	return nil
+}
+
+var proofMarker = regexp.MustCompile(`\[\[OTLP-PROOF-V1\|([^|\]]+)\|([^|\]]+)\|([^|\]]+)\]\]`)
+var commitRevision = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+type receiptProof struct {
+	FeatureID string `json:"featureId"`
+	Assertion string `json:"assertion"`
+	Basis     string `json:"basis"`
+	Result    string `json:"result"`
+}
+
+type validationReceipt struct {
+	SchemaVersion       int            `json:"schemaVersion"`
+	Revision            string         `json:"revision"`
+	Profile             string         `json:"profile"`
+	Scenario            string         `json:"scenario"`
+	ProofPlanSHA256     string         `json:"proofPlanSha256"`
+	CaptureSHA256       string         `json:"captureSha256"`
+	ValidationMode      string         `json:"validationMode"`
+	Outcome             string         `json:"outcome"`
+	XFailReason         string         `json:"xfailReason,omitempty"`
+	ScenarioShapeSHA256 string         `json:"scenarioShapeSha256,omitempty"`
+	Proofs              []receiptProof `json:"proofs"`
+}
+
+func validateProofSet(expected []proofPlanProof, output []byte) ([]receiptProof, error) {
+	actual := map[string]receiptProof{}
+	for _, match := range proofMarker.FindAllSubmatch(output, -1) {
+		proof := receiptProof{FeatureID: string(match[1]), Assertion: string(match[2]), Basis: string(match[3]), Result: "pass"}
+		key := proof.FeatureID + "\x00" + proof.Assertion + "\x00" + proof.Basis
+		if _, exists := actual[key]; exists {
+			return nil, fmt.Errorf("duplicate executed proof for %s/%s", proof.FeatureID, proof.Assertion)
+		}
+		actual[key] = proof
+	}
+	wanted := map[string]proofPlanProof{}
+	for _, proof := range expected {
+		key := proof.FeatureID + "\x00" + proof.Assertion + "\x00" + proof.Basis
+		if _, exists := wanted[key]; exists {
+			return nil, fmt.Errorf("normalized plan duplicates proof %s", proof.FeatureID)
+		}
+		wanted[key] = proof
+	}
+	if len(actual) != len(wanted) {
+		return nil, fmt.Errorf("executed proof set has %d entries, normalized plan requires %d", len(actual), len(wanted))
+	}
+	keys := make([]string, 0, len(wanted))
+	for key := range wanted {
+		if _, ok := actual[key]; !ok {
+			proof := wanted[key]
+			return nil, fmt.Errorf("missing proof %s/%s (%s)", proof.FeatureID, proof.Assertion, proof.Basis)
+		}
+		keys = append(keys, key)
+	}
+	for key, proof := range actual {
+		if _, ok := wanted[key]; !ok {
+			return nil, fmt.Errorf("unexpected proof %s/%s", proof.FeatureID, proof.Assertion)
+		}
+	}
+	sort.Strings(keys)
+	proofs := make([]receiptProof, 0, len(keys))
+	for _, key := range keys {
+		proofs = append(proofs, actual[key])
+	}
+	return proofs, nil
+}
+
+func emitValidationReceipt(profile atomicProfile, capture []byte, proofs []receiptProof) error {
+	return emitReceipt(profile, capture, proofs, "verified", "")
+}
+
+func emitExpectedFailureReceipt(profile atomicProfile, capture []byte, reason string) error {
+	if reason == "" {
+		return errors.New("an OTLP xfail receipt requires a reason")
+	}
+	if len(capture) == 0 {
+		return errors.New("an OTLP xfail receipt requires the rejected capture")
+	}
+	return emitReceipt(profile, capture, []receiptProof{}, "xfail", reason)
+}
+
+func emitReceipt(profile atomicProfile, capture []byte, proofs []receiptProof, outcome, xfailReason string) error {
+	revision := os.Getenv("OTEL_TEST_REVISION")
+	if revision == "" {
+		return nil
+	}
+	if !commitRevision.MatchString(revision) {
+		return errors.New("a lowercase 40-character current revision is required to emit an OTLP receipt")
+	}
+	root := os.Getenv("TEST_UNDECLARED_OUTPUTS_DIR")
+	if root == "" {
+		return errors.New("TEST_UNDECLARED_OUTPUTS_DIR is unavailable for OTLP receipt")
+	}
+	planDigest, captureDigest := sha256.Sum256(profile.Plan), sha256.Sum256(capture)
+	receipt := validationReceipt{
+		SchemaVersion: 1, Revision: revision, Profile: profile.ID, Scenario: profile.Scenario,
+		ProofPlanSHA256: fmt.Sprintf("%x", planDigest), CaptureSHA256: fmt.Sprintf("%x", captureDigest),
+		ValidationMode: profile.ValidationMode, Outcome: outcome, XFailReason: xfailReason, Proofs: proofs,
+	}
+	if profile.ValidationMode == "exact" {
+		digest := sha256.Sum256(profile.Shape)
+		receipt.ScenarioShapeSHA256 = fmt.Sprintf("%x", digest)
+	}
+	encoded, err := json.MarshalIndent(receipt, "", "  ")
+	if err != nil {
+		return err
+	}
+	encoded = append(encoded, '\n')
+	directory := filepath.Join(root, "receipts", profile.ID)
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		return err
+	}
+	path := filepath.Join(directory, profile.Scenario+".json")
+	if err := os.WriteFile(path, encoded, 0o644); err != nil {
+		return fmt.Errorf("write OTLP receipt: %w", err)
+	}
+	capturePath := filepath.Join(directory, profile.Scenario+".capture.json")
+	if err := os.WriteFile(capturePath, capture, 0o644); err != nil {
+		_ = os.Remove(path)
+		return fmt.Errorf("write accepted OTLP capture: %w", err)
+	}
+	return nil
+}
+
+func containsString(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 func payloadHasServiceName(payload json.RawMessage, signal string) bool {
@@ -484,18 +723,10 @@ func readSinkStats(client http.Client, baseURL string) (sinkStats, error) {
 	return stats, nil
 }
 
-func readSchemeBundle(libraries, imports []string, programValue, goldenCase string) ([]byte, error) {
+func readSchemeBundle(libraries, imports []string, programValue, scenario, validationMode string) ([]byte, error) {
 	var source []byte
 	for _, item := range libraries {
-		path, err := resolvePath(item, false)
-		if err != nil {
-			return nil, fmt.Errorf("resolve Scheme library %q: %w", item, err)
-		}
-		contents, err := os.ReadFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("read Scheme library %q: %w", path, err)
-		}
-		source = append(source, contents...)
+		source = append(source, item...)
 		source = append(source, '\n')
 	}
 	source = append(source, []byte("(import (scheme base) (scheme read)")...)
@@ -508,25 +739,19 @@ func readSchemeBundle(libraries, imports []string, programValue, goldenCase stri
 		source = append(source, declaration...)
 	}
 	source = append(source, []byte(")\n")...)
-	parts := strings.SplitN(goldenCase, "/", 2)
-	if len(parts) != 2 {
-		return nil, fmt.Errorf("--otel-case must use app/case form, got %q", goldenCase)
-	}
-	if err := schemeIdentifier(parts[1]); err != nil {
+	if err := schemeIdentifier(scenario); err != nil {
 		return nil, fmt.Errorf("invalid OTLP scenario: %w", err)
 	}
 	source = append(source, []byte("(define scenario-name '")...)
-	source = append(source, parts[1]...)
+	source = append(source, scenario...)
 	source = append(source, []byte(")\n")...)
-	program, err := resolvePath(programValue, false)
-	if err != nil {
-		return nil, fmt.Errorf("resolve Scheme program %q: %w", programValue, err)
+	source = append(source, []byte("(define validation-mode '")...)
+	source = append(source, validationMode...)
+	source = append(source, []byte(")\n")...)
+	if validationMode != "exact" {
+		source = append(source, []byte("(define scenario-shape '())\n")...)
 	}
-	contents, err := os.ReadFile(program)
-	if err != nil {
-		return nil, fmt.Errorf("read Scheme program %q: %w", program, err)
-	}
-	source = append(source, contents...)
+	source = append(source, programValue...)
 	source = append(source, '\n')
 	return source, nil
 }
@@ -572,85 +797,56 @@ func schemeLibraryName(value string) ([]byte, error) {
 	return []byte("(" + strings.Join(parts, " ") + ")"), nil
 }
 
-func emitGoldenCandidate(client http.Client, baseURL, goldenCase, configuredProfile string, capture []byte) error {
-	app, scenario, err := goldenCandidateParts(goldenCase)
-	if err != nil {
-		return err
+func emitShapeCandidate(client http.Client, baseURL, scenario, profile string, capture []byte) error {
+	app := profile
+	if strings.Contains(profile, "aiohttp") {
+		app = "aiohttp"
+	}
+	if strings.Contains(profile, "django") {
+		app = "django"
+	}
+	if strings.Contains(profile, "gin") {
+		app = "gin"
 	}
 	response, err := client.Get(baseURL + "/candidate?app=" + url.QueryEscape(app))
 	if err != nil {
-		return fmt.Errorf("generate OTLP Scheme golden candidate: %w", err)
+		return fmt.Errorf("generate OTLP Scheme shape candidate: %w", err)
 	}
-	golden, readErr := io.ReadAll(response.Body)
+	shape, readErr := io.ReadAll(response.Body)
 	response.Body.Close()
 	if readErr != nil {
-		return fmt.Errorf("read OTLP Scheme golden candidate: %w", readErr)
+		return fmt.Errorf("read OTLP Scheme shape candidate: %w", readErr)
 	}
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("generate OTLP Scheme golden candidate: HTTP %d: %s", response.StatusCode, golden)
+		return fmt.Errorf("generate OTLP Scheme shape candidate: HTTP %d: %s", response.StatusCode, shape)
 	}
-	profile, err := implementationProfile(app, configuredProfile)
-	if err != nil {
-		return err
-	}
-	golden = append([]byte(fmt.Sprintf("(define-library (realworld detail %s %s)\n  (export expected-trace-shapes)\n  (import (scheme base) (otel trace-shape))\n  (begin\n", profile, scenario)), golden...)
-	golden = append(golden, []byte("  ))\n")...)
+	shape = append([]byte(fmt.Sprintf("(define-library (realworld shape %s %s)\n  (export scenario-shape)\n  (import (scheme base) (otel trace-shape))\n  (begin\n", profile, scenario)), shape...)
+	shape = append(shape, []byte("  ))\n")...)
 	root := os.Getenv("TEST_UNDECLARED_OUTPUTS_DIR")
 	if root == "" {
-		return errors.New("TEST_UNDECLARED_OUTPUTS_DIR is unavailable for golden candidate")
+		return errors.New("TEST_UNDECLARED_OUTPUTS_DIR is unavailable for shape candidate")
 	}
-	directory := filepath.Join(root, "goldens", profile, scenario)
+	directory := filepath.Join(root, "shapes", profile, scenario)
 	if err := os.MkdirAll(directory, 0o755); err != nil {
-		return fmt.Errorf("create golden candidate output directory: %w", err)
+		return fmt.Errorf("create shape candidate output directory: %w", err)
 	}
 	capturePath := filepath.Join(directory, "capture.json")
-	goldenPath := filepath.Join(directory, "golden.scm")
+	shapePath := filepath.Join(directory, "shape.scm")
 	if err := os.WriteFile(capturePath, capture, 0o644); err != nil {
 		return fmt.Errorf("write raw candidate capture: %w", err)
 	}
-	if err := os.WriteFile(goldenPath, golden, 0o644); err != nil {
-		return fmt.Errorf("write Scheme golden candidate: %w", err)
+	if err := os.WriteFile(shapePath, shape, 0o644); err != nil {
+		return fmt.Errorf("write Scheme shape candidate: %w", err)
 	}
 	return nil
 }
 
-func goldenCandidateParts(value string) (string, string, error) {
-	parts := strings.Split(value, "/")
-	if len(parts) != 2 {
-		return "", "", fmt.Errorf("--otel-case must use app/case form, got %q", value)
-	}
-	if err := schemeIdentifier(parts[0]); err != nil {
-		return "", "", fmt.Errorf("invalid OTLP application: %w", err)
-	}
-	if err := schemeIdentifier(parts[1]); err != nil {
-		return "", "", fmt.Errorf("invalid OTLP scenario: %w", err)
-	}
-	return parts[0], parts[1], nil
-}
-
-func implementationProfile(app, configured string) (string, error) {
-	if configured != "" {
-		if err := schemeIdentifier(configured); err != nil {
-			return "", fmt.Errorf("invalid OTLP implementation profile: %w", err)
-		}
-		return configured, nil
-	}
-	switch app {
-	case "aiohttp":
-		return "python-aiohttp-auto-v0-65b0", nil
-	case "django":
-		return "python-django-auto-v0-65b0", nil
-	default:
-		return "", fmt.Errorf("unknown OTLP implementation profile for %q", app)
-	}
-}
-
-func emitFailedCapture(goldenCase string, capture []byte) {
+func emitFailedCapture(scenarioName string, capture []byte) {
 	root := os.Getenv("TEST_UNDECLARED_OUTPUTS_DIR")
 	if root == "" {
 		return
 	}
-	name := strings.NewReplacer("/", "-", "\\", "-").Replace(goldenCase)
+	name := strings.NewReplacer("/", "-", "\\", "-").Replace(scenarioName)
 	if name == "" {
 		name = "otel"
 	}

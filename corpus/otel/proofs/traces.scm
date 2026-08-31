@@ -1,0 +1,18 @@
+(define-library (otel proofs traces)
+  (export traces-proof-rules)
+  (import (scheme base))
+  (begin
+(define traces-proof-rules
+  '(("traces.tracerprovider.get-a-tracer" trace/scope-associated requires-immutable-source)
+    ("traces.tracerprovider.get-a-tracer-with-schema-url" trace/schema-url-present requires-immutable-source)
+    ("traces.tracerprovider.associate-tracer-with-instrumentationscope" trace/scope-associated requires-immutable-source)
+    ("traces.tracer.create-a-new-span" span/present requires-immutable-source)
+    ("traces.span.create-root-span" span/root-present wire-sufficient)
+    ("traces.span.create-with-default-parent-active-span" span/parent-valid-present requires-immutable-source)
+    ("traces.span.create-with-parent-from-context" span/parent-valid-present requires-immutable-source)
+    ("traces.span.end" span/all-completed wire-sufficient)
+    ("traces.span-attributes.string-type" span/string-attribute-present wire-sufficient)
+    ("traces.span-attributes.signed-int64-type" span/int64-attribute-present wire-sufficient)
+    ("traces.span-exceptions.recordexception" span/exception-events-complete requires-immutable-source)
+    ("traces.span-exceptions.recordexception-with-extra-parameters" span/exception-events-complete requires-immutable-source)))
+  ))

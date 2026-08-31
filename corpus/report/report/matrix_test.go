@@ -84,7 +84,7 @@ func TestImportMatrixPreservesEscapedPipes(t *testing.T) {
 
 func TestCheckedInCatalogImportsEveryCategory(t *testing.T) {
 	args := flag.Args()
-	if len(args) != 2 {
+	if len(args) < 2 {
 		t.Fatalf("expected catalog and matrix runfiles, got %q", args)
 	}
 	runfile := func(path string) string {

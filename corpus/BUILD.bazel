@@ -1,9 +1,101 @@
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
-load("//corpus:defs.bzl", "REALWORLD_HURL_CASES", "REALWORLD_PROFILES")
+load("//corpus:defs.bzl", "REALWORLD_HURL_CASES")
+load("//corpus:profile.bzl", "otel_profile", "otel_standard_registry")
 
 package(default_visibility = ["//visibility:public"])
 
 exports_files(glob(["**/*.scm"]))
+
+go_binary(
+    name = "standard_registry_generator",
+    srcs = ["report/registry/main.go"],
+    deps = [":feature_parity_lib"],
+)
+
+go_binary(
+    name = "profile_plan_compiler",
+    srcs = ["report/profilecmd/main.go"],
+    deps = [":feature_parity_lib"],
+)
+
+otel_standard_registry(
+    name = "otel_standard_registry",
+    matrix = "report/data/spec-compliance-matrix.md",
+    metadata = "report/data/catalog.json",
+)
+
+filegroup(
+    name = "otel_standard_registry_json",
+    srcs = [":otel_standard_registry"],
+    output_group = "registry",
+)
+
+_PYTHON_IMPLEMENTATION_LAYERS = [
+    "otel/implementations/python-sdk-v1.44.0.scm",
+    "otel/implementations/python-auto-v0.65b0.scm",
+]
+
+otel_profile(
+    name = "python_aiohttp_profile",
+    profile_id = "python-aiohttp-auto-v0-65b0",
+    specification = "realworld/profiles/python-aiohttp-auto-v0-65b0.scm",
+    implementation_libraries = _PYTHON_IMPLEMENTATION_LAYERS + ["otel/implementations/aiohttp-v0.65b0.scm"],
+    runtime_libraries = ["realworld/profiles/python.scm"],
+    scenarios = REALWORLD_HURL_CASES,
+    scenario_shapes = {
+        "realworld/shapes/python-aiohttp-auto-v0-65b0/{}/shape.scm".format(scenario): scenario
+        for scenario in REALWORLD_HURL_CASES
+    },
+    signals = ["traces", "metrics", "logs"],
+    standard_registry = ":otel_standard_registry",
+)
+
+filegroup(
+    name = "python_aiohttp_proof_plan",
+    srcs = [":python_aiohttp_profile"],
+    output_group = "proof_plan",
+)
+
+otel_profile(
+    name = "python_django_profile",
+    profile_id = "python-django-auto-v0-65b0",
+    specification = "realworld/profiles/python-django-auto-v0-65b0.scm",
+    implementation_libraries = _PYTHON_IMPLEMENTATION_LAYERS + ["otel/implementations/django-v0.65b0.scm"],
+    runtime_libraries = ["realworld/profiles/python.scm"],
+    scenarios = REALWORLD_HURL_CASES,
+    scenario_shapes = {
+        "realworld/shapes/python-django-auto-v0-65b0/{}/shape.scm".format(scenario): scenario
+        for scenario in REALWORLD_HURL_CASES
+    },
+    signals = ["traces", "metrics", "logs"],
+    standard_registry = ":otel_standard_registry",
+)
+
+filegroup(
+    name = "python_django_proof_plan",
+    srcs = [":python_django_profile"],
+    output_group = "proof_plan",
+)
+
+otel_profile(
+    name = "go_gin_profile",
+    profile_id = "go-gin-otelbuild-v1-1-0",
+    specification = "realworld/profiles/go-gin-otelbuild-v1-1-0.scm",
+    implementation_libraries = [
+        "otel/implementations/go-compile-v1.1.0.scm",
+        "otel/implementations/go-runtime-v0.70.0.scm",
+    ],
+    runtime_libraries = ["realworld/profiles/go.scm"],
+    scenarios = REALWORLD_HURL_CASES,
+    signals = ["traces", "metrics"],
+    standard_registry = ":otel_standard_registry",
+)
+
+filegroup(
+    name = "go_gin_proof_plan",
+    srcs = [":go_gin_profile"],
+    output_group = "proof_plan",
+)
 
 config_setting(
     name = "cloudflared_linux_amd64",
@@ -45,21 +137,6 @@ config_setting(
     ],
 )
 
-_REPORT_PROFILES = REALWORLD_PROFILES
-_REPORT_SCENARIOS = REALWORLD_HURL_CASES
-
-_REPORT_MANIFESTS = ["report/manifests/{}.json".format(profile) for profile in _REPORT_PROFILES]
-_REPORT_GOLDENS = [
-    golden
-    for golden in glob(["realworld/goldens/*/*/golden.scm"])
-    if golden.split("/")[2] in _REPORT_PROFILES and golden.split("/")[3] in _REPORT_SCENARIOS
-]
-_REPORT_EVIDENCE = [
-    "otel/validation.scm",
-    "realworld/contract.scm",
-    "realworld/programs/validate.scm",
-    "realworld/programs/validate_contract.scm",
-] + ["realworld/profiles/{}.scm".format(profile) for profile in _REPORT_PROFILES] + _REPORT_GOLDENS
 go_library(
     name = "feature_parity_lib",
     srcs = glob(
@@ -73,6 +150,15 @@ go_library(
 go_binary(
     name = "feature_parity_generator",
     srcs = ["report/cmd/main.go"],
+    deps = [":feature_parity_lib"],
+)
+
+go_test(
+    name = "feature_parity_generator_test",
+    srcs = [
+        "report/cmd/main.go",
+        "report/cmd/main_test.go",
+    ],
     deps = [":feature_parity_lib"],
 )
 
@@ -93,15 +179,13 @@ go_library(
 go_binary(
     name = "feature_parity_http_server",
     srcs = ["report/server/cmd/main.go"],
-    args = ["--file=$(rootpath :feature_parity_report)"],
-    data = [":feature_parity_report"],
     deps = [":feature_parity_http_server_lib"],
 )
 
 go_binary(
     name = "feature_parity_public_report",
     srcs = ["report/server/cmd/main.go"],
-    args = ["--file=$(rootpath :feature_parity_report)"] + select(
+    args = select(
         {
             ":cloudflared_linux_amd64": ["--cloudflared=$(rootpath @cloudflared_linux_amd64//file)"],
             ":cloudflared_linux_arm64": ["--cloudflared=$(rootpath @cloudflared_linux_arm64//file)"],
@@ -111,7 +195,7 @@ go_binary(
         },
         no_match_error = "feature_parity_public_report supports Linux/macOS on x86-64/ARM64 and Windows on x86-64",
     ),
-    data = [":feature_parity_report"] + select(
+    data = select(
         {
             ":cloudflared_linux_amd64": ["@cloudflared_linux_amd64//file"],
             ":cloudflared_linux_arm64": ["@cloudflared_linux_arm64//file"],
@@ -136,10 +220,26 @@ go_test(
     args = [
         "$(rootpath report/data/catalog.json)",
         "$(rootpath report/data/spec-compliance-matrix.md)",
+        "$(rootpath :otel_standard_registry_json)",
+        "$(rootpath :go_gin_proof_plan)",
+        "$(rootpath :python_aiohttp_proof_plan)",
+        "$(rootpath :python_django_proof_plan)",
+        "$(rootpath realworld/profiles/go-gin-otelbuild-v1-1-0.scm)",
+        "$(rootpath realworld/profiles/python-aiohttp-auto-v0-65b0.scm)",
+        "$(rootpath realworld/profiles/python-django-auto-v0-65b0.scm)",
+        "$(rootpath realworld/contract.scm)",
     ],
     data = [
         "report/data/catalog.json",
         "report/data/spec-compliance-matrix.md",
+        ":otel_standard_registry_json",
+        ":go_gin_proof_plan",
+        ":python_aiohttp_proof_plan",
+        ":python_django_proof_plan",
+        "realworld/contract.scm",
+        "realworld/profiles/go-gin-otelbuild-v1-1-0.scm",
+        "realworld/profiles/python-aiohttp-auto-v0-65b0.scm",
+        "realworld/profiles/python-django-auto-v0-65b0.scm",
     ],
     embed = [":feature_parity_lib"],
 )
@@ -151,35 +251,4 @@ go_test(
         "report/updater/main_test.go",
     ],
     deps = [":feature_parity_lib"],
-)
-
-genrule(
-    name = "feature_parity_report",
-    srcs = [
-        "report/data/catalog.json",
-        "report/data/spec-compliance-matrix.md",
-    ] + _REPORT_MANIFESTS + _REPORT_EVIDENCE,
-    outs = ["feature-parity-report.html"],
-    cmd = " ".join([
-        "$(location :feature_parity_generator)",
-        "--matrix=$(location report/data/spec-compliance-matrix.md)",
-        "--metadata=$(location report/data/catalog.json)",
-        "--profiles={}".format(",".join(_REPORT_PROFILES)),
-        "--scenarios={}".format(",".join(_REPORT_SCENARIOS)),
-        "--repository-revision=$${REPORT_REVISION:-main}",
-    ] + [
-        "--manifest=$(location {})".format(manifest)
-        for manifest in _REPORT_MANIFESTS
-    ] + [
-        "--evidence-ref={}".format(evidence)
-        for evidence in _REPORT_EVIDENCE
-    ] + [
-        "--golden='{profile},{scenario},$(location {golden}),https://github.com/pawelchcki/rules_stests/blob/main/corpus/{golden}'".format(
-            golden = golden,
-            profile = golden.split("/")[2],
-            scenario = golden.split("/")[3],
-        )
-        for golden in _REPORT_GOLDENS
-    ] + ["--out=$@"]),
-    tools = [":feature_parity_generator"],
 )
