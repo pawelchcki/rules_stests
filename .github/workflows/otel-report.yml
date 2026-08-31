@@ -16,6 +16,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - uses: bazel-contrib/setup-bazel@8cb04a772ab4c1eb984e9c1b493a182e96c5e425 # 0.19.0
         with:
@@ -23,44 +24,22 @@ jobs:
 
       - name: Run all 39 profile scenarios without cached test results
         env:
-          OTEL_TEST_REVISION: ${{ github.sha }}
+          OTEL_TEST_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           bazel test \
             --nocache_test_results \
             --test_env=OTEL_TEST_REVISION \
             --build_event_json_file=otel-profile.bep.json \
+            --nobuild_event_json_file_path_conversion \
             //bazel/itest/apps:aiohttp_otel_hurl_test \
             //bazel/itest/apps:django_otel_hurl_test \
             //bazel/itest/apps:gin_otel_contract_test
 
       - name: Assemble the receipt-backed report
         env:
-          REVISION: ${{ github.sha }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          bazel build //corpus:python_aiohttp_profile //corpus:python_django_profile //corpus:go_gin_profile //corpus:feature_parity_generator
-          args=(
-            --matrix=corpus/report/data/spec-compliance-matrix.md
-            --metadata=corpus/report/data/catalog.json
-            --out=feature-parity-report.html
-            --bep=otel-profile.bep.json
-            --revision="${REVISION}"
-            --profiles=go-gin-otelbuild-v1-1-0,python-aiohttp-auto-v0-65b0,python-django-auto-v0-65b0
-            --scenarios=articles,auth,comments,errors_articles,errors_auth,errors_authorization,errors_comments,errors_profiles,favorites,feed,pagination,profiles,tags
-            --plan="go-gin-otelbuild-v1-1-0,bazel-bin/corpus/go_gin_profile.proof-plan.json,https://github.com/${GITHUB_REPOSITORY}/blob/${REVISION}/corpus/realworld/profiles/go-gin-otelbuild-v1-1-0.scm"
-            --plan="python-aiohttp-auto-v0-65b0,bazel-bin/corpus/python_aiohttp_profile.proof-plan.json,https://github.com/${GITHUB_REPOSITORY}/blob/${REVISION}/corpus/realworld/profiles/python-aiohttp-auto-v0-65b0.scm"
-            --plan="python-django-auto-v0-65b0,bazel-bin/corpus/python_django_profile.proof-plan.json,https://github.com/${GITHUB_REPOSITORY}/blob/${REVISION}/corpus/realworld/profiles/python-django-auto-v0-65b0.scm"
-          )
-          profiles=(python-aiohttp-auto-v0-65b0 python-django-auto-v0-65b0)
-          scenarios=(articles auth comments errors_articles errors_auth errors_authorization errors_comments errors_profiles favorites feed pagination profiles tags)
-          for profile in "${profiles[@]}"; do
-            for scenario in "${scenarios[@]}"; do
-              path="corpus/realworld/shapes/${profile}/${scenario}/shape.scm"
-              args+=(--shape="${profile},${scenario},${path},https://github.com/${GITHUB_REPOSITORY}/blob/${REVISION}/${path}")
-            done
-          done
-          bazel-bin/corpus/feature_parity_generator_/feature_parity_generator "${args[@]}"
+          REPORT_REPOSITORY: ${{ github.repository }}
+          REPORT_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: tools/assemble_otel_report.sh
 
       - name: Publish report and proof artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
