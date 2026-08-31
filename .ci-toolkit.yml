@@ -3,7 +3,7 @@ api_version: ci-toolkit/v1alpha1
 automations:
   - id: opentelemetry-proof-report
     triggers:
-      - id: successful-buildbuddy-status
+      - id: successful-status-push
         uses: github.commit-status@v1
         with:
           event: github.commit_status
@@ -18,9 +18,6 @@ automations:
                 name: main
           status:
             context: Full test suite
-            creator:
-              login: buildbuddy-io[bot]
-              id: 130678843
             target_url:
               scheme: https
               host: pawel.buildbuddy.io
