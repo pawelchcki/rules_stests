@@ -14,8 +14,6 @@ automations:
                 state: open
                 base_branches:
                   - "*"
-            - branch:
-                name: main
           status:
             context: Full test suite
             target_url:
