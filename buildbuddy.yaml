@@ -1,5 +1,6 @@
 actions:
   - name: Full test suite
+    visibility: PUBLIC
     container_image: ubuntu-24.04
     resource_requests:
       cpu: 32
