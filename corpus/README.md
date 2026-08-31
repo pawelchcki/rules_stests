@@ -59,6 +59,6 @@ absent, stale, duplicate, malformed, digest-mismatched, failed, or incomplete
 receipts. Only accepted receipts create `verified` cells; unclaimed matrix rows
 remain `not_exercised`.
 
-The exact invocation is maintained in
-`.github/workflows/otel-report.yml`. The report servers no longer build or infer
-a report; pass the explicitly assembled HTML file with `--file`.
+The exact invocation is maintained in `buildbuddy.yaml`. The report servers no
+longer build or infer a report; pass the explicitly assembled HTML file with
+`--file`.

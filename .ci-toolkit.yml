@@ -1,0 +1,70 @@
+api_version: ci-toolkit/v1alpha1
+
+automations:
+  - id: opentelemetry-proof-report
+    triggers:
+      - id: successful-buildbuddy-status
+        uses: github.commit-status@v1
+        with:
+          event: github.commit_status
+          states:
+            - success
+          targets:
+            - pull_request:
+                state: open
+                base_branches:
+                  - "*"
+            - branch:
+                name: main
+          status:
+            context: Full test suite
+            creator:
+              login: buildbuddy-io[bot]
+              id: 130678843
+            target_url:
+              scheme: https
+              host: pawel.buildbuddy.io
+              path_pattern: /invocation/{uuid}
+            require_target_head_sha: true
+
+    sources:
+      - id: opentelemetry-proof-report
+        uses: buildbuddy.workflow-artifact@v1
+        with:
+          invocation_url: "{{ event.target_url }}"
+          artifact: command-0/opentelemetry-proof-report.html
+          expected:
+            media_type: text/html
+            max_bytes: 5242880
+
+    actions:
+      - id: publish-report
+        uses: toolkit.public-artifact@v1
+        with:
+          source: opentelemetry-proof-report
+          destination: public-artifacts
+          key: "{{ repository.full_name }}/opentelemetry-proof-report/{{ commit.sha }}/opentelemetry-proof-report.html"
+          immutable: true
+          visibility: public
+          content_disposition: inline
+          security_profile: untrusted-html
+          checksum: sha256
+          retention: 90d
+
+      - id: comment-on-pull-request
+        uses: github.pull-request-comment@v1
+        needs:
+          - publish-report
+        when:
+          target: pull_request
+        with:
+          operation: upsert
+          marker: "<!-- ci-toolkit:opentelemetry-proof-report -->"
+          body: |
+            <!-- ci-toolkit:opentelemetry-proof-report -->
+            ## [Open the OpenTelemetry proof report]({{ actions.publish-report.outputs.public_url | markdown_url_escape }})
+
+            - **Commit:** [`{{ commit.sha | markdown_escape }}`]({{ commit.url | markdown_url_escape }})
+            - **BuildBuddy:** [invocation]({{ event.target_url | markdown_url_escape }})
+            - **SHA-256:** `{{ actions.publish-report.outputs.sha256 | markdown_escape }}`
+            - **Available until:** `{{ actions.publish-report.outputs.expires_at | markdown_escape }}`
