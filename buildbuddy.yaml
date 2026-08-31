@@ -22,11 +22,17 @@ actions:
           OTEL_TEST_REVISION="$REPORT_REVISION" bazel test \
             --config=buildbuddy \
             --build_tests_only \
+            --test_env=OTEL_TEST_REVISION \
+            //... \
+            //bazel/itest/apps:gin_otel_contract_test
+          OTEL_TEST_REVISION="$REPORT_REVISION" bazel test \
+            --config=buildbuddy \
             --nocache_test_results \
             --test_env=OTEL_TEST_REVISION \
             --build_event_json_file=otel-profile.bep.json \
             --remote_download_outputs=toplevel \
-            //... \
+            //bazel/itest/apps:aiohttp_otel_hurl_test \
+            //bazel/itest/apps:django_otel_hurl_test \
             //bazel/itest/apps:gin_otel_contract_test
           REPORT_BAZEL_CONFIG=buildbuddy \
             REPORT_REPOSITORY=pawelchcki/rules_stests \
