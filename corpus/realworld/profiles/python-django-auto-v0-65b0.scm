@@ -72,6 +72,9 @@
 (define profile
   (realworld-profile
     (id 'python-django-auto-v0-65b0)
+    (display-name "Python Django (auto 0.65b0)")
+    (language 'python)
+    (framework "Django")
     (implementation (compose python-sdk-v1.44 python-auto-v0.65b0
                              python-system-metrics-v0.65b0 django-v0.65b0))
     (service-name "django-otel")

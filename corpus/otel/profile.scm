@@ -1,5 +1,5 @@
 (define-library (otel profile)
-  (export realworld-profile id implementation compose service-name signals
+  (export realworld-profile id display-name language framework implementation compose service-name signals
           capture-contract all scenario observed corroborated sources
           validate-profile)
   (import (scheme base) (scheme write)
@@ -9,6 +9,9 @@
   (begin
 
 (define (id value) (list 'id value))
+(define (display-name value) (list 'display-name value))
+(define (language value) (list 'language value))
+(define (framework value) (list 'framework value))
 (define (implementation value) (list 'implementation value))
 (define (compose . values) (cons 'composition values))
 (define (service-name value) (list 'service-name value))

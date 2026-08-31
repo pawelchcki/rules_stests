@@ -13,8 +13,33 @@ func receiptFixture() (string, []string, []string, map[string]PlanArtifact, map[
 	key := "python\x00articles"
 	shapes := map[string][]byte{key: []byte("shape\n")}
 	captures := map[string][]byte{key: []byte("capture\n")}
-	receipt := ValidationReceipt{SchemaVersion: 1, Revision: revision, Profile: "python", Scenario: "articles", ProofPlanSHA256: digest(planBytes), CaptureSHA256: digest(captures[key]), ValidationMode: "exact", ScenarioShapeSHA256: digest(shapes[key]), Proofs: []ReceiptProof{{FeatureID: proof.FeatureID, Assertion: proof.Assertion, Basis: proof.Basis, Result: "pass"}}}
+	receipt := ValidationReceipt{SchemaVersion: 1, Revision: revision, Profile: "python", Scenario: "articles", ProofPlanSHA256: digest(planBytes), CaptureSHA256: digest(captures[key]), ValidationMode: "exact", Outcome: "verified", ScenarioShapeSHA256: digest(shapes[key]), Proofs: []ReceiptProof{{FeatureID: proof.FeatureID, Assertion: proof.Assertion, Basis: proof.Basis, Result: "pass"}}}
 	return revision, []string{"python"}, []string{"articles"}, plans, shapes, captures, receipt
+}
+
+func TestValidateReceiptSetAcceptsXFailAndScopesCoverageToVerifiedScenarios(t *testing.T) {
+	revision, profiles, _, plans, _, _, verified := receiptFixture()
+	verified.ValidationMode = "contract"
+	verified.ScenarioShapeSHA256 = ""
+	shapes := map[string][]byte{}
+	verifiedCapture := []byte("verified capture\n")
+	verified.CaptureSHA256 = digest(verifiedCapture)
+	captures := map[string][]byte{"python\x00articles": verifiedCapture}
+	xfailCapture := []byte("rejected capture\n")
+	xfail := ValidationReceipt{
+		SchemaVersion: 1, Revision: revision, Profile: "python", Scenario: "auth",
+		ProofPlanSHA256: verified.ProofPlanSHA256, CaptureSHA256: digest(xfailCapture),
+		ValidationMode: "contract", Outcome: "xfail", XFailReason: "issue #123",
+	}
+	captures["python\x00auth"] = xfailCapture
+	receipts := []ValidationReceipt{verified, xfail}
+	if err := ValidateReceiptSet(revision, profiles, []string{"articles", "auth"}, plans, shapes, captures, receipts); err != nil {
+		t.Fatal(err)
+	}
+	coverages := CoveragesFromPlans(plans, receipts)
+	if len(coverages) != 1 || len(coverages[0].Claims) != 1 || coverages[0].Claims[0].AllScenarios || len(coverages[0].Claims[0].Scenarios) != 1 || coverages[0].Claims[0].Scenarios[0] != "articles" {
+		t.Fatalf("xfail was represented as verified coverage: %#v", coverages)
+	}
 }
 
 func TestValidateReceiptSetAcceptsCompleteCurrentProof(t *testing.T) {
@@ -52,6 +77,9 @@ func TestValidateReceiptSetRejectsUntrustedInputs(t *testing.T) {
 		{"failed proof", func(r *ValidationReceipt, _ map[string]PlanArtifact, _ map[string][]byte, _ map[string][]byte) {
 			r.Proofs[0].Result = "fail"
 		}, false, false, "failed proof"},
+		{"missing outcome", func(r *ValidationReceipt, _ map[string]PlanArtifact, _ map[string][]byte, _ map[string][]byte) {
+			r.Outcome = ""
+		}, false, false, "invalid receipt outcome"},
 		{"duplicate proof", func(r *ValidationReceipt, _ map[string]PlanArtifact, _ map[string][]byte, _ map[string][]byte) {
 			r.Proofs = append(r.Proofs, r.Proofs[0])
 		}, false, false, "duplicate proof"},
@@ -92,7 +120,7 @@ func TestValidateReceiptSetRequiresEveryScenarioForAllScenarioClaims(t *testing.
 }
 
 func TestDecodeReceiptRejectsMalformedSchema(t *testing.T) {
-	if _, err := DecodeReceipt([]byte(`{"schemaVersion":1,"revision":"bad","profile":"p","scenario":"s","proofPlanSha256":"x","captureSha256":"x","validationMode":"contract","proofs":[]}`)); err == nil {
+	if _, err := DecodeReceipt([]byte(`{"schemaVersion":1,"revision":"bad","profile":"p","scenario":"s","proofPlanSha256":"x","captureSha256":"x","validationMode":"contract","outcome":"verified","proofs":[]}`)); err == nil {
 		t.Fatal("malformed receipt accepted")
 	}
 	if _, err := DecodeReceipt([]byte(`{"schemaVersion":1,"unknown":true}`)); err == nil {

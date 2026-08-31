@@ -70,6 +70,21 @@ func CompileNormalizedProfile(profileSource string, implementationSources []stri
 				return plan, fmt.Errorf("profile id clause is malformed")
 			}
 			plan.Profile = atomValue(unquote(clause.list[1]))
+		case "display-name":
+			if len(clause.list) != 2 || !clause.list[1].str {
+				return plan, fmt.Errorf("profile display-name clause is malformed")
+			}
+			plan.DisplayName = clause.list[1].atom
+		case "language":
+			if len(clause.list) != 2 {
+				return plan, fmt.Errorf("profile language clause is malformed")
+			}
+			plan.Language = atomValue(unquote(clause.list[1]))
+		case "framework":
+			if len(clause.list) != 2 || !clause.list[1].str {
+				return plan, fmt.Errorf("profile framework clause is malformed")
+			}
+			plan.Framework = clause.list[1].atom
 		case "service-name":
 			if len(clause.list) != 2 || !clause.list[1].str {
 				return plan, fmt.Errorf("profile service-name clause is malformed")
@@ -107,8 +122,11 @@ func CompileNormalizedProfile(profileSource string, implementationSources []stri
 			}
 		}
 	}
-	if plan.Profile == "" || plan.ServiceName == "" || len(plan.Signals) == 0 || len(plan.Implementations) == 0 || len(plan.Proofs) == 0 {
+	if plan.Profile == "" || plan.DisplayName == "" || plan.Language == "" || plan.Framework == "" || plan.ServiceName == "" || len(plan.Signals) == 0 || len(plan.Implementations) == 0 || len(plan.Proofs) == 0 {
 		return plan, fmt.Errorf("profile metadata is incomplete")
+	}
+	if plan.Language != "go" && plan.Language != "python" {
+		return plan, fmt.Errorf("unsupported profile language %q", plan.Language)
 	}
 	for _, signal := range plan.Signals {
 		if signal != "traces" && signal != "metrics" && signal != "logs" {

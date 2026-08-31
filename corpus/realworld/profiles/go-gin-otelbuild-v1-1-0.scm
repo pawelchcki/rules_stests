@@ -97,6 +97,9 @@
 (define profile
   (realworld-profile
     (id 'go-gin-otelbuild-v1-1-0)
+    (display-name "Go Gin (otelbuild v1.1.0)")
+    (language 'go)
+    (framework "Gin")
     (implementation (compose go-compile-v1.1 go-runtime-v0.70))
     (service-name "gin-otel")
     (signals 'traces 'metrics)

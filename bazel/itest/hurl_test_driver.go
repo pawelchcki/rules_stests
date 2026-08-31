@@ -117,6 +117,15 @@ func main() {
 		if err := classifyOTLPValidation(validationErr, *otelXFail, *otelCase, os.Stderr); err != nil {
 			fatal(err)
 		}
+		if validationErr != nil {
+			var assertionFailure *otlpAssertionFailure
+			if !errors.As(validationErr, &assertionFailure) {
+				fatal(errors.New("internal error: accepted OTLP xfail is not an assertion failure"))
+			}
+			if err := emitExpectedFailureReceipt(profile, assertionFailure.capture, *otelXFail); err != nil {
+				fatal(err)
+			}
+		}
 	}
 	fmt.Printf("RealWorld Hurl suite passed against %s (%d files, %d jobs)\n", endpoint, len(specs), *jobs)
 }
@@ -162,6 +171,9 @@ type proofPlanProof struct {
 type normalizedProofPlan struct {
 	SchemaVersion   int               `json:"schemaVersion"`
 	Profile         string            `json:"profile"`
+	DisplayName     string            `json:"displayName"`
+	Language        string            `json:"language"`
+	Framework       string            `json:"framework"`
 	ServiceName     string            `json:"serviceName"`
 	Signals         []string          `json:"signals"`
 	Implementations []string          `json:"implementations"`
@@ -240,7 +252,8 @@ func loadAtomicProfile(value, scenario, mode string) (atomicProfile, error) {
 }
 
 type otlpAssertionFailure struct {
-	cause error
+	cause   error
+	capture []byte
 }
 
 func (failure *otlpAssertionFailure) Error() string {
@@ -420,7 +433,7 @@ func validateTelemetryDump(client http.Client, baseURL, mode, scenario string, p
 	for signal := range profile.Signals {
 		if !seen[signal] {
 			emitFailedCapture(profile.ID+"/"+scenario, contents)
-			return &otlpAssertionFailure{cause: fmt.Errorf("OTLP dump at %s lacks %s with service.name", baseURL, signal)}
+			return &otlpAssertionFailure{cause: fmt.Errorf("OTLP dump at %s lacks %s with service.name", baseURL, signal), capture: append([]byte(nil), contents...)}
 		}
 	}
 	source, err := readSchemeBundle(profile.Libraries, profile.Imports, profile.Program, scenario, profile.ValidationMode)
@@ -450,12 +463,17 @@ func validateTelemetryDump(client http.Client, baseURL, mode, scenario string, p
 	}
 	if validationResponse.StatusCode != http.StatusOK {
 		emitFailedCapture(profile.ID+"/"+scenario, contents)
-		return schemeValidationFailure(validationResponse.StatusCode, validationOutput)
+		failure := schemeValidationFailure(validationResponse.StatusCode, validationOutput)
+		var assertionFailure *otlpAssertionFailure
+		if errors.As(failure, &assertionFailure) {
+			assertionFailure.capture = append([]byte(nil), contents...)
+		}
+		return failure
 	}
 	proofs, err := validateProofSet(profile.ExpectedProofs, validationOutput)
 	if err != nil {
 		emitFailedCapture(profile.ID+"/"+scenario, contents)
-		return &otlpAssertionFailure{cause: err}
+		return &otlpAssertionFailure{cause: err, capture: append([]byte(nil), contents...)}
 	}
 	if mode == "candidate" {
 		if err := emitShapeCandidate(client, baseURL, scenario, profile.ID, contents); err != nil {
@@ -489,6 +507,8 @@ type validationReceipt struct {
 	ProofPlanSHA256     string         `json:"proofPlanSha256"`
 	CaptureSHA256       string         `json:"captureSha256"`
 	ValidationMode      string         `json:"validationMode"`
+	Outcome             string         `json:"outcome"`
+	XFailReason         string         `json:"xfailReason,omitempty"`
 	ScenarioShapeSHA256 string         `json:"scenarioShapeSha256,omitempty"`
 	Proofs              []receiptProof `json:"proofs"`
 }
@@ -536,6 +556,20 @@ func validateProofSet(expected []proofPlanProof, output []byte) ([]receiptProof,
 }
 
 func emitValidationReceipt(profile atomicProfile, capture []byte, proofs []receiptProof) error {
+	return emitReceipt(profile, capture, proofs, "verified", "")
+}
+
+func emitExpectedFailureReceipt(profile atomicProfile, capture []byte, reason string) error {
+	if reason == "" {
+		return errors.New("an OTLP xfail receipt requires a reason")
+	}
+	if len(capture) == 0 {
+		return errors.New("an OTLP xfail receipt requires the rejected capture")
+	}
+	return emitReceipt(profile, capture, []receiptProof{}, "xfail", reason)
+}
+
+func emitReceipt(profile atomicProfile, capture []byte, proofs []receiptProof, outcome, xfailReason string) error {
 	revision := os.Getenv("OTEL_TEST_REVISION")
 	if revision == "" {
 		return nil
@@ -551,7 +585,7 @@ func emitValidationReceipt(profile atomicProfile, capture []byte, proofs []recei
 	receipt := validationReceipt{
 		SchemaVersion: 1, Revision: revision, Profile: profile.ID, Scenario: profile.Scenario,
 		ProofPlanSHA256: fmt.Sprintf("%x", planDigest), CaptureSHA256: fmt.Sprintf("%x", captureDigest),
-		ValidationMode: profile.ValidationMode, Proofs: proofs,
+		ValidationMode: profile.ValidationMode, Outcome: outcome, XFailReason: xfailReason, Proofs: proofs,
 	}
 	if profile.ValidationMode == "exact" {
 		digest := sha256.Sum256(profile.Shape)

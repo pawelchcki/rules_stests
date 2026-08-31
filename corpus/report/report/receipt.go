@@ -25,6 +25,8 @@ type ValidationReceipt struct {
 	ProofPlanSHA256     string         `json:"proofPlanSha256"`
 	CaptureSHA256       string         `json:"captureSha256"`
 	ValidationMode      string         `json:"validationMode"`
+	Outcome             string         `json:"outcome"`
+	XFailReason         string         `json:"xfailReason,omitempty"`
 	ScenarioShapeSHA256 string         `json:"scenarioShapeSha256,omitempty"`
 	Proofs              []ReceiptProof `json:"proofs"`
 }
@@ -57,6 +59,15 @@ func DecodeReceipt(input []byte) (ValidationReceipt, error) {
 	if receipt.ValidationMode != "exact" && receipt.ValidationMode != "contract" {
 		return receipt, fmt.Errorf("invalid validation mode %q", receipt.ValidationMode)
 	}
+	if receipt.Outcome != "verified" && receipt.Outcome != "xfail" {
+		return receipt, fmt.Errorf("invalid receipt outcome %q", receipt.Outcome)
+	}
+	if receipt.Outcome == "xfail" && receipt.XFailReason == "" {
+		return receipt, fmt.Errorf("xfail receipt has no reason")
+	}
+	if receipt.Outcome == "verified" && receipt.XFailReason != "" {
+		return receipt, fmt.Errorf("verified receipt has an xfail reason")
+	}
 	return receipt, nil
 }
 
@@ -69,6 +80,15 @@ func ValidateReceiptSet(revision string, profiles, scenarios []string, plans map
 	profileSet, scenarioSet := stringSet(profiles), stringSet(scenarios)
 	seen := map[string]bool{}
 	for _, receipt := range receipts {
+		if receipt.Outcome != "verified" && receipt.Outcome != "xfail" {
+			return fmt.Errorf("invalid receipt outcome %q for %s/%s", receipt.Outcome, receipt.Profile, receipt.Scenario)
+		}
+		if receipt.Outcome == "xfail" && receipt.XFailReason == "" {
+			return fmt.Errorf("xfail receipt %s/%s has no reason", receipt.Profile, receipt.Scenario)
+		}
+		if receipt.Outcome == "verified" && receipt.XFailReason != "" {
+			return fmt.Errorf("verified receipt %s/%s has an xfail reason", receipt.Profile, receipt.Scenario)
+		}
 		if !profileSet[receipt.Profile] || !scenarioSet[receipt.Scenario] {
 			return fmt.Errorf("unexpected receipt %s/%s", receipt.Profile, receipt.Scenario)
 		}
@@ -101,6 +121,12 @@ func ValidateReceiptSet(revision string, profiles, scenarios []string, plans map
 			}
 		} else if receipt.ValidationMode != "contract" || receipt.ScenarioShapeSHA256 != "" {
 			return fmt.Errorf("unexpected exact validation for %s/%s", receipt.Profile, receipt.Scenario)
+		}
+		if receipt.Outcome == "xfail" {
+			if len(receipt.Proofs) != 0 {
+				return fmt.Errorf("xfail receipt %s/%s contains passing proofs", receipt.Profile, receipt.Scenario)
+			}
+			continue
 		}
 		wanted := map[string]bool{}
 		for _, proof := range artifact.Plan.Proofs {
@@ -148,7 +174,22 @@ func ValidateReceiptSet(revision string, profiles, scenarios []string, plans map
 
 func digest(value []byte) string { sum := sha256.Sum256(value); return fmt.Sprintf("%x", sum) }
 
-func CoveragesFromPlans(plans map[string]PlanArtifact) []ProfileProofCoverage {
+func CoveragesFromPlans(plans map[string]PlanArtifact, receipts []ValidationReceipt) []ProfileProofCoverage {
+	verifiedScenarios := map[string][]string{}
+	xfails := map[string]map[string]bool{}
+	for _, receipt := range receipts {
+		if receipt.Outcome == "verified" {
+			verifiedScenarios[receipt.Profile] = append(verifiedScenarios[receipt.Profile], receipt.Scenario)
+		} else if receipt.Outcome == "xfail" {
+			if xfails[receipt.Profile] == nil {
+				xfails[receipt.Profile] = map[string]bool{}
+			}
+			xfails[receipt.Profile][receipt.Scenario] = true
+		}
+	}
+	for profile := range verifiedScenarios {
+		sort.Strings(verifiedScenarios[profile])
+	}
 	profiles := make([]string, 0, len(plans))
 	for profile := range plans {
 		profiles = append(profiles, profile)
@@ -159,7 +200,23 @@ func CoveragesFromPlans(plans map[string]PlanArtifact) []ProfileProofCoverage {
 		artifact := plans[profile]
 		coverage := ProfileProofCoverage{Profile: profile, Source: artifact.Source}
 		for _, proof := range artifact.Plan.Proofs {
-			claim := FeatureClaim{FeatureID: proof.FeatureID, Basis: proof.Basis, Assertion: proof.Assertion, AllScenarios: len(proof.Scenarios) == 0, Scenarios: append([]string(nil), proof.Scenarios...), Evidence: []Evidence{artifact.Source}}
+			claimScenarios := append([]string(nil), proof.Scenarios...)
+			allScenarios := len(proof.Scenarios) == 0
+			if allScenarios && len(xfails[profile]) > 0 {
+				claimScenarios = append([]string(nil), verifiedScenarios[profile]...)
+				allScenarios = false
+			} else if !allScenarios && len(xfails[profile]) > 0 {
+				claimScenarios = claimScenarios[:0]
+				for _, scenario := range proof.Scenarios {
+					if !xfails[profile][scenario] {
+						claimScenarios = append(claimScenarios, scenario)
+					}
+				}
+			}
+			if !allScenarios && len(claimScenarios) == 0 {
+				continue
+			}
+			claim := FeatureClaim{FeatureID: proof.FeatureID, Basis: proof.Basis, Assertion: proof.Assertion, AllScenarios: allScenarios, Scenarios: claimScenarios, Evidence: []Evidence{artifact.Source}}
 			for index, source := range proof.Sources {
 				claim.Evidence = append(claim.Evidence, Evidence{Label: fmt.Sprintf("immutable source %d", index+1), Href: artifact.Plan.Sources[source]})
 			}

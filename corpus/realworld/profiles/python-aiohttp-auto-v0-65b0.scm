@@ -75,6 +75,9 @@
 (define profile
   (realworld-profile
     (id 'python-aiohttp-auto-v0-65b0)
+    (display-name "Python aiohttp (auto 0.65b0)")
+    (language 'python)
+    (framework "aiohttp")
     (implementation (compose python-sdk-v1.44 python-auto-v0.65b0
                              python-system-metrics-v0.65b0 aiohttp-v0.65b0))
     (service-name "aiohttp-otel")

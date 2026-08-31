@@ -29,6 +29,9 @@ const profileTestImplementation = `(define sdk-v1 '(sdk "1.2.3"))
 const profileTestSource = `(define profile
   (realworld-profile
     (id 'test-profile)
+    (display-name "Test profile")
+    (language 'python)
+    (framework "Test framework")
     (implementation (compose sdk-v1))
     (service-name "test-service")
     (signals 'traces)
@@ -54,7 +57,7 @@ func TestCompileNormalizedProfileComposesAndScopesDeterministically(t *testing.T
 	if !bytes.Equal(firstJSON, secondJSON) {
 		t.Fatal("normalized profile plan is not deterministic")
 	}
-	if first.Profile != "test-profile" || first.ServiceName != "test-service" || len(first.Implementations) != 1 || first.Implementations[0] != "sdk-v1" {
+	if first.Profile != "test-profile" || first.DisplayName != "Test profile" || first.Language != "python" || first.Framework != "Test framework" || first.ServiceName != "test-service" || len(first.Implementations) != 1 || first.Implementations[0] != "sdk-v1" {
 		t.Fatalf("composition metadata was not preserved: %#v", first)
 	}
 	if got := first.Sources["tracer-source"]; !strings.Contains(got, "/blob/0123456789abcdef0123456789abcdef01234567/") {

@@ -134,20 +134,9 @@ func run(matrixPath, metadataPath, outputPath, profileList, scenarioList, revisi
 	manifests := make([]report.Manifest, 0, len(profiles))
 	for _, profile := range profiles {
 		artifact := plans[profile]
-		language := "python"
-		if strings.HasPrefix(profile, "go-") {
-			language = "go"
-		}
-		framework := "Gin"
-		if strings.Contains(profile, "aiohttp") {
-			framework = "aiohttp"
-		}
-		if strings.Contains(profile, "django") {
-			framework = "Django"
-		}
-		manifests = append(manifests, report.Manifest{SchemaVersion: 1, Profile: profile, DisplayName: profile, Language: language, Framework: framework, InstrumentationVersion: strings.Join(artifact.Plan.Implementations, " + "), ProfileEvidence: []report.Evidence{artifact.Source}, BaseCoverage: "contract_only", DefaultVerification: "not_exercised"})
+		manifests = append(manifests, report.Manifest{SchemaVersion: 1, Profile: profile, DisplayName: artifact.Plan.DisplayName, Language: artifact.Plan.Language, Framework: artifact.Plan.Framework, InstrumentationVersion: strings.Join(artifact.Plan.Implementations, " + "), ProfileEvidence: []report.Evidence{artifact.Source}, BaseCoverage: "contract_only", DefaultVerification: "not_exercised"})
 	}
-	coverages := report.CoveragesFromPlans(plans)
+	coverages := report.CoveragesFromPlans(plans, receipts)
 	model, err := report.BuildModel(metadata, features, manifests, shapes, profiles, scenarios, evidencePaths, coverages...)
 	if err != nil {
 		return err

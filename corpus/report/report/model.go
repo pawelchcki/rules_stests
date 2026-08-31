@@ -72,6 +72,9 @@ type ProofPlanProof struct {
 type NormalizedProfilePlan struct {
 	SchemaVersion   int               `json:"schemaVersion"`
 	Profile         string            `json:"profile"`
+	DisplayName     string            `json:"displayName"`
+	Language        string            `json:"language"`
+	Framework       string            `json:"framework"`
 	ServiceName     string            `json:"serviceName"`
 	Signals         []string          `json:"signals"`
 	Implementations []string          `json:"implementations"`

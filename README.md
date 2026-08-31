@@ -268,9 +268,12 @@ realworld_hurl_test_suite(
 
 The Hurl workload and full OTLP validation still run. A Scheme contract
 rejection is printed as `XFAIL`, tagged `otel-xfail`, and keeps its failed JSON
-capture in undeclared outputs. A validation that starts passing becomes a hard
-`XPASS` failure until the entry is removed. Sink failures, timeouts, validator
-crashes, and other infrastructure errors are never swallowed by an xfail.
+capture in undeclared outputs. Receipt-enabled runs also emit an `xfail`
+receipt carrying the reason and rejected-capture digest, so report assembly can
+show the expected failure without treating that scenario as verified. A
+validation that starts passing becomes a hard `XPASS` failure until the entry
+is removed. Sink failures, timeouts, validator crashes, and other
+infrastructure errors are never swallowed by an xfail.
 Contract rejections use a distinct HTTP 409 response; Scheme compilation, VM,
 heap, call-budget, and output-budget failures remain validator errors and can
 never satisfy an xfail.

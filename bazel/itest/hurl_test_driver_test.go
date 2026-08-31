@@ -78,9 +78,37 @@ func TestEmitValidationReceiptIsOptInAndWritesDigests(t *testing.T) {
 	if receipt.ValidationMode != "exact" || len(receipt.ProofPlanSHA256) != 64 || len(receipt.CaptureSHA256) != 64 || len(receipt.ScenarioShapeSHA256) != 64 {
 		t.Fatalf("malformed emitted receipt: %#v", receipt)
 	}
+	if receipt.Outcome != "verified" || receipt.XFailReason != "" {
+		t.Fatalf("validation receipt has wrong outcome: %#v", receipt)
+	}
 	capture, err := os.ReadFile(filepath.Join(root, "receipts", "python-test", "articles.capture.json"))
 	if err != nil || string(capture) != "capture\n" {
 		t.Fatalf("accepted capture was not emitted: %q, %v", capture, err)
+	}
+}
+
+func TestEmitExpectedFailureReceiptPreservesRejectedCapture(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("TEST_UNDECLARED_OUTPUTS_DIR", root)
+	t.Setenv("OTEL_TEST_REVISION", strings.Repeat("b", 40))
+	profile := atomicProfile{ID: "python-test", Scenario: "comments", ValidationMode: "contract", Plan: []byte("plan\n")}
+	if err := emitExpectedFailureReceipt(profile, []byte("rejected capture\n"), "issue #123"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "receipts", "python-test", "comments.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var receipt validationReceipt
+	if err := json.Unmarshal(data, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Outcome != "xfail" || receipt.XFailReason != "issue #123" || len(receipt.Proofs) != 0 {
+		t.Fatalf("malformed xfail receipt: %#v", receipt)
+	}
+	capture, err := os.ReadFile(filepath.Join(root, "receipts", "python-test", "comments.capture.json"))
+	if err != nil || string(capture) != "rejected capture\n" {
+		t.Fatalf("rejected capture was not emitted: %q, %v", capture, err)
 	}
 }
 
