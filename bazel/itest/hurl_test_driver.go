@@ -537,6 +537,9 @@ func validateProofSet(expected []proofPlanProof, output []byte) ([]receiptProof,
 
 func emitValidationReceipt(profile atomicProfile, capture []byte, proofs []receiptProof) error {
 	revision := os.Getenv("OTEL_TEST_REVISION")
+	if revision == "" {
+		return nil
+	}
 	if !commitRevision.MatchString(revision) {
 		return errors.New("a lowercase 40-character current revision is required to emit an OTLP receipt")
 	}

@@ -46,20 +46,28 @@ func TestValidateProofSetMatchesNormalizedPlanExactly(t *testing.T) {
 	}
 }
 
-func TestEmitValidationReceiptRequiresRevisionAndWritesDigests(t *testing.T) {
+func TestEmitValidationReceiptIsOptInAndWritesDigests(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("TEST_UNDECLARED_OUTPUTS_DIR", root)
 	t.Setenv("OTEL_TEST_REVISION", "")
 	profile := atomicProfile{ID: "python-test", Scenario: "articles", ValidationMode: "exact", Plan: []byte("plan\n"), Shape: []byte("shape\n")}
 	proofs := []receiptProof{{FeatureID: "traces.span.end", Assertion: "span/all-completed", Basis: "observed", Result: "pass"}}
+	if err := emitValidationReceipt(profile, []byte("capture\n"), proofs); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "receipts", "python-test", "articles.json")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("receipt emitted without an opted-in revision: %v", err)
+	}
+	t.Setenv("OTEL_TEST_REVISION", "invalid")
 	if err := emitValidationReceipt(profile, []byte("capture\n"), proofs); err == nil {
-		t.Fatal("receipt emitted without a revision")
+		t.Fatal("malformed opted-in revision accepted")
 	}
 	t.Setenv("OTEL_TEST_REVISION", strings.Repeat("a", 40))
 	if err := emitValidationReceipt(profile, []byte("capture\n"), proofs); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(root, "receipts", "python-test", "articles.json"))
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
