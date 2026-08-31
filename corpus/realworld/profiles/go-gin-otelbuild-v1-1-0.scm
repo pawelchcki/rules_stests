@@ -10,7 +10,7 @@
           (realworld contract))
   (begin
 
-; Contract profile for the gothinkster Gin RealWorld application built with
+; Exact profile for the gothinkster Gin RealWorld application built with
 ; opentelemetry-go-compile-instrumentation v1.1.0.
 (define implementation-profile 'go-gin-otelbuild-v1-1-0)
 

@@ -87,6 +87,10 @@ otel_profile(
     ],
     runtime_libraries = ["realworld/profiles/go.scm"],
     scenarios = REALWORLD_HURL_CASES,
+    scenario_shapes = {
+        "realworld/shapes/go-gin-otelbuild-v1-1-0/{}/shape.scm".format(scenario): scenario
+        for scenario in REALWORLD_HURL_CASES
+    },
     signals = ["traces", "metrics"],
     standard_registry = ":otel_standard_registry",
 )

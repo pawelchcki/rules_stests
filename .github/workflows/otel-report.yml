@@ -31,7 +31,7 @@ jobs:
             --build_event_json_file=otel-profile.bep.json \
             //bazel/itest/apps:aiohttp_otel_hurl_test \
             //bazel/itest/apps:django_otel_hurl_test \
-            //bazel/itest/apps:gin_otel_contract_test
+            //bazel/itest/apps:gin_otel_hurl_test
 
       - name: Assemble the receipt-backed report
         env:
@@ -52,7 +52,7 @@ jobs:
             --plan="python-aiohttp-auto-v0-65b0,bazel-bin/corpus/python_aiohttp_profile.proof-plan.json,https://github.com/${GITHUB_REPOSITORY}/blob/${REVISION}/corpus/realworld/profiles/python-aiohttp-auto-v0-65b0.scm"
             --plan="python-django-auto-v0-65b0,bazel-bin/corpus/python_django_profile.proof-plan.json,https://github.com/${GITHUB_REPOSITORY}/blob/${REVISION}/corpus/realworld/profiles/python-django-auto-v0-65b0.scm"
           )
-          profiles=(python-aiohttp-auto-v0-65b0 python-django-auto-v0-65b0)
+          profiles=(go-gin-otelbuild-v1-1-0 python-aiohttp-auto-v0-65b0 python-django-auto-v0-65b0)
           scenarios=(articles auth comments errors_articles errors_auth errors_authorization errors_comments errors_profiles favorites feed pagination profiles tags)
           for profile in "${profiles[@]}"; do
             for scenario in "${scenarios[@]}"; do

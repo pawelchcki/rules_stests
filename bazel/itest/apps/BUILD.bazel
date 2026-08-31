@@ -291,11 +291,9 @@ service_test(
 )
 
 realworld_hurl_test_suite(
-    name = "gin_otel_contract_test",
+    name = "gin_otel_hurl_test",
     timeout = "moderate",
-    otel_candidates = False,
     otel_profile = "//corpus:go_gin_profile",
     otel_sink = "//bazel/itest:otel_sink_service",
     service = ":gin_otel_service",
-    tags = ["manual"],
 )

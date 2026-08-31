@@ -53,7 +53,7 @@ Candidate targets use the `_shape_candidate` suffix and write
 
 The report assembler is `//corpus:feature_parity_generator`. It requires a
 Bazel JSON build-event file from an uncached complete 39-scenario run, the three
-normalized plans, all checked-in Python shapes, and the current revision. It
+normalized plans, all checked-in scenario shapes, and the current revision. It
 rejects a build-event file that does not record `--nocache_test_results`, plus
 absent, stale, duplicate, malformed, digest-mismatched, failed, or incomplete
 receipts. Only accepted receipts create `verified` cells; unclaimed matrix rows

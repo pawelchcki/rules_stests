@@ -8,6 +8,7 @@ use core::fmt::Write;
 use serde_json::Value;
 
 const MAX_TRACE_DEPTH: usize = 128;
+const HTTP_STATUS_KEYS: [&str; 2] = ["http.status_code", "http.response.status_code"];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SemanticSpan {
@@ -410,10 +411,10 @@ fn typed_http_status(attributes: &[proto::KeyValue]) -> Result<Option<i128>, Str
     let mut result = None;
     for attribute in attributes
         .iter()
-        .filter(|attribute| attribute.key == "http.status_code")
+        .filter(|attribute| HTTP_STATUS_KEYS.contains(&attribute.key.as_str()))
     {
         if result.is_some() {
-            return Err("duplicate attribute \"http.status_code\"".into());
+            return Err("duplicate HTTP status attribute".into());
         }
         let value = attribute
             .value
@@ -421,7 +422,7 @@ fn typed_http_status(attributes: &[proto::KeyValue]) -> Result<Option<i128>, Str
             .and_then(|value| value.value.as_ref());
         match value {
             Some(proto::any_value::Value::IntValue(value)) => result = Some(i128::from(*value)),
-            _ => return Err("attribute \"http.status_code\" is not an integer".into()),
+            _ => return Err(format!("attribute {:?} is not an integer", attribute.key)),
         }
     }
     Ok(result)
@@ -430,16 +431,20 @@ fn typed_http_status(attributes: &[proto::KeyValue]) -> Result<Option<i128>, Str
 fn json_http_status(attributes: Option<&Value>) -> Result<Option<i128>, String> {
     let mut result = None;
     for attribute in array(attributes).iter().filter(|attribute| {
-        attribute.get("key").and_then(Value::as_str) == Some("http.status_code")
+        attribute
+            .get("key")
+            .and_then(Value::as_str)
+            .is_some_and(|key| HTTP_STATUS_KEYS.contains(&key))
     }) {
         if result.is_some() {
-            return Err("duplicate attribute \"http.status_code\"".into());
+            return Err("duplicate HTTP status attribute".into());
         }
+        let key = attribute.get("key").and_then(Value::as_str).unwrap();
         let value = attribute
             .get("value")
             .map(|value| value.get("value").unwrap_or(value))
             .and_then(|value| field(value, "int_value", "intValue"));
-        result = Some(integer(value, "http.status_code attribute")?);
+        result = Some(integer(value, &format!("{key} attribute"))?);
     }
     Ok(result)
 }
