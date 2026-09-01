@@ -54,11 +54,12 @@ func ImportMatrix(markdown string, source CatalogSource) ([]Feature, error) {
 			continue
 		}
 		goIndex, pythonIndex := headers["Go"], headers["Python"]
-		if goIndex >= len(cells) || pythonIndex >= len(cells) {
+		rubyIndex, hasRuby := headers["Ruby"]
+		if goIndex >= len(cells) || pythonIndex >= len(cells) || (hasRuby && rubyIndex >= len(cells)) {
 			return nil, fmt.Errorf("line %d: row has fewer cells than its header", lineNumber)
 		}
 		name, href := parseFeatureCell(cells[0])
-		if cleanMarkdown(cells[goIndex]) == "Go" && cleanMarkdown(cells[pythonIndex]) == "Python" {
+		if cleanMarkdown(cells[goIndex]) == "Go" && cleanMarkdown(cells[pythonIndex]) == "Python" && (!hasRuby || cleanMarkdown(cells[rubyIndex]) == "Ruby") {
 			group = name
 			continue
 		}
@@ -78,11 +79,16 @@ func ImportMatrix(markdown string, source CatalogSource) ([]Feature, error) {
 		if href != "" {
 			featureSource = resolveSourceLink(href, source.Revision)
 		}
+		rubySupport := "unknown"
+		if hasRuby {
+			rubySupport = supportState(cells[rubyIndex])
+		}
 		features = append(features, Feature{
 			ID: id, Category: category, Group: group, Name: name, Optional: optional,
 			Support: map[string]string{
 				"go":     supportState(cells[goIndex]),
 				"python": supportState(cells[pythonIndex]),
+				"ruby":   rubySupport,
 			},
 			Source: featureSource,
 		})
@@ -91,7 +97,7 @@ func ImportMatrix(markdown string, source CatalogSource) ([]Feature, error) {
 		return nil, fmt.Errorf("read compliance matrix: %w", err)
 	}
 	if len(features) == 0 {
-		return nil, fmt.Errorf("compliance matrix contains no Go/Python features")
+		return nil, fmt.Errorf("compliance matrix contains no Go/Python/Ruby features")
 	}
 	return features, nil
 }

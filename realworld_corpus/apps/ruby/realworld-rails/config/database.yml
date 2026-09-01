@@ -1,0 +1,15 @@
+default: &default
+  adapter: sqlite3
+  pool: <%= ENV.fetch("RAILS_MAX_THREADS", 5) %>
+  timeout: 5000
+  foreign_keys: true
+
+development:
+  <<: *default
+  database: <%= ENV.fetch("DATABASE_PATH", Rails.root.join("storage/development.sqlite3")) %>
+test:
+  <<: *default
+  database: <%= ENV.fetch("DATABASE_PATH", Rails.root.join("storage/test.sqlite3")) %>
+production:
+  <<: *default
+  database: <%= ENV.fetch("DATABASE_PATH", Rails.root.join("storage/production.sqlite3")) %>

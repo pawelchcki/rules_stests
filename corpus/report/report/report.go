@@ -25,7 +25,7 @@ func DecodeMetadata(data []byte) (CatalogMetadata, error) {
 	if metadata.MaturitySource == "" {
 		return metadata, fmt.Errorf("catalog maturitySource is required")
 	}
-	for _, language := range []string{"go", "python"} {
+	for _, language := range []string{"go", "python", "ruby"} {
 		maturity, ok := metadata.Maturity[language]
 		if !ok || maturity.Traces == "" || maturity.Metrics == "" || maturity.Logs == "" {
 			return metadata, fmt.Errorf("catalog maturity for %s must include traces, metrics, and logs", language)
@@ -165,7 +165,7 @@ func BuildModel(metadata CatalogMetadata, features []Feature, manifests []Manife
 			return model, fmt.Errorf("duplicate manifest profile %q", manifest.Profile)
 		}
 		manifestProfiles[manifest.Profile] = true
-		if manifest.Language != "go" && manifest.Language != "python" {
+		if manifest.Language != "go" && manifest.Language != "python" && manifest.Language != "ruby" {
 			return model, fmt.Errorf("manifest %q has unsupported language %q", manifest.Profile, manifest.Language)
 		}
 		if !verificationStates[manifest.DefaultVerification] {

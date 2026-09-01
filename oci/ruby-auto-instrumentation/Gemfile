@@ -1,0 +1,4 @@
+source "https://rubygems.org"
+
+ruby "3.3.12"
+gem "opentelemetry-auto-instrumentation", path: "vendor/opentelemetry-ruby-instrumentation"

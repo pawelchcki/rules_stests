@@ -1,0 +1,8 @@
+Repository: https://github.com/open-telemetry/opentelemetry-ruby-instrumentation
+Commit: 5e1c2b7c5b30877f957ae555029275114b23a14d
+Release: opentelemetry-auto-instrumentation 0.1.0
+
+The gemspec, runtime source, version file, and license are copied from this
+immutable revision. The repository-owned activation patch is outside this
+directory. Upstream documentation and development-only files are intentionally
+excluded from the runtime build context.

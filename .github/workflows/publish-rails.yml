@@ -1,0 +1,126 @@
+name: Publish Rails RealWorld fixture
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - realworld_corpus/apps/ruby/realworld-rails/**
+      - bazel/**
+      - MODULE.bazel
+      - MODULE.bazel.lock
+      - tools/update_oci_lock.py
+      - .github/workflows/publish-rails.yml
+  workflow_dispatch:
+
+concurrency:
+  group: publish-rails
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+  pull-requests: write
+
+env:
+  CONTEXT: realworld_corpus/apps/ruby/realworld-rails
+  IMAGE: ghcr.io/pawelchcki/rules_stest_apps
+  LOCK_NAME: rails_realworld
+  REF_NAME: rails
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - uses: bazel-contrib/setup-bazel@8cb04a772ab4c1eb984e9c1b493a182e96c5e425 # 0.19.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Require the agent lock to be published first
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -A4 '^OTEL_RUBY = struct' bazel/oci_images.lock.bzl | grep -q 'sha256:0000000000000000000000000000000000000000000000000000000000000000'
+
+      - name: Prove two clean builds are identical
+        id: reproducible
+        shell: bash
+        run: |
+          set -euo pipefail
+          for build in a b; do
+            docker buildx build --no-cache --platform linux/amd64 --provenance=false --sbom=false \
+              --file "${CONTEXT}/oci/Dockerfile" --build-arg SOURCE_DATE_EPOCH=0 \
+              --output "type=oci,dest=/tmp/rails-${build}.tar,rewrite-timestamp=true,oci-mediatypes=true,compression=gzip,force-compression=true" \
+              "${CONTEXT}"
+          done
+          digest_a="$(tar -xOf /tmp/rails-a.tar index.json | jq -r '.manifests[0].digest')"
+          digest_b="$(tar -xOf /tmp/rails-b.tar index.json | jq -r '.manifests[0].digest')"
+          test "${digest_a}" = "${digest_b}"
+          echo "digest=${digest_a}" >> "${GITHUB_OUTPUT}"
+
+      - name: Publish immutable fixture
+        id: publish
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ${{ env.CONTEXT }}
+          file: ${{ env.CONTEXT }}/oci/Dockerfile
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
+          push: true
+          no-cache: true
+          build-args: SOURCE_DATE_EPOCH=0
+          outputs: type=image,push=true,rewrite-timestamp=true,oci-mediatypes=true,compression=gzip,force-compression=true
+          tags: ${{ env.IMAGE }}:${{ env.REF_NAME }}-tree-${{ github.sha }}
+
+      - name: Verify anonymous pull and propose lock
+        env:
+          DIGEST: ${{ steps.publish.outputs.digest }}
+          EXPECTED_DIGEST: ${{ steps.reproducible.outputs.digest }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${DIGEST}" = "${EXPECTED_DIGEST}"
+          tree_oid="$(git rev-parse HEAD:${CONTEXT})"
+          docker logout ghcr.io
+          docker pull "${IMAGE}@${DIGEST}"
+          test "$(docker buildx imagetools inspect "${IMAGE}@${DIGEST}" --raw | jq '[.layers[] | select(.size > 1024)] | length')" = 1
+          python3 tools/update_oci_lock.py --name "${LOCK_NAME}" --digest "${DIGEST}" --tree "${tree_oid}"
+          bazel test \
+            //bazel/itest/apps:rails_test \
+            //bazel/itest/apps:rails_hurl_test \
+            //bazel/itest/apps:rails_otel_test \
+            //bazel/itest/apps:rails_otel_hurl_test
+          if git diff --quiet -- MODULE.bazel.lock bazel/oci_images.lock.bzl; then
+            echo "Rails fixture lock already matches ${tree_oid}; nothing to propose."
+            exit 0
+          fi
+          branch="automation/oci-lock-${REF_NAME}-${tree_oid:0:12}"
+          propose_pr() {
+            gh pr create --base main --head "${branch}" --title "chore: lock Rails RealWorld OCI digest" \
+              --body "Locks the anonymously pulled, reproducibly built Rails fixture at ${DIGEST}; plain and patched-auto smoke tests plus all 13 plain and 13 exact-profile Hurl shards passed."
+          }
+          if git ls-remote --exit-code --heads origin "refs/heads/${branch}" >/dev/null; then
+            echo "Validated lock branch ${branch} already exists; reusing it."
+            open_pr="$(gh pr list --base main --head "${branch}" --state open --json number --jq '.[0].number // empty')"
+            if [[ -z "${open_pr}" ]] && ! propose_pr; then
+              echo "::warning::The validated lock branch ${branch} exists, but repository settings prevent Actions from creating its pull request."
+            fi
+            exit 0
+          fi
+          git switch -c "${branch}"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add MODULE.bazel.lock bazel/oci_images.lock.bzl
+          git commit -m "chore: lock Rails RealWorld OCI digest"
+          git push origin "HEAD:refs/heads/${branch}"
+          if ! propose_pr; then
+            echo "::warning::The validated lock branch ${branch} was pushed, but repository settings prevent Actions from creating its pull request."
+          fi

@@ -7,7 +7,7 @@ import (
 
 func fixtureModel(t *testing.T, includeScenarioShape bool) (CatalogMetadata, []Feature, []Manifest, []ScenarioShape, map[string]bool) {
 	t.Helper()
-	metadata := CatalogMetadata{SchemaVersion: 1, Source: testSource(), MaturitySource: "https://example.test/status", Maturity: map[string]SignalMaturity{"go": {Traces: "stable", Metrics: "stable", Logs: "beta"}, "python": {Traces: "stable", Metrics: "stable", Logs: "development"}}}
+	metadata := CatalogMetadata{SchemaVersion: 1, Source: testSource(), MaturitySource: "https://example.test/status", Maturity: map[string]SignalMaturity{"go": {Traces: "stable", Metrics: "stable", Logs: "beta"}, "python": {Traces: "stable", Metrics: "stable", Logs: "development"}, "ruby": {Traces: "stable", Metrics: "development", Logs: "development"}}}
 	features := []Feature{
 		{ID: "traces.span.create-root-span", Category: "Traces", Group: "Span", Name: "Create root span", Support: map[string]string{"go": "supported", "python": "supported"}, Source: "https://example.test/feature"},
 		{ID: "traces.span.end", Category: "Traces", Group: "Span", Name: "End", Support: map[string]string{"go": "supported", "python": "supported"}, Source: "https://example.test/end"},

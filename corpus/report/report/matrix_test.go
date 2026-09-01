@@ -14,16 +14,16 @@ func testSource() CatalogSource {
 
 func TestImportMatrix(t *testing.T) {
 	matrix := `## Traces
-| Feature | Optional | Go | Python |
-| --- | --- | --- | --- |
-| [Span](specification/trace/api.md#span) | Optional | Go | Python |
-| Create root span | | + | - |
-| A [linked](specification/linked.md) claim with code | X | N/A | |
+| Feature | Optional | Go | Python | Ruby |
+| --- | --- | --- | --- | --- |
+| [Span](specification/trace/api.md#span) | Optional | Go | Python | Ruby |
+| Create root span | | + | - | + |
+| A [linked](specification/linked.md) claim with code | X | N/A | | - |
 
 ## Environment Variables
-| Feature | Go | Python |
-| --- | --- | --- |
-| OTEL_SDK_DISABLED | - | + |
+| Feature | Go | Python | Ruby |
+| --- | --- | --- | --- |
+| OTEL_SDK_DISABLED | - | + | + |
 `
 	features, err := ImportMatrix(matrix, testSource())
 	if err != nil {
@@ -37,6 +37,9 @@ func TestImportMatrix(t *testing.T) {
 	}
 	if features[0].Support["go"] != "supported" || features[0].Support["python"] != "unsupported" {
 		t.Fatalf("unexpected support: %#v", features[0].Support)
+	}
+	if features[0].Support["ruby"] != "supported" {
+		t.Fatalf("unexpected Ruby support: %#v", features[0].Support)
 	}
 	if features[1].Support["go"] != "n/a" || features[1].Support["python"] != "unknown" {
 		t.Fatalf("unexpected support: %#v", features[1].Support)
@@ -54,10 +57,10 @@ func TestImportMatrix(t *testing.T) {
 
 func TestImportMatrixRejectsDuplicateFeatureIDs(t *testing.T) {
 	matrix := `## Traces
-| Feature | Go | Python |
-| --- | --- | --- |
-| Same name | + | + |
-| Same name | + | + |
+| Feature | Go | Python | Ruby |
+| --- | --- | --- | --- |
+| Same name | + | + | + |
+| Same name | + | + | + |
 `
 	if _, err := ImportMatrix(matrix, testSource()); err == nil || !strings.Contains(err.Error(), "duplicate feature id") {
 		t.Fatalf("expected duplicate error, got %v", err)
@@ -66,9 +69,9 @@ func TestImportMatrixRejectsDuplicateFeatureIDs(t *testing.T) {
 
 func TestImportMatrixPreservesEscapedPipes(t *testing.T) {
 	matrix := `## Traces
-| Feature | Optional | Go | Python |
-| --- | --- | --- | --- |
-| Emit A \| B | | + | - |
+| Feature | Optional | Go | Python | Ruby |
+| --- | --- | --- | --- | --- |
+| Emit A \| B | | + | - | + |
 `
 	features, err := ImportMatrix(matrix, testSource())
 	if err != nil {

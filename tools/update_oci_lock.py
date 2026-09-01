@@ -9,8 +9,9 @@ from pathlib import Path
 
 
 ENTRY_RE = re.compile(r'^    "(?P<name>[a-z0-9_]+)": struct\($')
-DIGEST_RE = re.compile(r'^        digest = "sha256:[0-9a-f]{64}",$')
-TREE_RE = re.compile(r'^        tree = "(?:unpublished|[0-9a-f]{40})",$')
+TOP_LEVEL_ENTRY_RE = re.compile(r'^(?P<name>[A-Z][A-Z0-9_]+) = struct\($')
+DIGEST_RE = re.compile(r'^\s+digest = "sha256:[0-9a-f]{64}",$')
+TREE_RE = re.compile(r'^\s+tree = "(?:unpublished|[0-9a-f]{40})",$')
 
 
 def main() -> None:
@@ -37,13 +38,20 @@ def main() -> None:
             active_entry = match.group("name")
             found_entry = found_entry or active_entry == args.name
             continue
+        top_level_match = TOP_LEVEL_ENTRY_RE.match(line)
+        if top_level_match:
+            active_entry = top_level_match.group("name").lower()
+            found_entry = found_entry or active_entry == args.name
+            continue
         if active_entry == args.name and DIGEST_RE.match(line):
-            lines[index] = f'        digest = "{args.digest}",'
+            indent = line[: len(line) - len(line.lstrip())]
+            lines[index] = f'{indent}digest = "{args.digest}",'
             found_digest = True
         elif active_entry == args.name and TREE_RE.match(line):
-            lines[index] = f'        tree = "{args.tree}",'
+            indent = line[: len(line) - len(line.lstrip())]
+            lines[index] = f'{indent}tree = "{args.tree}",'
             found_tree = True
-        elif active_entry and line == "    ),":
+        elif active_entry and line in ("    ),", ")"):
             active_entry = None
 
     if not found_entry:
