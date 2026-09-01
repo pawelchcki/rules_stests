@@ -125,7 +125,7 @@ func CompileNormalizedProfile(profileSource string, implementationSources []stri
 	if plan.Profile == "" || plan.DisplayName == "" || plan.Language == "" || plan.Framework == "" || plan.ServiceName == "" || len(plan.Signals) == 0 || len(plan.Implementations) == 0 || len(plan.Proofs) == 0 {
 		return plan, fmt.Errorf("profile metadata is incomplete")
 	}
-	if plan.Language != "go" && plan.Language != "python" {
+	if plan.Language != "go" && plan.Language != "python" && plan.Language != "ruby" {
 		return plan, fmt.Errorf("unsupported profile language %q", plan.Language)
 	}
 	for _, signal := range plan.Signals {

@@ -7,6 +7,7 @@ consumers of the corpus never load this package.
 load("@rules_itest//:itest.bzl", "itest_service", "service_test")
 load("//rules:hurl_test.bzl", "realworld_hurl_test_suite")
 load("//rules:oci_rootfs.bzl", "oci_rootfs")
+load("//bazel:oci_images.lock.bzl", "RUBY_IMAGES_PUBLISHED")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -192,6 +193,113 @@ realworld_hurl_test_suite(
     otel_profile = "//corpus:python_django_profile",
     otel_sink = "//bazel/itest:otel_sink_service",
     service = ":django_otel_service",
+)
+
+# Ruby app and agent images are intentionally manual while their immutable
+# publication locks contain the all-zero sentinel. The publish workflows remove
+# this gate only after anonymous-pull and single-payload verification succeeds.
+_RUBY_MANUAL = [] if RUBY_IMAGES_PUBLISHED else ["manual"]
+
+_RUBY_OTEL_SINK_ENV = {
+    "OTEL_BLRP_SCHEDULE_DELAY": "100",
+    "OTEL_BSP_SCHEDULE_DELAY": "100",
+    "OTEL_EXPORTER_OTLP_COMPRESSION": "none",
+    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT": "http://127.0.0.1:$${@@//bazel/itest:otel_sink_service}/v1/logs",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "http://127.0.0.1:$${@@//bazel/itest:otel_sink_service}/v1/traces",
+    "OTEL_LOGS_EXPORTER": "otlp",
+    "OTEL_METRICS_EXPORTER": "none",
+    "OTEL_RUBY_ENABLED_INSTRUMENTATIONS": "rack,rails,action_pack,active_record",
+    "OTEL_TRACES_EXPORTER": "otlp",
+}
+
+oci_rootfs(
+    name = "rails_rootfs",
+    image = "@rails_realworld_linux_amd64",
+    single_payload = True,
+    tags = _RUBY_MANUAL,
+)
+
+itest_service(
+    name = "rails_service",
+    args = [
+        "app-ruby",
+        "rails",
+        "$(rootpath :rails_rootfs)",
+        "server",
+        "--binding",
+        "127.0.0.1",
+        "--port",
+        "$${PORT}",
+    ],
+    autoassign_port = True,
+    data = [":rails_rootfs"],
+    exe = "//bazel/itest:oci_bundle",
+    expected_start_duration = "4s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    shutdown_timeout = "10s",
+    tags = _RUBY_MANUAL,
+)
+
+service_test(
+    name = "rails_test",
+    timeout = "moderate",
+    args = ["--service-suffix=//bazel/itest/apps:rails_service"],
+    services = [":rails_service"],
+    tags = _RUBY_MANUAL,
+    test = "//bazel/itest:api_probe",
+)
+
+realworld_hurl_test_suite(
+    name = "rails_hurl_test",
+    timeout = "moderate",
+    service = ":rails_service",
+    tags = _RUBY_MANUAL,
+)
+
+itest_service(
+    name = "rails_otel_service",
+    args = [
+        "app-ruby-otel",
+        "rails-otel",
+        "$(rootpath :rails_rootfs)",
+        "$(rootpath //bazel/itest:otel_ruby_rootfs)",
+        "server",
+        "--binding",
+        "127.0.0.1",
+        "--port",
+        "$${PORT}",
+    ],
+    autoassign_port = True,
+    data = [
+        ":rails_rootfs",
+        "//bazel/itest:otel_ruby_rootfs",
+    ],
+    deps = ["//bazel/itest:otel_sink_service"],
+    env = _RUBY_OTEL_SINK_ENV,
+    exe = "//bazel/itest:oci_bundle",
+    expected_start_duration = "4s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    shutdown_timeout = "10s",
+    tags = _RUBY_MANUAL,
+)
+
+service_test(
+    name = "rails_otel_test",
+    timeout = "moderate",
+    args = ["--service-suffix=//bazel/itest/apps:rails_otel_service"],
+    services = [":rails_otel_service"],
+    tags = _RUBY_MANUAL,
+    test = "//bazel/itest:api_probe",
+)
+
+realworld_hurl_test_suite(
+    name = "rails_otel_hurl_test",
+    timeout = "moderate",
+    otel_profile = "//corpus:ruby_rails_profile",
+    otel_sink = "//bazel/itest:otel_sink_service",
+    service = ":rails_otel_service",
+    tags = _RUBY_MANUAL,
 )
 
 # The Gin fixture ships two binaries in one image: an uninstrumented build and

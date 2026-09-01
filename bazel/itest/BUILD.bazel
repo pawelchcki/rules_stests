@@ -4,6 +4,7 @@ load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("@rules_itest//:itest.bzl", "itest_service", "service_test")
 load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
 load("//rules:oci_rootfs.bzl", "oci_rootfs")
+load("//bazel:oci_images.lock.bzl", "OTEL_RUBY_PUBLISHED")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -158,4 +159,11 @@ oci_rootfs(
 oci_rootfs(
     name = "otel_python_rootfs",
     image = "@otel_python_linux_amd64",
+)
+
+oci_rootfs(
+    name = "otel_ruby_rootfs",
+    image = "@otel_ruby_linux_amd64",
+    single_payload = True,
+    tags = [] if OTEL_RUBY_PUBLISHED else ["manual"],
 )

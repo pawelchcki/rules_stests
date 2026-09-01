@@ -78,6 +78,31 @@ filegroup(
 )
 
 otel_profile(
+    name = "ruby_rails_profile",
+    profile_id = "ruby-rails-auto-v0-1-0",
+    specification = "realworld/profiles/ruby-rails-auto-v0-1-0.scm",
+    implementation_libraries = [
+        "otel/implementations/rails-v0.40.0.scm",
+        "otel/implementations/ruby-auto-v0.1.0.scm",
+        "otel/implementations/ruby-sdk-v1.11.0.scm",
+    ],
+    runtime_libraries = ["realworld/profiles/ruby.scm"],
+    scenarios = REALWORLD_HURL_CASES,
+    scenario_shapes = {
+        "realworld/shapes/ruby-rails-auto-v0-1-0/{}/shape.scm".format(scenario): scenario
+        for scenario in REALWORLD_HURL_CASES
+    },
+    signals = ["traces", "logs"],
+    standard_registry = ":otel_standard_registry",
+)
+
+filegroup(
+    name = "ruby_rails_proof_plan",
+    srcs = [":ruby_rails_profile"],
+    output_group = "proof_plan",
+)
+
+otel_profile(
     name = "go_gin_profile",
     profile_id = "go-gin-otelbuild-v1-1-0",
     specification = "realworld/profiles/go-gin-otelbuild-v1-1-0.scm",
@@ -228,9 +253,11 @@ go_test(
         "$(rootpath :go_gin_proof_plan)",
         "$(rootpath :python_aiohttp_proof_plan)",
         "$(rootpath :python_django_proof_plan)",
+        "$(rootpath :ruby_rails_proof_plan)",
         "$(rootpath realworld/profiles/go-gin-otelbuild-v1-1-0.scm)",
         "$(rootpath realworld/profiles/python-aiohttp-auto-v0-65b0.scm)",
         "$(rootpath realworld/profiles/python-django-auto-v0-65b0.scm)",
+        "$(rootpath realworld/profiles/ruby-rails-auto-v0-1-0.scm)",
         "$(rootpath realworld/contract.scm)",
     ],
     data = [
@@ -240,10 +267,12 @@ go_test(
         ":go_gin_proof_plan",
         ":python_aiohttp_proof_plan",
         ":python_django_proof_plan",
+        ":ruby_rails_proof_plan",
         "realworld/contract.scm",
         "realworld/profiles/go-gin-otelbuild-v1-1-0.scm",
         "realworld/profiles/python-aiohttp-auto-v0-65b0.scm",
         "realworld/profiles/python-django-auto-v0-65b0.scm",
+        "realworld/profiles/ruby-rails-auto-v0-1-0.scm",
     ],
     embed = [":feature_parity_lib"],
 )

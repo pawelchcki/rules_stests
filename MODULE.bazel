@@ -130,6 +130,8 @@ use_repo(
     "hurl_tool_linux_amd64",
     "otel_python",
     "otel_python_linux_amd64",
+    "otel_ruby",
+    "otel_ruby_linux_amd64",
 )
 
 # Images used only by //bazel/itest/apps, this repo's own reference services.
@@ -146,6 +148,8 @@ use_repo(
     "django_ninja_realworld_linux_amd64",
     "gin_realworld",
     "gin_realworld_linux_amd64",
+    "rails_realworld",
+    "rails_realworld_linux_amd64",
 )
 
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")

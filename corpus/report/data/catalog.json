@@ -17,6 +17,11 @@
       "traces": "stable",
       "metrics": "stable",
       "logs": "development"
+    },
+    "ruby": {
+      "traces": "stable",
+      "metrics": "development",
+      "logs": "development"
     }
   }
 }

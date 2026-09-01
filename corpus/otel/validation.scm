@@ -465,17 +465,25 @@
 (define exception-attribute-keys
   '("exception.type" "exception.message" "exception.stacktrace" "exception.escaped"))
 
+(define required-exception-attribute-keys
+  '("exception.type" "exception.message" "exception.stacktrace"))
+
 (define (nonempty-string-value? value)
   (and (tagged-value? 'string value) (> (string-length (cadr value)) 0)))
 
 (define (validate-exception-attributes attributes)
-  (check (= (length attributes) (length exception-attribute-keys))
+  (check (or (= (length attributes) (length required-exception-attribute-keys))
+             (= (length attributes) (length exception-attribute-keys)))
          "exception attribute set changed")
+  (check (every (lambda (entry) (member (car entry) exception-attribute-keys)) attributes)
+         "unexpected exception attribute")
   (for-each
     (lambda (key)
       (check (= (attribute-count attributes key) 1)
              "exception attribute missing or duplicated"))
-    exception-attribute-keys)
+    required-exception-attribute-keys)
+  (check (<= (attribute-count attributes "exception.escaped") 1)
+         "exception escaped attribute is duplicated")
   (check (nonempty-string-value? (attribute attributes "exception.type"))
          "exception type is empty")
   (check (nonempty-string-value? (attribute attributes "exception.message"))
@@ -485,8 +493,9 @@
                 (> (cadr stacktrace) 256))
            "exception stacktrace is missing"))
   (let ((escaped (attribute attributes "exception.escaped")))
-    (check (and (tagged-value? 'string escaped)
-                (member (cadr escaped) '("True" "False")))
+    (check (or (not escaped)
+               (and (tagged-value? 'string escaped)
+                    (member (cadr escaped) '("True" "False"))))
            "exception escaped flag is invalid")))
 
 (define (validate-events mode span)

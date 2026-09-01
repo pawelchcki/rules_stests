@@ -12,7 +12,21 @@ OTEL_PYTHON = struct(
     version = "0.65b0-1",
 )
 
+# Publication workflows replace this syntactically valid sentinel before the
+# manual Ruby integration targets are enabled.
+OTEL_RUBY = struct(
+    repository = "ghcr.io/pawelchcki/rules_stest_agents",
+    digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    tree = "unpublished",
+    version = "0.1.0",
+)
+
 OCI_IMAGES = {
+    "rails_realworld": struct(
+        repository = "ghcr.io/pawelchcki/rules_stest_apps",
+        digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        tree = "unpublished",
+    ),
     "gin_realworld": struct(
         repository = "ghcr.io/pawelchcki/rules_stest_apps",
         digest = "sha256:1f92ea819af2351374a9e50bf1349173098d5c402f80c7b53506e21f90771f04",
@@ -29,3 +43,6 @@ OCI_IMAGES = {
         tree = "41bdcadbd7c0ae3f61321cf19c1e0b7a22940589",
     ),
 }
+
+OTEL_RUBY_PUBLISHED = OTEL_RUBY.tree != "unpublished"
+RUBY_IMAGES_PUBLISHED = OTEL_RUBY_PUBLISHED and OCI_IMAGES["rails_realworld"].tree != "unpublished"

@@ -60,7 +60,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: oci_bundle extract <oci-layout> <rootfs> <single|multi> | app <instance> <rootfs> <command> [arguments...] | app-otel <instance> <rootfs> <otel-rootfs> <command> [arguments...] | app-exec <instance> <rootfs> <relative-binary> [arguments...]")
+		return errors.New("usage: oci_bundle extract <oci-layout> <rootfs> <single|multi> | app <instance> <rootfs> <command> [arguments...] | app-otel <instance> <rootfs> <otel-rootfs> <command> [arguments...] | app-ruby <instance> <rootfs> <command> [arguments...] | app-ruby-otel <instance> <rootfs> <otel-rootfs> <command> [arguments...] | app-exec <instance> <rootfs> <relative-binary> [arguments...]")
 	}
 	switch args[0] {
 	case "extract":
@@ -78,6 +78,16 @@ func run(args []string) error {
 			return errors.New("usage: oci_bundle app-otel <instance> <rootfs> <otel-rootfs> <command> [arguments...]")
 		}
 		return runApp(args[1], args[2], args[3], args[4], args[5:])
+	case "app-ruby":
+		if len(args) < 4 {
+			return errors.New("usage: oci_bundle app-ruby <instance> <rootfs> <command> [arguments...]")
+		}
+		return runRubyApp(args[1], args[2], "", args[3], args[4:])
+	case "app-ruby-otel":
+		if len(args) < 5 {
+			return errors.New("usage: oci_bundle app-ruby-otel <instance> <rootfs> <otel-rootfs> <command> [arguments...]")
+		}
+		return runRubyApp(args[1], args[2], args[3], args[4], args[5:])
 	case "app-exec":
 		if len(args) < 4 {
 			return errors.New("usage: oci_bundle app-exec <instance> <rootfs> <relative-binary> [arguments...]")
@@ -86,6 +96,140 @@ func run(args []string) error {
 	default:
 		return fmt.Errorf("unsupported mode %q", args[0])
 	}
+}
+
+func runRubyApp(instance, rootArg, otelRootArg, command string, args []string) error {
+	if !validInstance(instance) {
+		return fmt.Errorf("unsafe instance name %q", instance)
+	}
+	root, err := resolveDirectory(rootArg)
+	if err != nil {
+		return err
+	}
+	if err := prepareAppState(root, instance); err != nil {
+		return err
+	}
+	otelRoot := ""
+	if otelRootArg != "" {
+		otelRoot, err = resolveDirectory(otelRootArg)
+		if err != nil {
+			return fmt.Errorf("resolve OpenTelemetry Ruby rootfs: %w", err)
+		}
+	}
+	return execRubyApp(root, otelRoot, instance, command, args)
+}
+
+type rubyExecution struct {
+	loader      string
+	arguments   []string
+	environment []string
+}
+
+func rubyAppExecution(root, otelRoot, instance, command string, args []string, inherited []string) (rubyExecution, error) {
+	appRoot := filepath.Join(root, "opt", "app")
+	loader := filepath.Join(root, "lib64", "ld-linux-x86-64.so.2")
+	ruby := filepath.Join(appRoot, "ruby", "bin", "ruby")
+	rails := filepath.Join(appRoot, "src", "bin", "rails")
+	for label, path := range map[string]string{"dynamic loader": loader, "Ruby runtime": ruby, "Rails launcher": rails} {
+		if info, err := os.Stat(path); err != nil || info.IsDir() {
+			if err == nil {
+				err = errors.New("is a directory")
+			}
+			return rubyExecution{}, fmt.Errorf("inspect bundled %s: %w", label, err)
+		}
+	}
+	prismLibraries, err := filepath.Glob(filepath.Join(appRoot, "bundle", "ruby", "3.3.0", "gems", "prism-*", "lib"))
+	if err != nil || len(prismLibraries) != 1 {
+		return rubyExecution{}, fmt.Errorf("Rails rootfs must contain exactly one bundled Prism library, got %d", len(prismLibraries))
+	}
+
+	blocked := map[string]bool{
+		"BUNDLE_GEMFILE": true, "BUNDLE_PATH": true, "DATABASE_PATH": true, "GEM_HOME": true, "GEM_PATH": true,
+		"LD_LIBRARY_PATH": true, "OTEL_RUBY_ADDITIONAL_GEM_PATH": true, "REALWORLD_BUNDLE_ROOT": true, "RUBYLIB": true, "RUBYOPT": true,
+	}
+	environment := make([]string, 0, len(inherited)+9)
+	present := make(map[string]bool)
+	for _, entry := range inherited {
+		key, _, _ := strings.Cut(entry, "=")
+		if !blocked[key] {
+			environment = append(environment, entry)
+			present[key] = true
+		}
+	}
+	state := os.Getenv("APP_STATE_DIR")
+	if state == "" {
+		return rubyExecution{}, errors.New("APP_STATE_DIR is required after state preparation")
+	}
+	environment = append(environment,
+		"BUNDLE_GEMFILE="+filepath.Join(appRoot, "src", "Gemfile"),
+		"BUNDLE_PATH="+filepath.Join(appRoot, "bundle"),
+		"DATABASE_PATH="+filepath.Join(state, "realworld.sqlite3"),
+		"GEM_HOME="+filepath.Join(appRoot, "ruby", "lib", "ruby", "gems", "3.3.0"),
+		"GEM_PATH="+filepath.Join(appRoot, "ruby", "lib", "ruby", "gems", "3.3.0"),
+		"REALWORLD_BUNDLE_ROOT="+appRoot,
+		"RUBYLIB="+strings.Join([]string{prismLibraries[0], filepath.Join(appRoot, "ruby", "lib", "ruby", "3.3.0"), filepath.Join(appRoot, "ruby", "lib", "ruby", "3.3.0", "x86_64-linux")}, ":"),
+	)
+	if otelRoot != "" {
+		hook, gemRoot, err := rubyActivationHook(otelRoot)
+		if err != nil {
+			return rubyExecution{}, err
+		}
+		environment = append(environment,
+			"OTEL_RUBY_ADDITIONAL_GEM_PATH="+gemRoot,
+			"RUBYOPT=-r"+hook,
+		)
+		environment = appendDefaultEnvironment(environment, present, "OTEL_SERVICE_NAME", instance)
+		environment = appendDefaultEnvironment(environment, present, "OTEL_TRACES_EXPORTER", "console")
+		environment = appendDefaultEnvironment(environment, present, "OTEL_METRICS_EXPORTER", "none")
+		environment = appendDefaultEnvironment(environment, present, "OTEL_LOGS_EXPORTER", "none")
+	}
+	libraryPath := strings.Join([]string{
+		filepath.Join(root, "lib", "x86_64-linux-gnu"),
+		filepath.Join(root, "usr", "lib", "x86_64-linux-gnu"),
+		filepath.Join(appRoot, "ruby", "lib"),
+	}, ":")
+	environment = append(environment, "LD_LIBRARY_PATH="+libraryPath)
+	arguments := []string{loader, "--library-path", libraryPath, ruby, rails, command}
+	arguments = append(arguments, args...)
+	return rubyExecution{loader: loader, arguments: arguments, environment: environment}, nil
+}
+
+func rubyActivationHook(root string) (string, string, error) {
+	var hooks []string
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type().IsRegular() && entry.Name() == "activation.rb" {
+			hooks = append(hooks, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("inspect OpenTelemetry Ruby activation hook: %w", err)
+	}
+	if len(hooks) != 1 {
+		return "", "", fmt.Errorf("OpenTelemetry Ruby rootfs must contain exactly one activation.rb hook, got %d", len(hooks))
+	}
+	gemRoot := filepath.Dir(hooks[0])
+	if _, err := os.Stat(filepath.Join(gemRoot, "gems")); err != nil {
+		return "", "", fmt.Errorf("OpenTelemetry Ruby rootfs has no gem payload: %w", err)
+	}
+	return hooks[0], gemRoot, nil
+}
+
+func execRubyApp(root, otelRoot, instance, command string, args []string) error {
+	execution, err := rubyAppExecution(root, otelRoot, instance, command, args, os.Environ())
+	if err != nil {
+		return err
+	}
+	if otelRoot != "" {
+		fmt.Fprintf(os.Stderr, "oci_bundle: activating OpenTelemetry Ruby instrumentation for %s from %s\n", instance, otelRoot)
+	}
+	if err := syscall.Exec(execution.loader, execution.arguments, execution.environment); err != nil {
+		return fmt.Errorf("execute Rails app with bundled Ruby: %w", err)
+	}
+	return nil
 }
 
 func extractOCI(layoutArg, root string, singlePayload bool) error {

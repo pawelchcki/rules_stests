@@ -1,7 +1,7 @@
 """Creates repositories for the digest-locked RealWorld app images."""
 
 load("@rules_oci//oci:pull.bzl", "oci_pull")
-load("//bazel:oci_images.lock.bzl", "HURL_TOOL", "OCI_IMAGES", "OTEL_PYTHON")
+load("//bazel:oci_images.lock.bzl", "HURL_TOOL", "OCI_IMAGES", "OTEL_PYTHON", "OTEL_RUBY")
 
 def _oci_deps_impl(module_ctx):
     direct_deps = []
@@ -32,6 +32,15 @@ def _oci_deps_impl(module_ctx):
         is_bzlmod = True,
     )
     direct_deps.extend(["otel_python", "otel_python_linux_amd64"])
+
+    oci_pull(
+        name = "otel_ruby",
+        image = OTEL_RUBY.repository,
+        digest = OTEL_RUBY.digest,
+        platforms = ["linux/amd64"],
+        is_bzlmod = True,
+    )
+    direct_deps.extend(["otel_ruby", "otel_ruby_linux_amd64"])
 
     return module_ctx.extension_metadata(
         root_module_direct_deps = direct_deps,

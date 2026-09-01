@@ -1,0 +1,95 @@
+name: Publish Ruby auto-instrumentation payload
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - oci/ruby-auto-instrumentation/**
+      - bazel/oci_images.lock.bzl
+      - tools/update_oci_lock.py
+      - .github/workflows/publish-ruby-auto-instrumentation.yml
+  workflow_dispatch:
+
+concurrency:
+  group: publish-ruby-auto-instrumentation
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+  pull-requests: write
+
+env:
+  CONTEXT: oci/ruby-auto-instrumentation
+  IMAGE: ghcr.io/pawelchcki/rules_stest_agents
+  LOCK_NAME: otel_ruby
+  REF_NAME: ruby-auto-instrumentation
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - uses: bazel-contrib/setup-bazel@8cb04a772ab4c1eb984e9c1b493a182e96c5e425 # 0.19.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prove two clean builds are identical
+        id: reproducible
+        shell: bash
+        run: |
+          set -euo pipefail
+          for build in a b; do
+            docker buildx build --no-cache --platform linux/amd64 --provenance=false --sbom=false \
+              --build-arg SOURCE_DATE_EPOCH=0 \
+              --output "type=oci,dest=/tmp/ruby-agent-${build}.tar,rewrite-timestamp=true,oci-mediatypes=true,compression=gzip,force-compression=true" \
+              "${CONTEXT}"
+          done
+          digest_a="$(tar -xOf /tmp/ruby-agent-a.tar index.json | jq -r '.manifests[0].digest')"
+          digest_b="$(tar -xOf /tmp/ruby-agent-b.tar index.json | jq -r '.manifests[0].digest')"
+          test "${digest_a}" = "${digest_b}"
+          echo "digest=${digest_a}" >> "${GITHUB_OUTPUT}"
+
+      - name: Publish immutable payload
+        id: publish
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ${{ env.CONTEXT }}
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
+          push: true
+          no-cache: true
+          build-args: SOURCE_DATE_EPOCH=0
+          outputs: type=image,push=true,rewrite-timestamp=true,oci-mediatypes=true,compression=gzip,force-compression=true
+          tags: ${{ env.IMAGE }}:${{ env.REF_NAME }}-tree-${{ github.sha }}
+
+      - name: Verify anonymous pull and propose lock
+        env:
+          DIGEST: ${{ steps.publish.outputs.digest }}
+          EXPECTED_DIGEST: ${{ steps.reproducible.outputs.digest }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${DIGEST}" = "${EXPECTED_DIGEST}"
+          tree_oid="$(git rev-parse HEAD:${CONTEXT})"
+          docker logout ghcr.io
+          docker pull "${IMAGE}@${DIGEST}"
+          test "$(docker buildx imagetools inspect "${IMAGE}@${DIGEST}" --raw | jq '[.layers[] | select(.size > 1024)] | length')" = 1
+          python3 tools/update_oci_lock.py --name "${LOCK_NAME}" --digest "${DIGEST}" --tree "${tree_oid}"
+          branch="automation/oci-lock-${REF_NAME}-${tree_oid:0:12}"
+          git switch -c "${branch}"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add bazel/oci_images.lock.bzl
+          git commit -m "chore: lock Ruby auto-instrumentation OCI digest"
+          git push origin "HEAD:refs/heads/${branch}"
+          gh pr create --base main --head "${branch}" --title "chore: lock Ruby auto-instrumentation OCI digest" \
+            --body "Locks the anonymously pulled, reproducibly built Ruby 0.1.0 auto-instrumentation payload at ${DIGEST}."
