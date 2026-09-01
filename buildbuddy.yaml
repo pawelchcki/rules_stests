@@ -24,6 +24,7 @@ actions:
           OTEL_TEST_REVISION="$REPORT_REVISION" bazel test \
             --config=buildbuddy \
             --build_tests_only \
+            --local_test_jobs=8 \
             --test_env=OTEL_TEST_REVISION \
             //...
           profile_tests=(
