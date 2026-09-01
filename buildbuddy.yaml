@@ -39,6 +39,7 @@ actions:
           OTEL_TEST_REVISION="$REPORT_REVISION" bazel test \
             --config=buildbuddy \
             --nocache_test_results \
+            --local_test_jobs=8 \
             --test_env=OTEL_TEST_REVISION \
             --build_event_json_file=otel-profile.bep.json \
             --nobuild_event_json_file_path_conversion \
