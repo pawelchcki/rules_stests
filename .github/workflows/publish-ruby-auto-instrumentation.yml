@@ -89,11 +89,24 @@ jobs:
             exit 0
           fi
           branch="automation/oci-lock-${REF_NAME}-${tree_oid:0:12}"
+          propose_pr() {
+            gh pr create --base main --head "${branch}" --title "chore: lock Ruby auto-instrumentation OCI digest" \
+              --body "Locks the anonymously pulled, reproducibly built Ruby 0.1.0 auto-instrumentation payload at ${DIGEST}."
+          }
+          if git ls-remote --exit-code --heads origin "refs/heads/${branch}" >/dev/null; then
+            echo "Validated lock branch ${branch} already exists; reusing it."
+            open_pr="$(gh pr list --base main --head "${branch}" --state open --json number --jq '.[0].number // empty')"
+            if [[ -z "${open_pr}" ]] && ! propose_pr; then
+              echo "::warning::The validated lock branch ${branch} exists, but repository settings prevent Actions from creating its pull request."
+            fi
+            exit 0
+          fi
           git switch -c "${branch}"
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add bazel/oci_images.lock.bzl
           git commit -m "chore: lock Ruby auto-instrumentation OCI digest"
           git push origin "HEAD:refs/heads/${branch}"
-          gh pr create --base main --head "${branch}" --title "chore: lock Ruby auto-instrumentation OCI digest" \
-            --body "Locks the anonymously pulled, reproducibly built Ruby 0.1.0 auto-instrumentation payload at ${DIGEST}."
+          if ! propose_pr; then
+            echo "::warning::The validated lock branch ${branch} was pushed, but repository settings prevent Actions from creating its pull request."
+          fi

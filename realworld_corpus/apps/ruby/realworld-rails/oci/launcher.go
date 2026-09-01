@@ -63,24 +63,33 @@ func cloneSeed(source, destination string) error {
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return fmt.Errorf("create application state directory: %w", err)
 	}
+	if _, err := os.Stat(destination); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("inspect application database: %w", err)
+	}
 	input, err := os.Open(source)
 	if err != nil {
 		return fmt.Errorf("open database seed: %w", err)
 	}
 	defer input.Close()
-	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if os.IsExist(err) {
-		return nil
-	}
+	output, err := os.CreateTemp(filepath.Dir(destination), ".realworld.sqlite3-")
 	if err != nil {
-		return fmt.Errorf("create application database: %w", err)
+		return fmt.Errorf("create temporary application database: %w", err)
 	}
+	temporary := output.Name()
+	defer os.Remove(temporary)
 	if _, err := io.Copy(output, input); err != nil {
 		output.Close()
 		return fmt.Errorf("clone database seed: %w", err)
 	}
 	if err := output.Close(); err != nil {
 		return fmt.Errorf("close application database: %w", err)
+	}
+	if err := os.Link(temporary, destination); os.IsExist(err) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("publish application database: %w", err)
 	}
 	return nil
 }
