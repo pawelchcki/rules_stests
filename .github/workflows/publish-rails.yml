@@ -98,6 +98,10 @@ jobs:
             //bazel/itest/apps:rails_hurl_test \
             //bazel/itest/apps:rails_otel_test \
             //bazel/itest/apps:rails_otel_hurl_test
+          if git diff --quiet -- MODULE.bazel.lock bazel/oci_images.lock.bzl; then
+            echo "Rails fixture lock already matches ${tree_oid}; nothing to propose."
+            exit 0
+          fi
           branch="automation/oci-lock-${REF_NAME}-${tree_oid:0:12}"
           git switch -c "${branch}"
           git config user.name github-actions[bot]

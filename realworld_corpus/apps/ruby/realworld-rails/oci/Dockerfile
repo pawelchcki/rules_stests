@@ -10,7 +10,16 @@ ARG SOURCE_DATE_EPOCH
 ENV BUNDLE_DEPLOYMENT=1 BUNDLE_FROZEN=1 BUNDLE_WITHOUT=development BUNDLE_PATH=/opt/app/bundle \
     RAILS_ENV=test SOURCE_DATE_EPOCH=0
 WORKDIR /opt/app/src
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential libsqlite3-dev && rm -rf /var/lib/apt/lists/*
+RUN sed -i \
+      -e 's|URIs: http://deb.debian.org/debian$|URIs: http://snapshot.debian.org/archive/debian/20260824T000000Z|' \
+      -e 's|URIs: http://deb.debian.org/debian-security$|URIs: http://snapshot.debian.org/archive/debian-security/20260824T000000Z|' \
+      -e '/^Signed-By:/a Check-Valid-Until: no' \
+      /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+      build-essential=12.9 \
+      libsqlite3-dev=3.40.1-2+deb12u2 \
+    && rm -rf /var/lib/apt/lists/*
 RUN gem install bundler -v 4.0.3 --no-document
 COPY Gemfile Gemfile.lock ./
 RUN bundle _4.0.3_ config set deployment true && bundle _4.0.3_ config set without development && bundle _4.0.3_ install --jobs=4

@@ -84,6 +84,10 @@ jobs:
           docker pull "${IMAGE}@${DIGEST}"
           test "$(docker buildx imagetools inspect "${IMAGE}@${DIGEST}" --raw | jq '[.layers[] | select(.size > 1024)] | length')" = 1
           python3 tools/update_oci_lock.py --name "${LOCK_NAME}" --digest "${DIGEST}" --tree "${tree_oid}"
+          if git diff --quiet -- bazel/oci_images.lock.bzl; then
+            echo "Ruby auto-instrumentation lock already matches ${tree_oid}; nothing to propose."
+            exit 0
+          fi
           branch="automation/oci-lock-${REF_NAME}-${tree_oid:0:12}"
           git switch -c "${branch}"
           git config user.name github-actions[bot]
