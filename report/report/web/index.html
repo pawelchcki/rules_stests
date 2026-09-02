@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenTelemetry feature parity &amp; corpus coverage</title>
+<style>
+__STYLE__
+</style>
+</head>
+<body>
+<nav class="top">
+  <ul>
+    <li><a href="#overview">Overview</a></li>
+    <li><a href="#coverage">Coverage</a></li>
+    <li><a href="#compare">Compare</a></li>
+    <li><a href="#features">Features</a></li>
+    <li><a href="#receipts">Receipts</a></li>
+    <li><a href="#glossary">Glossary</a></li>
+  </ul>
+</nav>
+
+<header>
+  <h1>OpenTelemetry feature parity &amp; corpus coverage</h1>
+  <p class="lede">What the upstream compliance matrix claims each language supports, what this
+  corpus actually asserted end to end, and how two instrumented implementations differ span by span.</p>
+  <div class="meta" id="meta"></div>
+</header>
+
+<main>
+  <section class="panel" id="overview">
+    <h2>Overview</h2>
+    <p class="section-note" id="how-to-read"></p>
+    <div class="tiles" id="kpis"></div>
+    <h3>Implementations</h3>
+    <div class="cards" id="implementations"></div>
+    <h3>Language maturity</h3>
+    <div class="scroll"><table id="maturity"></table></div>
+  </section>
+
+  <section class="panel" id="coverage">
+    <h2>Scenario coverage</h2>
+    <p class="section-note">Each cell says how strongly this corpus pins the scenario for that
+    implementation. Select a cell to open the aligned comparison.</p>
+    <div class="scroll"><table id="coverage-grid"></table></div>
+  </section>
+
+  <section class="panel" id="compare">
+    <h2>Aligned shape comparison</h2>
+    <p class="section-note">Traces are paired by root span, then spans are paired by kind and
+    normalized name. Scope is reported but never used for pairing, because scopes differ by
+    language by design.</p>
+    <div class="filters">
+      <label>Left implementation<select id="left"></select></label>
+      <label>Right implementation<select id="right"></select></label>
+      <label>Scenario<select id="scenario"></select></label>
+      <label><button type="button" id="swap">Swap sides</button></label>
+      <label class="toggle"><input type="checkbox" id="differences-only"> Differences only</label>
+      <label class="toggle"><input type="checkbox" id="hide-scope"> Hide scope differences</label>
+    </div>
+    <div class="compare-summary" id="compare-summary"></div>
+    <div id="compare-body"></div>
+    <h3>Scenario across all implementations</h3>
+    <div class="scroll"><table id="scenario-overview"></table></div>
+  </section>
+
+  <section class="panel" id="features">
+    <h2>Feature matrix</h2>
+    <p class="section-note">Upstream support claims beside what this corpus verified, per
+    implementation. Verified states are produced only by executable proof plans.</p>
+    <div class="filters">
+      <label>Category<select id="category"><option value="">All categories</option></select></label>
+      <label>Language<select id="language"><option value="">All languages</option><option>go</option><option>python</option><option>ruby</option></select></label>
+      <label>Upstream support<select id="support"><option value="">Any support</option><option>supported</option><option>unsupported</option><option>n/a</option><option>unknown</option></select></label>
+      <label>Verification<select id="verification"><option value="">Any verification</option><option>verified</option><option>known_gap</option><option>not_exercised</option><option>not_applicable</option></select></label>
+      <label>Evidence basis<select id="basis"><option value="">Any basis</option><option>observed</option><option>corroborated</option></select></label>
+      <label>Search<input type="search" id="search" placeholder="feature name or id"></label>
+      <label class="toggle"><input type="checkbox" id="verified-only"> Verified only</label>
+    </div>
+    <div class="scroll"><table id="feature-matrix"></table></div>
+  </section>
+
+  <section class="panel" id="receipts">
+    <h2>Receipt provenance</h2>
+    <p class="section-note">Every verified claim is backed by a current-revision end-to-end receipt
+    whose proof plan, capture, and optional scenario shape digests were checked during assembly.
+    Expected failures stay visible but never count as proof.</p>
+    <div class="scroll"><table id="receipts-table"></table></div>
+  </section>
+
+  <section class="panel" id="glossary">
+    <h2>Glossary</h2>
+    <p class="section-note">Five badge vocabularies appear in this report. They answer different
+    questions and are never interchangeable.</p>
+    <div class="glossary-grid" id="glossary-body"></div>
+  </section>
+</main>
+
+<script type="application/json" id="report-data">__REPORT_DATA__</script>
+<script>
+__SCRIPT__
+</script>
+</body>
+</html>

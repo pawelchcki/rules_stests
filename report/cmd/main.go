@@ -195,7 +195,7 @@ func run(matrixPath, metadataPath, outputPath, profileList, scenarioList, revisi
 	manifests := make([]report.Manifest, 0, len(profiles))
 	for _, profile := range profiles {
 		artifact := plans[profile]
-		manifests = append(manifests, report.Manifest{SchemaVersion: 1, Profile: profile, DisplayName: artifact.Plan.DisplayName, Language: artifact.Plan.Language, Framework: artifact.Plan.Framework, InstrumentationVersion: strings.Join(artifact.Plan.Implementations, " + "), ProfileEvidence: []report.Evidence{artifact.Source}, BaseCoverage: "contract_only", DefaultVerification: "not_exercised"})
+		manifests = append(manifests, report.Manifest{SchemaVersion: 1, Profile: profile, DisplayName: artifact.Plan.DisplayName, Language: artifact.Plan.Language, Framework: artifact.Plan.Framework, InstrumentationVersion: strings.Join(artifact.Plan.Implementations, " + "), Version: report.FormatInstrumentationVersion(artifact.Plan.Implementations), ShortLabel: report.FormatProfileLabel(artifact.Plan.Language, artifact.Plan.Framework, artifact.Plan.Implementations), ProfileEvidence: []report.Evidence{artifact.Source}, BaseCoverage: "contract_only", DefaultVerification: "not_exercised"})
 	}
 	coverages := report.CoveragesFromPlans(plans, receipts)
 	model, err := report.BuildModel(metadata, features, manifests, shapes, profiles, scenarios, evidencePaths, coverages...)

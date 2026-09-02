@@ -344,6 +344,27 @@ bazel run //fixtures:aiohttp_service
 bazel run //fixtures:django_service
 ```
 
+## Reading the report
+
+`//report:assemble` renders `feature-parity-report.html`, a single self-contained
+page whose front end lives in `report/report/web/`. Read it in three layers, each
+defined in the report's own glossary. An **upstream claim** is what the
+OpenTelemetry compliance matrix says a language supports. A **corpus
+verification** is what this repository's end-to-end suite actually asserted about
+a running implementation, and only an executable proof plan backed by a
+current-revision receipt can produce a `verified` state. An **evidence basis**
+says how that was proved: observed directly in a capture, or corroborated by an
+immutable upstream source. The three layers never substitute for one another.
+
+The Compare view pairs two implementations span by span. Trace groups match on
+their root span, then spans match on kind and normalized name, with route
+parameters collapsed so `api/articles/<slug>` and `api/articles/{slug}` align.
+Scope is shown for both sides but never used for pairing, because scopes differ
+by language by design. Rows are marked matched, matched-with-differences, or
+present on only one side; the page makes no parity judgement of its own. Views
+are deep-linkable through the URL hash, so a coverage cell or a receipt can link
+straight into the relevant comparison.
+
 ## Test tiers
 
 Tests progress from cheap structure checks to externally exercised evidence:

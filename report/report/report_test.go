@@ -1,6 +1,8 @@
 package report
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -153,12 +155,48 @@ func TestRenderHTMLIsSelfContainedAndEscapesData(t *testing.T) {
 	if strings.Contains(text, "<link rel=") || strings.Contains(text, "<script src=") {
 		t.Fatal("report depends on external assets")
 	}
-	if !strings.Contains(text, "const manifests=lang?data.manifests.filter(m=>m.language===lang):data.manifests") {
-		t.Fatal("verification filtering is not scoped to the selected language")
+	for _, id := range []string{`id="overview"`, `id="coverage"`, `id="compare"`, `id="feature-matrix"`, `id="receipts"`, `id="glossary"`} {
+		if !strings.Contains(text, id) {
+			t.Fatalf("report is missing the stable anchor %s", id)
+		}
 	}
-	if !strings.Contains(text, "Evidence basis") || !strings.Contains(text, "badge('basis',v.basis)") || !strings.Contains(text, "assertion: ") {
-		t.Fatal("report lacks basis badges, filtering, or capture assertions")
+	if strings.Contains(text, "__STYLE__") || strings.Contains(text, "__SCRIPT__") || strings.Contains(text, "__REPORT_DATA__") {
+		t.Fatal("template placeholders were not substituted")
 	}
+	if !strings.Contains(text, styleCSS) || !strings.Contains(text, appJS) {
+		t.Fatal("the embedded stylesheet and script are not inlined")
+	}
+}
+
+// TestRenderHTMLWritesPreview leaves a viewable page in the test outputs so the
+// front end can be opened in a browser after a Bazel run.
+func TestRenderHTMLWritesPreview(t *testing.T) {
+	directory := os.Getenv("TEST_UNDECLARED_OUTPUTS_DIR")
+	if directory == "" {
+		directory = t.TempDir()
+	}
+	metadata, features, manifests, shapes, evidence := fixtureModel(t, true)
+	model, err := BuildModel(metadata, features, manifests, shapes, []string{"go", "python"}, []string{"case"}, evidence, fixtureProfileProofCoverage(features)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.Receipts = []ValidationReceipt{{
+		SchemaVersion: 1, Profile: "python", Scenario: "case", ValidationMode: "exact", Outcome: "verified",
+		CaptureSHA256: strings.Repeat("ab", 32), ProofPlanSHA256: strings.Repeat("cd", 32),
+		Proofs: []ReceiptProof{{FeatureID: features[1].ID, Assertion: "span/all-completed", Basis: "observed", Result: "pass"}},
+	}}
+	html, err := RenderHTML(model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "preview.html")
+	if err := os.WriteFile(path, html, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if len(html) > 5<<20 {
+		t.Fatalf("rendered report is %d bytes, over the publication cap", len(html))
+	}
+	t.Logf("wrote %s (%d bytes)", path, len(html))
 }
 
 func TestPinRepositoryRevisionRewritesReportEvidence(t *testing.T) {

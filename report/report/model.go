@@ -89,6 +89,8 @@ type Manifest struct {
 	Language               string         `json:"language"`
 	Framework              string         `json:"framework"`
 	InstrumentationVersion string         `json:"instrumentationVersion"`
+	Version                string         `json:"version,omitempty"`
+	ShortLabel             string         `json:"shortLabel,omitempty"`
 	ProfileEvidence        []Evidence     `json:"profileEvidence"`
 	BaseCoverage           string         `json:"baseCoverage"`
 	DefaultVerification    string         `json:"defaultVerification"`
@@ -144,17 +146,57 @@ type CoverageCell struct {
 }
 
 type Comparison struct {
-	LeftProfile  string         `json:"leftProfile"`
-	RightProfile string         `json:"rightProfile"`
-	Scenario     string         `json:"scenario"`
-	Available    bool           `json:"available"`
-	TraceDelta   int            `json:"traceDelta"`
-	SpanDelta    int            `json:"spanDelta"`
-	ScopeDelta   map[string]int `json:"scopeDelta"`
-	StatusDelta  map[string]int `json:"statusDelta"`
-	CountDelta   int            `json:"countDelta"`
-	Left         *ScenarioShape `json:"left,omitempty"`
-	Right        *ScenarioShape `json:"right,omitempty"`
+	LeftProfile  string          `json:"leftProfile"`
+	RightProfile string          `json:"rightProfile"`
+	Scenario     string          `json:"scenario"`
+	Available    bool            `json:"available"`
+	TraceDelta   int             `json:"traceDelta"`
+	SpanDelta    int             `json:"spanDelta"`
+	ScopeDelta   map[string]int  `json:"scopeDelta"`
+	StatusDelta  map[string]int  `json:"statusDelta"`
+	CountDelta   int             `json:"countDelta"`
+	Left         *ScenarioShape  `json:"left,omitempty"`
+	Right        *ScenarioShape  `json:"right,omitempty"`
+	Alignment    *ShapeAlignment `json:"alignment,omitempty"`
+}
+
+// ShapeAlignment is the span-by-span pairing of two scenario shapes.
+type ShapeAlignment struct {
+	Traces  []TraceMatch `json:"traces"`
+	Summary AlignSummary `json:"summary"`
+}
+
+type AlignSummary struct {
+	TraceMatched   int `json:"traceMatched"`
+	TraceLeftOnly  int `json:"traceLeftOnly"`
+	TraceRightOnly int `json:"traceRightOnly"`
+	Matched        int `json:"matched"`
+	LeftOnly       int `json:"leftOnly"`
+	RightOnly      int `json:"rightOnly"`
+	Differing      int `json:"differing"`
+}
+
+type TraceRef struct {
+	Index int    `json:"index"`
+	Label string `json:"label"`
+	Card  string `json:"card,omitempty"`
+}
+
+type TraceMatch struct {
+	Kind  string      `json:"kind"`
+	Left  *TraceRef   `json:"left,omitempty"`
+	Right *TraceRef   `json:"right,omitempty"`
+	Spans []SpanMatch `json:"spans"`
+}
+
+type SpanMatch struct {
+	Kind      string    `json:"kind"`
+	Depth     int       `json:"depth"`
+	Left      *SpanNode `json:"left,omitempty"`
+	Right     *SpanNode `json:"right,omitempty"`
+	LeftCard  string    `json:"leftCard,omitempty"`
+	RightCard string    `json:"rightCard,omitempty"`
+	Diffs     []string  `json:"diffs,omitempty"`
 }
 
 type ReportModel struct {

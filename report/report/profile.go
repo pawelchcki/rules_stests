@@ -3,6 +3,7 @@ package report
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -390,4 +391,75 @@ func collectImplementationDefinitions(forms []sexpr, bindings map[string]bool, s
 		visit(form)
 	}
 	return result
+}
+
+var implementationVersionPattern = regexp.MustCompile(`-v([0-9][0-9A-Za-z.\-]*)$`)
+
+// FormatInstrumentationVersion turns implementation bindings such as
+// "python-sdk-v1.44" into a readable "python-sdk 1.44" list. Bindings without a
+// recognisable version suffix are kept verbatim.
+func FormatInstrumentationVersion(implementations []string) string {
+	parts := make([]string, 0, len(implementations))
+	for _, implementation := range implementations {
+		name, version := splitImplementationVersion(implementation)
+		if version == "" {
+			parts = append(parts, implementation)
+			continue
+		}
+		parts = append(parts, name+" "+version)
+	}
+	return strings.Join(parts, " + ")
+}
+
+// FormatProfileLabel builds a short human label such as
+// "Python · Django · auto 0.65b0" for use in pickers and cards.
+func FormatProfileLabel(language, framework string, implementations []string) string {
+	parts := []string{titleCase(language)}
+	if framework != "" {
+		parts = append(parts, framework)
+	}
+	if version := primaryImplementationVersion(implementations); version != "" {
+		parts = append(parts, version)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func primaryImplementationVersion(implementations []string) string {
+	for _, keyword := range []string{"auto", "sdk", "compile"} {
+		for _, implementation := range implementations {
+			name, version := splitImplementationVersion(implementation)
+			if version != "" && strings.Contains(name, keyword) {
+				return keyword + " " + version
+			}
+		}
+	}
+	for _, implementation := range implementations {
+		if name, version := splitImplementationVersion(implementation); version != "" {
+			return name + " " + version
+		}
+	}
+	return ""
+}
+
+func splitImplementationVersion(implementation string) (string, string) {
+	normalized := strings.ReplaceAll(implementation, "-v", "-v")
+	match := implementationVersionPattern.FindStringSubmatch(normalized)
+	if match == nil {
+		// Bazel-style ids spell dots as dashes: "-v0-65b0".
+		if index := strings.LastIndex(normalized, "-v"); index >= 0 {
+			candidate := normalized[index+2:]
+			if candidate != "" && candidate[0] >= '0' && candidate[0] <= '9' {
+				return normalized[:index], strings.ReplaceAll(candidate, "-", ".")
+			}
+		}
+		return implementation, ""
+	}
+	return strings.TrimSuffix(normalized, match[0]), match[1]
+}
+
+func titleCase(value string) string {
+	if value == "" {
+		return value
+	}
+	return strings.ToUpper(value[:1]) + value[1:]
 }

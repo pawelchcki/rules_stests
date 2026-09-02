@@ -165,6 +165,12 @@ func BuildModel(metadata CatalogMetadata, features []Feature, manifests []Manife
 			return model, fmt.Errorf("duplicate manifest profile %q", manifest.Profile)
 		}
 		manifestProfiles[manifest.Profile] = true
+		if manifest.Version == "" {
+			manifest.Version = manifest.InstrumentationVersion
+		}
+		if manifest.ShortLabel == "" {
+			manifest.ShortLabel = FormatProfileLabel(manifest.Language, manifest.Framework, nil)
+		}
 		if manifest.Language != "go" && manifest.Language != "python" && manifest.Language != "ruby" {
 			return model, fmt.Errorf("manifest %q has unsupported language %q", manifest.Profile, manifest.Language)
 		}
@@ -285,6 +291,7 @@ func BuildModel(metadata CatalogMetadata, features []Feature, manifests []Manife
 					mergeDelta(comparison.ScopeDelta, rightScenarioShape.Scopes, 1)
 					mergeDelta(comparison.StatusDelta, rightScenarioShape.Statuses, 1)
 				}
+				comparison.Alignment = AlignShapes(leftScenarioShape, rightScenarioShape)
 				model.Comparisons = append(model.Comparisons, comparison)
 			}
 		}
