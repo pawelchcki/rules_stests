@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - realworld_corpus/apps/go/realworld-gin/**
+      - fixtures/apps/go/realworld-gin/**
       - bazel/**
       - MODULE.bazel
       - MODULE.bazel.lock
@@ -22,7 +22,7 @@ permissions:
   pull-requests: write
 
 env:
-  APP_PATH: realworld_corpus/apps/go/realworld-gin
+  APP_PATH: fixtures/apps/go/realworld-gin
   IMAGE: ghcr.io/pawelchcki/rules_stest_apps
   LOCK_NAME: gin_realworld
   REF_NAME: gin
@@ -143,7 +143,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 tools/update_oci_lock.py --name "${LOCK_NAME}" --digest "${DIGEST}" --tree "${TREE_OID}"
-          bazel test //bazel/itest/apps:gin_smoke //bazel/itest/apps:gin_hurl_test //bazel/itest/apps:gin_otel_hurl_test
+          bazel test //fixtures:gin_test //fixtures:gin_hurl_test //fixtures:gin_otel_test //fixtures:gin_otel_hurl_test
           if git diff --quiet -- MODULE.bazel.lock bazel/oci_images.lock.bzl; then
             echo "Digest lock is already current."
             exit 0

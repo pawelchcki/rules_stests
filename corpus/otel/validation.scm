@@ -1,294 +1,13 @@
 (define-library (otel validation)
-  (export otel-validate-contract otel-validate-exact)
-  (import (scheme base) (scheme char) (scheme write))
+  (export otel-validate-capture)
+  (import (scheme base) (scheme write)
+          (otel base) (otel contract-error) (otel declarations) (otel identifiers)
+          (otel matchers) (otel record))
   (begin
-
-(define (contract-error message)
-  (display "[[OTLP-CONTRACT-V1:" (current-error-port))
-  (display (string-length message) (current-error-port))
-  (display "]]" (current-error-port))
-  (display message (current-error-port))
-  (error "OTLP contract sentinel"))
-
-(define (check condition message)
-  (if condition #t (contract-error message)))
 
 (define (field key object)
   (let ((entry (assq key object)))
     (if entry (cadr entry) (contract-error "missing OTLP field"))))
-
-(define (third values)
-  (car (cdr (cdr values))))
-
-(define (count predicate values)
-  (let loop ((values values) (total 0))
-    (if (null? values)
-        total
-        (loop (cdr values) (+ total (if (predicate (car values)) 1 0))))))
-
-(define (every predicate values)
-  (or (null? values)
-      (and (predicate (car values)) (every predicate (cdr values)))))
-
-(define (find predicate values)
-  (cond ((null? values) #f)
-        ((predicate (car values)) (car values))
-        (else (find predicate (cdr values)))))
-
-(define (sum values)
-  (if (null? values) 0 (+ (car values) (sum (cdr values)))))
-
-(define (string-prefix? prefix value)
-  (and (<= (string-length prefix) (string-length value))
-       (string=? prefix (substring value 0 (string-length prefix)))))
-
-(define (string-suffix? suffix value)
-  (let ((offset (- (string-length value) (string-length suffix))))
-    (and (>= offset 0)
-         (string=? suffix (substring value offset (string-length value))))))
-
-(define (ascii-digit? character)
-  (and (char>=? character #\0) (char<=? character #\9)))
-
-(define (hex-character? character)
-  (or (ascii-digit? character)
-      (and (char>=? character #\a) (char<=? character #\f))
-      (and (char>=? character #\A) (char<=? character #\F))))
-
-(define (valid-hex? value width)
-  (and (= (string-length value) width)
-       (let loop ((index 0) (nonzero #f))
-         (if (= index width)
-             nonzero
-             (let ((character (string-ref value index)))
-               (and (hex-character? character)
-                    (loop (+ index 1) (or nonzero (not (char=? character #\0))))))))))
-
-(define (lower-alpha? character)
-  (and (char>=? character #\a) (char<=? character #\z)))
-
-(define (trace-key-character? character)
-  (or (lower-alpha? character)
-      (ascii-digit? character)
-      (memv character '(#\_ #\- #\* #\/))))
-
-(define (character-index value wanted)
-  (let loop ((index 0))
-    (cond ((= index (string-length value)) #f)
-          ((char=? (string-ref value index) wanted) index)
-          (else (loop (+ index 1))))))
-
-(define (valid-trace-key-part? value max-length first-predicate)
-  (and (> (string-length value) 0)
-       (<= (string-length value) max-length)
-       (first-predicate (string-ref value 0))
-       (let loop ((index 1))
-         (or (= index (string-length value))
-             (and (trace-key-character? (string-ref value index))
-                  (loop (+ index 1)))))))
-
-(define (valid-trace-state-key? key)
-  (let ((separator (character-index key #\@)))
-    (if separator
-        (and (not (character-index (substring key (+ separator 1) (string-length key)) #\@))
-             (valid-trace-key-part?
-               (substring key 0 separator)
-               241
-               (lambda (character) (or (lower-alpha? character) (ascii-digit? character))))
-             (valid-trace-key-part?
-               (substring key (+ separator 1) (string-length key))
-               14
-               lower-alpha?))
-        (valid-trace-key-part? key 256 lower-alpha?))))
-
-(define (ows? character)
-  (or (char=? character #\space) (char=? character #\tab)))
-
-(define (trim-ows value)
-  (let find-start ((start 0))
-    (if (and (< start (string-length value)) (ows? (string-ref value start)))
-        (find-start (+ start 1))
-        (let find-end ((end (string-length value)))
-          (if (and (> end start) (ows? (string-ref value (- end 1))))
-              (find-end (- end 1))
-              (substring value start end))))))
-
-(define (split-on-comma value)
-  (let loop ((index 0) (start 0) (members '()))
-    (if (= index (string-length value))
-        (reverse (cons (trim-ows (substring value start index)) members))
-        (if (char=? (string-ref value index) #\,)
-            (loop (+ index 1) (+ index 1)
-                  (cons (trim-ows (substring value start index)) members))
-            (loop (+ index 1) start members)))))
-
-(define (valid-trace-state-value? value)
-  (and (> (string-length value) 0)
-       (<= (string-length value) 256)
-       (not (ows? (string-ref value (- (string-length value) 1))))
-       (let loop ((index 0))
-         (or (= index (string-length value))
-             (let* ((character (string-ref value index))
-                    (code (char->integer character)))
-               (and (>= code 32)
-                    (<= code 126)
-                    (not (memv character '(#\, #\=)))
-                    (loop (+ index 1))))))))
-
-(define (valid-trace-state-member? member)
-  (let ((separator (character-index member #\=)))
-    (and separator
-         (not (character-index (substring member (+ separator 1) (string-length member)) #\=))
-         (valid-trace-state-key? (substring member 0 separator))
-         (valid-trace-state-value?
-           (substring member (+ separator 1) (string-length member))))))
-
-(define (valid-trace-state? value)
-  (or (string=? value "")
-      (and (<= (string-length value) 512)
-           (let ((members (split-on-comma value)))
-             (and (<= (length members) 32)
-                  (every valid-trace-state-member? members)
-                  (every
-                    (lambda (member)
-                      (= (count
-                           (lambda (candidate)
-                             (string=? (substring member 0 (character-index member #\=))
-                                       (substring candidate 0 (character-index candidate #\=))))
-                           members)
-                         1))
-                    members))))))
-
-(define (uuid? value)
-  (and (= (string-length value) 36)
-       (let loop ((index 0))
-         (if (= index 36)
-             #t
-             (and (if (memv index '(8 13 18 23))
-                      (char=? (string-ref value index) #\-)
-                      (hex-character? (string-ref value index)))
-                  (loop (+ index 1)))))))
-
-(define loopback-prefix "127.0.0.1:")
-
-(define (decimal-string? value)
-  (and (> (string-length value) 0)
-       (let loop ((index 0))
-         (or (= index (string-length value))
-             (and (ascii-digit? (string-ref value index))
-                  (loop (+ index 1)))))))
-
-(define (ascii-alpha? character)
-  (or (and (char>=? character #\a) (char<=? character #\z))
-      (and (char>=? character #\A) (char<=? character #\Z))))
-
-(define (valid-host-label? value)
-  (and (> (string-length value) 0)
-       (or (ascii-alpha? (string-ref value 0))
-           (ascii-digit? (string-ref value 0)))
-       (or (ascii-alpha? (string-ref value (- (string-length value) 1)))
-           (ascii-digit? (string-ref value (- (string-length value) 1))))
-       (let loop ((index 1))
-         (or (>= index (- (string-length value) 1))
-             (let ((character (string-ref value index)))
-               (and (or (ascii-alpha? character)
-                        (ascii-digit? character)
-                        (char=? character #\-))
-                    (loop (+ index 1))))))))
-
-(define (valid-host-name? value)
-  (and (> (string-length value) 0)
-       (let loop ((remaining value))
-         (let ((separator (character-index remaining #\.)))
-           (if separator
-               (and (> separator 0)
-                    (< separator (- (string-length remaining) 1))
-                    (valid-host-label? (substring remaining 0 separator))
-                    (loop (substring remaining (+ separator 1) (string-length remaining))))
-               (valid-host-label? remaining))))))
-
-(define (valid-host-field? value)
-  (if (and (> (string-length value) 0) (char=? (string-ref value 0) #\[))
-      (let ((close (character-index value #\])))
-        (and close
-             (> close 1)
-             (character-index (substring value 1 close) #\:)
-             (every
-               (lambda (character)
-                 (or (hex-character? character)
-                     (char=? character #\:)
-                     (char=? character #\.)))
-               (string->list (substring value 1 close)))
-             (or (= close (- (string-length value) 1))
-                 (and (char=? (string-ref value (+ close 1)) #\:)
-                      (decimal-string?
-                        (substring value (+ close 2) (string-length value)))))))
-      (let ((separator (character-index value #\:)))
-        (if separator
-            (and (> separator 0)
-                 (not (character-index
-                        (substring value (+ separator 1) (string-length value))
-                        #\:))
-                 (valid-host-name? (substring value 0 separator))
-                 (decimal-string?
-                   (substring value (+ separator 1) (string-length value))))
-            (valid-host-name? value)))))
-
-(define (loopback-port-number value)
-  (and (string-prefix? loopback-prefix value)
-       (let* ((suffix (substring value (string-length loopback-prefix) (string-length value)))
-              (port (and (decimal-string? suffix) (string->number suffix))))
-         (and (integer? port) (> port 0) (<= port 65535) port))))
-
-(define (tagged-value? tag value)
-  (and (pair? value) (eq? (car value) tag) (pair? (cdr value))))
-
-(define (matches-value? matcher value)
-  (let ((kind (car matcher)))
-    (cond
-      ((eq? kind 'exact)
-       (and (tagged-value? 'string value) (string=? (cadr matcher) (cadr value))))
-      ((eq? kind 'uuid)
-       (and (tagged-value? 'string value) (uuid? (cadr value))))
-      ((eq? kind 'nonempty)
-       (or (and (tagged-value? 'string value) (> (string-length (cadr value)) 0))
-           (and (tagged-value? 'long-string value) (> (cadr value) 0))))
-      ((eq? kind 'loopback-port)
-       (and (tagged-value? 'string value) (loopback-port-number (cadr value))))
-      ((eq? kind 'integer)
-       (tagged-value? 'integer value))
-      ((eq? kind 'nonnegative-integer)
-       (and (tagged-value? 'integer value) (>= (cadr value) 0)))
-      ((eq? kind 'positive-integer)
-       (and (tagged-value? 'integer value) (> (cadr value) 0)))
-      ((eq? kind 'http-status)
-       (and (tagged-value? 'integer value) (>= (cadr value) 100) (<= (cadr value) 599)))
-      ((eq? kind 'one-of)
-       (and (tagged-value? 'string value) (member (cadr value) (cdr matcher))))
-      ((eq? kind 'nonempty-array)
-       (and (tagged-value? 'array value)
-            (pair? (cadr value))
-            (every (lambda (item)
-                     (or (and (tagged-value? 'string item)
-                              (string? (cadr item)))
-                         ; The capture deliberately summarizes strings over
-                         ; 256 bytes by their positive length.
-                         (and (tagged-value? 'long-string item)
-                              (integer? (cadr item))
-                              (> (cadr item) 0))))
-                   (cadr value))))
-      (else (error "unknown value matcher" kind)))))
-
-(define (attribute attributes key)
-  (let ((entry (assoc key attributes)))
-    (and entry (cadr entry))))
-
-(define (attribute-count attributes key)
-  (count (lambda (entry) (string=? (car entry) key)) attributes))
-
-(define (attribute-integer attributes key)
-  (let ((value (attribute attributes key)))
-    (if (tagged-value? 'integer value) (cadr value) 'absent)))
 
 ; A profile declares the signals its implementation emits by declaring scopes
 ; for them. Traces are mandatory; an implementation with no metric or log scopes
@@ -387,32 +106,32 @@
 ; A scope declaration is:
 ; (alias instrumentation-name version required-keys allowed-keys string-rules integer-keys schema-url)
 (define (scope-declaration expected-scopes name)
-  (find (lambda (scope) (string=? (cadr scope) name)) expected-scopes))
+  (find (lambda (scope) (string=? (record-field scope 'instrumentation) name)) expected-scopes))
 
 (define (validate-scopes expected-scopes scopes)
   (for-each
     (lambda (expected)
-      (check (> (count (lambda (scope) (string=? (field 'name scope) (cadr expected))) scopes) 0)
+      (check (> (count (lambda (scope) (string=? (field 'name scope) (record-field expected 'instrumentation))) scopes) 0)
              "expected instrumentation scope is missing"))
     expected-scopes)
   (for-each
     (lambda (scope)
       (let ((expected (scope-declaration expected-scopes (field 'name scope))))
         (check expected "unexpected instrumentation scope")
-        (check (string=? (field 'version scope) (third expected)) "instrumentation scope version changed")
+        (check (string=? (field 'version scope) (record-field expected 'version)) "instrumentation scope version changed")
         (check (null? (field 'attributes scope)) "instrumentation scope attributes changed")
         (check (= (field 'dropped-attributes scope) 0) "instrumentation scope dropped attributes")
-        (check (string=? (field 'schema-url scope) (list-ref expected 7))
+        (check (string=? (field 'schema-url scope) (record-field expected 'schema-url))
                "instrumentation scope schema URL changed")))
     scopes))
 
 (define (validate-span-attributes span expected-scopes)
   (let* ((expected (scope-declaration expected-scopes (field 'scope span)))
          (attributes (field 'attributes span))
-         (required (list-ref expected 3))
-         (allowed (list-ref expected 4))
-         (string-rules (list-ref expected 5))
-         (integer-keys (list-ref expected 6)))
+         (required (record-field expected 'required-keys))
+         (allowed (record-field expected 'allowed-keys))
+         (string-rules (record-field expected 'string-rules))
+         (integer-keys (record-field expected 'integer-keys)))
     (check (every (lambda (entry) (member (car entry) allowed)) attributes) "unexpected span attribute")
     (for-each
       (lambda (entry)
@@ -460,7 +179,7 @@
   (list-ref '(unset ok error) value))
 
 (define (scope-alias expected-scopes name)
-  (car (scope-declaration expected-scopes name)))
+  (record-field (scope-declaration expected-scopes name) 'alias))
 
 (define exception-attribute-keys
   '("exception.type" "exception.message" "exception.stacktrace" "exception.escaped"))
@@ -533,8 +252,8 @@
         (check (string=? message "") "non-error span has a status message"))))
 
 (define (validate-spans expected-scopes event-policy expected-flags expected-trace-state error-message-policy spans)
-  (let ((event-mode (car event-policy))
-        (expected-event-count (cadr event-policy)))
+  (let ((event-mode (record-field event-policy 'mode))
+        (expected-event-count (record-field event-policy 'occurrences)))
     (check (> (length spans) 0) "capture contains no spans")
     (for-each
       (lambda (span)
@@ -568,13 +287,6 @@
               (sum (map (lambda (span) (length (field 'events span))) spans)))
            "span exception event count changed")))
 
-(define (matches-name? matcher name)
-  (cond
-    ((eq? (car matcher) 'exact) (string=? name (cadr matcher)))
-    ((eq? (car matcher) 'prefix-suffix)
-     (and (string-prefix? (cadr matcher) name) (string-suffix? (third matcher) name)))
-    (else (error "unknown span name matcher" (car matcher)))))
-
 ; HTTP instrumentations name the response status after the semantic convention
 ; version they target. Which key a profile permits is pinned by its scope
 ; declaration, so bucketing accepts whichever one the span actually carries.
@@ -585,43 +297,34 @@
         current)))
 
 (define (span-matches-bucket? span bucket expected-scopes spans)
-  (and (eq? (scope-alias expected-scopes (field 'scope span)) (list-ref bucket 1))
-       (eq? (kind-name (field 'kind span)) (list-ref bucket 2))
-       (eq? (status-name (field 'status-code span)) (list-ref bucket 3))
-       (matches-name? (list-ref bucket 4) (field 'name span))
-       (eq? (field 'parent-class span) (list-ref bucket 5))
-       (equal? (span-http-status (field 'attributes span)) (list-ref bucket 6))))
-
-(define (validate-buckets buckets expected-scopes spans)
-  (check (= (sum (map car buckets)) (length spans)) "shape span total changed")
-  (for-each
-    (lambda (bucket)
-      (check (= (car bucket)
-                (count (lambda (span) (span-matches-bucket? span bucket expected-scopes spans)) spans))
-             "shape span bucket count changed"))
-    buckets))
+  (and (eq? (scope-alias expected-scopes (field 'scope span)) (record-field bucket 'scope))
+       (eq? (kind-name (field 'kind span)) (record-field bucket 'kind))
+       (eq? (status-name (field 'status-code span)) (record-field bucket 'status))
+       (matches-name? (record-field bucket 'name) (field 'name span))
+       (eq? (field 'parent-class span) (record-field bucket 'parent))
+       (equal? (span-http-status (field 'attributes span)) (record-field bucket 'http-status))))
 
 (define (validate-contract-buckets buckets expected-scopes spans)
-  (check (= (sum (map car buckets))
+  (check (= (sum (map (lambda (bucket) (record-field bucket 'bucket-count)) buckets))
             (count (lambda (span)
                      (eq? (kind-name (field 'kind span)) 'server))
                    spans))
          "contract span total changed")
   (for-each
     (lambda (bucket)
-      (check (= (car bucket)
+      (check (= (record-field bucket 'bucket-count)
                 (count (lambda (span) (span-matches-bucket? span bucket expected-scopes spans)) spans))
              "contract span bucket count changed"))
     buckets))
 
 (define (signal-scope-declaration expected name)
-  (find (lambda (scope) (string=? (car scope) name)) expected))
+  (find (lambda (scope) (string=? (record-field scope 'instrumentation) name)) expected))
 
 (define (validate-signal-scopes expected items)
   (for-each
     (lambda (scope)
-      (if (or (= (length scope) 3) (list-ref scope 3))
-          (check (> (count (lambda (item) (string=? (field 'scope item) (car scope))) items) 0)
+      (if (eq? (record-field/default scope 'presence 'required) 'required)
+          (check (> (count (lambda (item) (string=? (field 'scope item) (record-field scope 'instrumentation))) items) 0)
                  "expected signal instrumentation scope is missing")
           #t))
     expected)
@@ -629,9 +332,9 @@
     (lambda (item)
       (let ((scope (signal-scope-declaration expected (field 'scope item))))
         (check scope "unexpected signal instrumentation scope")
-        (check (string=? (field 'scope-version item) (cadr scope))
+        (check (string=? (field 'scope-version item) (record-field scope 'version))
                "signal instrumentation scope version changed")
-        (check (string=? (field 'schema-url item) (third scope))
+        (check (string=? (field 'schema-url item) (record-field scope 'schema-url))
                "signal instrumentation scope schema URL changed")
         (check (null? (field 'scope-attributes item))
                "signal instrumentation scope attributes changed")
@@ -639,13 +342,14 @@
                "signal instrumentation scope dropped attributes")))
     items))
 
-(define (metric-descriptor metric)
-  (list (field 'scope metric)
-        (field 'name metric)
-        (field 'description metric)
-        (field 'unit metric)
-        (field 'data-type metric)
-        (field 'metadata metric)))
+(define (observed-metric-descriptor metric-value)
+  (metric-descriptor
+    (instrumentation (field 'scope metric-value))
+    (metric (field 'name metric-value))
+    (description (field 'description metric-value))
+    (unit (field 'unit metric-value))
+    (data-type (field 'data-type metric-value))
+    (list 'metadata (field 'metadata metric-value))))
 
 (define (validate-metric-metadata metadata)
   (for-each
@@ -676,10 +380,10 @@
     (if expected
         (begin
           (if (member data-type '(sum histogram exponential-histogram))
-              (check (eq? temporality (car expected)) "metric aggregation temporality changed")
+              (check (eq? temporality (record-field expected 'temporality)) "metric aggregation temporality changed")
               #t)
           (if (eq? data-type 'sum)
-              (check (eq? monotonic (if (member (field 'name metric) (cadr expected)) #t #f))
+              (check (eq? monotonic (if (member (field 'name metric) (record-field expected 'monotonic-sums)) #t #f))
                      "metric monotonicity changed")
               #t))
         #t)))
@@ -694,18 +398,18 @@
            "metric point attribute projection changed")
     (if expected-schemas
         (let ((schema (find (lambda (candidate)
-                              (string=? (car candidate) (field 'name metric)))
+                              (string=? (record-field candidate 'metric) (field 'name metric)))
                             expected-schemas)))
           (check schema "metric point attribute schema is missing")
           (for-each
             (lambda (attributes)
-              (check (same-attribute-keys? attributes (cadr schema))
+              (check (same-attribute-keys? attributes (record-field schema 'attribute-keys))
                      "metric point attribute keys changed")
               (for-each
                 (lambda (rule)
                   (check (matches-value? (cadr rule) (attribute attributes (car rule)))
                          "metric point attribute value changed"))
-                (third schema)))
+                (record-field schema 'value-rules)))
             points))
         #t)))
 
@@ -727,14 +431,14 @@
       (check (field 'data-points-valid metric) "metric data point is malformed")
       (validate-metric-point-attributes expected-point-schemas metric)
       (if expected-descriptors
-          (check (member (metric-descriptor metric) expected-descriptors)
+          (check (member (observed-metric-descriptor metric) expected-descriptors)
                  "metric descriptor changed")
           #t))
     metrics)
   (if expected-descriptors
       (for-each
         (lambda (expected)
-          (check (> (count (lambda (metric) (equal? (metric-descriptor metric) expected)) metrics) 0)
+          (check (> (count (lambda (metric) (equal? (observed-metric-descriptor metric) expected)) metrics) 0)
                  "expected metric descriptor is missing"))
         expected-descriptors)
       #t))
@@ -762,7 +466,7 @@
 (define valid-log-value? valid-attribute-value?)
 
 (define (validate-log-attributes required attributes)
-  (if required (check (> (length attributes) 0) "log has no attributes") #t)
+  (if (eq? required 'required) (check (> (length attributes) 0) "log has no attributes") #t)
   (for-each
     (lambda (entry)
       (check (> (string-length (car entry)) 0) "log attribute has no key")
@@ -775,19 +479,19 @@
   (validate-signal-scopes expected-scopes logs)
   (for-each
     (lambda (log)
-      (check (member (list-ref policy 4) '(unnamed named any))
+      (check (member (record-field policy 'event-name) '(unnamed named any))
              "log event-name policy is invalid")
-      (check (cond ((eq? (list-ref policy 4) 'unnamed)
+      (check (cond ((eq? (record-field policy 'event-name) 'unnamed)
                     (string=? (field 'event-name log) ""))
-                   ((eq? (list-ref policy 4) 'named)
+                   ((eq? (record-field policy 'event-name) 'named)
                     (> (string-length (field 'event-name log)) 0))
-                   ((eq? (list-ref policy 4) 'any) #t)
+                   ((eq? (record-field policy 'event-name) 'any) #t)
                    (else #f))
              "log event name changed")
-      (let ((severity-required (car policy))
-            (attributes-required (cadr policy))
-            (timestamps-required (third policy))
-            (body-required (list-ref policy 3))
+      (let ((severity-required (record-field policy 'severity))
+            (attributes-required (record-field policy 'attributes))
+            (timestamps-required (record-field policy 'timestamps))
+            (body-required (record-field policy 'body))
             (trace-id (field 'trace-id log))
             (span-id (field 'span-id log))
             (flags (field 'flags log))
@@ -797,18 +501,18 @@
         (check (or (> time 0) (> observed-time 0)) "log has no timestamp")
         (check (or (= time 0) (= observed-time 0) (>= observed-time time))
                "log timestamps are not ordered")
-        (if timestamps-required
+        (if (eq? timestamps-required 'required)
             (check (and (> time 0) (> observed-time 0)) "log timestamp is unspecified")
             #t)
         (check (and (>= (field 'severity-number log) 0)
                     (<= (field 'severity-number log) 24))
                "log severity number is invalid")
-        (if severity-required
+        (if (eq? severity-required 'required)
             (begin
               (check (> (field 'severity-number log) 0) "log severity number is unspecified")
               (check (> (string-length (field 'severity-text log)) 0) "log severity text is empty"))
             #t)
-        (if body-required
+        (if (eq? body-required 'required)
             (check (valid-log-value? (field 'body log)) "log body is missing")
             (check (or (equal? (field 'body log) '(other))
                        (valid-log-value? (field 'body log)))
@@ -846,39 +550,27 @@
     (validate-logs expected-log-scopes log-policy logs)
     (display "valid OTLP capture\n")))
 
-(define (otel-validate-contract expected-resource-attributes expected-resource-schema-url expected-scopes expected-metric-scopes expected-log-scopes event-policy expected-span-buckets capture)
-  (validate-capture expected-resource-attributes
-                    expected-resource-schema-url
-                    expected-scopes
-                    expected-metric-scopes
-                    #f
-                    #f
-                    #f
-                    expected-log-scopes
-                    '(#f #f #f #f any)
-                    event-policy
-                    '(0 1 256 257)
-                    #f
-                    'any
-                    expected-span-buckets
-                    validate-contract-buckets
-                    capture))
+(define relaxed-log-policy
+  (log-policy (severity 'optional) (attributes 'optional)
+              (timestamps 'optional) (body 'optional) (event-name 'any)))
 
-(define (otel-validate-exact expected-resource-attributes expected-resource-schema-url expected-scopes expected-metric-scopes expected-metric-descriptors expected-metric-aggregation expected-metric-point-schemas expected-log-scopes log-policy event-policy expected-span-flags expected-trace-state error-message-policy expected-span-buckets capture)
-  (validate-capture expected-resource-attributes
-                    expected-resource-schema-url
-                    expected-scopes
-                    expected-metric-scopes
-                    expected-metric-descriptors
-                    expected-metric-aggregation
-                    expected-metric-point-schemas
-                    expected-log-scopes
-                    log-policy
-                    event-policy
-                    expected-span-flags
-                    expected-trace-state
-                    error-message-policy
-                    expected-span-buckets
-                    validate-contract-buckets
-                    capture))
+(define (otel-validate-capture contract event-policy expected-span-buckets capture mode)
+  (let ((exact? (eq? mode 'exact)))
+    (validate-capture
+      (record-field contract 'resource-attributes)
+      (record-field contract 'resource-schema-url)
+      (record-field contract 'span-scopes)
+      (record-field contract 'metric-scopes)
+      (if exact? (record-field contract 'metric-descriptors) #f)
+      (if exact? (record-field contract 'metric-aggregation) #f)
+      (if exact? (record-field contract 'metric-point-schemas) #f)
+      (record-field contract 'log-scopes)
+      (if exact? (record-field contract 'log-policy) relaxed-log-policy)
+      event-policy
+      (if exact? (record-field contract 'span-flags) '(0 1 256 257))
+      (if exact? (record-field contract 'trace-state) #f)
+      (if exact? (record-field contract 'error-status-message) 'any)
+      expected-span-buckets
+      validate-contract-buckets
+      capture)))
   ))

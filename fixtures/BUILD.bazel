@@ -1,0 +1,99 @@
+"""Reference applications and their exact OpenTelemetry contract tests."""
+
+load("//bazel:oci_images.lock.bzl", "RUBY_IMAGES_PUBLISHED")
+load("//fixtures:fixture.bzl", "otlp_env", "realworld_app_fixture")
+load("//rules:otel_profile.bzl", "otel_report_manifest")
+
+package(default_visibility = ["//visibility:public"])
+
+_SERVER_ARGS = ["serve", "--host", "127.0.0.1", "--port", "$${PORT}"]
+
+_PYTHON_ENV = otlp_env(extra = {
+    "OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED": "true",
+})
+
+realworld_app_fixture(
+    name = "aiohttp",
+    image = "@aiohttp_realworld_linux_amd64",
+    launch = ["app", "aiohttp", "{rootfs}"] + _SERVER_ARGS,
+    otel_launch = ["app-otel", "aiohttp-otel", "{rootfs}", "{otel_rootfs}"] + _SERVER_ARGS,
+    otel_env = _PYTHON_ENV,
+    otel_flaky_cases = {
+        "errors_profiles": "a late startup /api/tags export can cross the trace-only reset boundary",
+    },
+    otel_profile = "//corpus:python-aiohttp-auto-v0-65b0",
+    otel_rootfs = "//harness:otel_python_rootfs",
+    so_reuseport_aware = True,
+)
+
+realworld_app_fixture(
+    name = "django",
+    image = "@django_ninja_realworld_linux_amd64",
+    launch = ["app", "django", "{rootfs}"] + _SERVER_ARGS,
+    otel_launch = ["app-otel", "django-otel", "{rootfs}", "{otel_rootfs}"] + _SERVER_ARGS,
+    otel_env = _PYTHON_ENV,
+    otel_flaky_reason = "the Python metric aggregator can emit a point whose start timestamp follows its collection timestamp under parallel load",
+    otel_profile = "//corpus:python-django-auto-v0-65b0",
+    otel_rootfs = "//harness:otel_python_rootfs",
+    so_reuseport_aware = True,
+)
+
+_RAILS_SERVER_ARGS = ["server", "--binding", "127.0.0.1", "--port", "$${PORT}"]
+
+realworld_app_fixture(
+    name = "rails",
+    image = "@rails_realworld_linux_amd64",
+    expected_start_duration = "4s",
+    launch = ["app-ruby", "rails", "{rootfs}"] + _RAILS_SERVER_ARGS,
+    manual = not RUBY_IMAGES_PUBLISHED,
+    otel_launch = ["app-ruby-otel", "rails-otel", "{rootfs}", "{otel_rootfs}"] + _RAILS_SERVER_ARGS,
+    otel_env = otlp_env(
+        metrics = False,
+        per_signal_endpoints = True,
+        extra = {
+            "OTEL_EXPORTER_OTLP_COMPRESSION": "none",
+            "OTEL_RUBY_ENABLED_INSTRUMENTATIONS": "rack,rails,action_pack,active_record",
+        },
+    ),
+    otel_profile = "//corpus:ruby-rails-auto-v0-1-0",
+    otel_rootfs = "//harness:otel_ruby_rootfs",
+)
+
+# Gin's listener does not use SO_REUSEPORT, and its instrumentation is linked
+# into a second binary in the same image rather than injected as a rootfs.
+_GIN_SERVER_ARGS = ["serve", "--host", "127.0.0.1", "--port", "$${PORT}"]
+
+realworld_app_fixture(
+    name = "gin",
+    image = "@gin_realworld_linux_amd64",
+    launch = ["app-exec", "gin", "{rootfs}", "opt/app/bin/realworld-gin"] + _GIN_SERVER_ARGS,
+    otel_launch = ["app-exec", "gin-otel", "{rootfs}", "opt/app/bin/realworld-gin-otel"] + _GIN_SERVER_ARGS,
+    otel_env = otlp_env(
+        logs = False,
+        extra = {
+            "OTEL_RESOURCE_ATTRIBUTES": "process.owner=nonroot",
+            "OTEL_SERVICE_NAME": "gin-otel",
+        },
+    ),
+    otel_profile = "//corpus:go-gin-otelbuild-v1-1-0",
+)
+
+_REPORT_PROFILES = [
+    "//corpus:go-gin-otelbuild-v1-1-0",
+    "//corpus:python-aiohttp-auto-v0-65b0",
+    "//corpus:python-django-auto-v0-65b0",
+] + (["//corpus:ruby-rails-auto-v0-1-0"] if RUBY_IMAGES_PUBLISHED else [])
+
+test_suite(
+    name = "otel_report_suite",
+    tests = [
+        ":aiohttp_otel_hurl_test",
+        ":django_otel_hurl_test",
+        ":gin_otel_hurl_test",
+    ] + ([":rails_otel_hurl_test"] if RUBY_IMAGES_PUBLISHED else []),
+)
+
+otel_report_manifest(
+    name = "otel_report_manifest",
+    profiles = _REPORT_PROFILES,
+)

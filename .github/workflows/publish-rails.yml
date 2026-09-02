@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - realworld_corpus/apps/ruby/realworld-rails/**
+      - fixtures/apps/ruby/realworld-rails/**
       - bazel/**
       - MODULE.bazel
       - MODULE.bazel.lock
@@ -22,7 +22,7 @@ permissions:
   pull-requests: write
 
 env:
-  CONTEXT: realworld_corpus/apps/ruby/realworld-rails
+  CONTEXT: fixtures/apps/ruby/realworld-rails
   IMAGE: ghcr.io/pawelchcki/rules_stest_apps
   LOCK_NAME: rails_realworld
   REF_NAME: rails
@@ -94,10 +94,10 @@ jobs:
           test "$(docker buildx imagetools inspect "${IMAGE}@${DIGEST}" --raw | jq '[.layers[] | select(.size > 1024)] | length')" = 1
           python3 tools/update_oci_lock.py --name "${LOCK_NAME}" --digest "${DIGEST}" --tree "${tree_oid}"
           bazel test \
-            //bazel/itest/apps:rails_test \
-            //bazel/itest/apps:rails_hurl_test \
-            //bazel/itest/apps:rails_otel_test \
-            //bazel/itest/apps:rails_otel_hurl_test
+            //fixtures:rails_test \
+            //fixtures:rails_hurl_test \
+            //fixtures:rails_otel_test \
+            //fixtures:rails_otel_hurl_test
           if git diff --quiet -- MODULE.bazel.lock bazel/oci_images.lock.bzl; then
             echo "Rails fixture lock already matches ${tree_oid}; nothing to propose."
             exit 0

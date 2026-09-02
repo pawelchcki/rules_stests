@@ -1,0 +1,169 @@
+"""Atomic OpenTelemetry profile and generated standard-registry rules."""
+
+OtelStandardRegistryInfo = provider(fields = ["scheme", "json"])
+
+OtelProfileInfo = provider(fields = [
+    "profile_id",
+    "spec_path",
+    "specification",
+    "implementation_libraries",
+    "normalized_proof_plan",
+    "signals",
+    "scenario_shapes",
+    "manifest",
+])
+
+def _standard_registry_impl(ctx):
+    scheme = ctx.actions.declare_file(ctx.label.name + ".scm")
+    registry_json = ctx.actions.declare_file(ctx.label.name + ".json")
+    ctx.actions.run(
+        executable = ctx.executable._generator,
+        inputs = [ctx.file.matrix, ctx.file.metadata],
+        outputs = [scheme, registry_json],
+        arguments = [
+            "--matrix=" + ctx.file.matrix.path,
+            "--metadata=" + ctx.file.metadata.path,
+            "--scheme-out=" + scheme.path,
+            "--json-out=" + registry_json.path,
+        ],
+        mnemonic = "OtelStandardRegistry",
+        progress_message = "Generating language-neutral OpenTelemetry registry",
+    )
+    return [
+        DefaultInfo(files = depset([scheme, registry_json])),
+        OutputGroupInfo(scheme = depset([scheme]), registry = depset([registry_json])),
+        OtelStandardRegistryInfo(scheme = scheme, json = registry_json),
+    ]
+
+otel_standard_registry = rule(
+    implementation = _standard_registry_impl,
+    attrs = {
+        "matrix": attr.label(allow_single_file = True, mandatory = True),
+        "metadata": attr.label(allow_single_file = True, mandatory = True),
+        "_generator": attr.label(
+            default = Label("//report:registry_generator"),
+            executable = True,
+            cfg = "exec",
+        ),
+    },
+)
+
+def _profile_impl(ctx):
+    registry = ctx.attr.standard_registry[OtelStandardRegistryInfo]
+    plan = ctx.actions.declare_file(ctx.label.name + ".proof-plan.json")
+    manifest = ctx.actions.declare_file(ctx.label.name + ".profile.json")
+    shape_paths = {}
+    shape_files = []
+    for target, scenario in ctx.attr.scenario_shapes.items():
+        files = target.files.to_list()
+        if len(files) != 1:
+            fail("scenario shape %s must provide exactly one file" % target.label)
+        shape_paths[scenario] = files[0].short_path
+        shape_files.append(files[0])
+    core_libraries = ctx.attr.core_libraries.files.to_list()
+    common = [registry.scheme] + core_libraries + ctx.files.runtime_libraries + ctx.files.implementation_libraries + [ctx.file.specification]
+
+    capture_shapes = None
+    proof_rule_tables = []
+    for source in core_libraries:
+        if source.short_path.endswith("otel/capture/shapes.scm"):
+            capture_shapes = source
+        elif "/otel/proofs/" in source.short_path:
+            proof_rule_tables.append(source)
+    if not capture_shapes:
+        fail("core_libraries must contain otel/capture/shapes.scm")
+    arguments = ctx.actions.args()
+    arguments.add("--profile=" + ctx.file.specification.path)
+    arguments.add("--registry=" + registry.json.path)
+    for source in proof_rule_tables:
+        arguments.add("--proof-rules=" + source.path)
+    arguments.add("--capture-shapes=" + capture_shapes.path)
+    arguments.add("--out=" + plan.path)
+    arguments.add("--manifest-out=" + manifest.path)
+    arguments.add("--profile-id=" + ctx.attr.profile_id)
+    arguments.add("--program=" + ctx.file.program.path)
+    for source in ctx.files.implementation_libraries:
+        arguments.add("--implementation=" + source.path)
+    for source in common:
+        arguments.add("--library=" + source.path)
+    for name in ["otel.profile", "realworld.profile.%s" % ctx.attr.profile_id]:
+        arguments.add("--import=" + name)
+    for signal in ctx.attr.signals:
+        arguments.add("--signal=" + signal)
+    for scenario in ctx.attr.scenarios:
+        arguments.add("--scenario=" + scenario)
+    for target, scenario in ctx.attr.scenario_shapes.items():
+        arguments.add("--shape=%s,%s" % (scenario, target.files.to_list()[0].path))
+    ctx.actions.run(
+        executable = ctx.executable._compiler,
+        inputs = depset([ctx.file.specification, registry.json, ctx.file.program] + common + shape_files),
+        outputs = [plan, manifest],
+        arguments = [arguments],
+        mnemonic = "OtelProfilePlan",
+        progress_message = "Compiling normalized proof plan for %s" % ctx.attr.profile_id,
+    )
+
+    return [
+        DefaultInfo(files = depset([manifest])),
+        OutputGroupInfo(
+            manifest = depset([manifest]),
+            proof_plan = depset([plan]),
+        ),
+        OtelProfileInfo(
+            profile_id = ctx.attr.profile_id,
+            spec_path = ctx.file.specification.short_path,
+            specification = ctx.file.specification,
+            implementation_libraries = depset(ctx.files.implementation_libraries),
+            normalized_proof_plan = plan,
+            signals = tuple(ctx.attr.signals),
+            scenario_shapes = shape_paths,
+            manifest = manifest,
+        ),
+    ]
+
+otel_profile = rule(
+    implementation = _profile_impl,
+    attrs = {
+        "profile_id": attr.string(mandatory = True),
+        "specification": attr.label(allow_single_file = [".scm"], mandatory = True),
+        "implementation_libraries": attr.label_list(allow_files = [".scm"], mandatory = True),
+        "runtime_libraries": attr.label_list(allow_files = [".scm"], mandatory = True),
+        "signals": attr.string_list(mandatory = True),
+        "scenarios": attr.string_list(mandatory = True),
+        "scenario_shapes": attr.label_keyed_string_dict(allow_files = [".scm"]),
+        "standard_registry": attr.label(providers = [OtelStandardRegistryInfo], mandatory = True),
+        "core_libraries": attr.label(
+            allow_files = [".scm"],
+            default = Label("//corpus:core_libraries"),
+        ),
+        "program": attr.label(allow_single_file = [".scm"], default = Label("//corpus:realworld/programs/validate_profile.scm")),
+        "_compiler": attr.label(
+            default = Label("//report:plan_compiler"),
+            executable = True,
+            cfg = "exec",
+        ),
+    },
+)
+
+def _report_manifest_impl(ctx):
+    output = ctx.actions.declare_file(ctx.label.name + ".json")
+    entries = []
+    plans = []
+    for target in ctx.attr.profiles:
+        profile = target[OtelProfileInfo]
+        plans.append(profile.normalized_proof_plan)
+        entries.append({
+            "id": profile.profile_id,
+            "spec": profile.spec_path,
+            "plan": profile.normalized_proof_plan.path,
+            "shapes": profile.scenario_shapes,
+        })
+    ctx.actions.write(output, json.encode(entries) + "\n")
+    return [DefaultInfo(files = depset([output] + plans))]
+
+otel_report_manifest = rule(
+    implementation = _report_manifest_impl,
+    attrs = {
+        "profiles": attr.label_list(providers = [OtelProfileInfo]),
+    },
+)

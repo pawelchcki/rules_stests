@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - realworld_corpus/apps/python/realworld-django-ninja/**
+      - fixtures/apps/python/realworld-django-ninja/**
       - bazel/**
       - MODULE.bazel
       - MODULE.bazel.lock
@@ -22,7 +22,7 @@ permissions:
   pull-requests: write
 
 env:
-  APP_PATH: realworld_corpus/apps/python/realworld-django-ninja
+  APP_PATH: fixtures/apps/python/realworld-django-ninja
   IMAGE: ghcr.io/pawelchcki/rules_stest_apps
   LOCK_NAME: django_ninja_realworld
   REF_NAME: django-ninja
@@ -143,7 +143,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 tools/update_oci_lock.py --name "${LOCK_NAME}" --digest "${DIGEST}" --tree "${TREE_OID}"
-          bazel test //bazel/itest/apps:django_test //bazel/itest/apps:django_hurl_test
+          bazel test //fixtures:django_test //fixtures:django_hurl_test
           if git diff --quiet -- MODULE.bazel.lock bazel/oci_images.lock.bzl; then
             echo "Digest lock is already current."
             exit 0

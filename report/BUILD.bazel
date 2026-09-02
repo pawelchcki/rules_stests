@@ -1,0 +1,91 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("//corpus:registry.bzl", "OTEL_PROFILES")
+
+package(default_visibility = ["//visibility:public"])
+
+go_library(
+    name = "lib",
+    srcs = glob(["report/*.go"], exclude = ["report/*_test.go"]),
+    importpath = "github.com/pawelchcki/rules_stests/report",
+)
+
+go_binary(name = "registry_generator", srcs = ["registry/main.go"], deps = [":lib"])
+go_binary(name = "plan_compiler", srcs = ["profilecmd/main.go"], deps = [":lib"])
+go_binary(name = "assemble", srcs = ["cmd/main.go"], deps = [":lib"])
+
+go_test(
+    name = "assemble_test",
+    srcs = ["cmd/main.go", "cmd/main_test.go"],
+    deps = [":lib"],
+)
+
+go_binary(name = "update_catalog", srcs = ["updater/main.go"], tags = ["manual"], deps = [":lib"])
+
+go_test(
+    name = "update_catalog_test",
+    srcs = ["updater/main.go", "updater/main_test.go"],
+    deps = [":lib"],
+)
+
+go_library(
+    name = "server_lib",
+    srcs = ["server/server.go"],
+    importpath = "github.com/pawelchcki/rules_stests/report/server",
+)
+
+go_binary(name = "server", srcs = ["server/cmd/main.go"], deps = [":server_lib"])
+
+config_setting(name = "cloudflared_linux_amd64", constraint_values = ["@platforms//cpu:x86_64", "@platforms//os:linux"])
+config_setting(name = "cloudflared_linux_arm64", constraint_values = ["@platforms//cpu:aarch64", "@platforms//os:linux"])
+config_setting(name = "cloudflared_darwin_amd64", constraint_values = ["@platforms//cpu:x86_64", "@platforms//os:osx"])
+config_setting(name = "cloudflared_darwin_arm64", constraint_values = ["@platforms//cpu:aarch64", "@platforms//os:osx"])
+config_setting(name = "cloudflared_windows_amd64", constraint_values = ["@platforms//cpu:x86_64", "@platforms//os:windows"])
+
+_CLOUDFLARED_ARGS = {
+    ":cloudflared_linux_amd64": ["--cloudflared=$(rootpath @cloudflared_linux_amd64//file)"],
+    ":cloudflared_linux_arm64": ["--cloudflared=$(rootpath @cloudflared_linux_arm64//file)"],
+    ":cloudflared_darwin_amd64": ["--cloudflared=$(rootpath @cloudflared_darwin_amd64//:cloudflared)"],
+    ":cloudflared_darwin_arm64": ["--cloudflared=$(rootpath @cloudflared_darwin_arm64//:cloudflared)"],
+    ":cloudflared_windows_amd64": ["--cloudflared=$(rootpath @cloudflared_windows_amd64//file)"],
+}
+_CLOUDFLARED_DATA = {
+    ":cloudflared_linux_amd64": ["@cloudflared_linux_amd64//file"],
+    ":cloudflared_linux_arm64": ["@cloudflared_linux_arm64//file"],
+    ":cloudflared_darwin_amd64": ["@cloudflared_darwin_amd64//:cloudflared"],
+    ":cloudflared_darwin_arm64": ["@cloudflared_darwin_arm64//:cloudflared"],
+    ":cloudflared_windows_amd64": ["@cloudflared_windows_amd64//file"],
+}
+
+go_binary(
+    name = "public_report",
+    srcs = ["server/cmd/main.go"],
+    args = select(_CLOUDFLARED_ARGS, no_match_error = "public_report supports Linux/macOS on x86-64/ARM64 and Windows on x86-64"),
+    data = select(_CLOUDFLARED_DATA, no_match_error = "public_report supports Linux/macOS on x86-64/ARM64 and Windows on x86-64"),
+    deps = [":server_lib"],
+)
+
+go_test(name = "server_test", srcs = ["server/server_test.go"], embed = [":server_lib"])
+
+_PROFILE_IDS = sorted(OTEL_PROFILES)
+_PLAN_LABELS = ["//corpus:" + profile_id + ".proof_plan" for profile_id in _PROFILE_IDS]
+_SPEC_LABELS = ["//corpus:realworld/profile/{}.scm".format(profile_id) for profile_id in _PROFILE_IDS]
+
+go_test(
+    name = "report_test",
+    srcs = glob(["report/*_test.go"]),
+    args = [
+        "$(rootpath data/catalog.json)",
+        "$(rootpath data/spec-compliance-matrix.md)",
+        "$(rootpath //corpus:otel_standard_registry_json)",
+    ] + ["$(rootpath {})".format(label) for label in _PLAN_LABELS] + [
+        "$(rootpath {})".format(label)
+        for label in _SPEC_LABELS
+    ] + ["$(rootpath //corpus:realworld/contract.scm)"],
+    data = [
+        "data/catalog.json",
+        "data/spec-compliance-matrix.md",
+        "//corpus:otel_standard_registry_json",
+        "//corpus:realworld/contract.scm",
+    ] + _PLAN_LABELS + _SPEC_LABELS,
+    embed = [":lib"],
+)

@@ -1,0 +1,87 @@
+(define-library (otel trace-shape explain)
+  (export trace-shape-mismatch)
+  (import (scheme base) (scheme write) (otel contract-error))
+  (begin
+
+(define (write-spaces count port)
+  (if (> count 0)
+      (begin (display " " port) (write-spaces (- count 1) port))
+      #t))
+
+(define (write-tree value indent port)
+  (write-spaces indent port)
+  (if (not (pair? value))
+      (write value port)
+      (begin
+        (display "(" port)
+        (write (car value) port)
+        (for-each
+          (lambda (child)
+            (newline port)
+            (write-tree child (+ indent 2) port))
+          (cdr value))
+        (display ")" port))))
+
+(define (first-concrete values tagged)
+  (and (pair? values)
+       (let ((item (car values)))
+         (cond ((tagged 'repeat item) (car (cdr (cdr item))))
+               ((tagged 'between item) (car (cdr (cdr (cdr item)))))
+               ((tagged 'optional item) (cadr item))
+               ((tagged 'one-of item) (first-concrete (cdr item) tagged))
+               (else item)))))
+
+(define (property-score tag expected actual property-matches?)
+  (if (property-matches? tag expected actual) 1 0))
+
+(define (node-score expected actual property-matches?)
+  (+ (property-score 'scope expected actual property-matches?)
+     (property-score 'kind expected actual property-matches?)
+     (property-score 'status expected actual property-matches?)
+     (property-score 'name expected actual property-matches?)
+     (property-score 'http-status expected actual property-matches?)))
+
+(define (maximum-node-score expected actual expand-actual property-matches?)
+  (let loop ((actual (expand-actual actual)) (best 0))
+    (if (null? actual)
+        best
+        (let ((score (node-score expected (car actual) property-matches?)))
+          (loop (cdr actual) (if (> score best) score best))))))
+
+(define (trace-score expected actual tagged part expand-actual property-matches?)
+  (let* ((expected-roots (part 'unordered expected))
+         (actual-roots (part 'unordered actual))
+         (expected-root (and expected-roots (first-concrete (cdr expected-roots) tagged))))
+    (+ (* 10 (property-score 'coverage expected actual property-matches?))
+       (if (and expected-root actual-roots)
+           (maximum-node-score expected-root (cdr actual-roots) expand-actual property-matches?)
+           0))))
+
+(define (nearest-trace expected actual tagged part expand-actual property-matches?)
+  (let loop ((actual (expand-actual actual)) (best #f) (best-score -1))
+    (if (null? actual)
+        best
+        (let ((score (trace-score expected (car actual) tagged part expand-actual property-matches?)))
+          (if (> score best-score)
+              (loop (cdr actual) (car actual) score)
+              (loop (cdr actual) best best-score))))))
+
+(define (trace-shape-mismatch expected actual tagged part property-matches? expand-actual)
+  (let* ((port (open-output-string))
+         (wanted (first-concrete (cdr expected) tagged))
+         (observed (and wanted
+                        (nearest-trace wanted (cdr actual) tagged part expand-actual property-matches?))))
+    (display "trace-shape mismatch at traces/0" port)
+    (newline port)
+    (display "expected tree:" port)
+    (newline port)
+    (if wanted (write-tree wanted 2 port) (display "  <none>" port))
+    (newline port)
+    (display "nearest actual tree:" port)
+    (newline port)
+    (if observed
+        (write-tree observed 2 port)
+        (display "  <none>" port))
+    (newline port)
+    (contract-error (get-output-string port))))
+  ))

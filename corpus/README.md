@@ -1,71 +1,64 @@
-# OpenTelemetry proof corpus
+# OpenTelemetry executable corpus
 
-The corpus separates specification features, executable OTLP facts, proof
-rules, implementation metadata, workload contracts, and scenario topology.
-There is no positional profile API and no source-only verification report.
+`corpus/` is portable Scheme plus one Starlark registry. It has no dependency
+on the fixture applications, harness, or report implementation.
 
-## Layout
-
-```text
-otel/capture/shapes.scm                 named executable OTLP assertions
-otel/proofs/*.scm                       signal-specific feature → assertion tables
-otel/proofs.scm                         combined runtime lookup facade
-otel/profile.scm                        labeled profile record and validator
-otel/implementations/                   immutable version/source layers
-realworld/contract.scm                  language-neutral HTTP workload
-realworld/profiles/                     composed concrete profiles
-realworld/shapes/<profile>/<case>/shape.scm
-profile.bzl                             OtelProfileInfo and atomic targets
-report/report/receipt.go                receipt trust boundary
-```
-
-`//corpus:otel_standard_registry` generates signal-specific Scheme standard
-libraries and a JSON registry from the pinned compliance matrix. The registry
-contains all 326 matrix IDs exactly once and assigns each a unique readable
-binding such as `span/end` or `tracer/get`.
-
-The three public `otel_profile` targets compile their Scheme authoring records
-to normalized proof plans:
+## Library map
 
 ```text
-//corpus:python_aiohttp_profile
-//corpus:python_django_profile
-//corpus:go_gin_profile
+registry.bzl                         profile registry and dependency order
+otel/base.scm                       list helpers
+otel/text.scm                       string and character predicates
+otel/identifiers.scm                OTLP identifier and host validation
+otel/record.scm                     named-record accessors
+otel/contract-error.scm             the HTTP 409 diagnostic sentinel
+otel/matchers.scm                   value, name, attribute, and capture matchers
+otel/declarations.scm               named profile declaration constructors
+otel/validation.scm                 capture validation entry point
+otel/trace-shape.scm                trace-shape constructors
+otel/trace-shape/{match,explain}.scm matching and mismatch explanation
+otel/capture/shapes.scm              executable proof-assertion table
+otel/proofs/*.scm                   keyed feature proof rules
+otel/implementation/*.scm           immutable source/version evidence
+otel/runtime/*.scm                  language runtime declarations
+realworld/{route,scenarios,contract}.scm
+realworld/profile/<id>.scm          composed concrete profile
+realworld/shape/<id>/<scenario>.scm exact checked-in topology
 ```
 
-Consumers pass one of those labels to `realworld_hurl_test_suite` through
-`otel_profile`. The target owns its implementation layers, signals, proof plan,
-and scenario-shape mapping. A scenario is exact when the provider supplies a
-shape and contract-only otherwise.
+Every authored record uses `(kind (key value) ...)`. Constructors produce the
+same datum as the quoted representation, and consumers use `record-field` or
+`record-field/default`; there is no positional profile API. Examples include
+`span-scope`, `metric-descriptor`, `point-schema`, `log-policy`, `event-policy`,
+`span-bucket`, and the top-level `capture-contract`.
 
-## Validation receipts
+`OTEL_CORE_LIBRARIES` in `registry.bzl` is dependency ordered because Stak must
+see each `define-library` before a program imports it. The same list builds
+profile manifests and the sink probe's embedded core bundle, so those two
+execution paths cannot drift.
 
-Every successful scenario compares the proofs actually executed by Scheme with
-the normalized plan, then writes a schema-v1 receipt and its accepted capture to
-`TEST_UNDECLARED_OUTPUTS_DIR/receipts/<profile>/`. Failed validation writes only
-a failed capture. Set `OTEL_TEST_REVISION` to the lowercase 40-character current
-commit; validation refuses to emit a receipt without it.
+## Profile targets
 
-Candidate targets use the `_shape_candidate` suffix and write
-`shapes/<profile>/<scenario>/shape.scm` under undeclared test outputs.
+The Bazel label is the profile ID. Each target owns the specification, runtime
+and implementation libraries, normalized proof plan, signals, and all scenario
+shapes:
 
-## Report assembly
+```text
+//corpus:go-gin-otelbuild-v1-1-0
+//corpus:python-aiohttp-auto-v0-65b0
+//corpus:python-django-auto-v0-65b0
+//corpus:ruby-rails-auto-v0-1-0
+```
 
-The report assembler is `//corpus:feature_parity_generator`. It requires a
-Bazel JSON build-event file from an uncached complete 39-scenario run, the three
-normalized plans, all checked-in scenario shapes, and the current revision. It
-rejects a build-event file that does not record `--nocache_test_results`, plus
-absent, stale, duplicate, malformed, digest-mismatched, failed, or incomplete
-receipts. Only accepted receipts create `verified` cells; unclaimed matrix rows
-remain `not_exercised`.
+The corresponding proof-plan view is `<id>.proof_plan`.
 
-The exact invocation is maintained in `buildbuddy.yaml`. The report servers no
-longer build or infer a report; pass the explicitly assembled HTML file with
-`--file`.
+## Receipts and candidates
 
-BuildBuddy publishes the assembled HTML as `opentelemetry-proof-report.html`.
-The repository-owned `.ci-toolkit.yml` binds that artifact to the trusted
-`Full test suite` status for the exact pull-request head, requests a public
-untrusted-HTML copy for 90 days, and defines the marker-based PR comment. The
-toolkit owns storage keys and platform trust limits; this repository declares
-only behavior it can actually vary.
+Successful exact scenarios compare the proofs executed by Scheme with the
+normalized plan and write a schema-v1 receipt plus accepted capture. Candidate
+targets write `shape/<profile>/<scenario>.scm` under Bazel undeclared outputs;
+that file can be copied directly to `corpus/realworld/shape/`.
+
+The report inputs are generated by `//fixtures:otel_report_manifest` and
+assembled by `//report:assemble`. The manifest is the only profile/scenario
+list used by report assembly.

@@ -3,7 +3,7 @@
   (import (scheme base))
   (begin
 (define logs-proof-rules
-  '(("logs.loggerprovider-get-logger" log/scope-associated requires-immutable-source)
-    ("logs.logger-emit-logrecord" log/record-present wire-sufficient)
-    ("logs.otlp-http-exporter" log/otlp-http-request-present wire-sufficient)))
+  '(("logs.loggerprovider-get-logger" (assertion log/scope-associated) (evidence requires-immutable-source))
+    ("logs.logger-emit-logrecord" (assertion log/record-present) (evidence wire-sufficient))
+    ("logs.otlp-http-exporter" (assertion log/otlp-http-request-present) (evidence wire-sufficient))))
   ))
