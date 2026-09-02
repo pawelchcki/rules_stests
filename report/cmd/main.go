@@ -92,6 +92,9 @@ func loadReportManifest(path, sourceRoot, corpusSourceRoot string) ([]string, []
 		profiles = append(profiles, entry.ID)
 		evidenceRoot := root
 		if entry.Repository != "" {
+			if entry.Repository != "rules_stests" {
+				return nil, nil, nil, nil, nil, fmt.Errorf("profile %q uses unsupported external repository %q", entry.ID, entry.Repository)
+			}
 			if corpusRoot == "" {
 				return nil, nil, nil, nil, nil, fmt.Errorf("--corpus-source-root is required for profile %q from repository %q", entry.ID, entry.Repository)
 			}

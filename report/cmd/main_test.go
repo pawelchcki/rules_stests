@@ -46,7 +46,7 @@ func TestCollectBEPRequiresUncachedRunAndCollectsArtifacts(t *testing.T) {
 func TestLoadReportManifestDerivesLegacyInputs(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "manifest.json")
 	manifest := `[
-  {"id":"go-profile","repository":"rules_stests+","spec":"corpus/realworld/profile/go-profile.scm","plan":"bazel-out/go.proof-plan.json","scenarios":["articles","tags"],"shapes":{"tags":"external/rules_stests+/corpus/realworld/shape/go-profile/tags.scm","articles":"external/rules_stests+/corpus/realworld/shape/go-profile/articles.scm"},"shapeSources":{"tags":"corpus/realworld/shape/go-profile/tags.scm","articles":"corpus/realworld/shape/go-profile/articles.scm"}},
+  {"id":"go-profile","repository":"rules_stests","spec":"corpus/realworld/profile/go-profile.scm","plan":"bazel-out/go.proof-plan.json","scenarios":["articles","tags"],"shapes":{"tags":"external/rules_stests+/corpus/realworld/shape/go-profile/tags.scm","articles":"external/rules_stests+/corpus/realworld/shape/go-profile/articles.scm"},"shapeSources":{"tags":"corpus/realworld/shape/go-profile/tags.scm","articles":"corpus/realworld/shape/go-profile/articles.scm"}},
   {"id":"python-profile","repository":"","spec":"profile/python-profile.scm","plan":"bazel-out/python.proof-plan.json","scenarios":["articles","auth","tags"],"shapes":{"tags":"shape/python-profile/tags.scm"},"shapeSources":{"tags":"shape/python-profile/tags.scm"}},
   {"id":"contract-profile","repository":"","spec":"profile/contract-profile.scm","plan":"bazel-out/contract.proof-plan.json","scenarios":["comments"],"shapes":{},"shapeSources":{}}
 ]`
@@ -80,6 +80,14 @@ func TestLoadReportManifestDerivesLegacyInputs(t *testing.T) {
 	}
 	if _, _, _, _, _, err := loadReportManifest(path, "https://example.test/consumer", ""); err == nil || !strings.Contains(err.Error(), "corpus-source-root") {
 		t.Fatalf("missing corpus source root was accepted: %v", err)
+	}
+	unsupportedPath := filepath.Join(t.TempDir(), "manifest.json")
+	unsupported := strings.Replace(manifest, `"repository":"rules_stests"`, `"repository":"third_party+"`, 1)
+	if err := os.WriteFile(unsupportedPath, []byte(unsupported), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, _, _, err := loadReportManifest(unsupportedPath, "https://example.test/consumer", "https://example.test/corpus"); err == nil || !strings.Contains(err.Error(), "unsupported external repository") {
+		t.Fatalf("unsupported external repository was accepted: %v", err)
 	}
 }
 

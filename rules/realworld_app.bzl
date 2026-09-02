@@ -177,7 +177,7 @@ def realworld_app_suite(
             args = _launcher_args(
                 application,
                 selected_rootfs,
-                name,
+                app,
                 binary = application.binary if application.runtime == "exec" else None,
             ),
             data = [selected_rootfs],
@@ -211,6 +211,9 @@ def realworld_app_suite(
         return
     otel_service = name + "_otel_service"
     instrumented_instance = instance or app + "-otel"
+    service_env = dict(env)
+    if application.runtime != "exec" and not injection and "OTEL_SERVICE_NAME" not in service_env:
+        service_env["OTEL_SERVICE_NAME"] = instrumented_instance
     data = [selected_rootfs]
     if injection:
         data.append(injection.rootfs)
@@ -225,7 +228,7 @@ def realworld_app_suite(
         ),
         data = data,
         deps = [_SINK],
-        env = env,
+        env = service_env,
         hygienic = False,
         **common
     )

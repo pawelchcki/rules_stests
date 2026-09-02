@@ -2,6 +2,8 @@
 
 load("//corpus:registry.bzl", "REALWORLD_HURL_CASES")
 
+_RULESET_REPOSITORY = Label("//:MODULE.bazel").repo_name
+
 OtelStandardRegistryInfo = provider(fields = ["scheme", "json"])
 
 OtelProfileInfo = provider(fields = [
@@ -172,6 +174,13 @@ def otel_realworld_profile(
     """Declares a RealWorld profile and its normalized proof-plan filegroup."""
     if shape_root and scenario_shapes:
         fail("shape_root and scenario_shapes are mutually exclusive")
+    if not scenarios:
+        fail("scenarios must contain at least one RealWorld scenario")
+    unknown_scenarios = [scenario for scenario in scenarios if scenario not in REALWORLD_HURL_CASES]
+    if unknown_scenarios:
+        fail("scenarios contains unknown RealWorld scenarios: {}".format(", ".join(sorted(unknown_scenarios))))
+    if len({scenario: True for scenario in scenarios}) != len(scenarios):
+        fail("scenarios contains duplicate RealWorld scenarios")
     unknown = [scenario for scenario in scenario_shapes if scenario not in scenarios]
     if unknown:
         fail("scenario_shapes contains unknown scenarios: {}".format(", ".join(sorted(unknown))))
@@ -213,7 +222,7 @@ def _report_manifest_impl(ctx):
         plans.append(profile.normalized_proof_plan)
         entries.append({
             "id": profile.profile_id,
-            "repository": profile.repository,
+            "repository": "rules_stests" if _RULESET_REPOSITORY and profile.repository == _RULESET_REPOSITORY else profile.repository,
             "spec": _repository_relative(profile.spec_path),
             "plan": profile.normalized_proof_plan.path,
             "scenarios": list(profile.scenarios),
