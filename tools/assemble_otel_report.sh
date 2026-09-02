@@ -42,11 +42,21 @@ mapfile -t manifest_files < <(bazel cquery "${bazel_flags[@]}" --output=files "$
 mapfile -t matrix_files < <(bazel cquery "${bazel_flags[@]}" --output=files "$matrix_label")
 mapfile -t metadata_files < <(bazel cquery "${bazel_flags[@]}" --output=files "$metadata_label")
 
-assemble_path="${assemble_files[0]}"
+execution_root="$(bazel info "${bazel_flags[@]}" execution_root)"
+resolve_bazel_path() {
+  local path="$1"
+  if [[ "$path" == /* ]]; then
+    printf '%s\n' "$path"
+  else
+    printf '%s/%s\n' "$execution_root" "$path"
+  fi
+}
+
+assemble_path="$(resolve_bazel_path "${assemble_files[0]}")"
 manifest_path=""
 for path in "${manifest_files[@]}"; do
   if [[ "$path" == *".json" && "$path" != *"proof-plan.json" ]]; then
-    manifest_path="$path"
+    manifest_path="$(resolve_bazel_path "$path")"
     break
   fi
 done
@@ -60,9 +70,12 @@ if [[ -n "$report_ruleset_source_root" ]]; then
   source_root_args+=("--corpus-source-root=$report_ruleset_source_root")
 fi
 
+matrix_path="$(resolve_bazel_path "${matrix_files[0]}")"
+metadata_path="$(resolve_bazel_path "${metadata_files[0]}")"
+
 "$assemble_path" \
-  --matrix="${matrix_files[0]}" \
-  --metadata="${metadata_files[0]}" \
+  --matrix="$matrix_path" \
+  --metadata="$metadata_path" \
   --out=feature-parity-report.html \
   --bep=otel-profile.bep.json \
   --revision="$REPORT_REVISION" \

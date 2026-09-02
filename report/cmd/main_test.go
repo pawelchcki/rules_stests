@@ -53,7 +53,7 @@ func TestLoadReportManifestDerivesLegacyInputs(t *testing.T) {
 	if err := os.WriteFile(path, []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	profiles, scenarios, plans, shapes, err := loadReportManifest(path, "https://example.test/consumer/", "https://example.test/corpus/")
+	profiles, scenarios, plans, shapes, profileScenarios, err := loadReportManifest(path, "https://example.test/consumer/", "https://example.test/corpus/")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,16 +63,22 @@ func TestLoadReportManifestDerivesLegacyInputs(t *testing.T) {
 	if got := strings.Join(scenarios, ","); got != "articles,auth,comments,tags" {
 		t.Fatalf("scenarios = %q", got)
 	}
+	if got := strings.Join(profileScenarios["go-profile"], ","); got != "articles,tags" {
+		t.Fatalf("go-profile scenarios = %q", got)
+	}
+	if got := strings.Join(profileScenarios["contract-profile"], ","); got != "comments" {
+		t.Fatalf("contract-profile scenarios = %q", got)
+	}
 	if got := strings.Join(plans, "\n"); !strings.Contains(got, "go-profile,bazel-out/go.proof-plan.json,https://example.test/corpus/corpus/realworld/profile/go-profile.scm") || !strings.Contains(got, "python-profile,bazel-out/python.proof-plan.json,https://example.test/consumer/profile/python-profile.scm") {
 		t.Fatalf("plans = %q", got)
 	}
 	if got := strings.Join(shapes, "\n"); !strings.Contains(got, "go-profile,articles,corpus/realworld/shape/go-profile/articles.scm,https://example.test/corpus/corpus/realworld/shape/go-profile/articles.scm") {
 		t.Fatalf("shapes = %q", got)
 	}
-	if _, _, _, _, err := loadReportManifest(path, "", "https://example.test/corpus"); err == nil || !strings.Contains(err.Error(), "source-root") {
+	if _, _, _, _, _, err := loadReportManifest(path, "", "https://example.test/corpus"); err == nil || !strings.Contains(err.Error(), "source-root") {
 		t.Fatalf("missing source root was accepted: %v", err)
 	}
-	if _, _, _, _, err := loadReportManifest(path, "https://example.test/consumer", ""); err == nil || !strings.Contains(err.Error(), "corpus-source-root") {
+	if _, _, _, _, _, err := loadReportManifest(path, "https://example.test/consumer", ""); err == nil || !strings.Contains(err.Error(), "corpus-source-root") {
 		t.Fatalf("missing corpus source root was accepted: %v", err)
 	}
 }

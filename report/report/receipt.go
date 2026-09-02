@@ -74,10 +74,32 @@ func DecodeReceipt(input []byte) (ValidationReceipt, error) {
 // ValidateReceiptSet is the report's trust boundary. Only a complete set of
 // current-revision E2E receipts can reach model construction.
 func ValidateReceiptSet(revision string, profiles, scenarios []string, plans map[string]PlanArtifact, shapes, captures map[string][]byte, receipts []ValidationReceipt) error {
+	profileScenarios := make(map[string][]string, len(profiles))
+	for _, profile := range profiles {
+		profileScenarios[profile] = scenarios
+	}
+	return ValidateReceiptSetForProfiles(revision, profiles, profileScenarios, plans, shapes, captures, receipts)
+}
+
+// ValidateReceiptSetForProfiles validates the exact profile/scenario pairs
+// declared by a report manifest without requiring their Cartesian product.
+func ValidateReceiptSetForProfiles(revision string, profiles []string, profileScenarios map[string][]string, plans map[string]PlanArtifact, shapes, captures map[string][]byte, receipts []ValidationReceipt) error {
 	if !receiptRevision.MatchString(revision) {
 		return fmt.Errorf("revision must be a lowercase 40-character commit")
 	}
-	profileSet, scenarioSet := stringSet(profiles), stringSet(scenarios)
+	profileSet := stringSet(profiles)
+	expected := map[string]bool{}
+	for profile, scenarios := range profileScenarios {
+		if !profileSet[profile] {
+			return fmt.Errorf("scenario membership declared for unknown profile %s", profile)
+		}
+		for _, scenario := range scenarios {
+			if scenario == "" {
+				return fmt.Errorf("profile %s has an empty scenario", profile)
+			}
+			expected[profile+"\x00"+scenario] = true
+		}
+	}
 	seen := map[string]bool{}
 	for _, receipt := range receipts {
 		if receipt.Outcome != "verified" && receipt.Outcome != "xfail" {
@@ -89,10 +111,10 @@ func ValidateReceiptSet(revision string, profiles, scenarios []string, plans map
 		if receipt.Outcome == "verified" && receipt.XFailReason != "" {
 			return fmt.Errorf("verified receipt %s/%s has an xfail reason", receipt.Profile, receipt.Scenario)
 		}
-		if !profileSet[receipt.Profile] || !scenarioSet[receipt.Scenario] {
+		key := receipt.Profile + "\x00" + receipt.Scenario
+		if !expected[key] {
 			return fmt.Errorf("unexpected receipt %s/%s", receipt.Profile, receipt.Scenario)
 		}
-		key := receipt.Profile + "\x00" + receipt.Scenario
 		if seen[key] {
 			return fmt.Errorf("duplicate receipt %s/%s", receipt.Profile, receipt.Scenario)
 		}
@@ -162,6 +184,10 @@ func ValidateReceiptSet(revision string, profiles, scenarios []string, plans map
 	for _, profile := range profiles {
 		if _, ok := plans[profile]; !ok {
 			return fmt.Errorf("missing normalized plan for %s", profile)
+		}
+		scenarios, ok := profileScenarios[profile]
+		if !ok || len(scenarios) == 0 {
+			return fmt.Errorf("profile %s has no declared scenarios", profile)
 		}
 		for _, scenario := range scenarios {
 			if !seen[profile+"\x00"+scenario] {

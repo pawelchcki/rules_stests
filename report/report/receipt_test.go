@@ -119,6 +119,37 @@ func TestValidateReceiptSetRequiresEveryScenarioForAllScenarioClaims(t *testing.
 	}
 }
 
+func TestValidateReceiptSetForProfilesPreservesScenarioMembership(t *testing.T) {
+	revision := strings.Repeat("a", 40)
+	profiles := []string{"go", "python"}
+	profileScenarios := map[string][]string{"go": {"articles"}, "python": {"auth"}}
+	plans := map[string]PlanArtifact{}
+	captures := map[string][]byte{}
+	var receipts []ValidationReceipt
+	for _, pair := range []struct{ profile, scenario string }{{"go", "articles"}, {"python", "auth"}} {
+		planBytes := []byte(pair.profile + " plan\n")
+		capture := []byte(pair.profile + " capture\n")
+		key := pair.profile + "\x00" + pair.scenario
+		plans[pair.profile] = PlanArtifact{Plan: NormalizedProfilePlan{SchemaVersion: 1, Profile: pair.profile}, Bytes: planBytes}
+		captures[key] = capture
+		receipts = append(receipts, ValidationReceipt{
+			SchemaVersion: 1, Revision: revision, Profile: pair.profile, Scenario: pair.scenario,
+			ProofPlanSHA256: digest(planBytes), CaptureSHA256: digest(capture),
+			ValidationMode: "contract", Outcome: "verified",
+		})
+	}
+	if err := ValidateReceiptSetForProfiles(revision, profiles, profileScenarios, plans, map[string][]byte{}, captures, receipts); err != nil {
+		t.Fatal(err)
+	}
+
+	unexpected := receipts[0]
+	unexpected.Scenario = "auth"
+	captures["go\x00auth"] = captures["go\x00articles"]
+	if err := ValidateReceiptSetForProfiles(revision, profiles, profileScenarios, plans, map[string][]byte{}, captures, append(receipts, unexpected)); err == nil || !strings.Contains(err.Error(), "unexpected receipt go/auth") {
+		t.Fatalf("undeclared profile/scenario pair was accepted: %v", err)
+	}
+}
+
 func TestDecodeReceiptRejectsMalformedSchema(t *testing.T) {
 	if _, err := DecodeReceipt([]byte(`{"schemaVersion":1,"revision":"bad","profile":"p","scenario":"s","proofPlanSha256":"x","captureSha256":"x","validationMode":"contract","outcome":"verified","proofs":[]}`)); err == nil {
 		t.Fatal("malformed receipt accepted")
