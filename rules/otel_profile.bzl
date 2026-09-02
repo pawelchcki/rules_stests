@@ -209,6 +209,15 @@ def otel_realworld_profile(
         fail("scenarios contains unknown RealWorld scenarios: {}".format(", ".join(sorted(unknown_scenarios))))
     if len({scenario: True for scenario in scenarios}) != len(scenarios):
         fail("scenarios contains duplicate RealWorld scenarios")
+    if not signals:
+        fail("signals must contain at least traces")
+    unknown_signals = [signal for signal in signals if signal not in ["traces", "metrics", "logs"]]
+    if unknown_signals:
+        fail("signals contains unknown OTLP signals: {}".format(", ".join(sorted(unknown_signals))))
+    if len({signal: True for signal in signals}) != len(signals):
+        fail("signals contains duplicate OTLP signals")
+    if "traces" not in signals:
+        fail("signals must include traces")
     unknown = [scenario for scenario in scenario_shapes if scenario not in scenarios]
     if unknown:
         fail("scenario_shapes contains unknown scenarios: {}".format(", ".join(sorted(unknown))))

@@ -142,6 +142,7 @@ def realworld_app_suite(
         manual = None,
         tags = [],
         scenarios = REALWORLD_HURL_CASES,
+        flaky = False,
         **kwargs):
     """Emits services, probes, and sharded Hurl tests for a catalog app."""
     if app not in REALWORLD_APPS:
@@ -186,6 +187,7 @@ def realworld_app_suite(
         )
         service_test(
             name = plain_service + "_hygiene_test",
+            flaky = flaky,
             services = [":" + plain_service],
             tags = suite_tags,
             test = _EXIT0,
@@ -194,6 +196,7 @@ def realworld_app_suite(
             name = name + "_test",
             timeout = "moderate",
             args = ["--service-suffix=" + _service_suffix(plain_service)],
+            flaky = flaky,
             services = [":" + plain_service],
             tags = suite_tags,
             test = _PROBE,
@@ -201,6 +204,7 @@ def realworld_app_suite(
         realworld_hurl_test_suite(
             name = name + "_hurl_test",
             cases = scenarios,
+            flaky = flaky,
             timeout = "moderate",
             service = ":" + plain_service,
             tags = suite_tags,
@@ -234,6 +238,7 @@ def realworld_app_suite(
     )
     service_test(
         name = otel_service + "_hygiene_test",
+        flaky = flaky,
         services = [":" + otel_service],
         tags = suite_tags,
         test = _EXIT0,
@@ -242,6 +247,7 @@ def realworld_app_suite(
         name = name + "_otel_test",
         timeout = "moderate",
         args = ["--service-suffix=" + _service_suffix(otel_service)],
+        flaky = flaky,
         services = [":" + otel_service],
         tags = suite_tags,
         test = _PROBE,
@@ -249,6 +255,7 @@ def realworld_app_suite(
     realworld_hurl_test_suite(
         name = name + "_otel_hurl_test",
         cases = scenarios,
+        flaky = flaky,
         timeout = "moderate",
         otel_candidates = otel_candidates,
         otel_flaky_reason = otel_flaky_reason,
