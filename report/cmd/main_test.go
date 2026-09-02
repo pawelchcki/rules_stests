@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/pawelchcki/rules_stests/report"
 )
 
 func TestCollectBEPRequiresUncachedRunAndCollectsArtifacts(t *testing.T) {
@@ -99,5 +101,18 @@ func TestExecutionPathResolvesManifestArtifactsFromExecRoot(t *testing.T) {
 	absolute := filepath.Join(string(filepath.Separator), "tmp", "shape.scm")
 	if got := executionPath(root, absolute); got != absolute {
 		t.Fatalf("absolute execution path = %q", got)
+	}
+}
+
+func TestLegacyCoverageWithholdsClaimsWithoutReceipts(t *testing.T) {
+	proof := report.ProofPlanProof{FeatureID: "traces.span.end", Basis: "observed", Assertion: "span/all-completed"}
+	plans := map[string]report.PlanArtifact{
+		"exercised":   {Plan: report.NormalizedProfilePlan{Profile: "exercised", Proofs: []report.ProofPlanProof{proof}}},
+		"unexercised": {Plan: report.NormalizedProfilePlan{Profile: "unexercised", Proofs: []report.ProofPlanProof{proof}}},
+	}
+	receipts := []report.ValidationReceipt{{Profile: "exercised", Scenario: "articles", Outcome: "verified"}}
+	coverages := coveragesForInvocation(plans, receipts, []string{"exercised", "unexercised"}, []string{"articles"}, nil)
+	if len(coverages) != 2 || len(coverages[0].Claims) != 1 || len(coverages[1].Claims) != 0 {
+		t.Fatalf("legacy coverage trusted a plan without receipts: %#v", coverages)
 	}
 }

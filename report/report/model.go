@@ -175,10 +175,12 @@ type AlignSummary struct {
 	TraceMatched   int `json:"traceMatched"`
 	TraceLeftOnly  int `json:"traceLeftOnly"`
 	TraceRightOnly int `json:"traceRightOnly"`
-	Matched        int `json:"matched"`
-	LeftOnly       int `json:"leftOnly"`
-	RightOnly      int `json:"rightOnly"`
-	Differing      int `json:"differing"`
+	// Span totals count authored span groups (the rendered rows), not expanded
+	// cardinalities. Each row carries its own exact or ranged count label.
+	Matched   int `json:"matched"`
+	LeftOnly  int `json:"leftOnly"`
+	RightOnly int `json:"rightOnly"`
+	Differing int `json:"differing"`
 }
 
 type TraceRef struct {

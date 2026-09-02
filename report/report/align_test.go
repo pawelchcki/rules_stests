@@ -133,6 +133,48 @@ func TestAlignShapesPicksBestOneOfAlternativeAndVariableCardinality(t *testing.T
 	}
 }
 
+func TestAlignShapesChoosesReorderedOneOfAlternativesDeterministically(t *testing.T) {
+	article := exactSpan("db", "client", "unset", "SELECT articles", "absent")
+	user := exactSpan("db", "client", "unset", "SELECT users", "absent")
+	choice := func(alternatives ...SpanGroup) SpanGroup {
+		return SpanGroup{Cardinality: "one_of", MinCount: 1, MaxCount: 1, Alternatives: alternatives}
+	}
+	left := shapeOf("left", exactSpan("server", "server", "unset", "GET /api/tags", "200", choice(user, article)))
+	right := shapeOf("right", exactSpan("server", "server", "unset", "GET /api/tags", "200", choice(article, user)))
+	alignment := AlignShapes(left, right)
+	if alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 {
+		t.Fatalf("equivalent reordered alternatives did not align: %#v", alignment.Summary)
+	}
+	row := findRow(t, alignment, "SELECT articles")
+	if row.Kind != "matched" || row.LeftCard != "one of 2" || row.RightCard != "one of 2" {
+		t.Fatalf("unexpected chosen alternative: %#v", row)
+	}
+
+	trace := func(root SpanGroup) TraceGroup {
+		return TraceGroup{Count: 1, MinCount: 1, MaxCount: 1, ExactCount: true, Coverage: "complete", Roots: []SpanGroup{root}}
+	}
+	left.Traces = []TraceGroup{{Cardinality: "one_of", MinCount: 1, MaxCount: 1, Alternatives: []TraceGroup{trace(user), trace(article)}}}
+	right.Traces = []TraceGroup{{Cardinality: "one_of", MinCount: 1, MaxCount: 1, Alternatives: []TraceGroup{trace(article), trace(user)}}}
+	alignment = AlignShapes(left, right)
+	if alignment.Summary.TraceMatched != 1 || alignment.Summary.TraceLeftOnly != 0 || alignment.Summary.TraceRightOnly != 0 {
+		t.Fatalf("equivalent reordered trace alternatives did not align: %#v", alignment.Summary)
+	}
+}
+
+func TestAlignShapesTreatsOmittedMatchersAsWildcards(t *testing.T) {
+	leftChild := exactSpan("", "client", "", "", "")
+	left := shapeOf("left", exactSpan("", "", "", "GET /api/tags", "", leftChild))
+	right := shapeOf("right", exactSpan("server", "server", "unset", "GET /api/tags", "200",
+		exactSpan("db", "client", "unset", "SELECT articles", "absent")))
+	alignment := AlignShapes(left, right)
+	if alignment.Summary.TraceMatched != 1 || alignment.Summary.Matched != 2 || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 {
+		t.Fatalf("omitted matchers were treated as literals: %#v", alignment.Summary)
+	}
+	if row := findRow(t, alignment, "SELECT articles"); row.Kind != "matched" || !strings.Contains(strings.Join(row.Diffs, ","), "name") {
+		t.Fatalf("wildcard span was not paired with its concrete counterpart: %#v", row)
+	}
+}
+
 func TestAlignShapesWorksWithoutExactCounts(t *testing.T) {
 	left := shapeOf("left", exactSpan("server", "server", "unset", "GET /api/tags", "200"))
 	right := shapeOf("right", exactSpan("server", "server", "unset", "GET /api/tags", "200"))
@@ -159,6 +201,12 @@ func TestFormatInstrumentationVersionAndLabel(t *testing.T) {
 	}
 	if got := FormatProfileLabel("go", "Gin", []string{"go-compile-v1.1"}); got != "Go · Gin · compile 1.1" {
 		t.Fatalf("unexpected go label %q", got)
+	}
+	if got := FormatInstrumentationVersion([]string{"python-auto-v0-65b0", "go-otelbuild-v1-1-0", "sdk-v1.2.3-beta"}); got != "python-auto 0.65b0 + go-otelbuild 1.1.0 + sdk 1.2.3-beta" {
+		t.Fatalf("unexpected dashed version string %q", got)
+	}
+	if got := FormatProfileLabel("python", "Django", []string{"python-auto-v0-65b0"}); got != "Python · Django · auto 0.65b0" {
+		t.Fatalf("unexpected dashed profile label %q", got)
 	}
 }
 

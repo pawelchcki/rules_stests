@@ -394,6 +394,7 @@ func collectImplementationDefinitions(forms []sexpr, bindings map[string]bool, s
 }
 
 var implementationVersionPattern = regexp.MustCompile(`-v([0-9][0-9A-Za-z.\-]*)$`)
+var dashedImplementationVersionPattern = regexp.MustCompile(`^[0-9]+(?:-[0-9][0-9A-Za-z]*)+$`)
 
 // FormatInstrumentationVersion turns implementation bindings such as
 // "python-sdk-v1.44" into a readable "python-sdk 1.44" list. Bindings without a
@@ -442,19 +443,17 @@ func primaryImplementationVersion(implementations []string) string {
 }
 
 func splitImplementationVersion(implementation string) (string, string) {
-	normalized := strings.ReplaceAll(implementation, "-v", "-v")
-	match := implementationVersionPattern.FindStringSubmatch(normalized)
+	match := implementationVersionPattern.FindStringSubmatch(implementation)
 	if match == nil {
-		// Bazel-style ids spell dots as dashes: "-v0-65b0".
-		if index := strings.LastIndex(normalized, "-v"); index >= 0 {
-			candidate := normalized[index+2:]
-			if candidate != "" && candidate[0] >= '0' && candidate[0] <= '9' {
-				return normalized[:index], strings.ReplaceAll(candidate, "-", ".")
-			}
-		}
 		return implementation, ""
 	}
-	return strings.TrimSuffix(normalized, match[0]), match[1]
+	version := match[1]
+	// Bazel-style identifiers spell version separators as dashes. Preserve a
+	// conventional dotted prerelease such as 1.2.3-beta.
+	if dashedImplementationVersionPattern.MatchString(version) {
+		version = strings.ReplaceAll(version, "-", ".")
+	}
+	return strings.TrimSuffix(implementation, match[0]), version
 }
 
 func titleCase(value string) string {

@@ -266,6 +266,11 @@ function visibleDiffs(row, hideScope) {
   return hideScope ? diffs.filter((d) => d !== 'scope') : diffs;
 }
 
+function visibleDifferingGroups(alignment, hideScope) {
+  return alignment.traces.reduce((total, trace) => total + trace.spans.filter((row) =>
+    row.kind === 'matched' && visibleDiffs(row, hideScope).length > 0).length, 0);
+}
+
 function renderAlignment(alignment, flipped, options) {
   if (!alignment || !alignment.traces.length) {
     return '<p class="muted">No traces to align.</p>';
@@ -379,13 +384,14 @@ function renderCompare() {
     const traceRight = flipped ? summary.traceLeftOnly : summary.traceRightOnly;
     const spanLeft = flipped ? summary.rightOnly : summary.leftOnly;
     const spanRight = flipped ? summary.leftOnly : summary.rightOnly;
+    const differing = visibleDifferingGroups(alignment, options.hideScope);
     const tiles = [
       [summary.traceMatched, 'matched trace groups'],
       [traceLeft + ' / ' + traceRight, 'trace groups only left / right'],
-      [summary.matched, 'matched spans'],
-      [summary.differing, 'matched spans that differ'],
-      [spanLeft, 'spans only in ' + profileName(left)],
-      [spanRight, 'spans only in ' + profileName(right)],
+      [summary.matched, 'matched span groups'],
+      [differing, 'matched span groups that differ'],
+      [spanLeft, 'span groups only in ' + profileName(left)],
+      [spanRight, 'span groups only in ' + profileName(right)],
     ];
     $('compare-summary').innerHTML = tiles.map((tile) =>
       '<div class="tile"><span class="value">' + esc(tile[0]) + '</span><span class="label">' +

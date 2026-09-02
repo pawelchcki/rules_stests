@@ -268,12 +268,7 @@ func run(matrixPath, metadataPath, outputPath, profileList, scenarioList, revisi
 		artifact := plans[profile]
 		manifests = append(manifests, report.Manifest{SchemaVersion: 1, Profile: profile, DisplayName: artifact.Plan.DisplayName, Language: artifact.Plan.Language, Framework: artifact.Plan.Framework, InstrumentationVersion: strings.Join(artifact.Plan.Implementations, " + "), Version: report.FormatInstrumentationVersion(artifact.Plan.Implementations), ShortLabel: report.FormatProfileLabel(artifact.Plan.Language, artifact.Plan.Framework, artifact.Plan.Implementations), ProfileEvidence: []report.Evidence{artifact.Source}, BaseCoverage: "contract_only", DefaultVerification: "not_exercised", Unexercised: unexercisedProfiles[profile]})
 	}
-	var coverages []report.ProfileProofCoverage
-	if profileScenarios == nil {
-		coverages = report.CoveragesFromPlans(plans, receipts)
-	} else {
-		coverages = report.CoveragesFromPlansForProfiles(plans, receipts, profileScenarios)
-	}
+	coverages := coveragesForInvocation(plans, receipts, profiles, scenarios, profileScenarios)
 	var model report.ReportModel
 	if profileScenarios == nil {
 		model, err = report.BuildModel(metadata, features, manifests, shapes, profiles, scenarios, evidencePaths, coverages...)
@@ -295,6 +290,19 @@ func run(matrixPath, metadataPath, outputPath, profileList, scenarioList, revisi
 		return err
 	}
 	return os.WriteFile(outputPath, html, 0o644)
+}
+
+// coveragesForInvocation applies the same receipt-scoped trust rule to the
+// legacy explicit-flags path and the manifest path. Without a manifest, every
+// selected profile is declared for the global scenario list.
+func coveragesForInvocation(plans map[string]report.PlanArtifact, receipts []report.ValidationReceipt, profiles, scenarios []string, profileScenarios map[string][]string) []report.ProfileProofCoverage {
+	if profileScenarios == nil {
+		profileScenarios = make(map[string][]string, len(profiles))
+		for _, profile := range profiles {
+			profileScenarios[profile] = append([]string(nil), scenarios...)
+		}
+	}
+	return report.CoveragesFromPlansForProfiles(plans, receipts, profileScenarios)
 }
 
 func executionPath(root, path string) string {

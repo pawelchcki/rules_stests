@@ -3,6 +3,7 @@ package report
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -44,8 +45,26 @@ func spanKey(node SpanNode) string {
 	return node.Kind + "\x00" + NormalizeSpanName(node.Name)
 }
 
-func rootKey(node SpanNode) string {
-	return spanKey(node) + "\x00" + node.HTTPStatus
+func spanMatchScore(left, right SpanNode) int {
+	score := 0
+	if left.Kind != "" && right.Kind != "" {
+		if left.Kind != right.Kind {
+			return -1
+		}
+		score += 10
+	} else if left.Kind != "" || right.Kind != "" {
+		score++
+	}
+	leftName, rightName := NormalizeSpanName(left.Name), NormalizeSpanName(right.Name)
+	if leftName != "" && rightName != "" {
+		if leftName != rightName {
+			return -1
+		}
+		score += 100
+	} else if leftName != "" || rightName != "" {
+		score++
+	}
+	return score
 }
 
 func formatCard(minCount, maxCount int, exact bool, altCount int) string {
@@ -117,9 +136,18 @@ func subtreeKeys(spans []alignedSpan, into map[string]int) {
 	}
 }
 
+func canonicalSpanKey(span alignedSpan) string {
+	children := make([]string, 0, len(span.children))
+	for _, child := range span.children {
+		children = append(children, canonicalSpanKey(child))
+	}
+	sort.Strings(children)
+	return strings.Join([]string{span.keyString, span.node.Status, span.node.HTTPStatus, span.card, strings.Join(children, "\x1e")}, "\x1f")
+}
+
 // chooseCandidates picks, for each authored group, the candidate that shares
-// the most span keys with the opposite side. Ties resolve to the first
-// alternative, keeping the result deterministic.
+// the most span keys with the opposite side. Ties use a canonical structural
+// key so equivalent one-of sets align regardless of their authored order.
 func chooseCandidates(groups []SpanGroup, opposite map[string]int) []alignedSpan {
 	var chosen []alignedSpan
 	for _, group := range groups {
@@ -127,7 +155,7 @@ func chooseCandidates(groups []SpanGroup, opposite map[string]int) []alignedSpan
 		if len(candidates) == 0 {
 			continue
 		}
-		best, bestScore := candidates[0], -1
+		best, bestScore, bestKey := candidates[0], -1, ""
 		for _, candidate := range candidates {
 			keys := map[string]int{}
 			subtreeKeys([]alignedSpan{candidate}, keys)
@@ -144,8 +172,9 @@ func chooseCandidates(groups []SpanGroup, opposite map[string]int) []alignedSpan
 			if candidate.keyString != "" && opposite[candidate.keyString] > 0 {
 				score += 100
 			}
-			if score > bestScore {
-				best, bestScore = candidate, score
+			candidateKey := canonicalSpanKey(candidate)
+			if score > bestScore || (score == bestScore && candidateKey < bestKey) {
+				best, bestScore, bestKey = candidate, score, candidateKey
 			}
 		}
 		chosen = append(chosen, best)
@@ -196,22 +225,36 @@ func spanDiffs(left, right alignedSpan) []string {
 // rows in a stable order: matched pairs first (in left order), then spans that
 // exist only on the left, then spans only on the right.
 func matchSpans(left, right []alignedSpan, depth int, summary *AlignSummary) []SpanMatch {
-	rightByKey := map[string][]int{}
-	for i, span := range right {
-		rightByKey[span.keyString] = append(rightByKey[span.keyString], i)
+	type candidate struct{ left, right, score int }
+	var candidates []candidate
+	for leftIndex, leftSpan := range left {
+		for rightIndex, rightSpan := range right {
+			if score := spanMatchScore(leftSpan.node, rightSpan.node); score >= 0 {
+				candidates = append(candidates, candidate{left: leftIndex, right: rightIndex, score: score})
+			}
+		}
+	}
+	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
+	matchedRight := make([]int, len(left))
+	for i := range matchedRight {
+		matchedRight[i] = -1
 	}
 	usedRight := make([]bool, len(right))
+	for _, candidate := range candidates {
+		if matchedRight[candidate.left] >= 0 || usedRight[candidate.right] {
+			continue
+		}
+		matchedRight[candidate.left] = candidate.right
+		usedRight[candidate.right] = true
+	}
 	var rows []SpanMatch
 	var leftOnly []alignedSpan
-	for _, leftSpan := range left {
-		indexes := rightByKey[leftSpan.keyString]
-		if len(indexes) == 0 {
+	for leftIndex, leftSpan := range left {
+		rightIndex := matchedRight[leftIndex]
+		if rightIndex < 0 {
 			leftOnly = append(leftOnly, leftSpan)
 			continue
 		}
-		rightIndex := indexes[0]
-		rightByKey[leftSpan.keyString] = indexes[1:]
-		usedRight[rightIndex] = true
 		rightSpan := right[rightIndex]
 		diffs := spanDiffs(leftSpan, rightSpan)
 		summary.Matched++
@@ -260,14 +303,22 @@ type resolvedTrace struct {
 	index int
 	card  string
 	roots []alignedSpan
-	key   string
 	label string
+}
+
+func canonicalTraceKey(trace resolvedTrace) string {
+	roots := make([]string, 0, len(trace.roots))
+	for _, root := range trace.roots {
+		roots = append(roots, canonicalSpanKey(root))
+	}
+	sort.Strings(roots)
+	return strings.Join([]string{trace.card, strings.Join(roots, "\x1e")}, "\x1f")
 }
 
 func resolveTraceGroup(index int, group TraceGroup, opposite map[string]int) resolvedTrace {
 	if len(group.Alternatives) > 0 {
 		best := resolveTraceGroup(index, group.Alternatives[0], opposite)
-		bestScore := -1
+		bestScore, bestKey := -1, ""
 		for _, alternative := range group.Alternatives {
 			candidate := resolveTraceGroup(index, alternative, opposite)
 			keys := map[string]int{}
@@ -282,8 +333,9 @@ func resolveTraceGroup(index int, group TraceGroup, opposite map[string]int) res
 					}
 				}
 			}
-			if score > bestScore {
-				best, bestScore = candidate, score
+			candidateKey := canonicalTraceKey(candidate)
+			if score > bestScore || (score == bestScore && candidateKey < bestKey) {
+				best, bestScore, bestKey = candidate, score, candidateKey
 			}
 		}
 		best.card = formatCard(group.MinCount, group.MaxCount, false, len(group.Alternatives))
@@ -293,7 +345,6 @@ func resolveTraceGroup(index int, group TraceGroup, opposite map[string]int) res
 	trace := resolvedTrace{index: index, card: formatCard(minCount, maxCount, group.ExactCount, 0)}
 	trace.roots = chooseCandidates(group.Roots, opposite)
 	if len(trace.roots) > 0 {
-		trace.key = rootKey(trace.roots[0].node)
 		trace.label = strings.TrimSpace(trace.roots[0].node.Name)
 	}
 	return trace
@@ -332,26 +383,45 @@ func AlignShapes(left, right *ScenarioShape) *ShapeAlignment {
 		rightTraces = append(rightTraces, resolveTraceGroup(i, group, leftKeys))
 	}
 	alignment := &ShapeAlignment{Traces: []TraceMatch{}}
-	usedRight := make([]bool, len(rightTraces))
-	pairRight := func(trace resolvedTrace, exact bool) int {
-		for i, candidate := range rightTraces {
-			if usedRight[i] {
+	type candidate struct{ left, right, score int }
+	var candidates []candidate
+	for leftIndex, leftTrace := range leftTraces {
+		if len(leftTrace.roots) == 0 {
+			continue
+		}
+		for rightIndex, rightTrace := range rightTraces {
+			if len(rightTrace.roots) == 0 {
 				continue
 			}
-			if exact && candidate.key == trace.key {
-				return i
+			score := spanMatchScore(leftTrace.roots[0].node, rightTrace.roots[0].node)
+			if score < 0 {
+				continue
 			}
-			if !exact && spanKeyOnly(candidate.key) == spanKeyOnly(trace.key) {
-				return i
+			leftHTTP, rightHTTP := leftTrace.roots[0].node.HTTPStatus, rightTrace.roots[0].node.HTTPStatus
+			if leftHTTP == "" || rightHTTP == "" || leftHTTP == rightHTTP {
+				score += 1000
 			}
+			if leftHTTP != "" && leftHTTP == rightHTTP {
+				score += 10
+			}
+			candidates = append(candidates, candidate{left: leftIndex, right: rightIndex, score: score})
 		}
-		return -1
 	}
-	for _, leftTrace := range leftTraces {
-		index := pairRight(leftTrace, true)
-		if index < 0 {
-			index = pairRight(leftTrace, false)
+	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
+	matchedRight := make([]int, len(leftTraces))
+	for i := range matchedRight {
+		matchedRight[i] = -1
+	}
+	usedRight := make([]bool, len(rightTraces))
+	for _, candidate := range candidates {
+		if matchedRight[candidate.left] >= 0 || usedRight[candidate.right] {
+			continue
 		}
+		matchedRight[candidate.left] = candidate.right
+		usedRight[candidate.right] = true
+	}
+	for leftIndex, leftTrace := range leftTraces {
+		index := matchedRight[leftIndex]
 		if index < 0 {
 			alignment.Traces = append(alignment.Traces, traceOnly(leftTrace, "left_only", &alignment.Summary))
 			alignment.Summary.TraceLeftOnly++
@@ -376,13 +446,6 @@ func AlignShapes(left, right *ScenarioShape) *ShapeAlignment {
 		alignment.Summary.TraceRightOnly++
 	}
 	return alignment
-}
-
-func spanKeyOnly(key string) string {
-	if index := strings.LastIndex(key, "\x00"); index >= 0 {
-		return key[:index]
-	}
-	return key
 }
 
 func traceOnly(trace resolvedTrace, kind string, summary *AlignSummary) TraceMatch {
