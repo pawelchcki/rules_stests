@@ -14,3 +14,7 @@ the tool into a `FROM scratch` image, then substitute only `rootfs`,
 
 The local override is for this repository's CI. Published consumers should
 remove it and select a released `rules_stests` version.
+
+When assembling a report, set `REPORT_RULESET_SOURCE_ROOT` to
+`https://github.com/pawelchcki/rules_stests/blob/<rules_stests-commit>` using the
+immutable commit that supplies the selected module version.

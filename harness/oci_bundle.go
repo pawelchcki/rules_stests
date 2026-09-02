@@ -408,6 +408,7 @@ func runAppExec(injection injection, instance, rootArg, relative string, args []
 	if err != nil {
 		return err
 	}
+	environment = applyExecDefaults(environment, instance)
 	if otelRoot != "" {
 		fmt.Fprintf(os.Stderr, "oci_bundle: activating instrumentation for %s from %s\n", instance, otelRoot)
 	}
@@ -416,6 +417,15 @@ func runAppExec(injection injection, instance, rootArg, relative string, args []
 		return fmt.Errorf("execute app binary %s: %w", relative, err)
 	}
 	return nil
+}
+
+func applyExecDefaults(environment []string, instance string) []string {
+	present := make(map[string]bool, len(environment))
+	for _, entry := range environment {
+		key, _, _ := strings.Cut(entry, "=")
+		present[key] = true
+	}
+	return appendDefaultEnvironment(environment, present, "OTEL_SERVICE_NAME", instance)
 }
 
 func validInstance(value string) bool {

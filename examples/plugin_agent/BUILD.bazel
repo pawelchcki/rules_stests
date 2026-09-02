@@ -54,7 +54,6 @@ realworld_app_suite(
     app = "aiohttp",
     env = _PYTHON_ENV,
     injection = python_auto_injection(),
-    instance = "aiohttp-otel",
     profile = ":example-aiohttp-auto-v0-65b0",
 )
 
@@ -71,7 +70,6 @@ realworld_app_suite(
         logs = False,
         extra = {
             "OTEL_RESOURCE_ATTRIBUTES": "process.owner=nonroot",
-            "OTEL_SERVICE_NAME": "gin-otel",
         },
     ),
     otel_binary = "opt/app/bin/realworld-gin-otel",

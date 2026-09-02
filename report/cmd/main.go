@@ -33,7 +33,7 @@ func main() {
 	flag.StringVar(&bepPath, "bep", "", "JSON build-event file from the uncached profile run")
 	flag.StringVar(&manifestPath, "manifest", "", "corpus report manifest JSON")
 	flag.StringVar(&sourceRoot, "source-root", "", "repository source URL prefix for manifest evidence")
-	flag.StringVar(&corpusSourceRoot, "corpus-source-root", "https://github.com/pawelchcki/rules_stests/blob/main", "rules_stests source URL prefix for external manifest evidence")
+	flag.StringVar(&corpusSourceRoot, "corpus-source-root", "", "pinned rules_stests source URL prefix for external manifest evidence")
 	flag.Var(&planSpecs, "plan", "profile,path,source URL (repeatable)")
 	flag.Var(&shapeSpecs, "shape", "profile,scenario,path,source URL (repeatable)")
 	flag.Parse()
@@ -57,6 +57,7 @@ type reportManifestEntry struct {
 	Repository string            `json:"repository"`
 	Spec       string            `json:"spec"`
 	Plan       string            `json:"plan"`
+	Scenarios  []string          `json:"scenarios"`
 	Shapes     map[string]string `json:"shapes"`
 }
 
@@ -92,10 +93,23 @@ func loadReportManifest(path, sourceRoot, corpusSourceRoot string) ([]string, []
 			evidenceRoot = corpusRoot
 		}
 		plans = append(plans, strings.Join([]string{entry.ID, entry.Plan, evidenceRoot + "/" + filepath.ToSlash(entry.Spec)}, ","))
+		declaredScenarios := map[string]bool{}
+		for _, scenario := range entry.Scenarios {
+			if scenario == "" {
+				return nil, nil, nil, nil, fmt.Errorf("profile %q has an empty scenario", entry.ID)
+			}
+			declaredScenarios[scenario] = true
+			scenarioSet[scenario] = true
+		}
+		if len(declaredScenarios) == 0 {
+			return nil, nil, nil, nil, fmt.Errorf("profile %q has no declared scenarios", entry.ID)
+		}
 		scenarios := make([]string, 0, len(entry.Shapes))
 		for scenario := range entry.Shapes {
 			scenarios = append(scenarios, scenario)
-			scenarioSet[scenario] = true
+			if !declaredScenarios[scenario] {
+				return nil, nil, nil, nil, fmt.Errorf("profile %q shape has undeclared scenario %q", entry.ID, scenario)
+			}
 		}
 		sort.Strings(scenarios)
 		for _, scenario := range scenarios {

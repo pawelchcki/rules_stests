@@ -170,6 +170,17 @@ func TestOtelDefaultsRequireRootfs(t *testing.T) {
 	}
 }
 
+func TestExecServiceNameDefaultPreservesExplicitValue(t *testing.T) {
+	defaulted := strings.Join(applyExecDefaults([]string{"KEEP=value"}, "gin-otel"), "\n")
+	if !strings.Contains(defaulted, "OTEL_SERVICE_NAME=gin-otel") {
+		t.Fatalf("defaulted environment = %q", defaulted)
+	}
+	explicit := strings.Join(applyExecDefaults([]string{"OTEL_SERVICE_NAME=custom"}, "gin-otel"), "\n")
+	if explicit != "OTEL_SERVICE_NAME=custom" {
+		t.Fatalf("explicit environment = %q", explicit)
+	}
+}
+
 func makePythonRoot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()

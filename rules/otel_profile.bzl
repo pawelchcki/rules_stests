@@ -12,6 +12,7 @@ OtelProfileInfo = provider(fields = [
     "implementation_libraries",
     "normalized_proof_plan",
     "signals",
+    "scenarios",
     "scenario_shapes",
     "manifest",
 ])
@@ -120,6 +121,7 @@ def _profile_impl(ctx):
             implementation_libraries = depset(ctx.files.implementation_libraries),
             normalized_proof_plan = plan,
             signals = tuple(ctx.attr.signals),
+            scenarios = tuple(ctx.attr.scenarios),
             scenario_shapes = shape_paths,
             manifest = manifest,
         ),
@@ -210,6 +212,7 @@ def _report_manifest_impl(ctx):
             "repository": profile.repository,
             "spec": _repository_relative(profile.spec_path),
             "plan": profile.normalized_proof_plan.path,
+            "scenarios": list(profile.scenarios),
             "shapes": {
                 scenario: _repository_relative(path)
                 for scenario, path in profile.scenario_shapes.items()

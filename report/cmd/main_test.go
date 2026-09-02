@@ -46,8 +46,9 @@ func TestCollectBEPRequiresUncachedRunAndCollectsArtifacts(t *testing.T) {
 func TestLoadReportManifestDerivesLegacyInputs(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "manifest.json")
 	manifest := `[
-  {"id":"go-profile","repository":"rules_stests+","spec":"corpus/realworld/profile/go-profile.scm","plan":"bazel-out/go.proof-plan.json","shapes":{"tags":"corpus/realworld/shape/go-profile/tags.scm","articles":"corpus/realworld/shape/go-profile/articles.scm"}},
-  {"id":"python-profile","repository":"","spec":"profile/python-profile.scm","plan":"bazel-out/python.proof-plan.json","shapes":{"tags":"shape/python-profile/tags.scm"}}
+  {"id":"go-profile","repository":"rules_stests+","spec":"corpus/realworld/profile/go-profile.scm","plan":"bazel-out/go.proof-plan.json","scenarios":["articles","tags"],"shapes":{"tags":"corpus/realworld/shape/go-profile/tags.scm","articles":"corpus/realworld/shape/go-profile/articles.scm"}},
+  {"id":"python-profile","repository":"","spec":"profile/python-profile.scm","plan":"bazel-out/python.proof-plan.json","scenarios":["articles","auth","tags"],"shapes":{"tags":"shape/python-profile/tags.scm"}},
+  {"id":"contract-profile","repository":"","spec":"profile/contract-profile.scm","plan":"bazel-out/contract.proof-plan.json","scenarios":["comments"],"shapes":{}}
 ]`
 	if err := os.WriteFile(path, []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
@@ -56,10 +57,10 @@ func TestLoadReportManifestDerivesLegacyInputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(profiles, ","); got != "go-profile,python-profile" {
+	if got := strings.Join(profiles, ","); got != "go-profile,python-profile,contract-profile" {
 		t.Fatalf("profiles = %q", got)
 	}
-	if got := strings.Join(scenarios, ","); got != "articles,tags" {
+	if got := strings.Join(scenarios, ","); got != "articles,auth,comments,tags" {
 		t.Fatalf("scenarios = %q", got)
 	}
 	if got := strings.Join(plans, "\n"); !strings.Contains(got, "go-profile,bazel-out/go.proof-plan.json,https://example.test/corpus/corpus/realworld/profile/go-profile.scm") || !strings.Contains(got, "python-profile,bazel-out/python.proof-plan.json,https://example.test/consumer/profile/python-profile.scm") {
@@ -70,5 +71,8 @@ func TestLoadReportManifestDerivesLegacyInputs(t *testing.T) {
 	}
 	if _, _, _, _, err := loadReportManifest(path, "", "https://example.test/corpus"); err == nil || !strings.Contains(err.Error(), "source-root") {
 		t.Fatalf("missing source root was accepted: %v", err)
+	}
+	if _, _, _, _, err := loadReportManifest(path, "https://example.test/consumer", ""); err == nil || !strings.Contains(err.Error(), "corpus-source-root") {
+		t.Fatalf("missing corpus source root was accepted: %v", err)
 	}
 }

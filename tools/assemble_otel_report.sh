@@ -21,9 +21,15 @@ fi
 
 report_manifest="${REPORT_MANIFEST:-//fixtures:otel_report_manifest}"
 report_ruleset="${REPORT_RULESET:-}"
+report_ruleset_source_root="${REPORT_RULESET_SOURCE_ROOT:-}"
 assemble_label="${report_ruleset}//report:assemble"
 matrix_label="${report_ruleset}//report:data/spec-compliance-matrix.md"
 metadata_label="${report_ruleset}//report:data/catalog.json"
+
+if [[ -n "$report_ruleset" && ! "$report_ruleset_source_root" =~ /blob/[0-9a-f]{40}$ ]]; then
+  echo "REPORT_RULESET_SOURCE_ROOT must end in /blob/<40-character-ruleset-commit> when REPORT_RULESET is set" >&2
+  exit 1
+fi
 
 bazel build "${bazel_flags[@]}" --remote_download_outputs=toplevel \
   "$report_manifest" \
@@ -49,6 +55,11 @@ if [[ -z "$manifest_path" ]]; then
   exit 1
 fi
 
+source_root_args=()
+if [[ -n "$report_ruleset_source_root" ]]; then
+  source_root_args+=("--corpus-source-root=$report_ruleset_source_root")
+fi
+
 "$assemble_path" \
   --matrix="${matrix_files[0]}" \
   --metadata="${metadata_files[0]}" \
@@ -56,4 +67,5 @@ fi
   --bep=otel-profile.bep.json \
   --revision="$REPORT_REVISION" \
   --manifest="$manifest_path" \
+  "${source_root_args[@]}" \
   --source-root="https://github.com/${REPORT_REPOSITORY}/blob/${REPORT_REVISION}"

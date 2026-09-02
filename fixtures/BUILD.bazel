@@ -57,7 +57,6 @@ realworld_app_suite(
         logs = False,
         extra = {
             "OTEL_RESOURCE_ATTRIBUTES": "process.owner=nonroot",
-            "OTEL_SERVICE_NAME": "gin-otel",
         },
     ),
     plain = True,

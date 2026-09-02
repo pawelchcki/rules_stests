@@ -208,7 +208,7 @@ def realworld_app_suite(
     if not profile:
         return
     otel_service = name + "_otel_service"
-    instrumented_instance = instance or name + "-otel"
+    instrumented_instance = instance or app + "-otel"
     data = [selected_rootfs]
     if injection:
         data.append(injection.rootfs)

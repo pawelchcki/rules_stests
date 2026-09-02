@@ -56,8 +56,10 @@ Use `otel_realworld_profile` without shapes for contract mode. Candidate
 targets record observed topology; check reviewed candidates into a shape tree
 and set `shape_root` for exact mode. Run a suite with `bazel test
 //:my_python_otel_hurl_test`. Assemble a consumer report with
-`REPORT_MANIFEST=//:otel_report_manifest REPORT_RULESET=@rules_stests` and
-`tools/assemble_otel_report.sh`. See [`examples/plugin_agent`](examples/plugin_agent).
+`REPORT_MANIFEST=//:otel_report_manifest REPORT_RULESET=@rules_stests
+REPORT_RULESET_SOURCE_ROOT=https://github.com/pawelchcki/rules_stests/blob/<rules_stests-commit>`
+and `tools/assemble_otel_report.sh`. The source root must name the immutable
+commit selected by the consumer. See [`examples/plugin_agent`](examples/plugin_agent).
 
 ## Public API
 
