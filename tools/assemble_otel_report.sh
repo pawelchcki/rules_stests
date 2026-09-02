@@ -2,6 +2,10 @@
 
 set -euo pipefail
 
+if [[ -n "${BUILD_WORKSPACE_DIRECTORY:-}" ]]; then
+  cd "$BUILD_WORKSPACE_DIRECTORY"
+fi
+
 : "${REPORT_REVISION:?REPORT_REVISION must be a 40-character commit SHA}"
 : "${REPORT_REPOSITORY:?REPORT_REPOSITORY must be an owner/repository name}"
 
@@ -80,5 +84,6 @@ metadata_path="$(resolve_bazel_path "${metadata_files[0]}")"
   --bep=otel-profile.bep.json \
   --revision="$REPORT_REVISION" \
   --manifest="$manifest_path" \
+  --execution-root="$execution_root" \
   "${source_root_args[@]}" \
   --source-root="https://github.com/${REPORT_REPOSITORY}/blob/${REPORT_REVISION}"

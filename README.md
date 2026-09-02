@@ -17,6 +17,7 @@ Injected agents supply data to the generic launcher:
 ```starlark
 load(
     "@rules_stests//rules:defs.bzl",
+    "oci_rootfs",
     "otel_injection",
     "otlp_env",
     "realworld_app_suite",
@@ -54,12 +55,30 @@ place its static executable in a `FROM scratch` image.
 
 Use `otel_realworld_profile` without shapes for contract mode. Candidate
 targets record observed topology; check reviewed candidates into a shape tree
-and set `shape_root` for exact mode. Run a suite with `bazel test
-//:my_python_otel_hurl_test`. Assemble a consumer report with
-`REPORT_MANIFEST=//:otel_report_manifest REPORT_RULESET=@rules_stests
-REPORT_RULESET_SOURCE_ROOT=https://github.com/pawelchcki/rules_stests/blob/<rules_stests-commit>`
-and `tools/assemble_otel_report.sh`. The source root must name the immutable
-commit selected by the consumer. See [`examples/plugin_agent`](examples/plugin_agent).
+and set `shape_root` for exact mode. When a profile declares a scenario subset,
+pass the same list as `scenarios` to `realworld_app_suite` so only those receipt
+shards are generated.
+
+Generate uncached receipt evidence and its build-event file before assembling a
+consumer report:
+
+```bash
+revision="$(git rev-parse HEAD)"
+bazel test //:otel_report_suite \
+  --test_env="OTEL_TEST_REVISION=${revision}" \
+  --nocache_test_results \
+  --build_event_json_file=otel-profile.bep.json
+
+REPORT_REVISION="${revision}" \
+REPORT_REPOSITORY=owner/repository \
+REPORT_MANIFEST=//:otel_report_manifest \
+REPORT_RULESET=@rules_stests \
+REPORT_RULESET_SOURCE_ROOT=https://github.com/pawelchcki/rules_stests/blob/<rules_stests-commit> \
+bazel run @rules_stests//tools:assemble_otel_report
+```
+
+`REPORT_RULESET_SOURCE_ROOT` must name the immutable dependency commit selected
+by the consumer. See [`examples/plugin_agent`](examples/plugin_agent).
 
 ## Public API
 

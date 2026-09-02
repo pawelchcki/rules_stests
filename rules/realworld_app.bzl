@@ -2,7 +2,7 @@
 
 load("@rules_itest//:itest.bzl", "itest_service", "service_test")
 load("//bazel:oci_images.lock.bzl", "RUBY_IMAGES_PUBLISHED")
-load("//rules:hurl_test.bzl", "realworld_hurl_test_suite")
+load("//rules:hurl_test.bzl", "REALWORLD_HURL_CASES", "realworld_hurl_test_suite")
 
 _SINK = Label("//harness:otel_sink_service")
 _LAUNCHER = Label("//harness:oci_bundle")
@@ -141,6 +141,7 @@ def realworld_app_suite(
         expected_start_duration = None,
         manual = None,
         tags = [],
+        scenarios = REALWORLD_HURL_CASES,
         **kwargs):
     """Emits services, probes, and sharded Hurl tests for a catalog app."""
     if app not in REALWORLD_APPS:
@@ -199,6 +200,7 @@ def realworld_app_suite(
         )
         realworld_hurl_test_suite(
             name = name + "_hurl_test",
+            cases = scenarios,
             timeout = "moderate",
             service = ":" + plain_service,
             tags = suite_tags,
@@ -243,6 +245,7 @@ def realworld_app_suite(
     )
     realworld_hurl_test_suite(
         name = name + "_otel_hurl_test",
+        cases = scenarios,
         timeout = "moderate",
         otel_candidates = otel_candidates,
         otel_flaky_reason = otel_flaky_reason,

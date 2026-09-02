@@ -14,6 +14,7 @@ OtelProfileInfo = provider(fields = [
     "signals",
     "scenarios",
     "scenario_shapes",
+    "scenario_shape_sources",
     "manifest",
 ])
 
@@ -57,12 +58,14 @@ def _profile_impl(ctx):
     plan = ctx.actions.declare_file(ctx.label.name + ".proof-plan.json")
     manifest = ctx.actions.declare_file(ctx.label.name + ".profile.json")
     shape_paths = {}
+    shape_sources = {}
     shape_files = []
     for target, scenario in ctx.attr.scenario_shapes.items():
         files = target.files.to_list()
         if len(files) != 1:
             fail("scenario shape %s must provide exactly one file" % target.label)
-        shape_paths[scenario] = files[0].short_path
+        shape_paths[scenario] = files[0].path
+        shape_sources[scenario] = files[0].short_path
         shape_files.append(files[0])
     core_libraries = ctx.attr.core_libraries.files.to_list()
     common = [registry.scheme] + core_libraries + ctx.files.runtime_libraries + ctx.files.implementation_libraries + [ctx.file.specification]
@@ -123,6 +126,7 @@ def _profile_impl(ctx):
             signals = tuple(ctx.attr.signals),
             scenarios = tuple(ctx.attr.scenarios),
             scenario_shapes = shape_paths,
+            scenario_shape_sources = shape_sources,
             manifest = manifest,
         ),
     ]
@@ -213,9 +217,10 @@ def _report_manifest_impl(ctx):
             "spec": _repository_relative(profile.spec_path),
             "plan": profile.normalized_proof_plan.path,
             "scenarios": list(profile.scenarios),
-            "shapes": {
+            "shapes": profile.scenario_shapes,
+            "shapeSources": {
                 scenario: _repository_relative(path)
-                for scenario, path in profile.scenario_shapes.items()
+                for scenario, path in profile.scenario_shape_sources.items()
             },
         })
     ctx.actions.write(output, json.encode(entries) + "\n")

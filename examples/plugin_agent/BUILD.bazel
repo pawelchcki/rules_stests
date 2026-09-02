@@ -15,6 +15,8 @@ _PYTHON_ENV = otlp_env(extra = {
     "OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED": "true",
 })
 
+_EXAMPLE_SCENARIOS = ["comments"]
+
 realworld_app_suite(
     name = "aiohttp",
     app = "aiohttp",
@@ -47,6 +49,7 @@ otel_realworld_profile(
         "@rules_stests//corpus:otel/implementation/aiohttp-v0.65b0.scm",
     ],
     signals = ["traces", "metrics", "logs"],
+    scenarios = _EXAMPLE_SCENARIOS,
 )
 
 realworld_app_suite(
@@ -55,6 +58,7 @@ realworld_app_suite(
     env = _PYTHON_ENV,
     injection = python_auto_injection(),
     profile = ":example-aiohttp-auto-v0-65b0",
+    scenarios = _EXAMPLE_SCENARIOS,
 )
 
 oci_rootfs(

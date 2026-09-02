@@ -22,7 +22,7 @@ func (values *repeatedFlag) String() string         { return strings.Join(*value
 func (values *repeatedFlag) Set(value string) error { *values = append(*values, value); return nil }
 
 func main() {
-	var matrixPath, metadataPath, outputPath, profileList, scenarioList, revision, bepPath, manifestPath, sourceRoot, corpusSourceRoot string
+	var matrixPath, metadataPath, outputPath, profileList, scenarioList, revision, bepPath, manifestPath, sourceRoot, corpusSourceRoot, executionRoot string
 	var planSpecs, shapeSpecs repeatedFlag
 	flag.StringVar(&matrixPath, "matrix", "", "checked-in compliance matrix")
 	flag.StringVar(&metadataPath, "metadata", "", "catalog metadata JSON")
@@ -34,6 +34,7 @@ func main() {
 	flag.StringVar(&manifestPath, "manifest", "", "corpus report manifest JSON")
 	flag.StringVar(&sourceRoot, "source-root", "", "repository source URL prefix for manifest evidence")
 	flag.StringVar(&corpusSourceRoot, "corpus-source-root", "", "pinned rules_stests source URL prefix for external manifest evidence")
+	flag.StringVar(&executionRoot, "execution-root", "", "Bazel execution root for manifest artifact paths")
 	flag.Var(&planSpecs, "plan", "profile,path,source URL (repeatable)")
 	flag.Var(&shapeSpecs, "shape", "profile,scenario,path,source URL (repeatable)")
 	flag.Parse()
@@ -48,19 +49,20 @@ func main() {
 		planSpecs, shapeSpecs = append(planSpecs, plans...), append(shapeSpecs, shapes...)
 		profileScenarios = memberships
 	}
-	if err := run(matrixPath, metadataPath, outputPath, profileList, scenarioList, revision, bepPath, profileScenarios, planSpecs, shapeSpecs); err != nil {
+	if err := run(matrixPath, metadataPath, outputPath, profileList, scenarioList, revision, bepPath, executionRoot, profileScenarios, planSpecs, shapeSpecs); err != nil {
 		fmt.Fprintln(os.Stderr, "assemble feature report:", err)
 		os.Exit(1)
 	}
 }
 
 type reportManifestEntry struct {
-	ID         string            `json:"id"`
-	Repository string            `json:"repository"`
-	Spec       string            `json:"spec"`
-	Plan       string            `json:"plan"`
-	Scenarios  []string          `json:"scenarios"`
-	Shapes     map[string]string `json:"shapes"`
+	ID           string            `json:"id"`
+	Repository   string            `json:"repository"`
+	Spec         string            `json:"spec"`
+	Plan         string            `json:"plan"`
+	Scenarios    []string          `json:"scenarios"`
+	Shapes       map[string]string `json:"shapes"`
+	ShapeSources map[string]string `json:"shapeSources"`
 }
 
 func loadReportManifest(path, sourceRoot, corpusSourceRoot string) ([]string, []string, []string, []string, map[string][]string, error) {
@@ -118,11 +120,20 @@ func loadReportManifest(path, sourceRoot, corpusSourceRoot string) ([]string, []
 			if !declaredScenarios[scenario] {
 				return nil, nil, nil, nil, nil, fmt.Errorf("profile %q shape has undeclared scenario %q", entry.ID, scenario)
 			}
+			if entry.ShapeSources[scenario] == "" {
+				return nil, nil, nil, nil, nil, fmt.Errorf("profile %q shape %q has no evidence source", entry.ID, scenario)
+			}
+		}
+		for scenario := range entry.ShapeSources {
+			if entry.Shapes[scenario] == "" {
+				return nil, nil, nil, nil, nil, fmt.Errorf("profile %q has evidence for unknown shape %q", entry.ID, scenario)
+			}
 		}
 		sort.Strings(scenarios)
 		for _, scenario := range scenarios {
 			shapePath := filepath.ToSlash(entry.Shapes[scenario])
-			shapes = append(shapes, strings.Join([]string{entry.ID, scenario, shapePath, evidenceRoot + "/" + shapePath}, ","))
+			shapeSource := filepath.ToSlash(entry.ShapeSources[scenario])
+			shapes = append(shapes, strings.Join([]string{entry.ID, scenario, shapePath, evidenceRoot + "/" + shapeSource}, ","))
 		}
 	}
 	scenarios := make([]string, 0, len(scenarioSet))
@@ -133,7 +144,7 @@ func loadReportManifest(path, sourceRoot, corpusSourceRoot string) ([]string, []
 	return profiles, scenarios, plans, shapes, profileScenarios, nil
 }
 
-func run(matrixPath, metadataPath, outputPath, profileList, scenarioList, revision, bepPath string, profileScenarios map[string][]string, planSpecs, shapeSpecs []string) error {
+func run(matrixPath, metadataPath, outputPath, profileList, scenarioList, revision, bepPath, executionRoot string, profileScenarios map[string][]string, planSpecs, shapeSpecs []string) error {
 	if matrixPath == "" || metadataPath == "" || outputPath == "" || bepPath == "" {
 		return fmt.Errorf("--matrix, --metadata, --out, and --bep are required")
 	}
@@ -165,7 +176,8 @@ func run(matrixPath, metadataPath, outputPath, profileList, scenarioList, revisi
 		if len(parts) != 3 {
 			return fmt.Errorf("invalid --plan %q", spec)
 		}
-		data, readErr := os.ReadFile(parts[1])
+		readPath := executionPath(executionRoot, parts[1])
+		data, readErr := os.ReadFile(readPath)
 		if readErr != nil {
 			return readErr
 		}
@@ -193,7 +205,8 @@ func run(matrixPath, metadataPath, outputPath, profileList, scenarioList, revisi
 		if len(parts) != 4 {
 			return fmt.Errorf("invalid --shape %q", spec)
 		}
-		data, readErr := os.ReadFile(parts[2])
+		readPath := executionPath(executionRoot, parts[2])
+		data, readErr := os.ReadFile(readPath)
 		if readErr != nil {
 			return readErr
 		}
@@ -236,7 +249,12 @@ func run(matrixPath, metadataPath, outputPath, profileList, scenarioList, revisi
 		manifests = append(manifests, report.Manifest{SchemaVersion: 1, Profile: profile, DisplayName: artifact.Plan.DisplayName, Language: artifact.Plan.Language, Framework: artifact.Plan.Framework, InstrumentationVersion: strings.Join(artifact.Plan.Implementations, " + "), ProfileEvidence: []report.Evidence{artifact.Source}, BaseCoverage: "contract_only", DefaultVerification: "not_exercised"})
 	}
 	coverages := report.CoveragesFromPlans(plans, receipts)
-	model, err := report.BuildModel(metadata, features, manifests, shapes, profiles, scenarios, evidencePaths, coverages...)
+	var model report.ReportModel
+	if profileScenarios == nil {
+		model, err = report.BuildModel(metadata, features, manifests, shapes, profiles, scenarios, evidencePaths, coverages...)
+	} else {
+		model, err = report.BuildModelForProfiles(metadata, features, manifests, shapes, profiles, scenarios, profileScenarios, evidencePaths, coverages...)
+	}
 	if err != nil {
 		return err
 	}
@@ -252,6 +270,13 @@ func run(matrixPath, metadataPath, outputPath, profileList, scenarioList, revisi
 		return err
 	}
 	return os.WriteFile(outputPath, html, 0o644)
+}
+
+func executionPath(root, path string) string {
+	if root == "" || filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(root, path)
 }
 
 func collectBEP(path string) (map[string][]byte, map[string][]byte, error) {
