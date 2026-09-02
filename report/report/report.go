@@ -92,8 +92,36 @@ func VerifyMatrixDigest(markdown []byte, expected string) error {
 }
 
 func BuildModel(metadata CatalogMetadata, features []Feature, manifests []Manifest, shapes []ScenarioShape, profiles, scenarios []string, evidencePaths map[string]bool, proofCoverages ...ProfileProofCoverage) (ReportModel, error) {
+	profileScenarios := make(map[string][]string, len(profiles))
+	for _, profile := range profiles {
+		profileScenarios[profile] = scenarios
+	}
+	return BuildModelForProfiles(metadata, features, manifests, shapes, profiles, scenarios, profileScenarios, evidencePaths, proofCoverages...)
+}
+
+// BuildModelForProfiles preserves the exact scenario membership declared for
+// each profile while retaining the global scenario union used by the report UI.
+func BuildModelForProfiles(metadata CatalogMetadata, features []Feature, manifests []Manifest, shapes []ScenarioShape, profiles, scenarios []string, profileScenarios map[string][]string, evidencePaths map[string]bool, proofCoverages ...ProfileProofCoverage) (ReportModel, error) {
 	model := ReportModel{GeneratedFrom: metadata.Source.Revision, Metadata: metadata, Features: features, Manifests: manifests, Scenarios: append([]string(nil), scenarios...), Verification: map[string]map[string]Verification{}}
 	profileSet, scenarioSet, featureSet := stringSet(profiles), stringSet(scenarios), map[string]bool{}
+	profileScenarioSets := make(map[string]map[string]bool, len(profiles))
+	for profile, declaredScenarios := range profileScenarios {
+		if !profileSet[profile] {
+			return model, fmt.Errorf("scenario membership declared for unknown profile %q", profile)
+		}
+		profileScenarioSets[profile] = map[string]bool{}
+		for _, scenario := range declaredScenarios {
+			if !scenarioSet[scenario] {
+				return model, fmt.Errorf("profile %q declares unknown scenario %q", profile, scenario)
+			}
+			profileScenarioSets[profile][scenario] = true
+		}
+	}
+	for _, profile := range profiles {
+		if len(profileScenarioSets[profile]) == 0 {
+			return model, fmt.Errorf("profile %q has no declared scenarios", profile)
+		}
+	}
 	for _, feature := range features {
 		if featureSet[feature.ID] {
 			return model, fmt.Errorf("duplicate feature id %q", feature.ID)
@@ -131,6 +159,9 @@ func BuildModel(metadata CatalogMetadata, features []Feature, manifests []Manife
 			for _, scenario := range claim.Scenarios {
 				if !scenarioSet[scenario] {
 					return model, fmt.Errorf("normalized proof plan %q feature %q has unknown scenario %q", coverage.Profile, claim.FeatureID, scenario)
+				}
+				if !profileScenarioSets[coverage.Profile][scenario] {
+					return model, fmt.Errorf("normalized proof plan %q feature %q has undeclared scenario %q", coverage.Profile, claim.FeatureID, scenario)
 				}
 			}
 			if err := validateEvidence(claim.Evidence, evidencePaths); err != nil {
@@ -231,6 +262,9 @@ func BuildModel(metadata CatalogMetadata, features []Feature, manifests []Manife
 		if !scenarioSet[shape.Scenario] {
 			return model, fmt.Errorf("shape has unknown scenario %q", shape.Scenario)
 		}
+		if !profileScenarioSets[shape.Profile][shape.Scenario] {
+			return model, fmt.Errorf("shape has undeclared scenario %q for profile %q", shape.Scenario, shape.Profile)
+		}
 		key := shape.Profile + "\x00" + shape.Scenario
 		if shapeIndex[key] != nil {
 			return model, fmt.Errorf("duplicate shape for %s/%s", shape.Profile, shape.Scenario)
@@ -250,7 +284,7 @@ func BuildModel(metadata CatalogMetadata, features []Feature, manifests []Manife
 			if claim, ok := coverageClaims[manifest.Profile][feature.ID]; ok {
 				claimScenarios := append([]string(nil), claim.Scenarios...)
 				if claim.AllScenarios {
-					claimScenarios = append([]string(nil), scenarios...)
+					claimScenarios = append([]string(nil), profileScenarios[manifest.Profile]...)
 				}
 				verification = Verification{
 					FeatureID: feature.ID,
@@ -266,8 +300,11 @@ func BuildModel(metadata CatalogMetadata, features []Feature, manifests []Manife
 	}
 	for _, scenario := range scenarios {
 		for _, manifest := range manifests {
-			state := manifest.BaseCoverage
-			if shapeIndex[manifest.Profile+"\x00"+scenario] != nil {
+			state := "unavailable"
+			if profileScenarioSets[manifest.Profile][scenario] {
+				state = manifest.BaseCoverage
+			}
+			if profileScenarioSets[manifest.Profile][scenario] && shapeIndex[manifest.Profile+"\x00"+scenario] != nil {
 				state = "exact_shape"
 			}
 			model.Coverage = append(model.Coverage, CoverageCell{Profile: manifest.Profile, Scenario: scenario, State: state})

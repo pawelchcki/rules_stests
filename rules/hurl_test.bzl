@@ -10,21 +10,21 @@ _SPEC_ANCHOR = Label("@realworld_api_specs//:hurl_all")
 REALWORLD_HURL_CASES = _CASES
 
 def _rootpath(label):
-    return "$(rootpath {})".format(str(label))
+    return "$(rlocationpath {})".format(str(label))
 
 def _realworld_hurl_case_test(name, case, service, otel_sink = None,
                               otel_profile = None, otel_mode = "validate",
                               otel_xfail = "", flaky = False, tags = [], **kwargs):
     spec = _SPEC_ANCHOR.same_package_label("hurl/{}.hurl".format(case))
     args = [
-        "--service-suffix=" + service,
+        "--service-suffix=" + str(service),
         "--jobs=1",
         "--hurl-rootfs=" + _rootpath(_HURL_ROOTFS),
     ]
     data = [_HURL_ROOTFS, spec]
     if otel_sink:
         args.extend([
-            "--otel-sink-suffix=" + otel_sink,
+            "--otel-sink-suffix=" + str(otel_sink),
             "--otel-mode=" + otel_mode,
             "--otel-case=" + case,
             "--otel-profile-manifest=" + _rootpath(otel_profile),
@@ -47,12 +47,20 @@ def _realworld_hurl_case_test(name, case, service, otel_sink = None,
 def realworld_hurl_test_suite(name, service, otel_sink = None,
                               otel_profile = None, otel_candidates = True,
                               otel_flaky_reason = "", otel_flaky_cases = {},
-                              otel_xfails = {}, flaky = False, tags = [], **kwargs):
+                              otel_xfails = {}, flaky = False, tags = [],
+                              cases = REALWORLD_HURL_CASES, **kwargs):
     """Creates one test per RealWorld scenario from one atomic profile label."""
     if bool(otel_sink) != bool(otel_profile):
         fail("otel_sink and the atomic otel_profile label must be supplied together")
-    unknown_xfails = [case for case in otel_xfails if case not in REALWORLD_HURL_CASES]
-    unknown_flaky = [case for case in otel_flaky_cases if case not in REALWORLD_HURL_CASES]
+    if not cases:
+        fail("cases must contain at least one RealWorld scenario")
+    unknown_cases = [case for case in cases if case not in REALWORLD_HURL_CASES]
+    if unknown_cases:
+        fail("cases contains unknown scenarios: {}".format(", ".join(sorted(unknown_cases))))
+    if len({case: True for case in cases}) != len(cases):
+        fail("cases contains duplicate scenarios")
+    unknown_xfails = [case for case in otel_xfails if case not in cases]
+    unknown_flaky = [case for case in otel_flaky_cases if case not in cases]
     if unknown_xfails:
         fail("otel_xfails contains unknown cases: {}".format(", ".join(sorted(unknown_xfails))))
     if unknown_flaky:
@@ -64,7 +72,7 @@ def realworld_hurl_test_suite(name, service, otel_sink = None,
         fail("cases cannot be both flaky and xfail: {}".format(", ".join(sorted(overlap))))
 
     tests, candidates = [], []
-    for case in REALWORLD_HURL_CASES:
+    for case in cases:
         test_name = name + "_" + case
         xfail_reason = otel_xfails.get(case, "")
         if case in otel_xfails and not xfail_reason:
@@ -95,6 +103,7 @@ def realworld_hurl_test_suite(name, service, otel_sink = None,
                 otel_sink = otel_sink,
                 otel_profile = otel_profile,
                 otel_mode = "candidate",
+                flaky = case_is_flaky,
                 tags = tags + ["manual"],
                 **kwargs
             )

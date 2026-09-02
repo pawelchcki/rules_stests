@@ -62,6 +62,40 @@ func TestBuildModelSeparatesScenarioShapeAndContractCoverage(t *testing.T) {
 	}
 }
 
+func TestBuildModelForProfilesPreservesScenarioMembership(t *testing.T) {
+	metadata, features, manifests, _, evidence := fixtureModel(t, false)
+	coverages := fixtureProfileProofCoverage(features)
+	coverages[1].Claims[0].AllScenarios = true
+	coverages[1].Claims[0].Scenarios = nil
+	profiles := []string{"go", "python"}
+	scenarios := []string{"articles", "auth"}
+	profileScenarios := map[string][]string{"go": {"articles"}, "python": {"auth"}}
+	model, err := BuildModelForProfiles(metadata, features, manifests, nil, profiles, scenarios, profileScenarios, evidence, coverages...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := model.Verification[features[0].ID]["go"].Scenarios; len(got) != 1 || got[0] != "articles" {
+		t.Fatalf("go verification scenarios = %#v", got)
+	}
+	if got := model.Verification[features[1].ID]["python"].Scenarios; len(got) != 1 || got[0] != "auth" {
+		t.Fatalf("python verification scenarios = %#v", got)
+	}
+	wantCoverage := []CoverageCell{
+		{Profile: "go", Scenario: "articles", State: "contract_only"},
+		{Profile: "python", Scenario: "articles", State: "unavailable"},
+		{Profile: "go", Scenario: "auth", State: "unavailable"},
+		{Profile: "python", Scenario: "auth", State: "contract_only"},
+	}
+	if len(model.Coverage) != len(wantCoverage) {
+		t.Fatalf("coverage = %#v", model.Coverage)
+	}
+	for index := range wantCoverage {
+		if model.Coverage[index] != wantCoverage[index] {
+			t.Fatalf("coverage[%d] = %#v, want %#v", index, model.Coverage[index], wantCoverage[index])
+		}
+	}
+}
+
 func TestBuildModelValidatesManifests(t *testing.T) {
 	metadata, features, manifests, shapes, evidence := fixtureModel(t, false)
 	manifests[0].Verifications = []Verification{{FeatureID: "unknown", State: "known_gap", Evidence: manifests[0].ProfileEvidence}}

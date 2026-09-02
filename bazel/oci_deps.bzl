@@ -42,10 +42,12 @@ def _oci_deps_impl(module_ctx):
     )
     direct_deps.extend(["otel_ruby", "otel_ruby_linux_amd64"])
 
-    return module_ctx.extension_metadata(
-        root_module_direct_deps = direct_deps,
-        root_module_direct_dev_deps = [],
-        reproducible = True,
-    )
+    if any([module.is_root for module in module_ctx.modules]):
+        return module_ctx.extension_metadata(
+            root_module_direct_deps = direct_deps,
+            root_module_direct_dev_deps = [],
+            reproducible = True,
+        )
+    return module_ctx.extension_metadata(reproducible = True)
 
 oci_deps = module_extension(implementation = _oci_deps_impl)

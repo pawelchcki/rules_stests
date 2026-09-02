@@ -1,15 +1,24 @@
 """Atomic OpenTelemetry profile and generated standard-registry rules."""
 
-OtelStandardRegistryInfo = provider(fields = ["scheme", "json"])
+load("//corpus:registry.bzl", "REALWORLD_HURL_CASES")
+
+_RULESET_REPOSITORY = Label("//:MODULE.bazel").repo_name
+
+OtelStandardRegistryInfo = provider(fields = ["scheme", "json", "matrix", "metadata"])
 
 OtelProfileInfo = provider(fields = [
     "profile_id",
+    "repository",
     "spec_path",
     "specification",
     "implementation_libraries",
     "normalized_proof_plan",
     "signals",
+    "scenarios",
     "scenario_shapes",
+    "scenario_shape_sources",
+    "registry_matrix",
+    "registry_metadata",
     "manifest",
 ])
 
@@ -32,7 +41,12 @@ def _standard_registry_impl(ctx):
     return [
         DefaultInfo(files = depset([scheme, registry_json])),
         OutputGroupInfo(scheme = depset([scheme]), registry = depset([registry_json])),
-        OtelStandardRegistryInfo(scheme = scheme, json = registry_json),
+        OtelStandardRegistryInfo(
+            scheme = scheme,
+            json = registry_json,
+            matrix = ctx.file.matrix,
+            metadata = ctx.file.metadata,
+        ),
     ]
 
 otel_standard_registry = rule(
@@ -50,15 +64,29 @@ otel_standard_registry = rule(
 
 def _profile_impl(ctx):
     registry = ctx.attr.standard_registry[OtelStandardRegistryInfo]
+    profile_repository = ctx.label.repo_name
+    if ctx.file.specification.owner.repo_name != profile_repository:
+        fail("profile specification {} must be owned by the same repository as {}".format(
+            ctx.file.specification.owner,
+            ctx.label,
+        ))
     plan = ctx.actions.declare_file(ctx.label.name + ".proof-plan.json")
     manifest = ctx.actions.declare_file(ctx.label.name + ".profile.json")
     shape_paths = {}
+    shape_sources = {}
     shape_files = []
     for target, scenario in ctx.attr.scenario_shapes.items():
         files = target.files.to_list()
         if len(files) != 1:
             fail("scenario shape %s must provide exactly one file" % target.label)
-        shape_paths[scenario] = files[0].short_path
+        if files[0].owner.repo_name != profile_repository:
+            fail("scenario shape {} for {} must be owned by the same repository as {}".format(
+                files[0].owner,
+                scenario,
+                ctx.label,
+            ))
+        shape_paths[scenario] = files[0].path
+        shape_sources[scenario] = files[0].short_path
         shape_files.append(files[0])
     core_libraries = ctx.attr.core_libraries.files.to_list()
     common = [registry.scheme] + core_libraries + ctx.files.runtime_libraries + ctx.files.implementation_libraries + [ctx.file.specification]
@@ -111,12 +139,17 @@ def _profile_impl(ctx):
         ),
         OtelProfileInfo(
             profile_id = ctx.attr.profile_id,
+            repository = ctx.label.repo_name,
             spec_path = ctx.file.specification.short_path,
             specification = ctx.file.specification,
             implementation_libraries = depset(ctx.files.implementation_libraries),
             normalized_proof_plan = plan,
             signals = tuple(ctx.attr.signals),
+            scenarios = tuple(ctx.attr.scenarios),
             scenario_shapes = shape_paths,
+            scenario_shape_sources = shape_sources,
+            registry_matrix = registry.matrix,
+            registry_metadata = registry.metadata,
             manifest = manifest,
         ),
     ]
@@ -145,21 +178,133 @@ otel_profile = rule(
     },
 )
 
+def _validate_scheme_identifier(value, field):
+    if not value:
+        fail("{} must be a non-empty Scheme identifier".format(field))
+    first = value[0]
+    if not ((first >= "a" and first <= "z") or
+            (first >= "A" and first <= "Z") or
+            first == "_"):
+        fail("{} {} is not a valid Scheme identifier".format(field, value))
+    for index in range(1, len(value)):
+        character = value[index]
+        if not ((character >= "a" and character <= "z") or
+                (character >= "A" and character <= "Z") or
+                (character >= "0" and character <= "9") or
+                character in "-+_"):
+            fail("{} {} is not a valid Scheme identifier".format(field, value))
+
+def otel_realworld_profile(
+        name,
+        specification,
+        runtime_libraries,
+        implementation_libraries,
+        signals,
+        profile_id = None,
+        scenario_shapes = {},
+        shape_root = None,
+        scenarios = REALWORLD_HURL_CASES,
+        standard_registry = Label("//corpus:otel_standard_registry"),
+        core_libraries = Label("//corpus:core_libraries"),
+        program = Label("//corpus:realworld/programs/validate_profile.scm"),
+        **kwargs):
+    """Declares a RealWorld profile and its normalized proof-plan filegroup."""
+    if shape_root and scenario_shapes:
+        fail("shape_root and scenario_shapes are mutually exclusive")
+    if not scenarios:
+        fail("scenarios must contain at least one RealWorld scenario")
+    unknown_scenarios = [scenario for scenario in scenarios if scenario not in REALWORLD_HURL_CASES]
+    if unknown_scenarios:
+        fail("scenarios contains unknown RealWorld scenarios: {}".format(", ".join(sorted(unknown_scenarios))))
+    if len({scenario: True for scenario in scenarios}) != len(scenarios):
+        fail("scenarios contains duplicate RealWorld scenarios")
+    if not signals:
+        fail("signals must contain at least traces")
+    unknown_signals = [signal for signal in signals if signal not in ["traces", "metrics", "logs"]]
+    if unknown_signals:
+        fail("signals contains unknown OTLP signals: {}".format(", ".join(sorted(unknown_signals))))
+    if len({signal: True for signal in signals}) != len(signals):
+        fail("signals contains duplicate OTLP signals")
+    if "traces" not in signals:
+        fail("signals must include traces")
+    unknown = [scenario for scenario in scenario_shapes if scenario not in scenarios]
+    if unknown:
+        fail("scenario_shapes contains unknown scenarios: {}".format(", ".join(sorted(unknown))))
+    resolved_profile_id = profile_id or name
+    _validate_scheme_identifier(resolved_profile_id, "profile_id")
+    shapes = dict(scenario_shapes)
+    if shape_root:
+        shapes = {
+            scenario: "{}/{}.scm".format(shape_root.rstrip("/"), scenario)
+            for scenario in scenarios
+        }
+    shapes_by_label = {}
+    for scenario, label in shapes.items():
+        if label in shapes_by_label:
+            fail("scenario_shapes reuses shape label {} for scenarios {} and {}".format(
+                label,
+                shapes_by_label[label],
+                scenario,
+            ))
+        shapes_by_label[label] = scenario
+    otel_profile(
+        name = name,
+        profile_id = resolved_profile_id,
+        specification = specification,
+        runtime_libraries = runtime_libraries,
+        implementation_libraries = implementation_libraries,
+        signals = signals,
+        scenarios = scenarios,
+        scenario_shapes = shapes_by_label,
+        standard_registry = standard_registry,
+        core_libraries = core_libraries,
+        program = program,
+        **kwargs
+    )
+    native.filegroup(
+        name = name + ".proof_plan",
+        srcs = [":" + name],
+        output_group = "proof_plan",
+    )
+
 def _report_manifest_impl(ctx):
     output = ctx.actions.declare_file(ctx.label.name + ".json")
     entries = []
     plans = []
+    registry_matrix = None
+    registry_metadata = None
     for target in ctx.attr.profiles:
         profile = target[OtelProfileInfo]
+        if registry_matrix == None:
+            registry_matrix = profile.registry_matrix
+            registry_metadata = profile.registry_metadata
+        elif (profile.registry_matrix.path != registry_matrix.path or
+              profile.registry_metadata.path != registry_metadata.path):
+            fail("report profiles must use one standard_registry; {} uses a different registry".format(target.label))
         plans.append(profile.normalized_proof_plan)
         entries.append({
             "id": profile.profile_id,
-            "spec": profile.spec_path,
+            "repository": "rules_stests" if _RULESET_REPOSITORY and profile.repository == _RULESET_REPOSITORY else profile.repository,
+            "spec": _repository_relative(profile.spec_path),
             "plan": profile.normalized_proof_plan.path,
+            "scenarios": list(profile.scenarios),
             "shapes": profile.scenario_shapes,
+            "shapeSources": {
+                scenario: _repository_relative(path)
+                for scenario, path in profile.scenario_shape_sources.items()
+            },
         })
+    if registry_matrix == None:
+        fail("profiles must contain at least one OpenTelemetry profile")
     ctx.actions.write(output, json.encode(entries) + "\n")
-    return [DefaultInfo(files = depset([output] + plans))]
+    return [
+        DefaultInfo(files = depset([output] + plans + [registry_matrix, registry_metadata])),
+        OutputGroupInfo(
+            report_manifest = depset([output]),
+            report_matrix = depset([registry_matrix]),
+            report_metadata = depset([registry_metadata]),
+        ),
+    ]
 
 otel_report_manifest = rule(
     implementation = _report_manifest_impl,
@@ -167,3 +312,9 @@ otel_report_manifest = rule(
         "profiles": attr.label_list(providers = [OtelProfileInfo]),
     },
 )
+
+def _repository_relative(path):
+    if path.startswith("../"):
+        parts = path.split("/")
+        return "/".join(parts[2:])
+    return path
