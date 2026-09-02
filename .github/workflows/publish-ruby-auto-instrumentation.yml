@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - oci/ruby-auto-instrumentation/**
+      - fixtures/agents/ruby-auto-instrumentation/**
       - bazel/oci_images.lock.bzl
       - tools/update_oci_lock.py
       - .github/workflows/publish-ruby-auto-instrumentation.yml
@@ -20,7 +20,7 @@ permissions:
   pull-requests: write
 
 env:
-  CONTEXT: oci/ruby-auto-instrumentation
+  CONTEXT: fixtures/agents/ruby-auto-instrumentation
   IMAGE: ghcr.io/pawelchcki/rules_stest_agents
   LOCK_NAME: otel_ruby
   REF_NAME: ruby-auto-instrumentation

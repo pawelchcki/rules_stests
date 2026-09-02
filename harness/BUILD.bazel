@@ -1,0 +1,160 @@
+load("@crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("@rules_itest//:itest.bzl", "itest_service", "service_test")
+load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
+load("//rules:oci_rootfs.bzl", "oci_rootfs")
+load("//bazel:oci_images.lock.bzl", "OTEL_RUBY_PUBLISHED")
+load("//corpus:registry.bzl", "OTEL_CORE_LIBRARIES")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_binary(
+    name = "otel_sink",
+    srcs = [
+        "otel_sink/data.rs",
+        "otel_sink/http.rs",
+        "otel_sink/main.rs",
+        "otel_sink/otlp.rs",
+        "otel_sink/otlp_json.rs",
+        "otel_sink/platform.rs",
+        "otel_sink/proto.rs",
+        "otel_sink/runtime.rs",
+        "otel_sink/scheme.rs",
+        "otel_sink/server.rs",
+        "otel_sink/stats.rs",
+        "otel_sink/storage.rs",
+        "otel_sink/trace_forest.rs",
+        "otel_sink/validation.rs",
+    ],
+    aliases = aliases(),
+    compile_data = [
+        "@stak_compiler_assets//:compiler_bytecode",
+        "@stak_compiler_assets//:prelude",
+    ],
+    edition = "2024",
+    rustc_env = {
+        "STAK_COMPILER_BYTECODE": "$(location @stak_compiler_assets//:compiler_bytecode)",
+        "STAK_PRELUDE": "$(location @stak_compiler_assets//:prelude)",
+    },
+    rustc_flags = [
+        "-Copt-level=2",
+        "-Cpanic=abort",
+        "-Clink-arg=-nostartfiles",
+    ],
+    deps = all_crate_deps(normal = True),
+)
+
+genrule(
+    name = "otel_core_bundle",
+    srcs = ["//corpus:" + path for path in OTEL_CORE_LIBRARIES],
+    outs = ["scheme/otel_core.scm"],
+    cmd = "cat $(SRCS) > $@",
+)
+
+go_library(
+    name = "otel_sink_probe_lib",
+    srcs = ["otel_sink_probe.go"],
+    embedsrcs = [":otel_core_bundle"],
+    deps = ["//report:lib"],
+    importpath = "github.com/pawelchcki/rules_stests/harness/otel_sink_probe",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "otel_sink_probe",
+    embed = [":otel_sink_probe_lib"],
+)
+
+itest_service(
+    name = "otel_sink_service",
+    args = [
+        "--port",
+        "$${PORT}",
+        "--output",
+        "$${TMPDIR}/otel-sink.json",
+    ],
+    autoassign_port = True,
+    exe = ":otel_sink",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/healthz",
+    so_reuseport_aware = True,
+    shutdown_timeout = "2s",
+)
+
+service_test(
+    name = "otel_sink_test",
+    # Capture-shape coverage deliberately compiles and executes independent
+    # failing captures so each predicate family proves its HTTP 409 contract.
+    timeout = "long",
+    args = ["--service-suffix=//harness:otel_sink_service"],
+    services = [":otel_sink_service"],
+    test = ":otel_sink_probe",
+)
+
+go_library(
+    name = "oci_bundle_lib",
+    srcs = ["oci_bundle.go"],
+    importpath = "github.com/pawelchcki/rules_stests/harness/oci_bundle",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "oci_bundle",
+    embed = [":oci_bundle_lib"],
+)
+
+go_test(
+    name = "oci_bundle_test",
+    srcs = ["oci_bundle_test.go"],
+    embed = [":oci_bundle_lib"],
+)
+
+go_library(
+    name = "api_probe_lib",
+    srcs = ["api_probe.go"],
+    importpath = "github.com/pawelchcki/rules_stests/harness/api_probe",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "api_probe",
+    embed = [":api_probe_lib"],
+)
+
+go_library(
+    name = "hurl_test_driver_lib",
+    srcs = ["hurl_test_driver.go"],
+    importpath = "github.com/pawelchcki/rules_stests/harness/hurl_test_driver",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "realworld_hurl",
+    data = [
+        ":hurl_rootfs",
+        "@realworld_api_specs//:hurl_all",
+    ],
+    embed = [":hurl_test_driver_lib"],
+)
+
+go_test(
+    name = "hurl_test_driver_test",
+    srcs = ["hurl_test_driver_test.go"],
+    embed = [":hurl_test_driver_lib"],
+)
+
+oci_rootfs(
+    name = "hurl_rootfs",
+    image = "@hurl_tool_linux_amd64",
+)
+
+oci_rootfs(
+    name = "otel_python_rootfs",
+    image = "@otel_python_linux_amd64",
+)
+
+oci_rootfs(
+    name = "otel_ruby_rootfs",
+    image = "@otel_ruby_linux_amd64",
+    single_payload = True,
+    tags = [] if OTEL_RUBY_PUBLISHED else ["manual"],
+)

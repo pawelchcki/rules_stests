@@ -35,7 +35,7 @@ oci_rootfs = rule(
         "single_payload": attr.bool(default = False),
         "_extractor": attr.label(
             cfg = "exec",
-            default = "//bazel/itest:oci_bundle",
+            default = "//harness:oci_bundle",
             executable = True,
         ),
     },

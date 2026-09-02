@@ -1,0 +1,18 @@
+(define-library (otel base)
+  (export every some find count sum third)
+  (import (scheme base))
+  (begin
+(define (every predicate values)
+  (or (null? values) (and (predicate (car values)) (every predicate (cdr values)))))
+(define (some predicate values)
+  (and (pair? values) (or (predicate (car values)) (some predicate (cdr values)))))
+(define (find predicate values)
+  (cond ((null? values) #f) ((predicate (car values)) (car values))
+        (else (find predicate (cdr values)))))
+(define (count predicate values)
+  (let loop ((remaining values) (total 0))
+    (if (null? remaining) total
+        (loop (cdr remaining) (+ total (if (predicate (car remaining)) 1 0))))))
+(define (sum values) (if (null? values) 0 (+ (car values) (sum (cdr values)))))
+(define (third values) (car (cdr (cdr values))))
+  ))

@@ -27,16 +27,6 @@ actions:
             --local_test_jobs=8 \
             --test_env=OTEL_TEST_REVISION \
             //...
-          profile_tests=(
-            //bazel/itest/apps:aiohttp_otel_hurl_test
-            //bazel/itest/apps:django_otel_hurl_test
-            //bazel/itest/apps:gin_otel_hurl_test
-          )
-          # The Ruby targets become part of the report as soon as both
-          # reproducibly published image locks replace their sentinels.
-          if ! grep -q 'tree = "unpublished"' bazel/oci_images.lock.bzl; then
-            profile_tests+=(//bazel/itest/apps:rails_otel_hurl_test)
-          fi
           OTEL_TEST_REVISION="$REPORT_REVISION" bazel test \
             --config=buildbuddy \
             --nocache_test_results \
@@ -45,7 +35,7 @@ actions:
             --build_event_json_file=otel-profile.bep.json \
             --nobuild_event_json_file_path_conversion \
             --remote_download_outputs=toplevel \
-            "${profile_tests[@]}"
+            //fixtures:otel_report_suite
           REPORT_BAZEL_CONFIG=buildbuddy \
             REPORT_REPOSITORY=pawelchcki/rules_stests \
             REPORT_REVISION="$REPORT_REVISION" \

@@ -1,9 +1,9 @@
 # rules_stests corpus
 
-This repository contains portable, real-world application fixtures for
-[`rules_itest`](https://github.com/hermeticbuild/rules_itest). The fixtures are
-SQLite-backed Python APIs. Both are published in the shared
-`ghcr.io/pawelchcki/rules_stest_apps` package under app-prefixed tags.
+This repository contains portable RealWorld fixtures and an executable
+OpenTelemetry proof corpus for [`rules_itest`](https://github.com/hermeticbuild/rules_itest).
+The reference applications cover aiohttp, Django Ninja, Gin, and Rails; their
+immutable Linux/amd64 images use app-prefixed tags.
 
 Each image is Linux/amd64, has a `FROM scratch` runtime, and contains exactly
 one non-empty, gzip-compressed OCI payload layer. The payload includes a
@@ -25,16 +25,19 @@ not need Python, uv, a virtual environment, or a container runtime.
 ## Repository structure
 
 ```text
-corpus/       standard registry, proof rules, profiles, and scenario shapes
-rules/        reusable Starlark: realworld_hurl_test_suite, oci_rootfs
-bazel/itest/  the harness: Go drivers, the Rust otel_sink, shared services
-bazel/itest/apps/  this repo's own reference services (aiohttp, Django Ninja)
+rules/       public Starlark API
+corpus/      portable executable OpenTelemetry Scheme specification
+report/      proof receipts to parity report
+harness/     Go/Rust fixture runner and OTLP capture sink
+fixtures/    reference apps, injected agents, and generated fixture targets
+bazel/       repository-wide Bazel and OCI infrastructure
+tools/       maintainer scripts
 ```
 
-`corpus/` and `rules/` carry no dependency on `bazel/itest/apps`, so an
+`corpus/` and `rules/` carry no dependency on `fixtures`, so an
 alternative OpenTelemetry implementation can run these testcases unchanged.
 Corpus filenames mirror their Scheme library names: `corpus/otel/validation.scm`
-defines `(otel validation)`, `corpus/realworld/profiles/<profile>.scm` defines
+defines `(otel validation)`, `corpus/realworld/profile/<profile>.scm` defines
 `(realworld profile <profile>)`. See [`corpus/README.md`](corpus/README.md).
 
 ## External use
@@ -53,8 +56,8 @@ load("@rules_stests_corpus//rules:hurl_test.bzl", "realworld_hurl_test_suite")
 realworld_hurl_test_suite(
     name = "my_otel",
     service = ":my_service",
-    otel_profile = "@rules_stests_corpus//corpus:go_gin_profile",
-    otel_sink = "@rules_stests_corpus//bazel/itest:otel_sink_service",
+    otel_profile = "@rules_stests_corpus//corpus:go-gin-otelbuild-v1-1-0",
+    otel_sink = "@rules_stests_corpus//harness:otel_sink_service",
 )
 ```
 
@@ -97,12 +100,12 @@ run several explicitly selected files concurrently; `--jobs` controls that
 command-line concurrency.
 
 ```bash
-bazel run //bazel/itest:realworld_hurl -- \
+bazel run //harness:realworld_hurl -- \
   --base-url=http://127.0.0.1:8000 \
   --jobs=8
 
 # Equivalent host/port form:
-bazel run //bazel/itest:realworld_hurl -- --host=127.0.0.1 --port=8000
+bazel run //harness:realworld_hurl -- --host=127.0.0.1 --port=8000
 ```
 
 Pass one or more `.hurl` paths after the flags to run a selected subset. When
@@ -191,13 +194,15 @@ The libraries deliberately separate five layers:
 - `(realworld scenarios)` is one portable workload table. Its rows record only
   HTTP method, canonical route, status, and exact observation count. Every
   implementation selects a row by the injected `scenario-name` symbol.
-- `(otel profile python-auto-v0-65b0)` holds facts shared by the current Python
+- `(otel runtime python-auto-v0-65b0)` holds facts shared by the current Python
   agent independently of the web framework. A Go or custom Python tracer can
   supply an equivalent language/runtime library without changing the workload.
 - `(realworld profile <implementation>)` preserves implementation-wide behavior:
   resource identity, instrumentation libraries and versions, attribute schemas,
   per-scenario event policy, and server-span name rendering.
-- `(otel trace-shape)` defines unordered hierarchical trace matchers, while each
+- `(otel trace-shape)` defines trace constructors, `(otel trace-shape match)`
+  performs unordered hierarchical matching, and `(otel trace-shape explain)`
+  owns stable mismatch diagnostics, while each
   `(realworld shape <implementation> <scenario>)` library pins complete trace
   topology, scope, kind, status, name, and HTTP status without volatile IDs or
   timestamps. Repeated equivalent traces and children use `repeat`.
@@ -300,18 +305,18 @@ environment variable. It preserves both the raw JSON capture and a Scheme
 candidate in Bazel's undeclared test outputs:
 
 ```bash
-bazel test //bazel/itest/apps:aiohttp_otel_hurl_test_articles_shape_candidate \
+bazel test //fixtures:aiohttp_otel_hurl_test_articles_shape_candidate \
   --nocache_test_results --test_output=streamed
 
 # Generate every candidate, safely parallelized by Bazel.
-bazel test //bazel/itest/apps:aiohttp_otel_hurl_test_shape_candidates \
-  //bazel/itest/apps:django_otel_hurl_test_shape_candidates \
+bazel test //fixtures:aiohttp_otel_hurl_test_shape_candidates \
+  //fixtures:django_otel_hurl_test_shape_candidates \
   --jobs=4 --nocache_test_results
 ```
 
 The candidate is a deterministic, importable implementation-detail library for
 inspection. Check it in under
-`corpus/realworld/shapes/<profile>/<scenario>/shape.scm`. Portable HTTP contracts stay
+`corpus/realworld/shape/<profile>/<scenario>.scm`. Portable HTTP contracts stay
 in the single shared scenario table. Normal validation targets cannot rewrite
 checked-in shapes. The driver reports HTTP wall time,
 sink-measured evaluation time, and sink process peak RSS for each validation.
@@ -319,29 +324,40 @@ Configured profile names are propagated into candidate libraries, so a new
 implementation can generate candidates before exact tests import them.
 
 ```bash
-bazel test //bazel/itest/apps:aiohttp_test
-bazel test //bazel/itest/apps:aiohttp_hurl_test
-bazel test //bazel/itest/apps:django_test
-bazel test //bazel/itest/apps:django_hurl_test
+bazel test //fixtures:aiohttp_test
+bazel test //fixtures:aiohttp_hurl_test
+bazel test //fixtures:django_test
+bazel test //fixtures:django_hurl_test
 
 # The same probes and contracts with OpenTelemetry auto-instrumentation.
-bazel test //bazel/itest:otel_sink_test
-bazel test //bazel/itest/apps:aiohttp_otel_test
-bazel test //bazel/itest/apps:aiohttp_otel_hurl_test
-bazel test //bazel/itest/apps:django_otel_test
-bazel test //bazel/itest/apps:django_otel_hurl_test
+bazel test //harness:otel_sink_test
+bazel test //fixtures:aiohttp_otel_test
+bazel test //fixtures:aiohttp_otel_hurl_test
+bazel test //fixtures:django_otel_test
+bazel test //fixtures:django_otel_hurl_test
 ```
 
 Run a fixture and keep it available for manual development with:
 
 ```bash
-bazel run //bazel/itest/apps:aiohttp_service
-bazel run //bazel/itest/apps:django_service
+bazel run //fixtures:aiohttp_service
+bazel run //fixtures:django_service
 ```
+
+## Test tiers
+
+Tests progress from cheap structure checks to externally exercised evidence:
+
+1. Go unit tests validate parsing, manifests, reporting, and harness helpers.
+2. `//harness:otel_sink_test` proves OTLP decoding and Scheme assertion behavior.
+3. Fixture smoke probes and plain Hurl shards validate each application API.
+4. `*_otel_hurl_test` shards execute exact keyed profiles and trace shapes.
+5. `//fixtures:otel_report_suite` produces the complete uncached CI receipt set.
+6. Manual candidate targets and publication-gated Ruby targets cover authoring and release workflows.
 
 ## Publication and source identity
 
-Each application has a path-filtered GitHub Actions workflow. Both workflows
+Each application has a path-filtered GitHub Actions workflow. The workflows
 publish to `ghcr.io/pawelchcki/rules_stest_apps` with two app-prefixed,
 immutable tags and no `latest` tag:
 

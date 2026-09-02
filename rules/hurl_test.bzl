@@ -1,10 +1,10 @@
 """Sharded RealWorld Hurl tests using an atomic OpenTelemetry profile."""
 
 load("@rules_itest//:itest.bzl", "service_test")
-load("//corpus:defs.bzl", _CASES = "REALWORLD_HURL_CASES")
+load("//corpus:registry.bzl", _CASES = "REALWORLD_HURL_CASES")
 
-_HURL_ROOTFS = Label("//bazel/itest:hurl_rootfs")
-_DRIVER = Label("//bazel/itest:realworld_hurl")
+_HURL_ROOTFS = Label("//harness:hurl_rootfs")
+_DRIVER = Label("//harness:realworld_hurl")
 _SPEC_ANCHOR = Label("@realworld_api_specs//:hurl_all")
 
 REALWORLD_HURL_CASES = _CASES

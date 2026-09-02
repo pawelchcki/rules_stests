@@ -32,8 +32,8 @@ register_toolchains(
 crate = use_extension("@rules_rs//rs:extensions.bzl", "crate")
 crate.from_cargo(
     name = "crates",
-    cargo_lock = "//bazel/itest:Cargo.lock",
-    cargo_toml = "//bazel/itest:Cargo.toml",
+    cargo_lock = "//harness:Cargo.lock",
+    cargo_toml = "//harness:Cargo.toml",
     platform_triples = ["x86_64-unknown-linux-gnu"],
 )
 crate.annotation(
@@ -134,7 +134,7 @@ use_repo(
     "otel_ruby_linux_amd64",
 )
 
-# Images used only by //bazel/itest/apps, this repo's own reference services.
+# Images used only by //fixtures, this repo's own reference services.
 dev_corpus_images = use_extension(
     "//bazel:oci_deps.bzl",
     "oci_deps",

@@ -1,0 +1,12 @@
+(define-library (otel contract-error)
+  (export contract-error check)
+  (import (scheme base) (scheme write))
+  (begin
+(define (contract-error message)
+  (display "[[OTLP-CONTRACT-V1:" (current-error-port))
+  (display (string-length message) (current-error-port))
+  (display "]]" (current-error-port))
+  (display message (current-error-port))
+  (error "OTLP contract sentinel"))
+(define (check condition message) (if condition #t (contract-error message)))
+  ))
