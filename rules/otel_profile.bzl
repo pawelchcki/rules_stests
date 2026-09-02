@@ -157,6 +157,22 @@ otel_profile = rule(
     },
 )
 
+def _validate_scheme_identifier(value, field):
+    if not value:
+        fail("{} must be a non-empty Scheme identifier".format(field))
+    first = value[0]
+    if not ((first >= "a" and first <= "z") or
+            (first >= "A" and first <= "Z") or
+            first == "_"):
+        fail("{} {} is not a valid Scheme identifier".format(field, value))
+    for index in range(1, len(value)):
+        character = value[index]
+        if not ((character >= "a" and character <= "z") or
+                (character >= "A" and character <= "Z") or
+                (character >= "0" and character <= "9") or
+                character in "-+_"):
+            fail("{} {} is not a valid Scheme identifier".format(field, value))
+
 def otel_realworld_profile(
         name,
         specification,
@@ -184,24 +200,32 @@ def otel_realworld_profile(
     unknown = [scenario for scenario in scenario_shapes if scenario not in scenarios]
     if unknown:
         fail("scenario_shapes contains unknown scenarios: {}".format(", ".join(sorted(unknown))))
+    resolved_profile_id = profile_id or name
+    _validate_scheme_identifier(resolved_profile_id, "profile_id")
     shapes = dict(scenario_shapes)
     if shape_root:
         shapes = {
             scenario: "{}/{}.scm".format(shape_root.rstrip("/"), scenario)
             for scenario in scenarios
         }
+    shapes_by_label = {}
+    for scenario, label in shapes.items():
+        if label in shapes_by_label:
+            fail("scenario_shapes reuses shape label {} for scenarios {} and {}".format(
+                label,
+                shapes_by_label[label],
+                scenario,
+            ))
+        shapes_by_label[label] = scenario
     otel_profile(
         name = name,
-        profile_id = profile_id or name,
+        profile_id = resolved_profile_id,
         specification = specification,
         runtime_libraries = runtime_libraries,
         implementation_libraries = implementation_libraries,
         signals = signals,
         scenarios = scenarios,
-        scenario_shapes = {
-            label: scenario
-            for scenario, label in shapes.items()
-        },
+        scenario_shapes = shapes_by_label,
         standard_registry = standard_registry,
         core_libraries = core_libraries,
         program = program,
