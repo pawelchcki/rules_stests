@@ -103,6 +103,7 @@ def realworld_hurl_test_suite(name, service, otel_sink = None,
                 otel_sink = otel_sink,
                 otel_profile = otel_profile,
                 otel_mode = "candidate",
+                flaky = case_is_flaky,
                 tags = tags + ["manual"],
                 **kwargs
             )

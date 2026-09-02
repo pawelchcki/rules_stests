@@ -4,7 +4,7 @@ load("//corpus:registry.bzl", "REALWORLD_HURL_CASES")
 
 _RULESET_REPOSITORY = Label("//:MODULE.bazel").repo_name
 
-OtelStandardRegistryInfo = provider(fields = ["scheme", "json"])
+OtelStandardRegistryInfo = provider(fields = ["scheme", "json", "matrix", "metadata"])
 
 OtelProfileInfo = provider(fields = [
     "profile_id",
@@ -17,6 +17,8 @@ OtelProfileInfo = provider(fields = [
     "scenarios",
     "scenario_shapes",
     "scenario_shape_sources",
+    "registry_matrix",
+    "registry_metadata",
     "manifest",
 ])
 
@@ -39,7 +41,12 @@ def _standard_registry_impl(ctx):
     return [
         DefaultInfo(files = depset([scheme, registry_json])),
         OutputGroupInfo(scheme = depset([scheme]), registry = depset([registry_json])),
-        OtelStandardRegistryInfo(scheme = scheme, json = registry_json),
+        OtelStandardRegistryInfo(
+            scheme = scheme,
+            json = registry_json,
+            matrix = ctx.file.matrix,
+            metadata = ctx.file.metadata,
+        ),
     ]
 
 otel_standard_registry = rule(
@@ -141,6 +148,8 @@ def _profile_impl(ctx):
             scenarios = tuple(ctx.attr.scenarios),
             scenario_shapes = shape_paths,
             scenario_shape_sources = shape_sources,
+            registry_matrix = registry.matrix,
+            registry_metadata = registry.metadata,
             manifest = manifest,
         ),
     ]
@@ -262,8 +271,16 @@ def _report_manifest_impl(ctx):
     output = ctx.actions.declare_file(ctx.label.name + ".json")
     entries = []
     plans = []
+    registry_matrix = None
+    registry_metadata = None
     for target in ctx.attr.profiles:
         profile = target[OtelProfileInfo]
+        if registry_matrix == None:
+            registry_matrix = profile.registry_matrix
+            registry_metadata = profile.registry_metadata
+        elif (profile.registry_matrix.path != registry_matrix.path or
+              profile.registry_metadata.path != registry_metadata.path):
+            fail("report profiles must use one standard_registry; {} uses a different registry".format(target.label))
         plans.append(profile.normalized_proof_plan)
         entries.append({
             "id": profile.profile_id,
@@ -277,8 +294,17 @@ def _report_manifest_impl(ctx):
                 for scenario, path in profile.scenario_shape_sources.items()
             },
         })
+    if registry_matrix == None:
+        fail("profiles must contain at least one OpenTelemetry profile")
     ctx.actions.write(output, json.encode(entries) + "\n")
-    return [DefaultInfo(files = depset([output] + plans))]
+    return [
+        DefaultInfo(files = depset([output] + plans + [registry_matrix, registry_metadata])),
+        OutputGroupInfo(
+            report_manifest = depset([output]),
+            report_matrix = depset([registry_matrix]),
+            report_metadata = depset([registry_metadata]),
+        ),
+    ]
 
 otel_report_manifest = rule(
     implementation = _report_manifest_impl,

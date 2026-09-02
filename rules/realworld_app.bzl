@@ -131,7 +131,7 @@ def realworld_app_suite(
         injection = None,
         rootfs = None,
         otel_binary = None,
-        env = {},
+        env = None,
         plain = False,
         instance = None,
         otel_candidates = True,
@@ -215,7 +215,7 @@ def realworld_app_suite(
         return
     otel_service = name + "_otel_service"
     instrumented_instance = instance or app + "-otel"
-    service_env = dict(env)
+    service_env = dict(otlp_env() if env == None else env)
     if application.runtime != "exec" and not injection and "OTEL_SERVICE_NAME" not in service_env:
         service_env["OTEL_SERVICE_NAME"] = instrumented_instance
     data = [selected_rootfs]

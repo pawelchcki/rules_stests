@@ -27,8 +27,6 @@ report_manifest="${REPORT_MANIFEST:-//fixtures:otel_report_manifest}"
 report_ruleset="${REPORT_RULESET:-}"
 report_ruleset_source_root="${REPORT_RULESET_SOURCE_ROOT:-}"
 assemble_label="${report_ruleset}//report:assemble"
-matrix_label="${report_ruleset}//report:data/spec-compliance-matrix.md"
-metadata_label="${report_ruleset}//report:data/catalog.json"
 
 if [[ -n "$report_ruleset" && ! "$report_ruleset_source_root" =~ /blob/[0-9a-f]{40}$ ]]; then
   echo "REPORT_RULESET_SOURCE_ROOT must end in /blob/<40-character-ruleset-commit> when REPORT_RULESET is set" >&2
@@ -37,14 +35,12 @@ fi
 
 bazel build "${bazel_flags[@]}" --remote_download_outputs=toplevel \
   "$report_manifest" \
-  "$assemble_label" \
-  "$matrix_label" \
-  "$metadata_label"
+  "$assemble_label"
 
 mapfile -t assemble_files < <(bazel cquery "${bazel_flags[@]}" --output=files "$assemble_label")
-mapfile -t manifest_files < <(bazel cquery "${bazel_flags[@]}" --output=files "$report_manifest")
-mapfile -t matrix_files < <(bazel cquery "${bazel_flags[@]}" --output=files "$matrix_label")
-mapfile -t metadata_files < <(bazel cquery "${bazel_flags[@]}" --output=files "$metadata_label")
+mapfile -t manifest_files < <(bazel cquery "${bazel_flags[@]}" --output=files --output_groups=report_manifest "$report_manifest")
+mapfile -t matrix_files < <(bazel cquery "${bazel_flags[@]}" --output=files --output_groups=report_matrix "$report_manifest")
+mapfile -t metadata_files < <(bazel cquery "${bazel_flags[@]}" --output=files --output_groups=report_metadata "$report_manifest")
 
 execution_root="$(bazel info "${bazel_flags[@]}" execution_root)"
 resolve_bazel_path() {
