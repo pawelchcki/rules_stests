@@ -57,6 +57,12 @@ otel_standard_registry = rule(
 
 def _profile_impl(ctx):
     registry = ctx.attr.standard_registry[OtelStandardRegistryInfo]
+    profile_repository = ctx.label.repo_name
+    if ctx.file.specification.owner.repo_name != profile_repository:
+        fail("profile specification {} must be owned by the same repository as {}".format(
+            ctx.file.specification.owner,
+            ctx.label,
+        ))
     plan = ctx.actions.declare_file(ctx.label.name + ".proof-plan.json")
     manifest = ctx.actions.declare_file(ctx.label.name + ".profile.json")
     shape_paths = {}
@@ -66,6 +72,12 @@ def _profile_impl(ctx):
         files = target.files.to_list()
         if len(files) != 1:
             fail("scenario shape %s must provide exactly one file" % target.label)
+        if files[0].owner.repo_name != profile_repository:
+            fail("scenario shape {} for {} must be owned by the same repository as {}".format(
+                files[0].owner,
+                scenario,
+                ctx.label,
+            ))
         shape_paths[scenario] = files[0].path
         shape_sources[scenario] = files[0].short_path
         shape_files.append(files[0])
