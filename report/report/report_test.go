@@ -256,3 +256,29 @@ func TestPinRepositoryRevisionRewritesReportEvidence(t *testing.T) {
 		t.Fatal("expected invalid revision to fail")
 	}
 }
+
+// TestBuildModelKeepsUnexercisedProfileWithoutVerifiedClaims covers the profile
+// whose container images are unpublished: it stays in the report with its
+// corpus data, and none of its features may reach verified.
+func TestBuildModelKeepsUnexercisedProfileWithoutVerifiedClaims(t *testing.T) {
+	metadata, features, manifests, shapes, evidence := fixtureModel(t, true)
+	manifests[0].Unexercised = true
+	coverages := fixtureProfileProofCoverage(features)
+	// The unexercised profile keeps its plan source but proves nothing.
+	coverages[0].Claims = nil
+	model, err := BuildModel(metadata, features, manifests, shapes, []string{"go", "python"}, []string{"case"}, evidence, coverages...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(model.Manifests) != 2 || !model.Manifests[0].Unexercised {
+		t.Fatal("the unexercised profile was dropped from the report")
+	}
+	for _, feature := range features {
+		if state := model.Verification[feature.ID]["go"].State; state == "verified" {
+			t.Fatalf("feature %s reached verified without a receipt", feature.ID)
+		}
+	}
+	if model.Verification[features[1].ID]["python"].State != "verified" {
+		t.Fatal("the exercised profile lost its verified claim")
+	}
+}

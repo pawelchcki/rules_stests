@@ -252,3 +252,79 @@ func CoveragesFromPlans(plans map[string]PlanArtifact, receipts []ValidationRece
 	}
 	return result
 }
+
+// PartitionExercisedProfiles splits declared profiles into those that carry at
+// least one receipt and those that carry none. A profile with a partial
+// receipt set stays in the exercised list so the strict validator still
+// rejects it; only a profile with no receipts at all is reported as
+// unexercised. Callers must keep unexercised profiles out of the coverage
+// claims, because a plan alone proves nothing.
+func PartitionExercisedProfiles(profiles []string, receipts []ValidationReceipt) ([]string, []string) {
+	withReceipts := map[string]bool{}
+	for _, receipt := range receipts {
+		withReceipts[receipt.Profile] = true
+	}
+	exercised, unexercised := []string{}, []string{}
+	for _, profile := range profiles {
+		if withReceipts[profile] {
+			exercised = append(exercised, profile)
+			continue
+		}
+		unexercised = append(unexercised, profile)
+	}
+	return exercised, unexercised
+}
+
+// CoveragesFromPlansForProfiles derives feature claims from proof plans, keeping
+// every claim scoped to the scenarios that actually produced a verified
+// receipt. A profile whose scenarios all failed, expectedly failed, or never
+// ran contributes an empty coverage entry rather than plan-shaped claims.
+func CoveragesFromPlansForProfiles(plans map[string]PlanArtifact, receipts []ValidationReceipt, profileScenarios map[string][]string) []ProfileProofCoverage {
+	verified := map[string]map[string]bool{}
+	for _, receipt := range receipts {
+		if receipt.Outcome != "verified" {
+			continue
+		}
+		if verified[receipt.Profile] == nil {
+			verified[receipt.Profile] = map[string]bool{}
+		}
+		verified[receipt.Profile][receipt.Scenario] = true
+	}
+	profiles := make([]string, 0, len(plans))
+	for profile := range plans {
+		profiles = append(profiles, profile)
+	}
+	sort.Strings(profiles)
+	result := make([]ProfileProofCoverage, 0, len(profiles))
+	for _, profile := range profiles {
+		artifact := plans[profile]
+		coverage := ProfileProofCoverage{Profile: profile, Source: artifact.Source}
+		declared := profileScenarios[profile]
+		for _, proof := range artifact.Plan.Proofs {
+			scope := proof.Scenarios
+			if len(scope) == 0 {
+				scope = declared
+			}
+			claimScenarios := make([]string, 0, len(scope))
+			for _, scenario := range scope {
+				if verified[profile][scenario] {
+					claimScenarios = append(claimScenarios, scenario)
+				}
+			}
+			if len(claimScenarios) == 0 {
+				continue
+			}
+			allScenarios := len(proof.Scenarios) == 0 && len(claimScenarios) == len(declared)
+			if allScenarios {
+				claimScenarios = nil
+			}
+			claim := FeatureClaim{FeatureID: proof.FeatureID, Basis: proof.Basis, Assertion: proof.Assertion, AllScenarios: allScenarios, Scenarios: claimScenarios, Evidence: []Evidence{artifact.Source}}
+			for index, source := range proof.Sources {
+				claim.Evidence = append(claim.Evidence, Evidence{Label: fmt.Sprintf("immutable source %d", index+1), Href: artifact.Plan.Sources[source]})
+			}
+			coverage.Claims = append(coverage.Claims, claim)
+		}
+		result = append(result, coverage)
+	}
+	return result
+}

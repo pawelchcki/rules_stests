@@ -236,22 +236,44 @@ func run(matrixPath, metadataPath, outputPath, profileList, scenarioList, revisi
 		}
 		receipts = append(receipts, receipt)
 	}
+	// Every language stays in the report even when its container images are
+	// unpublished, so the matrix never silently drops a profile. A profile
+	// with no receipts at all is validated as unexercised: its corpus data is
+	// shown and none of its features can reach verified. A partial receipt set
+	// is still a hard failure.
+	exercised, unexercised := report.PartitionExercisedProfiles(profiles, receipts)
+	unexercisedProfiles := make(map[string]bool, len(unexercised))
+	for _, profile := range unexercised {
+		unexercisedProfiles[profile] = true
+	}
 	var validationErr error
 	if profileScenarios == nil {
-		validationErr = report.ValidateReceiptSet(revision, profiles, scenarios, plans, shapeBytes, captures, receipts)
+		validationErr = report.ValidateReceiptSet(revision, exercised, scenarios, plans, shapeBytes, captures, receipts)
 	} else {
-		validationErr = report.ValidateReceiptSetForProfiles(revision, profiles, profileScenarios, plans, shapeBytes, captures, receipts)
+		exercisedScenarios := make(map[string][]string, len(exercised))
+		for _, profile := range exercised {
+			exercisedScenarios[profile] = profileScenarios[profile]
+		}
+		validationErr = report.ValidateReceiptSetForProfiles(revision, exercised, exercisedScenarios, plans, shapeBytes, captures, receipts)
 	}
 	if validationErr != nil {
 		return validationErr
+	}
+	if len(exercised) == 0 {
+		return fmt.Errorf("no profile produced receipts; the report would prove nothing")
 	}
 
 	manifests := make([]report.Manifest, 0, len(profiles))
 	for _, profile := range profiles {
 		artifact := plans[profile]
-		manifests = append(manifests, report.Manifest{SchemaVersion: 1, Profile: profile, DisplayName: artifact.Plan.DisplayName, Language: artifact.Plan.Language, Framework: artifact.Plan.Framework, InstrumentationVersion: strings.Join(artifact.Plan.Implementations, " + "), Version: report.FormatInstrumentationVersion(artifact.Plan.Implementations), ShortLabel: report.FormatProfileLabel(artifact.Plan.Language, artifact.Plan.Framework, artifact.Plan.Implementations), ProfileEvidence: []report.Evidence{artifact.Source}, BaseCoverage: "contract_only", DefaultVerification: "not_exercised"})
+		manifests = append(manifests, report.Manifest{SchemaVersion: 1, Profile: profile, DisplayName: artifact.Plan.DisplayName, Language: artifact.Plan.Language, Framework: artifact.Plan.Framework, InstrumentationVersion: strings.Join(artifact.Plan.Implementations, " + "), Version: report.FormatInstrumentationVersion(artifact.Plan.Implementations), ShortLabel: report.FormatProfileLabel(artifact.Plan.Language, artifact.Plan.Framework, artifact.Plan.Implementations), ProfileEvidence: []report.Evidence{artifact.Source}, BaseCoverage: "contract_only", DefaultVerification: "not_exercised", Unexercised: unexercisedProfiles[profile]})
 	}
-	coverages := report.CoveragesFromPlans(plans, receipts)
+	var coverages []report.ProfileProofCoverage
+	if profileScenarios == nil {
+		coverages = report.CoveragesFromPlans(plans, receipts)
+	} else {
+		coverages = report.CoveragesFromPlansForProfiles(plans, receipts, profileScenarios)
+	}
 	var model report.ReportModel
 	if profileScenarios == nil {
 		model, err = report.BuildModel(metadata, features, manifests, shapes, profiles, scenarios, evidencePaths, coverages...)

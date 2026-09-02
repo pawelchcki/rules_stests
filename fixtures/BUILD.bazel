@@ -63,11 +63,16 @@ realworld_app_suite(
     profile = "//corpus:go-gin-otelbuild-v1-1-0",
 )
 
+# Every language stays in the report regardless of image publication. A profile
+# whose images are unpublished contributes no receipts, so report assembly marks
+# it unexercised: its checked-in shapes and upstream claims are shown and none
+# of its features can reach verified.
 _REPORT_PROFILES = [
     "//corpus:go-gin-otelbuild-v1-1-0",
     "//corpus:python-aiohttp-auto-v0-65b0",
     "//corpus:python-django-auto-v0-65b0",
-] + (["//corpus:ruby-rails-auto-v0-1-0"] if RUBY_IMAGES_PUBLISHED else [])
+    "//corpus:ruby-rails-auto-v0-1-0",
+]
 
 test_suite(
     name = "otel_report_suite",

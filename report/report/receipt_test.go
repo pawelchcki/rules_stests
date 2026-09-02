@@ -158,3 +158,69 @@ func TestDecodeReceiptRejectsMalformedSchema(t *testing.T) {
 		t.Fatal("unknown field accepted")
 	}
 }
+
+func TestPartitionExercisedProfilesSeparatesProfilesWithoutReceipts(t *testing.T) {
+	_, _, _, _, _, _, receipt := receiptFixture()
+	exercised, unexercised := PartitionExercisedProfiles([]string{"go", "python", "ruby"}, []ValidationReceipt{receipt})
+	if len(exercised) != 1 || exercised[0] != "python" {
+		t.Fatalf("unexpected exercised profiles %v", exercised)
+	}
+	if len(unexercised) != 2 || unexercised[0] != "go" || unexercised[1] != "ruby" {
+		t.Fatalf("unexpected unexercised profiles %v", unexercised)
+	}
+	// A profile with a partial receipt set must stay exercised so the strict
+	// validator still rejects the missing scenario.
+	partial, missing := PartitionExercisedProfiles([]string{"python"}, []ValidationReceipt{receipt})
+	if len(partial) != 1 || len(missing) != 0 {
+		t.Fatalf("a partial receipt set must not be treated as unexercised: %v %v", partial, missing)
+	}
+	if err := ValidateReceiptSetForProfiles(strings.Repeat("a", 40), partial, map[string][]string{"python": {"articles", "auth"}}, map[string]PlanArtifact{}, nil, nil, []ValidationReceipt{receipt}); err == nil {
+		t.Fatal("a partial receipt set must remain a validation failure")
+	}
+}
+
+func TestCoveragesFromPlansForProfilesWithheldWithoutReceipts(t *testing.T) {
+	revision, _, _, plans, shapes, captures, receipt := receiptFixture()
+	profileScenarios := map[string][]string{"python": {"articles"}}
+
+	// With a verified receipt the planned proof becomes a claim over every
+	// declared scenario.
+	coverages := CoveragesFromPlansForProfiles(plans, []ValidationReceipt{receipt}, profileScenarios)
+	if len(coverages) != 1 || len(coverages[0].Claims) != 1 || !coverages[0].Claims[0].AllScenarios {
+		t.Fatalf("verified receipt did not produce an all-scenario claim: %#v", coverages)
+	}
+	if err := ValidateReceiptSetForProfiles(revision, []string{"python"}, profileScenarios, plans, shapes, captures, []ValidationReceipt{receipt}); err != nil {
+		t.Fatal(err)
+	}
+
+	// With no receipts at all the plan proves nothing, so the profile keeps its
+	// coverage entry but contributes no claims.
+	empty := CoveragesFromPlansForProfiles(plans, nil, profileScenarios)
+	if len(empty) != 1 || empty[0].Profile != "python" {
+		t.Fatalf("an unexercised profile must keep its coverage entry: %#v", empty)
+	}
+	if len(empty[0].Claims) != 0 {
+		t.Fatalf("a plan without receipts must prove nothing, got %#v", empty[0].Claims)
+	}
+
+	// A scenario that only expectedly failed cannot carry the claim either.
+	xfail := receipt
+	xfail.Outcome, xfail.XFailReason, xfail.Proofs = "xfail", "issue #1", nil
+	if claims := CoveragesFromPlansForProfiles(plans, []ValidationReceipt{xfail}, profileScenarios); len(claims[0].Claims) != 0 {
+		t.Fatalf("an xfail receipt must not produce a claim: %#v", claims[0].Claims)
+	}
+}
+
+func TestCoveragesFromPlansForProfilesNarrowsPartiallyVerifiedClaims(t *testing.T) {
+	revision, _, _, plans, _, _, receipt := receiptFixture()
+	profileScenarios := map[string][]string{"python": {"articles", "auth"}}
+	xfail := ValidationReceipt{
+		SchemaVersion: 1, Revision: revision, Profile: "python", Scenario: "auth",
+		ValidationMode: "contract", Outcome: "xfail", XFailReason: "issue #123",
+	}
+	coverages := CoveragesFromPlansForProfiles(plans, []ValidationReceipt{receipt, xfail}, profileScenarios)
+	claim := coverages[0].Claims[0]
+	if claim.AllScenarios || len(claim.Scenarios) != 1 || claim.Scenarios[0] != "articles" {
+		t.Fatalf("claim was not narrowed to the verified scenario: %#v", claim)
+	}
+}

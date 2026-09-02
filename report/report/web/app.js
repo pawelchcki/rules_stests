@@ -178,6 +178,12 @@ function renderOverview() {
     const width = (count) => (100 * count / total).toFixed(1) + '%';
     const evidence = (manifest.profileEvidence || []).map((item) =>
       '<a class="evidence" href="' + esc(item.href) + '">' + esc(item.label) + '</a>').join('');
+    const unexercised = manifest.unexercised
+      ? '<div class="signals"><span class="badge state-warn" title="This profile is declared in the corpus, but its ' +
+        'container images are unpublished, so no end-to-end run produced receipts in this build. Its checked-in ' +
+        'shapes are still comparable; none of its features can reach verified.">' +
+        '<span class="icon" aria-hidden="true">○</span>not exercised in this build</span></div>'
+      : '';
     return '<article class="card"><h3>' + esc(manifest.displayName) + '</h3>' +
       '<div class="version">' + esc(manifest.shortLabel || (manifest.language + ' / ' + manifest.framework)) + '</div>' +
       '<div class="version">' + esc(manifest.version || manifest.instrumentationVersion) + '</div>' +
@@ -189,6 +195,7 @@ function renderOverview() {
       '<div class="bar-key"><span>' + coverage.exact_shape + ' exact shape</span>' +
         '<span>' + coverage.contract_only + ' contract only</span>' +
         '<span>' + coverage.unavailable + ' unavailable</span></div>' +
+      unexercised +
       '<div class="signals">' + badge('verification', 'verified') +
         '<span class="pill">' + verification.verified + ' verified claims</span></div>' +
       evidence + '</article>';
@@ -217,7 +224,8 @@ function otherProfileWithShape(profile, scenario) {
 
 function renderCoverageGrid() {
   const header = '<thead><tr><th>Scenario</th>' + data.manifests.map((m) =>
-    '<th>' + esc(m.displayName) + '<br><small>' + esc(m.shortLabel || '') + '</small></th>').join('') +
+    '<th>' + esc(m.displayName) + '<br><small>' + esc(m.shortLabel || '') +
+    (m.unexercised ? ' · not exercised' : '') + '</small></th>').join('') +
     '<th class="numeric">Exact</th></tr></thead>';
   const rows = data.scenarios.map((scenario) => {
     let exact = 0;
@@ -554,7 +562,11 @@ function renderGlossary() {
   const trust = '<div><h3>The trust rule</h3><p class="muted">A feature reaches <em>verified</em> only when a ' +
     'receipt from the current repository revision matches the assembled proof plan, capture, and scenario ' +
     'shape digests. Manifests cannot declare a feature verified by hand, and an expected failure never ' +
-    'produces one.</p></div>';
+    'produces one.</p>' +
+    '<h3>Not exercised in this build</h3><p class="muted">Every language stays in this report even when its ' +
+    'container images are unpublished, so the matrix never silently drops an implementation. Such a profile ' +
+    'contributes no receipts: its checked-in shapes stay comparable and its upstream claims stay visible, ' +
+    'but a proof plan alone proves nothing, so none of its features can reach verified.</p></div>';
   $('glossary-body').innerHTML = sections + trust;
 }
 
@@ -590,7 +602,8 @@ function applyHash() {
 
 function setup() {
   const options = data.manifests.map((m) =>
-    '<option value="' + esc(m.profile) + '">' + esc(m.displayName) + (m.shortLabel ? ' — ' + esc(m.shortLabel) : '') + '</option>').join('');
+    '<option value="' + esc(m.profile) + '">' + esc(m.displayName) + (m.shortLabel ? ' — ' + esc(m.shortLabel) : '') +
+    (m.unexercised ? ' (not exercised)' : '') + '</option>').join('');
   $('left').innerHTML = options;
   $('right').innerHTML = options;
   $('left').value = data.manifests[0].profile;

@@ -83,18 +83,23 @@ type NormalizedProfilePlan struct {
 }
 
 type Manifest struct {
-	SchemaVersion          int            `json:"schemaVersion"`
-	Profile                string         `json:"profile"`
-	DisplayName            string         `json:"displayName"`
-	Language               string         `json:"language"`
-	Framework              string         `json:"framework"`
-	InstrumentationVersion string         `json:"instrumentationVersion"`
-	Version                string         `json:"version,omitempty"`
-	ShortLabel             string         `json:"shortLabel,omitempty"`
-	ProfileEvidence        []Evidence     `json:"profileEvidence"`
-	BaseCoverage           string         `json:"baseCoverage"`
-	DefaultVerification    string         `json:"defaultVerification"`
-	Verifications          []Verification `json:"verifications"`
+	SchemaVersion          int    `json:"schemaVersion"`
+	Profile                string `json:"profile"`
+	DisplayName            string `json:"displayName"`
+	Language               string `json:"language"`
+	Framework              string `json:"framework"`
+	InstrumentationVersion string `json:"instrumentationVersion"`
+	Version                string `json:"version,omitempty"`
+	ShortLabel             string `json:"shortLabel,omitempty"`
+	// Unexercised marks a profile that is declared in the corpus but produced
+	// no receipts in this build, usually because its container images are not
+	// published. Its corpus data is shown; none of its features can be
+	// verified.
+	Unexercised         bool           `json:"unexercised,omitempty"`
+	ProfileEvidence     []Evidence     `json:"profileEvidence"`
+	BaseCoverage        string         `json:"baseCoverage"`
+	DefaultVerification string         `json:"defaultVerification"`
+	Verifications       []Verification `json:"verifications"`
 }
 
 type ScenarioShape struct {

@@ -68,3 +68,7 @@ postgres-data/
 # Container tooling
 .buildx-cache/
 .podman/
+
+# Local report assembly artifacts.
+otel-profile.bep.json
+feature-parity-report.html
