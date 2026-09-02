@@ -73,7 +73,7 @@ REPORT_REVISION="${revision}" \
 REPORT_REPOSITORY=owner/repository \
 REPORT_MANIFEST=//:otel_report_manifest \
 REPORT_RULESET=@rules_stests \
-REPORT_RULESET_SOURCE_ROOT=https://github.com/pawelchcki/rules_stests/blob/<rules_stests-commit> \
+REPORT_RULESET_SOURCE_ROOT="https://github.com/pawelchcki/rules_stests/blob/<rules_stests-commit>" \
 bazel run @rules_stests//tools:assemble_otel_report
 ```
 
