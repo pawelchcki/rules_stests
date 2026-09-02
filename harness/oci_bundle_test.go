@@ -84,42 +84,120 @@ func TestRemoveDanglingSymlinksPreservesReadOnlyEmptyTarget(t *testing.T) {
 	}
 }
 
-func TestRubyActivationHookRejectsAbsentAndAmbiguousHooks(t *testing.T) {
-	root := t.TempDir()
-	if _, _, err := rubyActivationHook(root); err == nil || !strings.Contains(err.Error(), "got 0") {
-		t.Fatalf("absent hook error = %v", err)
-	}
-	for _, directory := range []string{"one", "two"} {
-		path := filepath.Join(root, directory)
-		if err := os.MkdirAll(filepath.Join(path, "gems"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(path, "activation.rb"), nil, 0o444); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, _, err := rubyActivationHook(root); err == nil || !strings.Contains(err.Error(), "got 2") {
-		t.Fatalf("ambiguous hook error = %v", err)
-	}
-}
-
-func TestRubyActivationHookReturnsPayloadRoot(t *testing.T) {
-	root := t.TempDir()
-	payload := filepath.Join(root, "otel-auto-instrumentation-ruby")
-	if err := os.MkdirAll(filepath.Join(payload, "gems"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	hook := filepath.Join(payload, "activation.rb")
-	if err := os.WriteFile(hook, nil, 0o444); err != nil {
-		t.Fatal(err)
-	}
-	gotHook, gotPayload, err := rubyActivationHook(root)
+func TestParseAppArgsSeparatesOptionsAndPositionals(t *testing.T) {
+	parsed, positionals, err := parseAppArgs([]string{
+		"--otel-rootfs=agent", "--env=RUBYOPT=-r{otel_rootfs}/activation.rb",
+		"instance", "rootfs", "serve", "--port", "$${PORT}",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotHook != hook || gotPayload != payload {
-		t.Fatalf("hook/payload = %q, %q", gotHook, gotPayload)
+	if parsed.otelRootfs != "agent" || len(parsed.environment) != 1 {
+		t.Fatalf("injection = %#v", parsed)
 	}
+	if got := strings.Join(positionals, "|"); got != "instance|rootfs|serve|--port|$${PORT}" {
+		t.Fatalf("positionals = %q", got)
+	}
+
+	_, positionals, err = parseAppArgs([]string{"--", "instance", "rootfs", "--command"})
+	if err != nil || strings.Join(positionals, "|") != "instance|rootfs|--command" {
+		t.Fatalf("-- positionals = %q, %v", positionals, err)
+	}
+}
+
+func TestParseAppArgsRejectsPlaceholderWithoutRootfs(t *testing.T) {
+	if _, _, err := parseAppArgs([]string{"--require={otel_rootfs}/hook", "app", "root", "serve"}); err == nil || !strings.Contains(err.Error(), "without --otel-rootfs") {
+		t.Fatalf("placeholder error = %v", err)
+	}
+}
+
+func TestApplyInjectionRequiresExistingPath(t *testing.T) {
+	_, err := applyInjection(nil, injection{require: []string{filepath.Join(t.TempDir(), "missing")}}, "", "app", false)
+	if err == nil || !strings.Contains(err.Error(), "required injection path") {
+		t.Fatalf("missing requirement error = %v", err)
+	}
+}
+
+func TestPythonExecutionAppliesPathInjectionAfterIsolation(t *testing.T) {
+	root := makePythonRoot(t)
+	otel := t.TempDir()
+	hook := filepath.Join(otel, "auto", "sitecustomize.py")
+	if err := os.MkdirAll(filepath.Dir(hook), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hook, nil, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	parsed, _, err := parseAppArgs([]string{
+		"--otel-rootfs=" + otel,
+		"--prepend-path=PYTHONPATH={otel_rootfs}/auto",
+		"--append-path=PYTHONPATH={otel_rootfs}/tail",
+		"--require={otel_rootfs}/auto/sitecustomize.py",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, resolved, err := resolveInjection(parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	execution, err := pythonAppExecution(root, parsed, resolved, "python", "serve", nil, []string{"PYTHONPATH=/host", "KEEP=value"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment := strings.Join(execution.environment, "\n")
+	want := "PYTHONPATH=" + filepath.Join(otel, "auto") + ":" + filepath.Join(root, "opt", "app", "site-packages") + ":" + filepath.Join(root, "opt", "app", "src") + ":" + filepath.Join(otel, "tail")
+	if !strings.Contains(environment, want) || strings.Contains(environment, "/host") {
+		t.Fatalf("environment =\n%s\nwant %s", environment, want)
+	}
+}
+
+func TestInjectionEnvironmentOverridesBlockedKey(t *testing.T) {
+	environment, err := applyInjection([]string{"KEEP=value"}, injection{environment: []environmentEdit{{key: "RUBYOPT", value: "-rgood"}}}, "", "ruby", false)
+	if err != nil || !strings.Contains(strings.Join(environment, "\n"), "RUBYOPT=-rgood") {
+		t.Fatalf("environment = %q, %v", environment, err)
+	}
+}
+
+func TestOtelDefaultsRequireRootfs(t *testing.T) {
+	plain, err := applyInjection(nil, injection{}, "", "plain", false)
+	if err != nil || strings.Contains(strings.Join(plain, "\n"), "OTEL_SERVICE_NAME") {
+		t.Fatalf("plain defaults = %q, %v", plain, err)
+	}
+	instrumented, err := applyInjection(nil, injection{}, t.TempDir(), "otel", false)
+	if err != nil || !strings.Contains(strings.Join(instrumented, "\n"), "OTEL_SERVICE_NAME=otel") {
+		t.Fatalf("instrumented defaults = %q, %v", instrumented, err)
+	}
+}
+
+func TestExecServiceNameDefaultPreservesExplicitValue(t *testing.T) {
+	defaulted := strings.Join(applyExecDefaults([]string{"KEEP=value"}, "gin-otel"), "\n")
+	if !strings.Contains(defaulted, "OTEL_SERVICE_NAME=gin-otel") {
+		t.Fatalf("defaulted environment = %q", defaulted)
+	}
+	explicit := strings.Join(applyExecDefaults([]string{"OTEL_SERVICE_NAME=custom"}, "gin-otel"), "\n")
+	if explicit != "OTEL_SERVICE_NAME=custom" {
+		t.Fatalf("explicit environment = %q", explicit)
+	}
+}
+
+func makePythonRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	app := filepath.Join(root, "opt", "app")
+	for _, path := range []string{
+		filepath.Join(root, "lib64", "ld-linux-x86-64.so.2"),
+		filepath.Join(app, "python", "bin", "python3"),
+		filepath.Join(app, "entrypoint.py"),
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, nil, 0o555); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
 }
 
 func TestRubyExecutionIsolatesApplicationAndAgentEnvironment(t *testing.T) {
@@ -143,7 +221,7 @@ func TestRubyExecutionIsolatesApplicationAndAgentEnvironment(t *testing.T) {
 	state := t.TempDir()
 	t.Setenv("APP_STATE_DIR", state)
 	inherited := []string{"RUBYOPT=-rbad", "GEM_HOME=/host", "BUNDLE_GEMFILE=/host/Gemfile", "KEEP=value"}
-	plain, err := rubyAppExecution(root, "", "rails", "server", []string{"--port", "1"}, inherited)
+	plain, err := rubyAppExecution(root, injection{}, "", "rails", "server", []string{"--port", "1"}, inherited)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +241,21 @@ func TestRubyExecutionIsolatesApplicationAndAgentEnvironment(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(payload, "activation.rb"), nil, 0o444); err != nil {
 		t.Fatal(err)
 	}
-	instrumented, err := rubyAppExecution(root, otel, "rails-otel", "server", nil, inherited)
+	parsed, _, err := parseAppArgs([]string{
+		"--otel-rootfs=" + otel,
+		"--env=OTEL_RUBY_ADDITIONAL_GEM_PATH={otel_rootfs}/otel-auto-instrumentation-ruby",
+		"--env=RUBYOPT=-r{otel_rootfs}/otel-auto-instrumentation-ruby/activation.rb",
+		"--require={otel_rootfs}/otel-auto-instrumentation-ruby/activation.rb",
+		"--require={otel_rootfs}/otel-auto-instrumentation-ruby/gems",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, resolved, err := resolveInjection(parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instrumented, err := rubyAppExecution(root, parsed, resolved, "rails-otel", "server", nil, inherited)
 	if err != nil {
 		t.Fatal(err)
 	}

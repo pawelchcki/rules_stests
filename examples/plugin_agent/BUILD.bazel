@@ -1,0 +1,104 @@
+load(
+    "@rules_stests//rules:defs.bzl",
+    "oci_rootfs",
+    "otel_injection",
+    "otel_realworld_profile",
+    "otel_report_manifest",
+    "otlp_env",
+    "python_auto_injection",
+    "realworld_app_suite",
+)
+
+package(default_visibility = ["//visibility:public"])
+
+_PYTHON_ENV = otlp_env(extra = {
+    "OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED": "true",
+})
+
+_EXAMPLE_SCENARIOS = ["comments"]
+
+realworld_app_suite(
+    name = "aiohttp",
+    app = "aiohttp",
+    env = _PYTHON_ENV,
+    injection = otel_injection(
+        rootfs = "@rules_stests//harness:otel_python_rootfs",
+        prepend_path = {
+            "PYTHONPATH": "{otel_rootfs}/autoinstrumentation/opentelemetry/instrumentation/auto_instrumentation",
+        },
+        append_path = {
+            "PYTHONPATH": "{otel_rootfs}/autoinstrumentation",
+        },
+        require = [
+            "{otel_rootfs}/autoinstrumentation/opentelemetry/instrumentation/auto_instrumentation/sitecustomize.py",
+        ],
+    ),
+    otel_flaky_cases = {
+        "errors_profiles": "a late startup /api/tags export can cross the trace-only reset boundary",
+    },
+    profile = "@rules_stests//corpus:python-aiohttp-auto-v0-65b0",
+)
+
+otel_realworld_profile(
+    name = "example-aiohttp-auto-v0-65b0",
+    specification = "profile/example-aiohttp-auto-v0-65b0.scm",
+    runtime_libraries = ["@rules_stests//corpus:otel/runtime/python-auto-v0-65b0.scm"],
+    implementation_libraries = [
+        "@rules_stests//corpus:otel/implementation/python-sdk-v1.44.0.scm",
+        "@rules_stests//corpus:otel/implementation/python-auto-v0.65b0.scm",
+        "@rules_stests//corpus:otel/implementation/aiohttp-v0.65b0.scm",
+    ],
+    signals = ["traces", "metrics", "logs"],
+    scenarios = _EXAMPLE_SCENARIOS,
+)
+
+realworld_app_suite(
+    name = "example",
+    app = "aiohttp",
+    env = _PYTHON_ENV,
+    injection = python_auto_injection(),
+    profile = ":example-aiohttp-auto-v0-65b0",
+    scenarios = _EXAMPLE_SCENARIOS,
+)
+
+oci_rootfs(
+    name = "gin_rootfs",
+    image = "@gin_realworld_linux_amd64",
+    single_payload = True,
+)
+
+realworld_app_suite(
+    name = "gin",
+    app = "gin",
+    env = otlp_env(
+        logs = False,
+        extra = {
+            "OTEL_RESOURCE_ATTRIBUTES": "process.owner=nonroot",
+        },
+    ),
+    otel_binary = "opt/app/bin/realworld-gin-otel",
+    # The prebuilt Gin server cannot bind with SO_REUSEPORT. rules_itest must
+    # release its reserved ephemeral port before launch, so concurrent shards
+    # can very rarely claim it first; let Bazel retry that startup-only race.
+    flaky = True,
+    profile = "@rules_stests//corpus:go-gin-otelbuild-v1-1-0",
+    rootfs = ":gin_rootfs",
+)
+
+test_suite(
+    name = "otel_report_suite",
+    tests = [
+        ":aiohttp_otel_hurl_test",
+        ":example_otel_hurl_test",
+        ":gin_otel_hurl_test",
+    ],
+)
+
+otel_report_manifest(
+    name = "otel_report_manifest",
+    profiles = [
+        "@rules_stests//corpus:python-aiohttp-auto-v0-65b0",
+        ":example-aiohttp-auto-v0-65b0",
+        "@rules_stests//corpus:go-gin-otelbuild-v1-1-0",
+    ],
+)

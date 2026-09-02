@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("@rules_itest//:itest.bzl", "itest_service", "service_test")
 load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
 load("//rules:oci_rootfs.bzl", "oci_rootfs")
-load("//bazel:oci_images.lock.bzl", "OTEL_RUBY_PUBLISHED")
+load("//bazel:oci_images.lock.bzl", "OTEL_RUBY_PUBLISHED", "RUBY_IMAGES_PUBLISHED")
 load("//corpus:registry.bzl", "OTEL_CORE_LIBRARIES")
 
 package(default_visibility = ["//visibility:public"])
@@ -145,6 +145,31 @@ go_test(
 oci_rootfs(
     name = "hurl_rootfs",
     image = "@hurl_tool_linux_amd64",
+)
+
+oci_rootfs(
+    name = "aiohttp_rootfs",
+    image = "@aiohttp_realworld_linux_amd64",
+    single_payload = True,
+)
+
+oci_rootfs(
+    name = "django_rootfs",
+    image = "@django_ninja_realworld_linux_amd64",
+    single_payload = True,
+)
+
+oci_rootfs(
+    name = "gin_rootfs",
+    image = "@gin_realworld_linux_amd64",
+    single_payload = True,
+)
+
+oci_rootfs(
+    name = "rails_rootfs",
+    image = "@rails_realworld_linux_amd64",
+    single_payload = True,
+    tags = [] if RUBY_IMAGES_PUBLISHED else ["manual"],
 )
 
 oci_rootfs(

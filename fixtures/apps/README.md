@@ -39,3 +39,17 @@ The images also work without a container runtime: extract their only non-empty
 OCI payload layer and execute `opt/app/bin/app` (`opt/app/bin/realworld-gin`
 for the Gin image). See the repository-level README for the
 `rules_oci` and `rules_itest` integration.
+
+## Publication and source identity
+
+Path-filtered workflows publish app-prefixed immutable tags to
+`ghcr.io/pawelchcki/rules_stest_apps`. `<app>-tree-<git-tree-oid>` identifies
+the exact application subtree and `<app>-v0.<workflow-run-number>` is the
+human-facing release tag; there is no `latest` tag. Each workflow also creates
+an `oci/<app>/v0.<run>` tag at a deterministic parentless commit containing
+that subtree, smoke-tests an anonymous pull, and proposes the resulting
+manifest digest lock update.
+
+Docker build images and language dependencies are pinned. Workflows disable
+attestations and normalize build timestamps; if a tree-tag image already
+exists, later releases reuse the exact manifest instead of rebuilding it.

@@ -81,25 +81,15 @@ OTEL_PROFILES = {
     ),
 }
 
-def declare_otel_profiles(otel_profile):
+def declare_otel_profiles(otel_realworld_profile):
     """Declares every registered profile and its normalized proof-plan view."""
     for profile_id, declaration in OTEL_PROFILES.items():
-        otel_profile(
+        otel_realworld_profile(
             name = profile_id,
-            profile_id = profile_id,
             specification = "realworld/profile/{}.scm".format(profile_id),
             implementation_libraries = declaration.implementations,
             runtime_libraries = [declaration.runtime],
-            scenarios = REALWORLD_HURL_CASES,
-            scenario_shapes = {
-                "realworld/shape/{}/{}.scm".format(profile_id, scenario): scenario
-                for scenario in REALWORLD_HURL_CASES
-            },
+            shape_root = "realworld/shape/{}".format(profile_id),
             signals = declaration.signals,
             standard_registry = ":otel_standard_registry",
-        )
-        native.filegroup(
-            name = profile_id + ".proof_plan",
-            srcs = [":" + profile_id],
-            output_group = "proof_plan",
         )
