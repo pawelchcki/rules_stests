@@ -1,0 +1,27 @@
+module(name = "rules_stests_example")
+
+bazel_dep(name = "rules_stests", version = "0.0.0")
+
+local_path_override(
+    module_name = "rules_stests",
+    path = "../..",
+)
+
+corpus_images = use_extension("@rules_stests//bazel:oci_deps.bzl", "oci_deps")
+use_repo(
+    corpus_images,
+    "aiohttp_realworld",
+    "aiohttp_realworld_linux_amd64",
+    "django_ninja_realworld",
+    "django_ninja_realworld_linux_amd64",
+    "gin_realworld",
+    "gin_realworld_linux_amd64",
+    "hurl_tool",
+    "hurl_tool_linux_amd64",
+    "otel_python",
+    "otel_python_linux_amd64",
+    "otel_ruby",
+    "otel_ruby_linux_amd64",
+    "rails_realworld",
+    "rails_realworld_linux_amd64",
+)

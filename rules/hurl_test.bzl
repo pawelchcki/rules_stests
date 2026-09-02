@@ -10,21 +10,21 @@ _SPEC_ANCHOR = Label("@realworld_api_specs//:hurl_all")
 REALWORLD_HURL_CASES = _CASES
 
 def _rootpath(label):
-    return "$(rootpath {})".format(str(label))
+    return "$(rlocationpath {})".format(str(label))
 
 def _realworld_hurl_case_test(name, case, service, otel_sink = None,
                               otel_profile = None, otel_mode = "validate",
                               otel_xfail = "", flaky = False, tags = [], **kwargs):
     spec = _SPEC_ANCHOR.same_package_label("hurl/{}.hurl".format(case))
     args = [
-        "--service-suffix=" + service,
+        "--service-suffix=" + str(service),
         "--jobs=1",
         "--hurl-rootfs=" + _rootpath(_HURL_ROOTFS),
     ]
     data = [_HURL_ROOTFS, spec]
     if otel_sink:
         args.extend([
-            "--otel-sink-suffix=" + otel_sink,
+            "--otel-sink-suffix=" + str(otel_sink),
             "--otel-mode=" + otel_mode,
             "--otel-case=" + case,
             "--otel-profile-manifest=" + _rootpath(otel_profile),

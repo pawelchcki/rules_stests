@@ -1,5 +1,5 @@
 load("//corpus:registry.bzl", "OTEL_CORE_LIBRARIES", "declare_otel_profiles")
-load("//rules:otel_profile.bzl", "otel_profile", "otel_standard_registry")
+load("//rules:otel_profile.bzl", "otel_realworld_profile", "otel_standard_registry")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -22,4 +22,4 @@ filegroup(
     output_group = "registry",
 )
 
-declare_otel_profiles(otel_profile)
+declare_otel_profiles(otel_realworld_profile)

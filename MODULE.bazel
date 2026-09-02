@@ -1,5 +1,5 @@
 module(
-    name = "rules_stests_corpus",
+    name = "rules_stests",
     version = "0.0.0",
 )
 
@@ -122,32 +122,21 @@ crate.annotation(
 )
 use_repo(crate, "crates")
 
-# Images used by the shared harness: external consumers get these too.
 corpus_images = use_extension("//bazel:oci_deps.bzl", "oci_deps")
 use_repo(
     corpus_images,
-    "hurl_tool",
-    "hurl_tool_linux_amd64",
-    "otel_python",
-    "otel_python_linux_amd64",
-    "otel_ruby",
-    "otel_ruby_linux_amd64",
-)
-
-# Images used only by //fixtures, this repo's own reference services.
-dev_corpus_images = use_extension(
-    "//bazel:oci_deps.bzl",
-    "oci_deps",
-    dev_dependency = True,
-)
-use_repo(
-    dev_corpus_images,
     "aiohttp_realworld",
     "aiohttp_realworld_linux_amd64",
     "django_ninja_realworld",
     "django_ninja_realworld_linux_amd64",
     "gin_realworld",
     "gin_realworld_linux_amd64",
+    "hurl_tool",
+    "hurl_tool_linux_amd64",
+    "otel_python",
+    "otel_python_linux_amd64",
+    "otel_ruby",
+    "otel_ruby_linux_amd64",
     "rails_realworld",
     "rails_realworld_linux_amd64",
 )

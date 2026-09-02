@@ -1,9 +1,12 @@
 """Atomic OpenTelemetry profile and generated standard-registry rules."""
 
+load("//corpus:registry.bzl", "REALWORLD_HURL_CASES")
+
 OtelStandardRegistryInfo = provider(fields = ["scheme", "json"])
 
 OtelProfileInfo = provider(fields = [
     "profile_id",
+    "repository",
     "spec_path",
     "specification",
     "implementation_libraries",
@@ -111,6 +114,7 @@ def _profile_impl(ctx):
         ),
         OtelProfileInfo(
             profile_id = ctx.attr.profile_id,
+            repository = ctx.label.repo_name,
             spec_path = ctx.file.specification.short_path,
             specification = ctx.file.specification,
             implementation_libraries = depset(ctx.files.implementation_libraries),
@@ -145,6 +149,55 @@ otel_profile = rule(
     },
 )
 
+def otel_realworld_profile(
+        name,
+        specification,
+        runtime_libraries,
+        implementation_libraries,
+        signals,
+        profile_id = None,
+        scenario_shapes = {},
+        shape_root = None,
+        scenarios = REALWORLD_HURL_CASES,
+        standard_registry = Label("//corpus:otel_standard_registry"),
+        core_libraries = Label("//corpus:core_libraries"),
+        program = Label("//corpus:realworld/programs/validate_profile.scm"),
+        **kwargs):
+    """Declares a RealWorld profile and its normalized proof-plan filegroup."""
+    if shape_root and scenario_shapes:
+        fail("shape_root and scenario_shapes are mutually exclusive")
+    unknown = [scenario for scenario in scenario_shapes if scenario not in scenarios]
+    if unknown:
+        fail("scenario_shapes contains unknown scenarios: {}".format(", ".join(sorted(unknown))))
+    shapes = dict(scenario_shapes)
+    if shape_root:
+        shapes = {
+            scenario: "{}/{}.scm".format(shape_root.rstrip("/"), scenario)
+            for scenario in scenarios
+        }
+    otel_profile(
+        name = name,
+        profile_id = profile_id or name,
+        specification = specification,
+        runtime_libraries = runtime_libraries,
+        implementation_libraries = implementation_libraries,
+        signals = signals,
+        scenarios = scenarios,
+        scenario_shapes = {
+            label: scenario
+            for scenario, label in shapes.items()
+        },
+        standard_registry = standard_registry,
+        core_libraries = core_libraries,
+        program = program,
+        **kwargs
+    )
+    native.filegroup(
+        name = name + ".proof_plan",
+        srcs = [":" + name],
+        output_group = "proof_plan",
+    )
+
 def _report_manifest_impl(ctx):
     output = ctx.actions.declare_file(ctx.label.name + ".json")
     entries = []
@@ -154,9 +207,13 @@ def _report_manifest_impl(ctx):
         plans.append(profile.normalized_proof_plan)
         entries.append({
             "id": profile.profile_id,
-            "spec": profile.spec_path,
+            "repository": profile.repository,
+            "spec": _repository_relative(profile.spec_path),
             "plan": profile.normalized_proof_plan.path,
-            "shapes": profile.scenario_shapes,
+            "shapes": {
+                scenario: _repository_relative(path)
+                for scenario, path in profile.scenario_shapes.items()
+            },
         })
     ctx.actions.write(output, json.encode(entries) + "\n")
     return [DefaultInfo(files = depset([output] + plans))]
@@ -167,3 +224,9 @@ otel_report_manifest = rule(
         "profiles": attr.label_list(providers = [OtelProfileInfo]),
     },
 )
+
+def _repository_relative(path):
+    if path.startswith("../"):
+        parts = path.split("/")
+        return "/".join(parts[2:])
+    return path

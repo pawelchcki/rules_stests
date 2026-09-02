@@ -22,7 +22,7 @@ func (values *repeatedFlag) String() string         { return strings.Join(*value
 func (values *repeatedFlag) Set(value string) error { *values = append(*values, value); return nil }
 
 func main() {
-	var matrixPath, metadataPath, outputPath, profileList, scenarioList, revision, bepPath, manifestPath, sourceRoot string
+	var matrixPath, metadataPath, outputPath, profileList, scenarioList, revision, bepPath, manifestPath, sourceRoot, corpusSourceRoot string
 	var planSpecs, shapeSpecs repeatedFlag
 	flag.StringVar(&matrixPath, "matrix", "", "checked-in compliance matrix")
 	flag.StringVar(&metadataPath, "metadata", "", "catalog metadata JSON")
@@ -33,11 +33,12 @@ func main() {
 	flag.StringVar(&bepPath, "bep", "", "JSON build-event file from the uncached profile run")
 	flag.StringVar(&manifestPath, "manifest", "", "corpus report manifest JSON")
 	flag.StringVar(&sourceRoot, "source-root", "", "repository source URL prefix for manifest evidence")
+	flag.StringVar(&corpusSourceRoot, "corpus-source-root", "https://github.com/pawelchcki/rules_stests/blob/main", "rules_stests source URL prefix for external manifest evidence")
 	flag.Var(&planSpecs, "plan", "profile,path,source URL (repeatable)")
 	flag.Var(&shapeSpecs, "shape", "profile,scenario,path,source URL (repeatable)")
 	flag.Parse()
 	if manifestPath != "" {
-		profiles, scenarios, plans, shapes, err := loadReportManifest(manifestPath, sourceRoot)
+		profiles, scenarios, plans, shapes, err := loadReportManifest(manifestPath, sourceRoot, corpusSourceRoot)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "assemble feature report:", err)
 			os.Exit(1)
@@ -52,13 +53,14 @@ func main() {
 }
 
 type reportManifestEntry struct {
-	ID     string            `json:"id"`
-	Spec   string            `json:"spec"`
-	Plan   string            `json:"plan"`
-	Shapes map[string]string `json:"shapes"`
+	ID         string            `json:"id"`
+	Repository string            `json:"repository"`
+	Spec       string            `json:"spec"`
+	Plan       string            `json:"plan"`
+	Shapes     map[string]string `json:"shapes"`
 }
 
-func loadReportManifest(path, sourceRoot string) ([]string, []string, []string, []string, error) {
+func loadReportManifest(path, sourceRoot, corpusSourceRoot string) ([]string, []string, []string, []string, error) {
 	if sourceRoot == "" {
 		return nil, nil, nil, nil, fmt.Errorf("--source-root is required with --manifest")
 	}
@@ -73,6 +75,7 @@ func loadReportManifest(path, sourceRoot string) ([]string, []string, []string, 
 		return nil, nil, nil, nil, fmt.Errorf("decode report manifest: %w", err)
 	}
 	root := strings.TrimSuffix(sourceRoot, "/")
+	corpusRoot := strings.TrimSuffix(corpusSourceRoot, "/")
 	profiles, plans, shapes := make([]string, 0, len(entries)), make([]string, 0, len(entries)), []string{}
 	scenarioSet, profileSet := map[string]bool{}, map[string]bool{}
 	for _, entry := range entries {
@@ -81,7 +84,14 @@ func loadReportManifest(path, sourceRoot string) ([]string, []string, []string, 
 		}
 		profileSet[entry.ID] = true
 		profiles = append(profiles, entry.ID)
-		plans = append(plans, strings.Join([]string{entry.ID, entry.Plan, root + "/" + filepath.ToSlash(entry.Spec)}, ","))
+		evidenceRoot := root
+		if entry.Repository != "" {
+			if corpusRoot == "" {
+				return nil, nil, nil, nil, fmt.Errorf("--corpus-source-root is required for profile %q from repository %q", entry.ID, entry.Repository)
+			}
+			evidenceRoot = corpusRoot
+		}
+		plans = append(plans, strings.Join([]string{entry.ID, entry.Plan, evidenceRoot + "/" + filepath.ToSlash(entry.Spec)}, ","))
 		scenarios := make([]string, 0, len(entry.Shapes))
 		for scenario := range entry.Shapes {
 			scenarios = append(scenarios, scenario)
@@ -90,7 +100,7 @@ func loadReportManifest(path, sourceRoot string) ([]string, []string, []string, 
 		sort.Strings(scenarios)
 		for _, scenario := range scenarios {
 			shapePath := filepath.ToSlash(entry.Shapes[scenario])
-			shapes = append(shapes, strings.Join([]string{entry.ID, scenario, shapePath, root + "/" + shapePath}, ","))
+			shapes = append(shapes, strings.Join([]string{entry.ID, scenario, shapePath, evidenceRoot + "/" + shapePath}, ","))
 		}
 	}
 	scenarios := make([]string, 0, len(scenarioSet))

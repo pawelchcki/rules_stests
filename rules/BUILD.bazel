@@ -1,6 +1,9 @@
 package(default_visibility = ["//visibility:public"])
 
 exports_files([
+    "defs.bzl",
     "hurl_test.bzl",
     "oci_rootfs.bzl",
+    "otel_profile.bzl",
+    "realworld_app.bzl",
 ])

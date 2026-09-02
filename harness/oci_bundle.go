@@ -60,7 +60,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: oci_bundle extract <oci-layout> <rootfs> <single|multi> | app <instance> <rootfs> <command> [arguments...] | app-otel <instance> <rootfs> <otel-rootfs> <command> [arguments...] | app-ruby <instance> <rootfs> <command> [arguments...] | app-ruby-otel <instance> <rootfs> <otel-rootfs> <command> [arguments...] | app-exec <instance> <rootfs> <relative-binary> [arguments...]")
+		return errors.New("usage: oci_bundle extract <oci-layout> <rootfs> <single|multi> | <app|app-ruby|app-exec> [injection options] <instance> <rootfs> <command> [arguments...]")
 	}
 	switch args[0] {
 	case "extract":
@@ -68,37 +68,120 @@ func run(args []string) error {
 			return errors.New("usage: oci_bundle extract <oci-layout> <rootfs> <single|multi>")
 		}
 		return extractOCI(args[1], args[2], args[3] == "single")
-	case "app":
-		if len(args) < 4 {
-			return errors.New("usage: oci_bundle app <instance> <rootfs> <command> [arguments...]")
+	case "app", "app-ruby", "app-exec":
+		injection, positionals, err := parseAppArgs(args[1:])
+		if err != nil {
+			return err
 		}
-		return runApp(args[1], args[2], "", args[3], args[4:])
-	case "app-otel":
-		if len(args) < 5 {
-			return errors.New("usage: oci_bundle app-otel <instance> <rootfs> <otel-rootfs> <command> [arguments...]")
+		if len(positionals) < 3 {
+			return fmt.Errorf("usage: oci_bundle %s [injection options] <instance> <rootfs> <command> [arguments...]", args[0])
 		}
-		return runApp(args[1], args[2], args[3], args[4], args[5:])
-	case "app-ruby":
-		if len(args) < 4 {
-			return errors.New("usage: oci_bundle app-ruby <instance> <rootfs> <command> [arguments...]")
+		switch args[0] {
+		case "app":
+			return runApp(injection, positionals[0], positionals[1], positionals[2], positionals[3:])
+		case "app-ruby":
+			return runRubyApp(injection, positionals[0], positionals[1], positionals[2], positionals[3:])
+		default:
+			return runAppExec(injection, positionals[0], positionals[1], positionals[2], positionals[3:])
 		}
-		return runRubyApp(args[1], args[2], "", args[3], args[4:])
-	case "app-ruby-otel":
-		if len(args) < 5 {
-			return errors.New("usage: oci_bundle app-ruby-otel <instance> <rootfs> <otel-rootfs> <command> [arguments...]")
-		}
-		return runRubyApp(args[1], args[2], args[3], args[4], args[5:])
-	case "app-exec":
-		if len(args) < 4 {
-			return errors.New("usage: oci_bundle app-exec <instance> <rootfs> <relative-binary> [arguments...]")
-		}
-		return runAppExec(args[1], args[2], args[3], args[4:])
 	default:
 		return fmt.Errorf("unsupported mode %q", args[0])
 	}
 }
 
-func runRubyApp(instance, rootArg, otelRootArg, command string, args []string) error {
+type environmentEdit struct {
+	key   string
+	value string
+}
+
+type injection struct {
+	otelRootfs  string
+	environment []environmentEdit
+	prependPath []environmentEdit
+	appendPath  []environmentEdit
+	require     []string
+}
+
+func parseAppArgs(args []string) (injection, []string, error) {
+	var result injection
+	for index, arg := range args {
+		if arg == "--" {
+			return validateInjection(result, args[index+1:])
+		}
+		if !strings.HasPrefix(arg, "--") {
+			return validateInjection(result, args[index:])
+		}
+		name, value, ok := strings.Cut(arg, "=")
+		if !ok || value == "" {
+			return injection{}, nil, fmt.Errorf("injection option %q requires a non-empty value after =", name)
+		}
+		switch name {
+		case "--otel-rootfs":
+			if result.otelRootfs != "" {
+				return injection{}, nil, errors.New("--otel-rootfs may be specified only once")
+			}
+			result.otelRootfs = value
+		case "--env", "--prepend-path", "--append-path":
+			key, editValue, found := strings.Cut(value, "=")
+			if !found || key == "" {
+				return injection{}, nil, fmt.Errorf("%s requires KEY=VALUE", name)
+			}
+			edit := environmentEdit{key: key, value: editValue}
+			switch name {
+			case "--env":
+				result.environment = append(result.environment, edit)
+			case "--prepend-path":
+				result.prependPath = append(result.prependPath, edit)
+			case "--append-path":
+				result.appendPath = append(result.appendPath, edit)
+			}
+		case "--require":
+			result.require = append(result.require, value)
+		default:
+			return injection{}, nil, fmt.Errorf("unknown injection option %q", name)
+		}
+	}
+	return validateInjection(result, nil)
+}
+
+func validateInjection(value injection, positionals []string) (injection, []string, error) {
+	if value.otelRootfs == "" {
+		values := append([]string{}, value.require...)
+		for _, edits := range [][]environmentEdit{value.environment, value.prependPath, value.appendPath} {
+			for _, edit := range edits {
+				values = append(values, edit.value)
+			}
+		}
+		for _, candidate := range values {
+			if strings.Contains(candidate, "{otel_rootfs}") {
+				return injection{}, nil, errors.New("{otel_rootfs} used without --otel-rootfs")
+			}
+		}
+	}
+	return value, positionals, nil
+}
+
+func resolveInjection(value injection) (injection, string, error) {
+	if value.otelRootfs == "" {
+		return value, "", nil
+	}
+	root, err := resolveDirectory(value.otelRootfs)
+	if err != nil {
+		return injection{}, "", fmt.Errorf("resolve instrumentation rootfs: %w", err)
+	}
+	replace := func(input string) string { return strings.ReplaceAll(input, "{otel_rootfs}", root) }
+	for _, edits := range [][]environmentEdit{value.environment, value.prependPath, value.appendPath} {
+		for index := range edits {
+			edits[index].value = replace(edits[index].value)
+		}
+	}
+	for index := range value.require {
+		value.require[index] = replace(value.require[index])
+	}
+	return value, root, nil
+}
+
+func runRubyApp(injection injection, instance, rootArg, command string, args []string) error {
 	if !validInstance(instance) {
 		return fmt.Errorf("unsafe instance name %q", instance)
 	}
@@ -109,14 +192,11 @@ func runRubyApp(instance, rootArg, otelRootArg, command string, args []string) e
 	if err := prepareAppState(root, instance); err != nil {
 		return err
 	}
-	otelRoot := ""
-	if otelRootArg != "" {
-		otelRoot, err = resolveDirectory(otelRootArg)
-		if err != nil {
-			return fmt.Errorf("resolve OpenTelemetry Ruby rootfs: %w", err)
-		}
+	injection, otelRoot, err := resolveInjection(injection)
+	if err != nil {
+		return err
 	}
-	return execRubyApp(root, otelRoot, instance, command, args)
+	return execRubyApp(root, injection, otelRoot, instance, command, args)
 }
 
 type rubyExecution struct {
@@ -125,7 +205,7 @@ type rubyExecution struct {
 	environment []string
 }
 
-func rubyAppExecution(root, otelRoot, instance, command string, args []string, inherited []string) (rubyExecution, error) {
+func rubyAppExecution(root string, injection injection, otelRoot, instance, command string, args []string, inherited []string) (rubyExecution, error) {
 	appRoot := filepath.Join(root, "opt", "app")
 	loader := filepath.Join(root, "lib64", "ld-linux-x86-64.so.2")
 	ruby := filepath.Join(appRoot, "ruby", "bin", "ruby")
@@ -148,12 +228,10 @@ func rubyAppExecution(root, otelRoot, instance, command string, args []string, i
 		"LD_LIBRARY_PATH": true, "OTEL_RUBY_ADDITIONAL_GEM_PATH": true, "REALWORLD_BUNDLE_ROOT": true, "RUBYLIB": true, "RUBYOPT": true,
 	}
 	environment := make([]string, 0, len(inherited)+9)
-	present := make(map[string]bool)
 	for _, entry := range inherited {
 		key, _, _ := strings.Cut(entry, "=")
 		if !blocked[key] {
 			environment = append(environment, entry)
-			present[key] = true
 		}
 	}
 	state := os.Getenv("APP_STATE_DIR")
@@ -169,62 +247,28 @@ func rubyAppExecution(root, otelRoot, instance, command string, args []string, i
 		"REALWORLD_BUNDLE_ROOT="+appRoot,
 		"RUBYLIB="+strings.Join([]string{prismLibraries[0], filepath.Join(appRoot, "ruby", "lib", "ruby", "3.3.0"), filepath.Join(appRoot, "ruby", "lib", "ruby", "3.3.0", "x86_64-linux")}, ":"),
 	)
-	if otelRoot != "" {
-		hook, gemRoot, err := rubyActivationHook(otelRoot)
-		if err != nil {
-			return rubyExecution{}, err
-		}
-		environment = append(environment,
-			"OTEL_RUBY_ADDITIONAL_GEM_PATH="+gemRoot,
-			"RUBYOPT=-r"+hook,
-		)
-		environment = appendDefaultEnvironment(environment, present, "OTEL_SERVICE_NAME", instance)
-		environment = appendDefaultEnvironment(environment, present, "OTEL_TRACES_EXPORTER", "console")
-		environment = appendDefaultEnvironment(environment, present, "OTEL_METRICS_EXPORTER", "none")
-		environment = appendDefaultEnvironment(environment, present, "OTEL_LOGS_EXPORTER", "none")
-	}
 	libraryPath := strings.Join([]string{
 		filepath.Join(root, "lib", "x86_64-linux-gnu"),
 		filepath.Join(root, "usr", "lib", "x86_64-linux-gnu"),
 		filepath.Join(appRoot, "ruby", "lib"),
 	}, ":")
 	environment = append(environment, "LD_LIBRARY_PATH="+libraryPath)
+	environment, err = applyInjection(environment, injection, otelRoot, instance, false)
+	if err != nil {
+		return rubyExecution{}, err
+	}
 	arguments := []string{loader, "--library-path", libraryPath, ruby, rails, command}
 	arguments = append(arguments, args...)
 	return rubyExecution{loader: loader, arguments: arguments, environment: environment}, nil
 }
 
-func rubyActivationHook(root string) (string, string, error) {
-	var hooks []string
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.Type().IsRegular() && entry.Name() == "activation.rb" {
-			hooks = append(hooks, path)
-		}
-		return nil
-	})
-	if err != nil {
-		return "", "", fmt.Errorf("inspect OpenTelemetry Ruby activation hook: %w", err)
-	}
-	if len(hooks) != 1 {
-		return "", "", fmt.Errorf("OpenTelemetry Ruby rootfs must contain exactly one activation.rb hook, got %d", len(hooks))
-	}
-	gemRoot := filepath.Dir(hooks[0])
-	if _, err := os.Stat(filepath.Join(gemRoot, "gems")); err != nil {
-		return "", "", fmt.Errorf("OpenTelemetry Ruby rootfs has no gem payload: %w", err)
-	}
-	return hooks[0], gemRoot, nil
-}
-
-func execRubyApp(root, otelRoot, instance, command string, args []string) error {
-	execution, err := rubyAppExecution(root, otelRoot, instance, command, args, os.Environ())
+func execRubyApp(root string, injection injection, otelRoot, instance, command string, args []string) error {
+	execution, err := rubyAppExecution(root, injection, otelRoot, instance, command, args, os.Environ())
 	if err != nil {
 		return err
 	}
 	if otelRoot != "" {
-		fmt.Fprintf(os.Stderr, "oci_bundle: activating OpenTelemetry Ruby instrumentation for %s from %s\n", instance, otelRoot)
+		fmt.Fprintf(os.Stderr, "oci_bundle: activating instrumentation for %s from %s\n", instance, otelRoot)
 	}
 	if err := syscall.Exec(execution.loader, execution.arguments, execution.environment); err != nil {
 		return fmt.Errorf("execute Rails app with bundled Ruby: %w", err)
@@ -309,7 +353,7 @@ func preserveEmptySymlinkTarget(path string, target os.FileInfo) (result error) 
 	return nil
 }
 
-func runApp(instance, rootArg, otelRootArg, command string, args []string) error {
+func runApp(injection injection, instance, rootArg, command string, args []string) error {
 	if !validInstance(instance) {
 		return fmt.Errorf("unsafe instance name %q", instance)
 	}
@@ -320,21 +364,18 @@ func runApp(instance, rootArg, otelRootArg, command string, args []string) error
 	if err := prepareAppState(root, instance); err != nil {
 		return err
 	}
-	otelRoot := ""
-	if otelRootArg != "" {
-		otelRoot, err = resolveDirectory(otelRootArg)
-		if err != nil {
-			return fmt.Errorf("resolve OpenTelemetry rootfs: %w", err)
-		}
+	injection, otelRoot, err := resolveInjection(injection)
+	if err != nil {
+		return err
 	}
-	return execApp(root, otelRoot, instance, command, args)
+	return execPythonApp(root, injection, otelRoot, instance, command, args)
 }
 
 // runAppExec launches a self-contained binary from an app image. Unlike
 // runApp it interposes no language runtime: the image supplies a static
 // executable, and the per-instance state directory becomes its working
 // directory so relative database paths stay inside the instance.
-func runAppExec(instance, rootArg, relative string, args []string) error {
+func runAppExec(injection injection, instance, rootArg, relative string, args []string) error {
 	if !validInstance(instance) {
 		return fmt.Errorf("unsafe instance name %q", instance)
 	}
@@ -359,13 +400,17 @@ func runAppExec(instance, rootArg, relative string, args []string) error {
 		return fmt.Errorf("enter app state directory: %w", err)
 	}
 
-	environment := os.Environ()
-	present := make(map[string]bool, len(environment))
-	for _, entry := range environment {
-		key, _, _ := strings.Cut(entry, "=")
-		present[key] = true
+	injection, otelRoot, err := resolveInjection(injection)
+	if err != nil {
+		return err
 	}
-	environment = appendDefaultEnvironment(environment, present, "OTEL_SERVICE_NAME", instance)
+	environment, err := applyInjection(os.Environ(), injection, otelRoot, instance, false)
+	if err != nil {
+		return err
+	}
+	if otelRoot != "" {
+		fmt.Fprintf(os.Stderr, "oci_bundle: activating instrumentation for %s from %s\n", instance, otelRoot)
+	}
 
 	if err := syscall.Exec(binary, append([]string{binary}, args...), environment); err != nil {
 		return fmt.Errorf("execute app binary %s: %w", relative, err)
@@ -392,6 +437,9 @@ func resolveDirectory(value string) (string, error) {
 	}
 	if testSrcdir := os.Getenv("TEST_SRCDIR"); testSrcdir != "" {
 		candidates = append(candidates, filepath.Join(testSrcdir, value))
+	}
+	if executable, err := os.Executable(); err == nil {
+		candidates = append(candidates, filepath.Join(executable+".runfiles", value))
 	}
 	for _, candidate := range candidates {
 		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
@@ -709,7 +757,13 @@ func applyWhiteout(root, name string) error {
 	return os.RemoveAll(target)
 }
 
-func execApp(root, otelRoot, instance, command string, args []string) error {
+type pythonExecution struct {
+	loader      string
+	arguments   []string
+	environment []string
+}
+
+func pythonAppExecution(root string, injection injection, otelRoot, instance, command string, args []string, inherited []string) (pythonExecution, error) {
 	appRoot := filepath.Join(root, "opt", "app")
 	loader := filepath.Join(root, "lib64", "ld-linux-x86-64.so.2")
 	python := filepath.Join(appRoot, "python", "bin", "python3")
@@ -722,23 +776,12 @@ func execApp(root, otelRoot, instance, command string, args []string) error {
 		filepath.Join(appRoot, "site-packages"),
 		filepath.Join(appRoot, "src"),
 	}
-	if otelRoot != "" {
-		instrumentation := filepath.Join(otelRoot, "autoinstrumentation")
-		autoInstrumentation := filepath.Join(instrumentation, "opentelemetry", "instrumentation", "auto_instrumentation")
-		if _, err := os.Stat(filepath.Join(autoInstrumentation, "sitecustomize.py")); err != nil {
-			return fmt.Errorf("OpenTelemetry OCI rootfs has no Python activation hook: %w", err)
-		}
-		pythonPath = append([]string{autoInstrumentation}, pythonPath...)
-		pythonPath = append(pythonPath, instrumentation)
-	}
 
-	environment := make([]string, 0, len(os.Environ())+7)
-	present := make(map[string]bool)
-	for _, entry := range os.Environ() {
+	environment := make([]string, 0, len(inherited)+7)
+	for _, entry := range inherited {
 		key, _, _ := strings.Cut(entry, "=")
 		if key != "PYTHONHOME" && key != "PYTHONPATH" && key != "REALWORLD_BUNDLE_ROOT" {
 			environment = append(environment, entry)
-			present[key] = true
 		}
 	}
 	environment = append(environment,
@@ -746,25 +789,96 @@ func execApp(root, otelRoot, instance, command string, args []string) error {
 		"PYTHONPATH="+strings.Join(pythonPath, ":"),
 		"REALWORLD_BUNDLE_ROOT="+appRoot,
 	)
+	django := false
+	if _, err := os.Stat(filepath.Join(appRoot, "src", "manage.py")); err == nil {
+		django = true
+	}
+	var err error
+	environment, err = applyInjection(environment, injection, otelRoot, instance, django)
+	if err != nil {
+		return pythonExecution{}, err
+	}
+	arguments := []string{loader, "--library-path", libraryPath, python, "-c", pythonBootstrap, entrypoint, command}
+	arguments = append(arguments, args...)
+	return pythonExecution{loader: loader, arguments: arguments, environment: environment}, nil
+}
+
+func execPythonApp(root string, injection injection, otelRoot, instance, command string, args []string) error {
+	execution, err := pythonAppExecution(root, injection, otelRoot, instance, command, args, os.Environ())
+	if err != nil {
+		return err
+	}
 	if otelRoot != "" {
+		fmt.Fprintf(os.Stderr, "oci_bundle: activating instrumentation for %s from %s\n", instance, otelRoot)
+	}
+	if err := syscall.Exec(execution.loader, execution.arguments, execution.environment); err != nil {
+		return fmt.Errorf("execute app with bundled glibc: %w", err)
+	}
+	return nil
+}
+
+func applyInjection(environment []string, value injection, otelRoot, instance string, django bool) ([]string, error) {
+	set := func(key, value string) {
+		prefix := key + "="
+		for index, entry := range environment {
+			if strings.HasPrefix(entry, prefix) {
+				environment[index] = prefix + value
+				return
+			}
+		}
+		environment = append(environment, prefix+value)
+	}
+	get := func(key string) string {
+		prefix := key + "="
+		for index := len(environment) - 1; index >= 0; index-- {
+			if strings.HasPrefix(environment[index], prefix) {
+				return strings.TrimPrefix(environment[index], prefix)
+			}
+		}
+		return ""
+	}
+	for _, edit := range value.prependPath {
+		current := get(edit.key)
+		if current == "" {
+			set(edit.key, edit.value)
+		} else {
+			set(edit.key, edit.value+":"+current)
+		}
+	}
+	for _, edit := range value.appendPath {
+		current := get(edit.key)
+		if current == "" {
+			set(edit.key, edit.value)
+		} else {
+			set(edit.key, current+":"+edit.value)
+		}
+	}
+	for _, edit := range value.environment {
+		set(edit.key, edit.value)
+	}
+	if otelRoot != "" {
+		present := make(map[string]bool, len(environment))
+		for _, entry := range environment {
+			key, _, _ := strings.Cut(entry, "=")
+			present[key] = true
+		}
 		environment = appendDefaultEnvironment(environment, present, "OTEL_SERVICE_NAME", instance)
 		environment = appendDefaultEnvironment(environment, present, "OTEL_TRACES_EXPORTER", "console")
 		environment = appendDefaultEnvironment(environment, present, "OTEL_METRICS_EXPORTER", "none")
 		environment = appendDefaultEnvironment(environment, present, "OTEL_LOGS_EXPORTER", "none")
-		if _, err := os.Stat(filepath.Join(appRoot, "src", "manage.py")); err == nil {
+		if django {
 			environment = appendDefaultEnvironment(environment, present, "DEBUG", "True")
 			environment = appendDefaultEnvironment(environment, present, "DJANGO_SETTINGS_MODULE", "config.settings")
 			database := filepath.Join(os.Getenv("APP_STATE_DIR"), "realworld.sqlite3")
 			environment = appendDefaultEnvironment(environment, present, "DATABASE_URL", "file:"+database)
 		}
-		fmt.Fprintf(os.Stderr, "oci_bundle: activating OpenTelemetry Python instrumentation for %s from %s\n", instance, otelRoot)
 	}
-	arguments := []string{loader, "--library-path", libraryPath, python, "-c", pythonBootstrap, entrypoint, command}
-	arguments = append(arguments, args...)
-	if err := syscall.Exec(loader, arguments, environment); err != nil {
-		return fmt.Errorf("execute app with bundled glibc: %w", err)
+	for _, path := range value.require {
+		if _, err := os.Stat(path); err != nil {
+			return nil, fmt.Errorf("required injection path %s: %w", path, err)
+		}
 	}
-	return nil
+	return environment, nil
 }
 
 func appendDefaultEnvironment(environment []string, present map[string]bool, key, value string) []string {

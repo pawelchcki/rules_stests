@@ -40,5 +40,14 @@ actions:
             REPORT_REPOSITORY=pawelchcki/rules_stests \
             REPORT_REVISION="$REPORT_REVISION" \
             tools/assemble_otel_report.sh
+          (cd examples/plugin_agent && \
+            OTEL_TEST_REVISION="$REPORT_REVISION" bazel test \
+              --config=buildbuddy \
+              --build_tests_only \
+              --local_test_jobs=8 \
+              --test_env=OTEL_TEST_REVISION \
+              //...)
+          (cd examples/plugin_agent && \
+            bazel build --config=buildbuddy //:otel_report_manifest)
           # Files written here are published as BuildBuddy workflow artifacts.
           cp feature-parity-report.html "$BUILDBUDDY_ARTIFACTS_DIRECTORY/opentelemetry-proof-report.html"
