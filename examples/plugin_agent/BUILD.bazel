@@ -77,6 +77,10 @@ realworld_app_suite(
         },
     ),
     otel_binary = "opt/app/bin/realworld-gin-otel",
+    # The prebuilt Gin server cannot bind with SO_REUSEPORT. rules_itest must
+    # release its reserved ephemeral port before launch, so concurrent shards
+    # can very rarely claim it first; let Bazel retry that startup-only race.
+    flaky = True,
     profile = "@rules_stests//corpus:go-gin-otelbuild-v1-1-0",
     rootfs = ":gin_rootfs",
 )
