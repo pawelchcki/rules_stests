@@ -94,6 +94,9 @@ func alignedSpanMatchScore(left, right alignedSpan) int {
 	if score < 0 {
 		return score
 	}
+	if left.childGroups != nil || right.childGroups != nil {
+		left.children, right.children = choosePairedCandidates(left.childGroups, right.childGroups)
+	}
 	if left.node.Status != "" && left.node.Status == right.node.Status {
 		score += 8
 	}
@@ -140,11 +143,11 @@ func formatCard(minCount, maxCount int, exact bool, altCount int) string {
 // can produce. A group without alternatives yields exactly one candidate; a
 // one-of group yields one candidate per alternative, each tagged with the
 // number of alternatives so the front end can label the choice.
-func resolveSpanGroup(group SpanGroup, opposite, oppositeDetails map[string]int) []alignedSpan {
+func resolveSpanGroup(group SpanGroup) []alignedSpan {
 	if len(group.Alternatives) > 0 {
 		var candidates []alignedSpan
 		for _, alternative := range group.Alternatives {
-			for _, candidate := range resolveSpanGroup(alternative, opposite, oppositeDetails) {
+			for _, candidate := range resolveSpanGroup(alternative) {
 				// A cardinality wrapper around a one-of holds a single
 				// alternative; keep the inner choice count in that case.
 				if len(group.Alternatives) > 1 {
@@ -169,115 +172,8 @@ func resolveSpanGroup(group SpanGroup, opposite, oppositeDetails map[string]int)
 	}
 	span.card = formatCard(minCount, maxCount, group.ExactCount, 0)
 	span.childGroups = group.Span.Children
-	span.children = chooseCandidates(group.Span.Children, opposite, oppositeDetails)
+	span.children = canonicalSpanCandidates(group.Span.Children)
 	return []alignedSpan{span}
-}
-
-// subtreeKeys collects every span key in a candidate subtree so alternative
-// selection can score candidates against the opposite side.
-func subtreeKeys(spans []alignedSpan, into map[string]int) {
-	for _, span := range spans {
-		into[span.keyString]++
-		subtreeKeys(span.children, into)
-	}
-}
-
-// subtreeDetailKeys includes the rendered fields that distinguish otherwise
-// structurally-identical alternatives, such as a status or HTTP response.
-func subtreeDetailKeys(spans []alignedSpan, into map[string]int) {
-	for _, span := range spans {
-		key := strings.Join([]string{span.keyString, span.node.Status, span.node.HTTPStatus, fmt.Sprintf("%d:%d:%t", span.minCount, span.maxCount, span.exact)}, "\x1f")
-		into[key]++
-		subtreeDetailKeys(span.children, into)
-	}
-}
-
-type spanDetail struct {
-	node   SpanNode
-	status string
-	http   string
-	count  string
-}
-
-func parseSpanDetail(key string) spanDetail {
-	parts := strings.SplitN(key, "\x1f", 4)
-	detail := spanDetail{node: spanNodeFromKey(parts[0])}
-	if len(parts) > 1 {
-		detail.status = parts[1]
-	}
-	if len(parts) > 2 {
-		detail.http = parts[2]
-	}
-	if len(parts) > 3 {
-		detail.count = parts[3]
-	}
-	return detail
-}
-
-// detailMatchScore rewards rendered details after a structural match, rather
-// than requiring the canonical key to match exactly. This lets an omitted
-// name matcher retain its wildcard behavior while still selecting the
-// alternative with the closest status, HTTP response, and cardinality.
-func detailMatchScore(leftKey, rightKey string) int {
-	left, right := parseSpanDetail(leftKey), parseSpanDetail(rightKey)
-	if spanMatchScore(left.node, right.node) < 0 {
-		return -1
-	}
-	score := 0
-	if left.status == right.status {
-		score += 4
-	}
-	if left.http == right.http {
-		score += 2
-	}
-	if left.count == right.count {
-		score++
-	}
-	return score
-}
-
-func sortedCountKeys(values map[string]int) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func consumeCompatibleDetails(details, available map[string]int) (int, map[string]int) {
-	consumed := map[string]int{}
-	total := 0
-	availableKeys := sortedCountKeys(available)
-	for _, detailKey := range sortedCountKeys(details) {
-		for remaining := details[detailKey]; remaining > 0; remaining-- {
-			bestKey, bestScore := "", 0
-			for _, oppositeKey := range availableKeys {
-				if available[oppositeKey]-consumed[oppositeKey] <= 0 {
-					continue
-				}
-				score := detailMatchScore(detailKey, oppositeKey)
-				if score > bestScore || (score == bestScore && score > 0 && (bestKey == "" || oppositeKey < bestKey)) {
-					bestKey, bestScore = oppositeKey, score
-				}
-			}
-			if bestScore == 0 {
-				break
-			}
-			consumed[bestKey]++
-			total += bestScore
-		}
-	}
-	return total, consumed
-}
-
-func spanNodeFromKey(key string) SpanNode {
-	parts := strings.SplitN(key, "\x00", 2)
-	node := SpanNode{Kind: parts[0]}
-	if len(parts) == 2 {
-		node.Name = parts[1]
-	}
-	return node
 }
 
 func canonicalSpanKey(span alignedSpan) string {
@@ -293,117 +189,81 @@ func canonicalChildrenKey(span alignedSpan) string {
 	return strings.Join(children, "\x1e")
 }
 
-// chooseCandidates jointly picks candidates for sibling groups. Each choice
-// consumes matching opposite-side keys, so two independent one-of groups do
-// not both claim the same counterpart.
-func chooseCandidates(groups []SpanGroup, opposite, oppositeDetails map[string]int) []alignedSpan {
-	choices := make([][]alignedSpan, 0, len(groups))
+func spanCandidateLists(groups []SpanGroup) [][]alignedSpan {
+	lists := [][]alignedSpan{{}}
 	for _, group := range groups {
-		candidates := resolveSpanGroup(group, opposite, oppositeDetails)
+		candidates := resolveSpanGroup(group)
 		if len(candidates) == 0 {
 			continue
 		}
-		choices = append(choices, candidates)
-	}
-	if len(choices) == 0 {
-		return nil
-	}
-	available := make(map[string]int, len(opposite))
-	for key, count := range opposite {
-		available[key] = count
-	}
-	detailAvailable := make(map[string]int, len(oppositeDetails))
-	for key, count := range oppositeDetails {
-		detailAvailable[key] = count
-	}
-	bestScore, bestKey := -1, ""
-	var best []alignedSpan
-	var search func(index, score int, key string, picked []alignedSpan)
-	search = func(index, score int, key string, picked []alignedSpan) {
-		if index == len(choices) {
-			if score > bestScore || (score == bestScore && key < bestKey) {
-				bestScore, bestKey = score, key
-				best = append([]alignedSpan(nil), picked...)
-			}
-			return
-		}
-		for _, candidate := range choices[index] {
-			keys := map[string]int{}
-			subtreeKeys([]alignedSpan{candidate}, keys)
-			details := map[string]int{}
-			subtreeDetailKeys([]alignedSpan{candidate}, details)
-			delta := 0
-			consumed := map[string]int{}
-			for candidateKey, count := range keys {
-				taken := min(count, available[candidateKey])
-				consumed[candidateKey] = taken
-				delta += taken
-				for remaining := count - taken; remaining > 0; {
-					bestKey, bestScore := "", -1
-					for oppositeKey, availableCount := range available {
-						if availableCount-consumed[oppositeKey] <= 0 {
-							continue
-						}
-						if score := spanMatchScore(spanNodeFromKey(candidateKey), spanNodeFromKey(oppositeKey)); score > bestScore {
-							bestKey, bestScore = oppositeKey, score
-						}
-					}
-					if bestScore < 0 {
-						break
-					}
-					consumed[bestKey]++
-					delta++
-					remaining--
-				}
-			}
-			if candidate.keyString != "" && available[candidate.keyString] > 0 {
-				delta += 100
-			}
-			detailDelta, detailConsumed := consumeCompatibleDetails(details, detailAvailable)
-			delta += detailDelta
-			for candidateKey := range keys {
-				available[candidateKey] -= consumed[candidateKey]
-			}
-			for candidateKey, count := range consumed {
-				if _, direct := keys[candidateKey]; !direct {
-					available[candidateKey] -= count
-				}
-			}
-			for detailKey, count := range detailConsumed {
-				detailAvailable[detailKey] -= count
-			}
-			candidateKey := canonicalSpanKey(candidate)
-			search(index+1, score+delta, key+"\x1d"+candidateKey, append(picked, candidate))
-			for key, count := range consumed {
-				available[key] += count
-			}
-			for detailKey, count := range detailConsumed {
-				detailAvailable[detailKey] += count
+		next := make([][]alignedSpan, 0, len(lists)*len(candidates))
+		for _, list := range lists {
+			for _, candidate := range candidates {
+				picked := append([]alignedSpan(nil), list...)
+				next = append(next, append(picked, candidate))
 			}
 		}
+		lists = next
 	}
-	search(0, 0, "", nil)
-	return best
+	return lists
 }
 
-func candidateKeys(groups []SpanGroup) map[string]int {
-	keys := map[string]int{}
-	for _, group := range groups {
-		for _, candidate := range resolveSpanGroup(group, nil, nil) {
-			subtreeKeys([]alignedSpan{candidate}, keys)
-		}
+func canonicalSpanListKey(spans []alignedSpan) string {
+	keys := make([]string, 0, len(spans))
+	for _, span := range spans {
+		keys = append(keys, canonicalSpanKey(span))
 	}
-	return keys
+	sort.Strings(keys)
+	return strings.Join(keys, "\x1d")
 }
 
-func candidateDetailKeys(groups []SpanGroup) map[string]int {
-	keys := map[string]int{}
-	for _, group := range groups {
-		for _, candidate := range resolveSpanGroup(group, nil, nil) {
-			subtreeDetailKeys([]alignedSpan{candidate}, keys)
+func canonicalSpanCandidates(groups []SpanGroup) []alignedSpan {
+	lists := spanCandidateLists(groups)
+	best := lists[0]
+	bestKey := canonicalSpanListKey(best)
+	for _, candidate := range lists[1:] {
+		if key := canonicalSpanListKey(candidate); key < bestKey {
+			best, bestKey = candidate, key
 		}
 	}
-	return keys
+	return append([]alignedSpan(nil), best...)
+}
+
+func pairedSpanListScore(left, right []alignedSpan) (int, int) {
+	matchedRight, _ := maximumCardinalityPairs(left, right, alignedSpanMatchScore)
+	matched, detail := 0, 0
+	for leftIndex, rightIndex := range matchedRight {
+		if rightIndex < 0 {
+			continue
+		}
+		matched++
+		detail += alignedSpanMatchScore(left[leftIndex], right[rightIndex])
+	}
+	return matched, detail
+}
+
+// choosePairedCandidates evaluates the alternatives from both sibling lists
+// together. This avoids each side selecting a candidate that exists only in
+// the other side's discarded alternatives, and lets the assignment optimizer
+// decide which concrete node a wildcard should consume.
+func choosePairedCandidates(leftGroups, rightGroups []SpanGroup) ([]alignedSpan, []alignedSpan) {
+	leftLists, rightLists := spanCandidateLists(leftGroups), spanCandidateLists(rightGroups)
+	bestMatched, bestDetail, bestKey := -1, -1, ""
+	var bestLeft, bestRight []alignedSpan
+	for _, left := range leftLists {
+		for _, right := range rightLists {
+			matched, detail := pairedSpanListScore(left, right)
+			key := canonicalSpanListKey(left) + "\x1c" + canonicalSpanListKey(right)
+			if matched > bestMatched ||
+				(matched == bestMatched && detail > bestDetail) ||
+				(matched == bestMatched && detail == bestDetail && (bestKey == "" || key < bestKey)) {
+				bestMatched, bestDetail, bestKey = matched, detail, key
+				bestLeft = append([]alignedSpan(nil), left...)
+				bestRight = append([]alignedSpan(nil), right...)
+			}
+		}
+	}
+	return bestLeft, bestRight
 }
 
 func spanRef(span alignedSpan) *SpanNode {
@@ -552,9 +412,7 @@ func resolvePairedChildren(left, right alignedSpan) ([]alignedSpan, []alignedSpa
 	if left.childGroups == nil && right.childGroups == nil {
 		return left.children, right.children
 	}
-	leftKeys, rightKeys := candidateKeys(left.childGroups), candidateKeys(right.childGroups)
-	leftDetails, rightDetails := candidateDetailKeys(left.childGroups), candidateDetailKeys(right.childGroups)
-	return chooseCandidates(left.childGroups, rightKeys, rightDetails), chooseCandidates(right.childGroups, leftKeys, leftDetails)
+	return choosePairedCandidates(left.childGroups, right.childGroups)
 }
 
 // matchSpans pairs two sibling lists and emits depth-annotated rows in a
@@ -616,15 +474,16 @@ func onlyRows(span alignedSpan, kind string, depth int, summary *AlignSummary) [
 }
 
 type resolvedTrace struct {
-	index    int
-	card     string
-	minCount int
-	maxCount int
-	exact    bool
-	altCount int
-	coverage string
-	roots    []alignedSpan
-	label    string
+	index      int
+	card       string
+	minCount   int
+	maxCount   int
+	exact      bool
+	altCount   int
+	coverage   string
+	roots      []alignedSpan
+	rootGroups []SpanGroup
+	label      string
 }
 
 func canonicalTraceKey(trace resolvedTrace) string {
@@ -636,11 +495,11 @@ func canonicalTraceKey(trace resolvedTrace) string {
 	return strings.Join([]string{trace.card, trace.coverage, strings.Join(roots, "\x1e")}, "\x1f")
 }
 
-func traceGroupCandidates(index int, group TraceGroup, opposite, oppositeDetails map[string]int) []resolvedTrace {
+func traceGroupCandidates(index int, group TraceGroup) []resolvedTrace {
 	if len(group.Alternatives) > 0 {
 		var candidates []resolvedTrace
 		for _, alternative := range group.Alternatives {
-			for _, candidate := range traceGroupCandidates(index, alternative, opposite, oppositeDetails) {
+			for _, candidate := range traceGroupCandidates(index, alternative) {
 				// A cardinality wrapper around a one-of holds a single
 				// alternative; keep the inner choice count in that case.
 				if len(group.Alternatives) > 1 {
@@ -658,116 +517,73 @@ func traceGroupCandidates(index int, group TraceGroup, opposite, oppositeDetails
 	minCount, maxCount := traceBounds(group)
 	trace := resolvedTrace{index: index, minCount: minCount, maxCount: maxCount, exact: group.ExactCount, coverage: group.Coverage}
 	trace.card = formatCard(trace.minCount, trace.maxCount, trace.exact, trace.altCount)
-	trace.roots = chooseCandidates(group.Roots, opposite, oppositeDetails)
+	trace.rootGroups = group.Roots
+	trace.roots = canonicalSpanCandidates(group.Roots)
 	if len(trace.roots) > 0 {
 		trace.label = strings.TrimSpace(trace.roots[0].node.Name)
 	}
 	return []resolvedTrace{trace}
 }
 
-// chooseTraceCandidates jointly resolves trace-level alternatives, preventing
-// one trace group from selecting a counterpart needed by a later group.
-func chooseTraceCandidates(groups []TraceGroup, opposite, oppositeDetails map[string]int) []resolvedTrace {
-	choices := make([][]resolvedTrace, 0, len(groups))
+func traceCandidateLists(groups []TraceGroup) [][]resolvedTrace {
+	lists := [][]resolvedTrace{{}}
 	for index, group := range groups {
-		choices = append(choices, traceGroupCandidates(index, group, opposite, oppositeDetails))
-	}
-	available, detailAvailable := map[string]int{}, map[string]int{}
-	for key, count := range opposite {
-		available[key] = count
-	}
-	for key, count := range oppositeDetails {
-		detailAvailable[key] = count
-	}
-	bestScore, bestKey := -1, ""
-	var best []resolvedTrace
-	var search func(int, int, string, []resolvedTrace)
-	search = func(index, score int, key string, picked []resolvedTrace) {
-		if index == len(choices) {
-			if score > bestScore || (score == bestScore && key < bestKey) {
-				bestScore, bestKey, best = score, key, append([]resolvedTrace(nil), picked...)
-			}
-			return
+		candidates := traceGroupCandidates(index, group)
+		if len(candidates) == 0 {
+			continue
 		}
-		for _, candidate := range choices[index] {
-			keys, details := map[string]int{}, map[string]int{}
-			subtreeKeys(candidate.roots, keys)
-			subtreeDetailKeys(candidate.roots, details)
-			delta, consumed := 0, map[string]int{}
-			for item, count := range keys {
-				taken := min(count, available[item])
-				consumed[item] = taken
-				delta += taken
-				for remaining := count - taken; remaining > 0; remaining-- {
-					bestKey, bestScore := "", -1
-					for oppositeKey, availableCount := range available {
-						if availableCount-consumed[oppositeKey] <= 0 {
-							continue
-						}
-						if score := spanMatchScore(spanNodeFromKey(item), spanNodeFromKey(oppositeKey)); score > bestScore {
-							bestKey, bestScore = oppositeKey, score
-						}
-					}
-					if bestScore < 0 {
-						break
-					}
-					consumed[bestKey]++
-					delta++
-				}
-			}
-			detailDelta, detailConsumed := consumeCompatibleDetails(details, detailAvailable)
-			delta += detailDelta
-			for item, count := range consumed {
-				available[item] -= count
-			}
-			for item, count := range detailConsumed {
-				detailAvailable[item] -= count
-			}
-			search(index+1, score+delta, key+"\x1d"+canonicalTraceKey(candidate), append(picked, candidate))
-			for item, count := range consumed {
-				available[item] += count
-			}
-			for item, count := range detailConsumed {
-				detailAvailable[item] += count
+		next := make([][]resolvedTrace, 0, len(lists)*len(candidates))
+		for _, list := range lists {
+			for _, candidate := range candidates {
+				picked := append([]resolvedTrace(nil), list...)
+				next = append(next, append(picked, candidate))
 			}
 		}
+		lists = next
 	}
-	search(0, 0, "", nil)
-	return best
+	return lists
 }
 
-func traceCandidateKeys(groups []TraceGroup) map[string]int {
-	keys := map[string]int{}
-	var visit func(TraceGroup)
-	visit = func(group TraceGroup) {
-		for _, alternative := range group.Alternatives {
-			visit(alternative)
-		}
-		for key, count := range candidateKeys(group.Roots) {
-			keys[key] += count
-		}
+func canonicalTraceListKey(traces []resolvedTrace) string {
+	keys := make([]string, 0, len(traces))
+	for _, trace := range traces {
+		keys = append(keys, canonicalTraceKey(trace))
 	}
-	for _, group := range groups {
-		visit(group)
-	}
-	return keys
+	sort.Strings(keys)
+	return strings.Join(keys, "\x1d")
 }
 
-func traceCandidateDetailKeys(groups []TraceGroup) map[string]int {
-	keys := map[string]int{}
-	var visit func(TraceGroup)
-	visit = func(group TraceGroup) {
-		for _, alternative := range group.Alternatives {
-			visit(alternative)
+func pairedTraceListScore(left, right []resolvedTrace) (int, int) {
+	matchedRight, _ := maximumCardinalityTracePairs(left, right)
+	matched, detail := 0, 0
+	for leftIndex, rightIndex := range matchedRight {
+		if rightIndex < 0 {
+			continue
 		}
-		for key, count := range candidateDetailKeys(group.Roots) {
-			keys[key] += count
+		matched++
+		detail += traceMatchScore(left[leftIndex], right[rightIndex])
+	}
+	return matched, detail
+}
+
+func choosePairedTraceCandidates(leftGroups, rightGroups []TraceGroup) ([]resolvedTrace, []resolvedTrace) {
+	leftLists, rightLists := traceCandidateLists(leftGroups), traceCandidateLists(rightGroups)
+	bestMatched, bestDetail, bestKey := -1, -1, ""
+	var bestLeft, bestRight []resolvedTrace
+	for _, left := range leftLists {
+		for _, right := range rightLists {
+			matched, detail := pairedTraceListScore(left, right)
+			key := canonicalTraceListKey(left) + "\x1c" + canonicalTraceListKey(right)
+			if matched > bestMatched ||
+				(matched == bestMatched && detail > bestDetail) ||
+				(matched == bestMatched && detail == bestDetail && (bestKey == "" || key < bestKey)) {
+				bestMatched, bestDetail, bestKey = matched, detail, key
+				bestLeft = append([]resolvedTrace(nil), left...)
+				bestRight = append([]resolvedTrace(nil), right...)
+			}
 		}
 	}
-	for _, group := range groups {
-		visit(group)
-	}
-	return keys
+	return bestLeft, bestRight
 }
 
 // traceMatchScore treats roots as an unordered set. It rewards each compatible
@@ -775,6 +591,9 @@ func traceCandidateDetailKeys(groups []TraceGroup) map[string]int {
 // equivalent multi-root traces remain stable when authored in a different
 // order.
 func traceMatchScore(left, right resolvedTrace) int {
+	if left.rootGroups != nil || right.rootGroups != nil {
+		left.roots, right.roots = choosePairedCandidates(left.rootGroups, right.rootGroups)
+	}
 	rootScore := func(leftRoot, rightRoot alignedSpan) int {
 		score := alignedSpanMatchScore(leftRoot, rightRoot)
 		if score < 0 {
@@ -825,10 +644,7 @@ func AlignShapes(left, right *ScenarioShape) *ShapeAlignment {
 	if left == nil || right == nil {
 		return nil
 	}
-	leftKeys, rightKeys := traceCandidateKeys(left.Traces), traceCandidateKeys(right.Traces)
-	leftDetails, rightDetails := traceCandidateDetailKeys(left.Traces), traceCandidateDetailKeys(right.Traces)
-	leftTraces := chooseTraceCandidates(left.Traces, rightKeys, rightDetails)
-	rightTraces := chooseTraceCandidates(right.Traces, leftKeys, leftDetails)
+	leftTraces, rightTraces := choosePairedTraceCandidates(left.Traces, right.Traces)
 	alignment := &ShapeAlignment{Traces: []TraceMatch{}}
 	matchedRight, usedRight := maximumCardinalityTracePairs(leftTraces, rightTraces)
 	for leftIndex, leftTrace := range leftTraces {
@@ -840,6 +656,13 @@ func AlignShapes(left, right *ScenarioShape) *ShapeAlignment {
 		}
 		usedRight[index] = true
 		rightTrace := rightTraces[index]
+		leftTrace.roots, rightTrace.roots = choosePairedCandidates(leftTrace.rootGroups, rightTrace.rootGroups)
+		if len(leftTrace.roots) > 0 {
+			leftTrace.label = strings.TrimSpace(leftTrace.roots[0].node.Name)
+		}
+		if len(rightTrace.roots) > 0 {
+			rightTrace.label = strings.TrimSpace(rightTrace.roots[0].node.Name)
+		}
 		alignment.Summary.TraceMatched++
 		match := TraceMatch{
 			Kind:  "matched",

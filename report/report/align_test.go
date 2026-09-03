@@ -257,6 +257,40 @@ func TestAlignShapesCoordinatesSiblingOneOfChoices(t *testing.T) {
 	}
 }
 
+func TestAlignShapesResolvesAlternativesJointlyAcrossBothShapes(t *testing.T) {
+	a := exactSpan("", "server", "unset", "A", "")
+	b := exactSpan("", "server", "unset", "B", "")
+	c := exactSpan("", "server", "unset", "C", "")
+	choice := func(alternatives ...SpanGroup) SpanGroup {
+		return SpanGroup{Cardinality: "one_of", MinCount: 1, MaxCount: 1, Alternatives: alternatives}
+	}
+	left := shapeOf("left", choice(a, b), c)
+	right := shapeOf("right", a, choice(b, c))
+	alignment := AlignShapes(left, right)
+	if alignment.Summary.Matched != 2 || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 {
+		t.Fatalf("alternatives were resolved independently across shapes: %#v", alignment.Summary)
+	}
+	if row := findRow(t, alignment, "C"); row.Kind != "matched" || row.Left == nil || row.Right == nil {
+		t.Fatalf("joint alternative selection did not retain C on both sides: %#v", row)
+	}
+}
+
+func TestAlignShapesExploresWildcardInventoryAssignments(t *testing.T) {
+	wildcard := exactSpan("", "server", "error", "", "")
+	a := exactSpan("", "server", "unset", "A", "")
+	z := exactSpan("", "server", "error", "Z", "")
+	c := exactSpan("", "server", "error", "C", "")
+	choice := SpanGroup{Cardinality: "one_of", MinCount: 1, MaxCount: 1, Alternatives: []SpanGroup{z, c}}
+	alignment := AlignShapes(shapeOf("left", wildcard, choice), shapeOf("right", a, z))
+	if alignment.Summary.Matched != 2 || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 {
+		t.Fatalf("wildcard inventory choice lost a later exact match: %#v", alignment.Summary)
+	}
+	row := findRow(t, alignment, "Z")
+	if row.Kind != "matched" || row.Left == nil || row.Right == nil || row.Left.Name != "Z" || row.Right.Name != "Z" {
+		t.Fatalf("wildcard consumed the exact match needed by the later choice: %#v", row)
+	}
+}
+
 func TestAlignShapesSelectsOneOfAlternativeByDetails(t *testing.T) {
 	ok := exactSpan("http", "client", "unset", "GET item", "200")
 	failed := exactSpan("http", "client", "error", "GET item", "500")
