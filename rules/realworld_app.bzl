@@ -42,7 +42,7 @@ REALWORLD_APPS = {
         binary = "opt/app/bin/realworld-gin",
         otel_binary = "opt/app/bin/realworld-gin-otel",
         command = _SERVER_ARGS,
-        so_reuseport_aware = False,
+        so_reuseport_aware = True,
         expected_start_duration = "3s",
         manual = False,
     ),
