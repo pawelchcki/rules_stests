@@ -37,6 +37,7 @@ func findRow(t *testing.T, alignment *ShapeAlignment, name string) SpanMatch {
 func TestNormalizeSpanNameCollapsesRouteParameters(t *testing.T) {
 	tests := map[string]string{
 		"GET /api/articles/<slug>":    "get api/articles/*",
+		"GET api/articles/<slug>":     "get api/articles/*",
 		"GET /api/articles/:slug":     "get api/articles/*",
 		"GET /api/articles/{slug}":    "get api/articles/*",
 		"GET /api/articles/%{slug}":   "get api/articles/*",
@@ -44,6 +45,7 @@ func TestNormalizeSpanNameCollapsesRouteParameters(t *testing.T) {
 		"SELECT  …  articles_tag":     "select … articles_tag",
 		"SELECT value::text":          "select value::text",
 		"SELECT value::integer":       "select value::integer",
+		"SELECT data/{tenant}":        "select data/{tenant}",
 		"SELECT '{\"tenant\":\"a\"}'": "select '{\"tenant\":\"a\"}'",
 	}
 	for input, want := range tests {
@@ -335,13 +337,13 @@ func TestAlignShapesChoosesWildcardAlternative(t *testing.T) {
 }
 
 func TestAlignShapesMatchesEquivalentRoutes(t *testing.T) {
-	left := shapeOf("left", exactSpan("django", "server", "unset", "GET /api/articles/<slug>", "200"))
+	left := shapeOf("left", exactSpan("django", "server", "unset", "GET api/articles/<slug>", "200"))
 	right := shapeOf("right", exactSpan("aiohttp", "server", "unset", "GET /api/articles/:slug", "200"))
 	alignment := AlignShapes(left, right)
 	if alignment.Summary.TraceMatched != 1 || alignment.Summary.Matched != 1 {
 		t.Fatalf("unexpected summary %#v", alignment.Summary)
 	}
-	row := findRow(t, alignment, "GET /api/articles/<slug>")
+	row := findRow(t, alignment, "GET api/articles/<slug>")
 	if row.Kind != "matched" {
 		t.Fatalf("expected matched row, got %q", row.Kind)
 	}

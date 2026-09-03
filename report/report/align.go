@@ -15,6 +15,15 @@ var pathParameterPattern = regexp.MustCompile(`%?\{[^}]*\}|<[^>]*>`)
 var colonPathParameterPattern = regexp.MustCompile(`(^|/):[A-Za-z_][A-Za-z0-9_]*`)
 var whitespacePattern = regexp.MustCompile(`\s+`)
 
+func isHTTPMethod(value string) bool {
+	switch value {
+	case "connect", "delete", "get", "head", "options", "patch", "post", "put", "trace":
+		return true
+	default:
+		return false
+	}
+}
+
 // NormalizeSpanName lowercases a span name, drops a leading slash on the route
 // portion, and rewrites path parameters to "*" so routes that differ only in
 // the parameter syntax used by a framework still align.
@@ -23,7 +32,11 @@ func NormalizeSpanName(name string) string {
 	normalized = whitespacePattern.ReplaceAllString(normalized, " ")
 	fields := strings.Split(normalized, " ")
 	for i, field := range fields {
-		if strings.HasPrefix(field, "/") && len(field) > 1 {
+		// Some instrumentations omit the route's leading slash. Recognize that
+		// form only after an HTTP method so SQL/JSON placeholders are preserved.
+		isRoute := strings.HasPrefix(field, "/") ||
+			(i > 0 && isHTTPMethod(fields[i-1]) && strings.Contains(field, "/"))
+		if isRoute && len(field) > 1 {
 			field = pathParameterPattern.ReplaceAllString(field, "*")
 			field = colonPathParameterPattern.ReplaceAllString(field, "${1}*")
 			fields[i] = strings.TrimPrefix(field, "/")
