@@ -96,8 +96,13 @@ func main() {
 		"uid=" + objectUID,
 	}
 	args = append(args, specs...)
+	var profile atomicProfile
 	if *otelSinkSuffix != "" {
-		if err := resetStartupTelemetry(*otelSinkSuffix); err != nil {
+		profile, err = loadAtomicProfile(*otelProfileManifest, *otelCase, *otelMode)
+		if err != nil {
+			fatal(err)
+		}
+		if err := resetStartupTelemetry(*otelSinkSuffix, profile.Signals); err != nil {
 			fatal(err)
 		}
 	}
@@ -109,10 +114,6 @@ func main() {
 		fatal(fmt.Errorf("RealWorld Hurl suite failed: %w", err))
 	}
 	if *otelSinkSuffix != "" {
-		profile, err := loadAtomicProfile(*otelProfileManifest, *otelCase, *otelMode)
-		if err != nil {
-			fatal(err)
-		}
 		validationErr := requireExportedTelemetry(*otelSinkSuffix, *otelMode, *otelCase, profile)
 		if err := classifyOTLPValidation(validationErr, *otelXFail, *otelCase, os.Stderr); err != nil {
 			fatal(err)
@@ -279,34 +280,54 @@ func classifyOTLPValidation(validationErr error, xfailReason, scenarioName strin
 	return nil
 }
 
-func resetStartupTelemetry(serviceSuffix string) error {
+func resetStartupTelemetry(serviceSuffix string, signals map[string]bool) error {
 	port, err := assignedPort(serviceSuffix)
 	if err != nil {
 		return fmt.Errorf("locate OTLP sink for startup reset: %w", err)
 	}
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
-	client := http.Client{Timeout: 5 * time.Second}
-	deadline := time.Now().Add(15 * time.Second)
+	return resetStartupTelemetryAt(
+		&http.Client{Timeout: 5 * time.Second},
+		baseURL,
+		30*time.Second,
+		2*time.Second,
+		100*time.Millisecond,
+		signals,
+	)
+}
+
+func resetStartupTelemetryAt(client *http.Client, baseURL string, timeout, quietPeriod, pollInterval time.Duration, signals map[string]bool) error {
+	deadline := time.Now().Add(timeout)
 	lastTraceRequests := -1
 	lastTraceSpans := -1
 	stableSince := time.Time{}
 	for {
-		stats, statsErr := readSinkStats(client, baseURL)
-		if statsErr == nil {
+		stats, statsErr := readSinkStats(*client, baseURL)
+		// An empty sink is not evidence of quiescence: the application's first
+		// health-check batch may still be queued in its exporter. Wait until at
+		// least one startup span has arrived before starting the quiet period.
+		expectedSignalsArrived := stats.TraceRequests > 0 && stats.TraceSpans > 0 &&
+			(!signals["metrics"] || stats.MetricRequests > 0) &&
+			(!signals["logs"] || stats.LogRequests > 0)
+		if statsErr == nil && expectedSignalsArrived {
 			if stats.TraceRequests != lastTraceRequests || stats.TraceSpans != lastTraceSpans {
 				lastTraceRequests = stats.TraceRequests
 				lastTraceSpans = stats.TraceSpans
 				stableSince = time.Now()
-			} else if time.Since(stableSince) >= 2*time.Second {
+			} else if !stableSince.IsZero() && time.Since(stableSince) >= quietPeriod {
 				break
 			}
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("startup OTLP at %s did not quiesce before reset", baseURL)
+			return fmt.Errorf("startup OTLP at %s did not arrive and quiesce before reset", baseURL)
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(pollInterval)
 	}
-	request, err := http.NewRequest(http.MethodPost, baseURL+"/reset/traces", nil)
+	// Discard startup traces after they quiesce and the first metric collection,
+	// which can race lazy instrument creation in the Python SDK. Preserve startup
+	// logs because short scenarios do not necessarily reproduce every required
+	// logging scope.
+	request, err := http.NewRequest(http.MethodPost, baseURL+"/reset/traces-and-metrics", nil)
 	if err != nil {
 		return fmt.Errorf("create startup OTLP reset request: %w", err)
 	}

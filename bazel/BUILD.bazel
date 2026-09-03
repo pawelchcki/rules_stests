@@ -1,4 +1,5 @@
 exports_files([
     "oci_deps.bzl",
     "oci_images.lock.bzl",
+    "rules_rs_launchpad_zlib.patch",
 ])

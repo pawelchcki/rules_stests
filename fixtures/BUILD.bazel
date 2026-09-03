@@ -15,9 +15,6 @@ realworld_app_suite(
     app = "aiohttp",
     env = _PYTHON_ENV,
     injection = python_auto_injection(),
-    otel_flaky_cases = {
-        "errors_profiles": "a late startup /api/tags export can cross the trace-only reset boundary",
-    },
     plain = True,
     profile = "//corpus:python-aiohttp-auto-v0-65b0",
 )
@@ -27,7 +24,6 @@ realworld_app_suite(
     app = "django",
     env = _PYTHON_ENV,
     injection = python_auto_injection(),
-    otel_flaky_reason = "the Python metric aggregator can emit a point whose start timestamp follows its collection timestamp under parallel load",
     plain = True,
     profile = "//corpus:python-django-auto-v0-65b0",
 )

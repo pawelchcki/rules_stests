@@ -412,7 +412,6 @@ func runAppExec(injection injection, instance, rootArg, relative string, args []
 	if otelRoot != "" {
 		fmt.Fprintf(os.Stderr, "oci_bundle: activating instrumentation for %s from %s\n", instance, otelRoot)
 	}
-
 	if err := syscall.Exec(binary, append([]string{binary}, args...), environment); err != nil {
 		return fmt.Errorf("execute app binary %s: %w", relative, err)
 	}
