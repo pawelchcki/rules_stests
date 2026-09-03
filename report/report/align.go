@@ -177,6 +177,85 @@ func subtreeDetailKeys(spans []alignedSpan, into map[string]int) {
 	}
 }
 
+type spanDetail struct {
+	node   SpanNode
+	status string
+	http   string
+	count  string
+}
+
+func parseSpanDetail(key string) spanDetail {
+	parts := strings.SplitN(key, "\x1f", 4)
+	detail := spanDetail{node: spanNodeFromKey(parts[0])}
+	if len(parts) > 1 {
+		detail.status = parts[1]
+	}
+	if len(parts) > 2 {
+		detail.http = parts[2]
+	}
+	if len(parts) > 3 {
+		detail.count = parts[3]
+	}
+	return detail
+}
+
+// detailMatchScore rewards rendered details after a structural match, rather
+// than requiring the canonical key to match exactly. This lets an omitted
+// name matcher retain its wildcard behavior while still selecting the
+// alternative with the closest status, HTTP response, and cardinality.
+func detailMatchScore(leftKey, rightKey string) int {
+	left, right := parseSpanDetail(leftKey), parseSpanDetail(rightKey)
+	if spanMatchScore(left.node, right.node) < 0 {
+		return -1
+	}
+	score := 0
+	if left.status == right.status {
+		score += 4
+	}
+	if left.http == right.http {
+		score += 2
+	}
+	if left.count == right.count {
+		score++
+	}
+	return score
+}
+
+func sortedCountKeys(values map[string]int) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func consumeCompatibleDetails(details, available map[string]int) (int, map[string]int) {
+	consumed := map[string]int{}
+	total := 0
+	availableKeys := sortedCountKeys(available)
+	for _, detailKey := range sortedCountKeys(details) {
+		for remaining := details[detailKey]; remaining > 0; remaining-- {
+			bestKey, bestScore := "", 0
+			for _, oppositeKey := range availableKeys {
+				if available[oppositeKey]-consumed[oppositeKey] <= 0 {
+					continue
+				}
+				score := detailMatchScore(detailKey, oppositeKey)
+				if score > bestScore || (score == bestScore && score > 0 && (bestKey == "" || oppositeKey < bestKey)) {
+					bestKey, bestScore = oppositeKey, score
+				}
+			}
+			if bestScore == 0 {
+				break
+			}
+			consumed[bestKey]++
+			total += bestScore
+		}
+	}
+	return total, consumed
+}
+
 func spanNodeFromKey(key string) SpanNode {
 	parts := strings.SplitN(key, "\x00", 2)
 	node := SpanNode{Kind: parts[0]}
@@ -265,13 +344,8 @@ func chooseCandidates(groups []SpanGroup, opposite, oppositeDetails map[string]i
 			if candidate.keyString != "" && available[candidate.keyString] > 0 {
 				delta += 100
 			}
-			for detailKey, count := range details {
-				if count < detailAvailable[detailKey] {
-					delta += count * 10
-				} else {
-					delta += detailAvailable[detailKey] * 10
-				}
-			}
+			detailDelta, detailConsumed := consumeCompatibleDetails(details, detailAvailable)
+			delta += detailDelta
 			for candidateKey := range keys {
 				available[candidateKey] -= consumed[candidateKey]
 			}
@@ -280,10 +354,8 @@ func chooseCandidates(groups []SpanGroup, opposite, oppositeDetails map[string]i
 					available[candidateKey] -= count
 				}
 			}
-			detailConsumed := map[string]int{}
-			for detailKey, count := range details {
-				detailConsumed[detailKey] = min(count, detailAvailable[detailKey])
-				detailAvailable[detailKey] -= detailConsumed[detailKey]
+			for detailKey, count := range detailConsumed {
+				detailAvailable[detailKey] -= count
 			}
 			candidateKey := canonicalSpanKey(candidate)
 			search(index+1, score+delta, key+"\x1d"+candidateKey, append(picked, candidate))
@@ -348,76 +420,117 @@ func spanDiffs(left, right alignedSpan) []string {
 	return diffs
 }
 
-// maximumMatchingSize returns the number of compatible pairs still available
-// after start. It is the cardinality constraint used before detail scores are
-// allowed to break ties.
-func maximumMatchingSize(left, right []alignedSpan, start int, usedRight []bool, score func(alignedSpan, alignedSpan) int) int {
-	matchedRight := make([]int, len(right))
-	for i := range matchedRight {
-		matchedRight[i] = -1
-		if usedRight != nil && usedRight[i] {
-			matchedRight[i] = -2
+// maximumWeightAssignment returns the maximum-weight perfect assignment for a
+// square matrix. It is the Hungarian algorithm expressed as a minimum-cost
+// assignment over negated weights.
+func maximumWeightAssignment(weights [][]int) []int {
+	size := len(weights)
+	leftPotential, rightPotential := make([]int, size+1), make([]int, size+1)
+	matchedColumn, previous := make([]int, size+1), make([]int, size+1)
+	const infinity = int(^uint(0)>>1) / 4
+	for row := 1; row <= size; row++ {
+		matchedColumn[0] = row
+		column := 0
+		minCost := make([]int, size+1)
+		used := make([]bool, size+1)
+		for index := 1; index <= size; index++ {
+			minCost[index] = infinity
 		}
-	}
-	var assign func(int, []bool) bool
-	assign = func(leftIndex int, seen []bool) bool {
-		for rightIndex := range right {
-			if seen[rightIndex] || matchedRight[rightIndex] == -2 || score(left[leftIndex], right[rightIndex]) < 0 {
-				continue
+		for {
+			used[column] = true
+			matchedRow := matchedColumn[column]
+			delta, nextColumn := infinity, 0
+			for candidate := 1; candidate <= size; candidate++ {
+				if used[candidate] {
+					continue
+				}
+				cost := -weights[matchedRow-1][candidate-1] - leftPotential[matchedRow] - rightPotential[candidate]
+				if cost < minCost[candidate] {
+					minCost[candidate], previous[candidate] = cost, column
+				}
+				if minCost[candidate] < delta {
+					delta, nextColumn = minCost[candidate], candidate
+				}
 			}
-			seen[rightIndex] = true
-			if matchedRight[rightIndex] < 0 || assign(matchedRight[rightIndex], seen) {
-				matchedRight[rightIndex] = leftIndex
-				return true
+			for candidate := 0; candidate <= size; candidate++ {
+				if used[candidate] {
+					leftPotential[matchedColumn[candidate]] += delta
+					rightPotential[candidate] -= delta
+				} else {
+					minCost[candidate] -= delta
+				}
 			}
-		}
-		return false
-	}
-	matched := 0
-	for leftIndex := start; leftIndex < len(left); leftIndex++ {
-		if assign(leftIndex, make([]bool, len(right))) {
-			matched++
-		}
-	}
-	return matched
-}
-
-// maximumCardinalityPairs first preserves every compatible pair possible, then
-// uses the supplied score only to choose among pairings with that cardinality.
-func maximumCardinalityPairs(left, right []alignedSpan, score func(alignedSpan, alignedSpan) int) ([]int, []bool) {
-	target := maximumMatchingSize(left, right, 0, nil, score)
-	matchedRight := make([]int, len(left))
-	for i := range matchedRight {
-		matchedRight[i] = -1
-	}
-	usedRight := make([]bool, len(right))
-	matched := 0
-	for leftIndex := range left {
-		type candidate struct{ right, score int }
-		var candidates []candidate
-		for rightIndex := range right {
-			if usedRight[rightIndex] {
-				continue
-			}
-			if candidateScore := score(left[leftIndex], right[rightIndex]); candidateScore >= 0 {
-				candidates = append(candidates, candidate{right: rightIndex, score: candidateScore})
-			}
-		}
-		sort.SliceStable(candidates, func(i, j int) bool {
-			return candidates[i].score > candidates[j].score
-		})
-		for _, candidate := range candidates {
-			usedRight[candidate.right] = true
-			remaining := maximumMatchingSize(left, right, leftIndex+1, usedRight, score)
-			if matched+1+remaining >= target {
-				matchedRight[leftIndex] = candidate.right
-				matched++
+			column = nextColumn
+			if matchedColumn[column] == 0 {
 				break
 			}
-			usedRight[candidate.right] = false
+		}
+		for {
+			previousColumn := previous[column]
+			matchedColumn[column] = matchedColumn[previousColumn]
+			column = previousColumn
+			if column == 0 {
+				break
+			}
+		}
+	}
+	assignment := make([]int, size)
+	for column := 1; column <= size; column++ {
+		assignment[matchedColumn[column]-1] = column - 1
+	}
+	return assignment
+}
+
+// maximumWeightMaximumCardinalityPairs gives every compatible edge a bonus
+// larger than all possible detail scores, then maximizes the total weight.
+// The result therefore preserves the greatest number of matches while making
+// the globally best detail-aware pairing among those matchings.
+func maximumWeightMaximumCardinalityPairs(leftCount, rightCount int, score func(int, int) int) ([]int, []bool) {
+	matchedRight := make([]int, leftCount)
+	for index := range matchedRight {
+		matchedRight[index] = -1
+	}
+	usedRight := make([]bool, rightCount)
+	if leftCount == 0 || rightCount == 0 {
+		return matchedRight, usedRight
+	}
+	scores, highest := make([][]int, leftCount), 0
+	for leftIndex := 0; leftIndex < leftCount; leftIndex++ {
+		scores[leftIndex] = make([]int, rightCount)
+		for rightIndex := 0; rightIndex < rightCount; rightIndex++ {
+			scores[leftIndex][rightIndex] = score(leftIndex, rightIndex)
+			if scores[leftIndex][rightIndex] > highest {
+				highest = scores[leftIndex][rightIndex]
+			}
+		}
+	}
+	bonus := (highest + 1) * (min(leftCount, rightCount) + 1)
+	size := leftCount + rightCount
+	weights := make([][]int, size)
+	for index := range weights {
+		weights[index] = make([]int, size)
+	}
+	for leftIndex := 0; leftIndex < leftCount; leftIndex++ {
+		for rightIndex := 0; rightIndex < rightCount; rightIndex++ {
+			if scores[leftIndex][rightIndex] >= 0 {
+				weights[leftIndex][rightIndex] = bonus + scores[leftIndex][rightIndex]
+			}
+		}
+	}
+	assignment := maximumWeightAssignment(weights)
+	for leftIndex := 0; leftIndex < leftCount; leftIndex++ {
+		rightIndex := assignment[leftIndex]
+		if rightIndex < rightCount && scores[leftIndex][rightIndex] >= 0 {
+			matchedRight[leftIndex], usedRight[rightIndex] = rightIndex, true
 		}
 	}
 	return matchedRight, usedRight
+}
+
+func maximumCardinalityPairs(left, right []alignedSpan, score func(alignedSpan, alignedSpan) int) ([]int, []bool) {
+	return maximumWeightMaximumCardinalityPairs(len(left), len(right), func(leftIndex, rightIndex int) int {
+		return score(left[leftIndex], right[rightIndex])
+	})
 }
 
 // matchSpans pairs two sibling lists and emits depth-annotated rows in a
@@ -577,16 +690,13 @@ func chooseTraceCandidates(groups []TraceGroup, opposite, oppositeDetails map[st
 					delta++
 				}
 			}
-			for item, count := range details {
-				delta += min(count, detailAvailable[item]) * 10
-			}
+			detailDelta, detailConsumed := consumeCompatibleDetails(details, detailAvailable)
+			delta += detailDelta
 			for item, count := range consumed {
 				available[item] -= count
 			}
-			detailConsumed := map[string]int{}
-			for item, count := range details {
-				detailConsumed[item] = min(count, detailAvailable[item])
-				detailAvailable[item] -= detailConsumed[item]
+			for item, count := range detailConsumed {
+				detailAvailable[item] -= count
 			}
 			search(index+1, score+delta, key+"\x1d"+canonicalTraceKey(candidate), append(picked, candidate))
 			for item, count := range consumed {
@@ -678,69 +788,10 @@ func traceMatchScore(left, right resolvedTrace) int {
 	return matched*100000 + total - (len(left.roots)+len(right.roots)-2*matched)*10000
 }
 
-func maximumTraceMatchingSize(left, right []resolvedTrace, start int, usedRight []bool) int {
-	matchedRight := make([]int, len(right))
-	for i := range matchedRight {
-		matchedRight[i] = -1
-		if usedRight != nil && usedRight[i] {
-			matchedRight[i] = -2
-		}
-	}
-	var assign func(int, []bool) bool
-	assign = func(leftIndex int, seen []bool) bool {
-		for rightIndex := range right {
-			if seen[rightIndex] || matchedRight[rightIndex] == -2 || traceMatchScore(left[leftIndex], right[rightIndex]) < 0 {
-				continue
-			}
-			seen[rightIndex] = true
-			if matchedRight[rightIndex] < 0 || assign(matchedRight[rightIndex], seen) {
-				matchedRight[rightIndex] = leftIndex
-				return true
-			}
-		}
-		return false
-	}
-	matched := 0
-	for leftIndex := start; leftIndex < len(left); leftIndex++ {
-		if assign(leftIndex, make([]bool, len(right))) {
-			matched++
-		}
-	}
-	return matched
-}
-
 func maximumCardinalityTracePairs(left, right []resolvedTrace) ([]int, []bool) {
-	target := maximumTraceMatchingSize(left, right, 0, nil)
-	matchedRight := make([]int, len(left))
-	for i := range matchedRight {
-		matchedRight[i] = -1
-	}
-	usedRight := make([]bool, len(right))
-	matched := 0
-	for leftIndex := range left {
-		type candidate struct{ right, score int }
-		var candidates []candidate
-		for rightIndex := range right {
-			if usedRight[rightIndex] {
-				continue
-			}
-			if score := traceMatchScore(left[leftIndex], right[rightIndex]); score >= 0 {
-				candidates = append(candidates, candidate{right: rightIndex, score: score})
-			}
-		}
-		sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
-		for _, candidate := range candidates {
-			usedRight[candidate.right] = true
-			remaining := maximumTraceMatchingSize(left, right, leftIndex+1, usedRight)
-			if matched+1+remaining >= target {
-				matchedRight[leftIndex] = candidate.right
-				matched++
-				break
-			}
-			usedRight[candidate.right] = false
-		}
-	}
-	return matchedRight, usedRight
+	return maximumWeightMaximumCardinalityPairs(len(left), len(right), func(leftIndex, rightIndex int) int {
+		return traceMatchScore(left[leftIndex], right[rightIndex])
+	})
 }
 
 // AlignShapes pairs the trace groups of two scenario shapes by root span and

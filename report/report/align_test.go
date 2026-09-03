@@ -95,6 +95,37 @@ func TestAlignShapesPrefersEquallyUnspecifiedSiblingKinds(t *testing.T) {
 	}
 }
 
+func TestAlignShapesMaximizesSiblingDetailScoreGlobally(t *testing.T) {
+	unnamedError := exactSpan("", "server", "error", "", "500")
+	namedError := exactSpan("", "server", "error", "A", "500")
+	unnamedUnset := exactSpan("", "server", "unset", "", "500")
+	root := func(children ...SpanGroup) SpanGroup {
+		return exactSpan("", "server", "unset", "GET /items", "200", children...)
+	}
+	alignment := AlignShapes(shapeOf("left", root(unnamedError, namedError)), shapeOf("right", root(namedError, unnamedUnset)))
+	if alignment.Summary.Differing != 1 || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 {
+		t.Fatalf("sibling pairing did not maximize aggregate detail score: %#v", alignment.Summary)
+	}
+	if row := findRow(t, alignment, "A"); row.Left == nil || row.Right == nil || row.Left.Name != "A" || row.Right.Name != "A" {
+		t.Fatalf("specific sibling was not retained in its equivalent pair: %#v", row)
+	}
+}
+
+func TestAlignShapesChoosesWildcardAlternativeByDetails(t *testing.T) {
+	unnamedError := exactSpan("", "server", "error", "", "500")
+	unnamedUnset := exactSpan("", "server", "unset", "", "500")
+	choice := SpanGroup{Cardinality: "one_of", MinCount: 1, MaxCount: 1, Alternatives: []SpanGroup{unnamedError, unnamedUnset}}
+	root := func(children ...SpanGroup) SpanGroup {
+		return exactSpan("", "server", "unset", "GET /items", "200", children...)
+	}
+	left := shapeOf("left", root(choice))
+	right := shapeOf("right", root(exactSpan("", "server", "unset", "A", "500")))
+	row := findRow(t, AlignShapes(left, right), "A")
+	if row.Kind != "matched" || strings.Contains(strings.Join(row.Diffs, ","), "status") {
+		t.Fatalf("wildcard alternative ignored its matching status: %#v", row)
+	}
+}
+
 func TestAlignShapesPrefersTraceGroupsWithTheSameRootSet(t *testing.T) {
 	a := exactSpan("", "server", "unset", "A", "200")
 	b := exactSpan("", "server", "unset", "B", "200")

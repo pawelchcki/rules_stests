@@ -420,7 +420,7 @@ function renderCompare() {
     deltas = '<details><summary>Raw count deltas (right minus left)</summary>' +
       '<p class="muted">traces ' + signed(comparison.traceDelta) + ' / spans ' + signed(comparison.spanDelta) +
       ' / trace groups ' + signed(comparison.countDelta) + '</p>' +
-      (scope ? '<p class="muted">scopes: ' + scope + '</p>' : '') +
+      (scope && !options.hideScope ? '<p class="muted">scopes: ' + scope + '</p>' : '') +
       (status ? '<p class="muted">statuses: ' + status + '</p>' : '') + '</details>';
   }
 
