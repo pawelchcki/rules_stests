@@ -307,7 +307,8 @@ function renderAlignment(alignment, flipped, options) {
         spanCell(rightNode, rightCard, diffs, options.hideScope) + '</td>' +
         '<td class="row-flag">' + esc(flag) + '</td></tr>';
     }).join('');
-    if (options.differencesOnly && kind === 'matched' && !rows) return '';
+    const traceCardDiffers = kind === 'matched' && left && right && left.card !== right.card;
+    if (options.differencesOnly && kind === 'matched' && !rows && !traceCardDiffers) return '';
     const label = (left && left.label) || (right && right.label) || 'trace';
     const kindBadge = kind === 'matched'
       ? '<span class="badge state-ok"><span class="icon">✓</span>matched</span>'
@@ -319,7 +320,8 @@ function renderAlignment(alignment, flipped, options) {
       '<strong>' + esc(label) + '</strong>' +
       (cards ? '<span class="badge state-neutral">' + esc(cards) + '</span>' : '') +
       '<span class="muted">trace group ' + (index + 1) + '</span></summary>' +
-      '<table class="diff-table"><tbody>' + (rows || '<tr><td colspan="3" class="muted">No rows match the current filters.</td></tr>') +
+      '<table class="diff-table"><tbody>' + (rows || '<tr><td colspan="3" class="muted">' +
+        (traceCardDiffers ? 'Trace cardinality differs.' : 'No rows match the current filters.') + '</td></tr>') +
       '</tbody></table></details>';
   }).join('');
 }
@@ -348,7 +350,10 @@ function renderCompare() {
   const scenario = $('scenario').value;
   const options = { differencesOnly: $('differences-only').checked, hideScope: $('hide-scope').checked };
   if (readHash().section === 'compare') {
-    writeHash('compare', new URLSearchParams({ left: left, right: right, scenario: scenario }));
+    const params = new URLSearchParams({ left: left, right: right, scenario: scenario });
+    if (options.differencesOnly) params.set('differencesOnly', '1');
+    if (options.hideScope) params.set('hideScope', '1');
+    writeHash('compare', params);
   }
   renderScenarioOverview(scenario);
 
@@ -503,8 +508,16 @@ function renderFeatures() {
       }
       const upstream = seen.map((lang) =>
         '<div>' + esc(lang) + ' ' + badge('support', feature.support[lang] || 'unknown') + '</div>').join('');
+      const optionality = feature.optional === 'X'
+        ? '<span class="badge state-neutral" title="Optional in the upstream specification">optional</span>'
+        : (feature.optional === '*'
+          ? '<span class="badge state-neutral" title="At least one supported exporter format is required; additional formats are optional">one format required</span>'
+          : (feature.optional
+            ? '<span class="badge state-neutral" title="Upstream optionality">' + esc(feature.optional) + '</span>'
+            : ''));
       return '<tr><td><strong>' + esc(feature.name) + '</strong>' +
         (feature.group ? '<div class="muted">' + esc(feature.group) + '</div>' : '') +
+        (optionality ? '<div>' + optionality + '</div>' : '') +
         '<a class="evidence" href="' + esc(feature.source) + '">' + esc(feature.id) + '</a></td>' +
         '<td>' + upstream + '</td>' + cells + '</tr>';
     }).join('');
@@ -590,6 +603,8 @@ function syncControlsFromHash() {
     if (params.get('left') && manifestByProfile.has(params.get('left'))) $('left').value = params.get('left');
     if (params.get('right') && manifestByProfile.has(params.get('right'))) $('right').value = params.get('right');
     if (params.get('scenario') && data.scenarios.includes(params.get('scenario'))) $('scenario').value = params.get('scenario');
+    $('differences-only').checked = params.get('differencesOnly') === '1';
+    $('hide-scope').checked = params.get('hideScope') === '1';
   } else if (state.section === 'features') {
     const pairs = [['category', 'category'], ['language', 'language'], ['support', 'support'],
       ['verification', 'verification'], ['basis', 'basis']];

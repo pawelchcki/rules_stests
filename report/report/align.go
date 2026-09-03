@@ -166,41 +166,69 @@ func canonicalSpanKey(span alignedSpan) string {
 	return strings.Join([]string{span.keyString, span.node.Status, span.node.HTTPStatus, span.card, strings.Join(children, "\x1e")}, "\x1f")
 }
 
-// chooseCandidates picks, for each authored group, the candidate that shares
-// the most span keys with the opposite side. Ties use a canonical structural
-// key so equivalent one-of sets align regardless of their authored order.
+// chooseCandidates jointly picks candidates for sibling groups. Each choice
+// consumes matching opposite-side keys, so two independent one-of groups do
+// not both claim the same counterpart.
 func chooseCandidates(groups []SpanGroup, opposite map[string]int) []alignedSpan {
-	var chosen []alignedSpan
+	choices := make([][]alignedSpan, 0, len(groups))
 	for _, group := range groups {
 		candidates := resolveSpanGroup(group, opposite)
 		if len(candidates) == 0 {
 			continue
 		}
-		best, bestScore, bestKey := candidates[0], -1, ""
-		for _, candidate := range candidates {
+		choices = append(choices, candidates)
+	}
+	if len(choices) == 0 {
+		return nil
+	}
+	available := make(map[string]int, len(opposite))
+	for key, count := range opposite {
+		available[key] = count
+	}
+	bestScore, bestKey := -1, ""
+	var best []alignedSpan
+	var search func(index, score int, key string, picked []alignedSpan)
+	search = func(index, score int, key string, picked []alignedSpan) {
+		if index == len(choices) {
+			if score > bestScore || (score == bestScore && key < bestKey) {
+				bestScore, bestKey = score, key
+				best = append([]alignedSpan(nil), picked...)
+			}
+			return
+		}
+		for _, candidate := range choices[index] {
 			keys := map[string]int{}
 			subtreeKeys([]alignedSpan{candidate}, keys)
-			score := 0
-			for key, count := range keys {
-				if available, ok := opposite[key]; ok {
-					if count < available {
-						score += count
-					} else {
-						score += available
-					}
+			delta := 0
+			for candidateKey, count := range keys {
+				if count < available[candidateKey] {
+					delta += count
+				} else {
+					delta += available[candidateKey]
 				}
 			}
-			if candidate.keyString != "" && opposite[candidate.keyString] > 0 {
-				score += 100
+			if candidate.keyString != "" && available[candidate.keyString] > 0 {
+				delta += 100
+			}
+			for candidateKey, count := range keys {
+				if count < available[candidateKey] {
+					available[candidateKey] -= count
+				} else {
+					available[candidateKey] = 0
+				}
 			}
 			candidateKey := canonicalSpanKey(candidate)
-			if score > bestScore || (score == bestScore && candidateKey < bestKey) {
-				best, bestScore, bestKey = candidate, score, candidateKey
+			search(index+1, score+delta, key+"\x1d"+candidateKey, append(picked, candidate))
+			for key, count := range keys {
+				available[key] += count
+				if available[key] > opposite[key] {
+					available[key] = opposite[key]
+				}
 			}
 		}
-		chosen = append(chosen, best)
 	}
-	return chosen
+	search(0, 0, "", nil)
+	return best
 }
 
 func candidateKeys(groups []SpanGroup) map[string]int {
@@ -242,32 +270,83 @@ func spanDiffs(left, right alignedSpan) []string {
 	return diffs
 }
 
-// matchSpans pairs two sibling lists by span key and emits depth-annotated
-// rows in a stable order: matched pairs first (in left order), then spans that
-// exist only on the left, then spans only on the right.
-func matchSpans(left, right []alignedSpan, depth int, summary *AlignSummary) []SpanMatch {
-	type candidate struct{ left, right, score int }
-	var candidates []candidate
-	for leftIndex, leftSpan := range left {
-		for rightIndex, rightSpan := range right {
-			if score := alignedSpanMatchScore(leftSpan, rightSpan); score >= 0 {
-				candidates = append(candidates, candidate{left: leftIndex, right: rightIndex, score: score})
-			}
+// maximumMatchingSize returns the number of compatible pairs still available
+// after start. It is the cardinality constraint used before detail scores are
+// allowed to break ties.
+func maximumMatchingSize(left, right []alignedSpan, start int, usedRight []bool, score func(alignedSpan, alignedSpan) int) int {
+	matchedRight := make([]int, len(right))
+	for i := range matchedRight {
+		matchedRight[i] = -1
+		if usedRight != nil && usedRight[i] {
+			matchedRight[i] = -2
 		}
 	}
-	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
+	var assign func(int, []bool) bool
+	assign = func(leftIndex int, seen []bool) bool {
+		for rightIndex := range right {
+			if seen[rightIndex] || matchedRight[rightIndex] == -2 || score(left[leftIndex], right[rightIndex]) < 0 {
+				continue
+			}
+			seen[rightIndex] = true
+			if matchedRight[rightIndex] < 0 || assign(matchedRight[rightIndex], seen) {
+				matchedRight[rightIndex] = leftIndex
+				return true
+			}
+		}
+		return false
+	}
+	matched := 0
+	for leftIndex := start; leftIndex < len(left); leftIndex++ {
+		if assign(leftIndex, make([]bool, len(right))) {
+			matched++
+		}
+	}
+	return matched
+}
+
+// maximumCardinalityPairs first preserves every compatible pair possible, then
+// uses the supplied score only to choose among pairings with that cardinality.
+func maximumCardinalityPairs(left, right []alignedSpan, score func(alignedSpan, alignedSpan) int) ([]int, []bool) {
+	target := maximumMatchingSize(left, right, 0, nil, score)
 	matchedRight := make([]int, len(left))
 	for i := range matchedRight {
 		matchedRight[i] = -1
 	}
 	usedRight := make([]bool, len(right))
-	for _, candidate := range candidates {
-		if matchedRight[candidate.left] >= 0 || usedRight[candidate.right] {
-			continue
+	matched := 0
+	for leftIndex := range left {
+		type candidate struct{ right, score int }
+		var candidates []candidate
+		for rightIndex := range right {
+			if usedRight[rightIndex] {
+				continue
+			}
+			if candidateScore := score(left[leftIndex], right[rightIndex]); candidateScore >= 0 {
+				candidates = append(candidates, candidate{right: rightIndex, score: candidateScore})
+			}
 		}
-		matchedRight[candidate.left] = candidate.right
-		usedRight[candidate.right] = true
+		sort.SliceStable(candidates, func(i, j int) bool {
+			return candidates[i].score > candidates[j].score
+		})
+		for _, candidate := range candidates {
+			usedRight[candidate.right] = true
+			remaining := maximumMatchingSize(left, right, leftIndex+1, usedRight, score)
+			if matched+1+remaining >= target {
+				matchedRight[leftIndex] = candidate.right
+				matched++
+				break
+			}
+			usedRight[candidate.right] = false
+		}
 	}
+	return matchedRight, usedRight
+}
+
+// matchSpans pairs two sibling lists and emits depth-annotated rows in a
+// stable order: matched pairs first (in left order), then spans that exist only
+// on the left, then spans only on the right.
+func matchSpans(left, right []alignedSpan, depth int, summary *AlignSummary) []SpanMatch {
+	matchedRight, usedRight := maximumCardinalityPairs(left, right, alignedSpanMatchScore)
 	var rows []SpanMatch
 	var leftOnly []alignedSpan
 	for leftIndex, leftSpan := range left {

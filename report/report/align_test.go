@@ -85,6 +85,40 @@ func TestAlignShapesMatchesReorderedMultiRootTraces(t *testing.T) {
 	}
 }
 
+func TestAlignShapesCoordinatesSiblingOneOfChoices(t *testing.T) {
+	a := exactSpan("worker", "consumer", "unset", "receive a", "absent")
+	b := exactSpan("worker", "consumer", "unset", "receive b", "absent")
+	choice := SpanGroup{Cardinality: "one_of", MinCount: 1, MaxCount: 1, Alternatives: []SpanGroup{a, b}}
+	root := func(children ...SpanGroup) SpanGroup {
+		return exactSpan("server", "server", "unset", "GET /api/items", "200", children...)
+	}
+	left := shapeOf("left", root(choice, a))
+	right := shapeOf("right", root(a, b))
+	alignment := AlignShapes(left, right)
+	if alignment.Summary.Matched != 3 || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 {
+		t.Fatalf("sibling one-of alternatives were not selected jointly: %#v", alignment.Summary)
+	}
+	if row := findRow(t, alignment, "receive b"); row.Kind != "matched" || row.LeftCard != "one of 2" {
+		t.Fatalf("expected the one-of to consume the remaining b span: %#v", row)
+	}
+}
+
+func TestAlignShapesMaximizesWildcardSiblingPairing(t *testing.T) {
+	wildcard := exactSpan("", "", "error", "", "500")
+	server := exactSpan("", "server", "unset", "", "")
+	rightServer := exactSpan("", "server", "error", "GET /api/items", "500")
+	rightClient := exactSpan("", "client", "unset", "SELECT items", "")
+	root := func(children ...SpanGroup) SpanGroup {
+		return exactSpan("server", "server", "unset", "GET /api/items", "200", children...)
+	}
+	left := shapeOf("left", root(wildcard, server))
+	right := shapeOf("right", root(rightServer, rightClient))
+	alignment := AlignShapes(left, right)
+	if alignment.Summary.Matched != 3 || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 {
+		t.Fatalf("detail scoring sacrificed a compatible sibling match: %#v", alignment.Summary)
+	}
+}
+
 func TestAlignShapesMatchesEquivalentRoutes(t *testing.T) {
 	left := shapeOf("left", exactSpan("django", "server", "unset", "GET /api/articles/<slug>", "200"))
 	right := shapeOf("right", exactSpan("aiohttp", "server", "unset", "GET /api/articles/:slug", "200"))
