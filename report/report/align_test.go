@@ -156,6 +156,32 @@ func TestAlignShapesMaximizesCompatibleTracePairs(t *testing.T) {
 	}
 }
 
+func TestAlignShapesCoordinatesTraceOneOfChoices(t *testing.T) {
+	a := exactSpan("", "server", "unset", "GET a", "200")
+	b := exactSpan("", "server", "unset", "GET b", "200")
+	trace := func(roots ...SpanGroup) TraceGroup {
+		return TraceGroup{Count: 1, ExactCount: true, MinCount: 1, MaxCount: 1, Roots: roots}
+	}
+	choice := TraceGroup{Cardinality: "one_of", MinCount: 1, MaxCount: 1, Alternatives: []TraceGroup{trace(a), trace(b)}}
+	left := &ScenarioShape{Traces: []TraceGroup{choice, trace(a)}}
+	right := &ScenarioShape{Traces: []TraceGroup{trace(a), trace(b)}}
+	alignment := AlignShapes(left, right)
+	if alignment.Summary.TraceMatched != 2 || alignment.Summary.TraceLeftOnly != 0 || alignment.Summary.TraceRightOnly != 0 {
+		t.Fatalf("trace one-of choice was not coordinated: %#v", alignment.Summary)
+	}
+}
+
+func TestAlignShapesChoosesWildcardAlternative(t *testing.T) {
+	serverAny := exactSpan("", "server", "unset", "", "")
+	clientA := exactSpan("", "client", "unset", "A", "")
+	rightServer := exactSpan("", "server", "unset", "B", "")
+	choice := SpanGroup{Cardinality: "one_of", MinCount: 1, MaxCount: 1, Alternatives: []SpanGroup{clientA, serverAny}}
+	alignment := AlignShapes(shapeOf("left", choice), shapeOf("right", rightServer))
+	if alignment.Summary.Matched != 1 || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 {
+		t.Fatalf("wildcard alternative was not selected: %#v", alignment.Summary)
+	}
+}
+
 func TestAlignShapesMatchesEquivalentRoutes(t *testing.T) {
 	left := shapeOf("left", exactSpan("django", "server", "unset", "GET /api/articles/<slug>", "200"))
 	right := shapeOf("right", exactSpan("aiohttp", "server", "unset", "GET /api/articles/:slug", "200"))

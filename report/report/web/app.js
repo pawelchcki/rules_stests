@@ -562,10 +562,15 @@ function renderReceipts() {
   $('receipts-table').innerHTML = header + '<tbody>' +
     (rows || '<tr><td colspan="6" class="muted">No receipts were collected for this build.</td></tr>') + '</tbody>';
   for (const button of $('receipts-table').querySelectorAll('button.copy')) {
-    button.addEventListener('click', () => {
+    button.addEventListener('click', async () => {
       const value = button.getAttribute('data-sha');
-      if (navigator.clipboard) navigator.clipboard.writeText(value);
-      button.textContent = 'copied';
+      try {
+        if (!navigator.clipboard || !navigator.clipboard.writeText) throw new Error('Clipboard unavailable');
+        await navigator.clipboard.writeText(value);
+        button.textContent = 'copied';
+      } catch (_) {
+        button.textContent = 'copy failed';
+      }
       setTimeout(() => { button.textContent = 'copy'; }, 1500);
     });
   }

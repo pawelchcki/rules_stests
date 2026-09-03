@@ -167,6 +167,15 @@ func subtreeDetailKeys(spans []alignedSpan, into map[string]int) {
 	}
 }
 
+func spanNodeFromKey(key string) SpanNode {
+	parts := strings.SplitN(key, "\x00", 2)
+	node := SpanNode{Kind: parts[0]}
+	if len(parts) == 2 {
+		node.Name = parts[1]
+	}
+	return node
+}
+
 func canonicalSpanKey(span alignedSpan) string {
 	children := make([]string, 0, len(span.children))
 	for _, child := range span.children {
@@ -216,11 +225,27 @@ func chooseCandidates(groups []SpanGroup, opposite, oppositeDetails map[string]i
 			details := map[string]int{}
 			subtreeDetailKeys([]alignedSpan{candidate}, details)
 			delta := 0
+			consumed := map[string]int{}
 			for candidateKey, count := range keys {
-				if count < available[candidateKey] {
-					delta += count
-				} else {
-					delta += available[candidateKey]
+				taken := min(count, available[candidateKey])
+				consumed[candidateKey] = taken
+				delta += taken
+				for remaining := count - taken; remaining > 0; {
+					bestKey, bestScore := "", -1
+					for oppositeKey, availableCount := range available {
+						if availableCount-consumed[oppositeKey] <= 0 {
+							continue
+						}
+						if score := spanMatchScore(spanNodeFromKey(candidateKey), spanNodeFromKey(oppositeKey)); score > bestScore {
+							bestKey, bestScore = oppositeKey, score
+						}
+					}
+					if bestScore < 0 {
+						break
+					}
+					consumed[bestKey]++
+					delta++
+					remaining--
 				}
 			}
 			if candidate.keyString != "" && available[candidate.keyString] > 0 {
@@ -233,33 +258,26 @@ func chooseCandidates(groups []SpanGroup, opposite, oppositeDetails map[string]i
 					delta += detailAvailable[detailKey] * 10
 				}
 			}
-			for candidateKey, count := range keys {
-				if count < available[candidateKey] {
+			for candidateKey := range keys {
+				available[candidateKey] -= consumed[candidateKey]
+			}
+			for candidateKey, count := range consumed {
+				if _, direct := keys[candidateKey]; !direct {
 					available[candidateKey] -= count
-				} else {
-					available[candidateKey] = 0
 				}
 			}
+			detailConsumed := map[string]int{}
 			for detailKey, count := range details {
-				if count < detailAvailable[detailKey] {
-					detailAvailable[detailKey] -= count
-				} else {
-					detailAvailable[detailKey] = 0
-				}
+				detailConsumed[detailKey] = min(count, detailAvailable[detailKey])
+				detailAvailable[detailKey] -= detailConsumed[detailKey]
 			}
 			candidateKey := canonicalSpanKey(candidate)
 			search(index+1, score+delta, key+"\x1d"+candidateKey, append(picked, candidate))
-			for key, count := range keys {
+			for key, count := range consumed {
 				available[key] += count
-				if available[key] > opposite[key] {
-					available[key] = opposite[key]
-				}
 			}
-			for detailKey, count := range details {
+			for detailKey, count := range detailConsumed {
 				detailAvailable[detailKey] += count
-				if detailAvailable[detailKey] > oppositeDetails[detailKey] {
-					detailAvailable[detailKey] = oppositeDetails[detailKey]
-				}
 			}
 		}
 	}
@@ -461,31 +479,16 @@ func canonicalTraceKey(trace resolvedTrace) string {
 	return strings.Join([]string{trace.card, strings.Join(roots, "\x1e")}, "\x1f")
 }
 
-func resolveTraceGroup(index int, group TraceGroup, opposite, oppositeDetails map[string]int) resolvedTrace {
+func traceGroupCandidates(index int, group TraceGroup, opposite, oppositeDetails map[string]int) []resolvedTrace {
 	if len(group.Alternatives) > 0 {
-		best := resolveTraceGroup(index, group.Alternatives[0], opposite, oppositeDetails)
-		bestScore, bestKey := -1, ""
+		var candidates []resolvedTrace
 		for _, alternative := range group.Alternatives {
-			candidate := resolveTraceGroup(index, alternative, opposite, oppositeDetails)
-			keys := map[string]int{}
-			subtreeKeys(candidate.roots, keys)
-			score := 0
-			for key, count := range keys {
-				if available := opposite[key]; available > 0 {
-					if count < available {
-						score += count
-					} else {
-						score += available
-					}
-				}
-			}
-			candidateKey := canonicalTraceKey(candidate)
-			if score > bestScore || (score == bestScore && candidateKey < bestKey) {
-				best, bestScore, bestKey = candidate, score, candidateKey
+			for _, candidate := range traceGroupCandidates(index, alternative, opposite, oppositeDetails) {
+				candidate.card = formatCard(group.MinCount, group.MaxCount, false, len(group.Alternatives))
+				candidates = append(candidates, candidate)
 			}
 		}
-		best.card = formatCard(group.MinCount, group.MaxCount, false, len(group.Alternatives))
-		return best
+		return candidates
 	}
 	minCount, maxCount := traceBounds(group)
 	trace := resolvedTrace{index: index, card: formatCard(minCount, maxCount, group.ExactCount, 0)}
@@ -493,7 +496,64 @@ func resolveTraceGroup(index int, group TraceGroup, opposite, oppositeDetails ma
 	if len(trace.roots) > 0 {
 		trace.label = strings.TrimSpace(trace.roots[0].node.Name)
 	}
-	return trace
+	return []resolvedTrace{trace}
+}
+
+// chooseTraceCandidates jointly resolves trace-level alternatives, preventing
+// one trace group from selecting a counterpart needed by a later group.
+func chooseTraceCandidates(groups []TraceGroup, opposite, oppositeDetails map[string]int) []resolvedTrace {
+	choices := make([][]resolvedTrace, 0, len(groups))
+	for index, group := range groups {
+		choices = append(choices, traceGroupCandidates(index, group, opposite, oppositeDetails))
+	}
+	available, detailAvailable := map[string]int{}, map[string]int{}
+	for key, count := range opposite {
+		available[key] = count
+	}
+	for key, count := range oppositeDetails {
+		detailAvailable[key] = count
+	}
+	bestScore, bestKey := -1, ""
+	var best []resolvedTrace
+	var search func(int, int, string, []resolvedTrace)
+	search = func(index, score int, key string, picked []resolvedTrace) {
+		if index == len(choices) {
+			if score > bestScore || (score == bestScore && key < bestKey) {
+				bestScore, bestKey, best = score, key, append([]resolvedTrace(nil), picked...)
+			}
+			return
+		}
+		for _, candidate := range choices[index] {
+			keys, details := map[string]int{}, map[string]int{}
+			subtreeKeys(candidate.roots, keys)
+			subtreeDetailKeys(candidate.roots, details)
+			delta := 0
+			for item, count := range keys {
+				delta += min(count, available[item])
+			}
+			for item, count := range details {
+				delta += min(count, detailAvailable[item]) * 10
+			}
+			consumed, detailConsumed := map[string]int{}, map[string]int{}
+			for item, count := range keys {
+				consumed[item] = min(count, available[item])
+				available[item] -= consumed[item]
+			}
+			for item, count := range details {
+				detailConsumed[item] = min(count, detailAvailable[item])
+				detailAvailable[item] -= detailConsumed[item]
+			}
+			search(index+1, score+delta, key+"\x1d"+canonicalTraceKey(candidate), append(picked, candidate))
+			for item, count := range consumed {
+				available[item] += count
+			}
+			for item, count := range detailConsumed {
+				detailAvailable[item] += count
+			}
+		}
+	}
+	search(0, 0, "", nil)
+	return best
 }
 
 func traceCandidateKeys(groups []TraceGroup) map[string]int {
@@ -637,14 +697,8 @@ func AlignShapes(left, right *ScenarioShape) *ShapeAlignment {
 	}
 	leftKeys, rightKeys := traceCandidateKeys(left.Traces), traceCandidateKeys(right.Traces)
 	leftDetails, rightDetails := traceCandidateDetailKeys(left.Traces), traceCandidateDetailKeys(right.Traces)
-	leftTraces := make([]resolvedTrace, 0, len(left.Traces))
-	for i, group := range left.Traces {
-		leftTraces = append(leftTraces, resolveTraceGroup(i, group, rightKeys, rightDetails))
-	}
-	rightTraces := make([]resolvedTrace, 0, len(right.Traces))
-	for i, group := range right.Traces {
-		rightTraces = append(rightTraces, resolveTraceGroup(i, group, leftKeys, leftDetails))
-	}
+	leftTraces := chooseTraceCandidates(left.Traces, rightKeys, rightDetails)
+	rightTraces := chooseTraceCandidates(right.Traces, leftKeys, leftDetails)
 	alignment := &ShapeAlignment{Traces: []TraceMatch{}}
 	matchedRight, usedRight := maximumCardinalityTracePairs(leftTraces, rightTraces)
 	for leftIndex, leftTrace := range leftTraces {
