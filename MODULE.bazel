@@ -6,22 +6,12 @@ module(
 bazel_dep(name = "rules_go", version = "0.63.0")
 bazel_dep(name = "rules_itest", version = "0.0.59")
 bazel_dep(name = "rules_oci", version = "2.3.0")
-bazel_dep(name = "rules_rs", version = "0.0.102")
+bazel_dep(name = "rules_rs", version = "0.0.108")
 bazel_dep(name = "rules_shell", version = "0.8.0")
-bazel_dep(name = "llvm", version = "0.8.17")
+bazel_dep(name = "llvm", version = "0.8.18")
 bazel_dep(name = "aspect_bazel_lib", version = "2.21.1")
 bazel_dep(name = "package_metadata", version = "0.0.7")
 bazel_dep(name = "platforms", version = "1.1.0")
-
-# rules_rs 0.0.102 pins immutable Ubuntu zlib packages, but its archive URLs
-# stop resolving once Ubuntu supersedes the package. Launchpad retains those
-# exact checksummed artifacts permanently.
-single_version_override(
-    module_name = "rules_rs",
-    patch_strip = 1,
-    patches = ["//bazel:rules_rs_launchpad_zlib.patch"],
-    version = "0.0.102",
-)
 
 # No `name =` here: rules_go rejects a named SDK in a non-root module, which
 # would break importing this module as a dependency.
@@ -36,7 +26,7 @@ rust_toolchains.toolchain(
 use_repo(rust_toolchains, "default_rust_toolchains")
 
 register_toolchains(
-    "@default_rust_toolchains//:all",
+    "@default_rust_toolchains//...",
     "@llvm//toolchain:all",
 )
 

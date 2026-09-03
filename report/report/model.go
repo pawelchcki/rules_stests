@@ -83,16 +83,23 @@ type NormalizedProfilePlan struct {
 }
 
 type Manifest struct {
-	SchemaVersion          int            `json:"schemaVersion"`
-	Profile                string         `json:"profile"`
-	DisplayName            string         `json:"displayName"`
-	Language               string         `json:"language"`
-	Framework              string         `json:"framework"`
-	InstrumentationVersion string         `json:"instrumentationVersion"`
-	ProfileEvidence        []Evidence     `json:"profileEvidence"`
-	BaseCoverage           string         `json:"baseCoverage"`
-	DefaultVerification    string         `json:"defaultVerification"`
-	Verifications          []Verification `json:"verifications"`
+	SchemaVersion          int    `json:"schemaVersion"`
+	Profile                string `json:"profile"`
+	DisplayName            string `json:"displayName"`
+	Language               string `json:"language"`
+	Framework              string `json:"framework"`
+	InstrumentationVersion string `json:"instrumentationVersion"`
+	Version                string `json:"version,omitempty"`
+	ShortLabel             string `json:"shortLabel,omitempty"`
+	// Unexercised marks a profile that is declared in the corpus but produced
+	// no receipts in this build, usually because its container images are not
+	// published. Its corpus data is shown; none of its features can be
+	// verified.
+	Unexercised         bool           `json:"unexercised,omitempty"`
+	ProfileEvidence     []Evidence     `json:"profileEvidence"`
+	BaseCoverage        string         `json:"baseCoverage"`
+	DefaultVerification string         `json:"defaultVerification"`
+	Verifications       []Verification `json:"verifications"`
 }
 
 type ScenarioShape struct {
@@ -144,17 +151,60 @@ type CoverageCell struct {
 }
 
 type Comparison struct {
-	LeftProfile  string         `json:"leftProfile"`
-	RightProfile string         `json:"rightProfile"`
-	Scenario     string         `json:"scenario"`
-	Available    bool           `json:"available"`
-	TraceDelta   int            `json:"traceDelta"`
-	SpanDelta    int            `json:"spanDelta"`
-	ScopeDelta   map[string]int `json:"scopeDelta"`
-	StatusDelta  map[string]int `json:"statusDelta"`
-	CountDelta   int            `json:"countDelta"`
-	Left         *ScenarioShape `json:"left,omitempty"`
-	Right        *ScenarioShape `json:"right,omitempty"`
+	LeftProfile  string          `json:"leftProfile"`
+	RightProfile string          `json:"rightProfile"`
+	Scenario     string          `json:"scenario"`
+	Available    bool            `json:"available"`
+	TraceDelta   int             `json:"traceDelta"`
+	SpanDelta    int             `json:"spanDelta"`
+	ScopeDelta   map[string]int  `json:"scopeDelta"`
+	StatusDelta  map[string]int  `json:"statusDelta"`
+	CountDelta   int             `json:"countDelta"`
+	Left         *ScenarioShape  `json:"left,omitempty"`
+	Right        *ScenarioShape  `json:"right,omitempty"`
+	Alignment    *ShapeAlignment `json:"alignment,omitempty"`
+}
+
+// ShapeAlignment is the span-by-span pairing of two scenario shapes.
+type ShapeAlignment struct {
+	Traces  []TraceMatch `json:"traces"`
+	Summary AlignSummary `json:"summary"`
+}
+
+type AlignSummary struct {
+	TraceMatched   int `json:"traceMatched"`
+	TraceLeftOnly  int `json:"traceLeftOnly"`
+	TraceRightOnly int `json:"traceRightOnly"`
+	// Span totals count authored span groups (the rendered rows), not expanded
+	// cardinalities. Each row carries its own exact or ranged count label.
+	Matched   int `json:"matched"`
+	LeftOnly  int `json:"leftOnly"`
+	RightOnly int `json:"rightOnly"`
+	Differing int `json:"differing"`
+}
+
+type TraceRef struct {
+	Index    int    `json:"index"`
+	Label    string `json:"label"`
+	Card     string `json:"card,omitempty"`
+	Coverage string `json:"coverage,omitempty"`
+}
+
+type TraceMatch struct {
+	Kind  string      `json:"kind"`
+	Left  *TraceRef   `json:"left,omitempty"`
+	Right *TraceRef   `json:"right,omitempty"`
+	Spans []SpanMatch `json:"spans"`
+}
+
+type SpanMatch struct {
+	Kind      string    `json:"kind"`
+	Depth     int       `json:"depth"`
+	Left      *SpanNode `json:"left,omitempty"`
+	Right     *SpanNode `json:"right,omitempty"`
+	LeftCard  string    `json:"leftCard,omitempty"`
+	RightCard string    `json:"rightCard,omitempty"`
+	Diffs     []string  `json:"diffs,omitempty"`
 }
 
 type ReportModel struct {

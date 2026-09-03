@@ -273,6 +273,11 @@ def _report_manifest_impl(ctx):
     plans = []
     registry_matrix = None
     registry_metadata = None
+    profile_labels = {target.label: True for target in ctx.attr.profiles}
+    for target in ctx.attr.unavailable_profiles:
+        if target.label not in profile_labels:
+            fail("unavailable report profile {} is not in profiles".format(target.label))
+    unavailable = {target.label: True for target in ctx.attr.unavailable_profiles}
     for target in ctx.attr.profiles:
         profile = target[OtelProfileInfo]
         if registry_matrix == None:
@@ -293,6 +298,7 @@ def _report_manifest_impl(ctx):
                 scenario: _repository_relative(path)
                 for scenario, path in profile.scenario_shape_sources.items()
             },
+            "unavailable": target.label in unavailable,
         })
     if registry_matrix == None:
         fail("profiles must contain at least one OpenTelemetry profile")
@@ -310,6 +316,7 @@ otel_report_manifest = rule(
     implementation = _report_manifest_impl,
     attrs = {
         "profiles": attr.label_list(providers = [OtelProfileInfo]),
+        "unavailable_profiles": attr.label_list(providers = [OtelProfileInfo]),
     },
 )
 

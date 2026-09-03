@@ -59,11 +59,16 @@ realworld_app_suite(
     profile = "//corpus:go-gin-otelbuild-v1-1-0",
 )
 
+# Every language stays in the report regardless of image publication. A profile
+# whose images are unpublished is declared unavailable, so report assembly
+# accepts its lack of receipts while keeping its checked-in shapes and upstream
+# claims visible. No feature of an unavailable profile can reach verified.
 _REPORT_PROFILES = [
     "//corpus:go-gin-otelbuild-v1-1-0",
     "//corpus:python-aiohttp-auto-v0-65b0",
     "//corpus:python-django-auto-v0-65b0",
-] + (["//corpus:ruby-rails-auto-v0-1-0"] if RUBY_IMAGES_PUBLISHED else [])
+    "//corpus:ruby-rails-auto-v0-1-0",
+]
 
 test_suite(
     name = "otel_report_suite",
@@ -77,4 +82,7 @@ test_suite(
 otel_report_manifest(
     name = "otel_report_manifest",
     profiles = _REPORT_PROFILES,
+    # This is an explicit owner declaration, not an inference from missing
+    # receipts: an unexpected absent runner remains an assembly failure.
+    unavailable_profiles = ["//corpus:ruby-rails-auto-v0-1-0"] if not RUBY_IMAGES_PUBLISHED else [],
 )

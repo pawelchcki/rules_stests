@@ -6,6 +6,7 @@ package(default_visibility = ["//visibility:public"])
 go_library(
     name = "lib",
     srcs = glob(["report/*.go"], exclude = ["report/*_test.go"]),
+    embedsrcs = glob(["report/web/*"]),
     importpath = "github.com/pawelchcki/rules_stests/report",
 )
 
@@ -70,6 +71,14 @@ _PROFILE_IDS = sorted(OTEL_PROFILES)
 _PLAN_LABELS = ["//corpus:" + profile_id + ".proof_plan" for profile_id in _PROFILE_IDS]
 _SPEC_LABELS = ["//corpus:realworld/profile/{}.scm".format(profile_id) for profile_id in _PROFILE_IDS]
 
+# Alignment goldens run over authored shapes for the tags scenario.
+_ALIGN_SHAPE_LABELS = [
+    "//corpus:realworld/shape/python-django-auto-v0-65b0/tags.scm",
+    "//corpus:realworld/shape/python-aiohttp-auto-v0-65b0/tags.scm",
+    "//corpus:realworld/shape/go-gin-otelbuild-v1-1-0/tags.scm",
+    "//corpus:realworld/shape/ruby-rails-auto-v0-1-0/tags.scm",
+]
+
 go_test(
     name = "report_test",
     srcs = glob(["report/*_test.go"]),
@@ -80,12 +89,15 @@ go_test(
     ] + ["$(rootpath {})".format(label) for label in _PLAN_LABELS] + [
         "$(rootpath {})".format(label)
         for label in _SPEC_LABELS
-    ] + ["$(rootpath //corpus:realworld/contract.scm)"],
+    ] + ["$(rootpath //corpus:realworld/contract.scm)"] + [
+        "$(rootpath {})".format(label)
+        for label in _ALIGN_SHAPE_LABELS
+    ],
     data = [
         "data/catalog.json",
         "data/spec-compliance-matrix.md",
         "//corpus:otel_standard_registry_json",
         "//corpus:realworld/contract.scm",
-    ] + _PLAN_LABELS + _SPEC_LABELS,
+    ] + _PLAN_LABELS + _SPEC_LABELS + _ALIGN_SHAPE_LABELS,
     embed = [":lib"],
 )
