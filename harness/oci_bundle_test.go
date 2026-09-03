@@ -181,21 +181,6 @@ func TestExecServiceNameDefaultPreservesExplicitValue(t *testing.T) {
 	}
 }
 
-func TestRetryableBindFailureIsNarrow(t *testing.T) {
-	if !retryableBindFailure([]byte("listen tcp 127.0.0.1:8080: bind: address already in use")) {
-		t.Fatal("Gin bind collision was not retryable")
-	}
-	for _, output := range [][]byte{
-		[]byte("database migration failed"),
-		[]byte("permission denied while binding"),
-		[]byte("address already in use"),
-	} {
-		if retryableBindFailure(output) {
-			t.Fatalf("unrelated startup failure was retryable: %q", output)
-		}
-	}
-}
-
 func makePythonRoot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()

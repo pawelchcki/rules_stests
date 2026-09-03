@@ -2,7 +2,6 @@ package main
 
 import (
 	"archive/tar"
-	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,11 +10,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 )
 
 type descriptor struct {
@@ -63,7 +60,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: oci_bundle extract <oci-layout> <rootfs> <single|multi> | <app|app-ruby|app-exec|app-exec-retry-bind> [injection options] <instance> <rootfs> <command> [arguments...]")
+		return errors.New("usage: oci_bundle extract <oci-layout> <rootfs> <single|multi> | <app|app-ruby|app-exec> [injection options] <instance> <rootfs> <command> [arguments...]")
 	}
 	switch args[0] {
 	case "extract":
@@ -71,7 +68,7 @@ func run(args []string) error {
 			return errors.New("usage: oci_bundle extract <oci-layout> <rootfs> <single|multi>")
 		}
 		return extractOCI(args[1], args[2], args[3] == "single")
-	case "app", "app-ruby", "app-exec", "app-exec-retry-bind":
+	case "app", "app-ruby", "app-exec":
 		injection, positionals, err := parseAppArgs(args[1:])
 		if err != nil {
 			return err
@@ -85,7 +82,7 @@ func run(args []string) error {
 		case "app-ruby":
 			return runRubyApp(injection, positionals[0], positionals[1], positionals[2], positionals[3:])
 		default:
-			return runAppExec(injection, positionals[0], positionals[1], positionals[2], positionals[3:], args[0] == "app-exec-retry-bind")
+			return runAppExec(injection, positionals[0], positionals[1], positionals[2], positionals[3:])
 		}
 	default:
 		return fmt.Errorf("unsupported mode %q", args[0])
@@ -378,7 +375,7 @@ func runApp(injection injection, instance, rootArg, command string, args []strin
 // runApp it interposes no language runtime: the image supplies a static
 // executable, and the per-instance state directory becomes its working
 // directory so relative database paths stay inside the instance.
-func runAppExec(injection injection, instance, rootArg, relative string, args []string, retryBind bool) error {
+func runAppExec(injection injection, instance, rootArg, relative string, args []string) error {
 	if !validInstance(instance) {
 		return fmt.Errorf("unsafe instance name %q", instance)
 	}
@@ -415,41 +412,10 @@ func runAppExec(injection injection, instance, rootArg, relative string, args []
 	if otelRoot != "" {
 		fmt.Fprintf(os.Stderr, "oci_bundle: activating instrumentation for %s from %s\n", instance, otelRoot)
 	}
-	if retryBind {
-		return runWithBindRetry(binary, args, environment)
-	}
-
 	if err := syscall.Exec(binary, append([]string{binary}, args...), environment); err != nil {
 		return fmt.Errorf("execute app binary %s: %w", relative, err)
 	}
 	return nil
-}
-
-const bindRetryWindow = time.Minute
-
-func runWithBindRetry(binary string, args, environment []string) error {
-	deadline := time.Now().Add(bindRetryWindow)
-	for attempt := 1; ; attempt++ {
-		var stderr bytes.Buffer
-		command := exec.Command(binary, args...)
-		command.Env = environment
-		command.Stdin = os.Stdin
-		command.Stdout = os.Stdout
-		command.Stderr = io.MultiWriter(os.Stderr, &stderr)
-		err := command.Run()
-		if err == nil {
-			return nil
-		}
-		if !retryableBindFailure(stderr.Bytes()) || time.Now().After(deadline) {
-			return fmt.Errorf("execute app binary %s: %w", binary, err)
-		}
-		fmt.Fprintf(os.Stderr, "oci_bundle: assigned port was claimed during startup; retrying bind (attempt %d)\n", attempt+1)
-		time.Sleep(25 * time.Millisecond)
-	}
-}
-
-func retryableBindFailure(stderr []byte) bool {
-	return bytes.Contains(stderr, []byte("bind: address already in use"))
 }
 
 func applyExecDefaults(environment []string, instance string) []string {

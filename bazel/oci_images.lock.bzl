@@ -29,8 +29,8 @@ OCI_IMAGES = {
     ),
     "gin_realworld": struct(
         repository = "ghcr.io/pawelchcki/rules_stest_apps",
-        digest = "sha256:1f92ea819af2351374a9e50bf1349173098d5c402f80c7b53506e21f90771f04",
-        tree = "a6927e4a50ac12bb62f31e2176ff8857cfe49c7e",
+        digest = "sha256:97d77de5274dc379d091af756512fc102b0ece420924f5c4c4d0c2a19e164bac",
+        tree = "5e3486997eb01b9233614181841d16c8216f7bd3",
     ),
     "django_ninja_realworld": struct(
         repository = "ghcr.io/pawelchcki/rules_stest_apps",
