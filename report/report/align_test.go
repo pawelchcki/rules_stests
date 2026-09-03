@@ -103,6 +103,22 @@ func TestAlignShapesCoordinatesSiblingOneOfChoices(t *testing.T) {
 	}
 }
 
+func TestAlignShapesSelectsOneOfAlternativeByDetails(t *testing.T) {
+	ok := exactSpan("http", "client", "unset", "GET item", "200")
+	failed := exactSpan("http", "client", "error", "GET item", "500")
+	choice := SpanGroup{Cardinality: "one_of", MinCount: 1, MaxCount: 1, Alternatives: []SpanGroup{failed, ok}}
+	root := func(children ...SpanGroup) SpanGroup {
+		return exactSpan("server", "server", "unset", "GET /api/items", "200", children...)
+	}
+	alignment := AlignShapes(shapeOf("left", root(choice)), shapeOf("right", root(ok)))
+	if alignment.Summary.Matched != 2 || alignment.Summary.Differing != 1 || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 {
+		t.Fatalf("one-of choice ignored matching status and HTTP details: %#v", alignment.Summary)
+	}
+	if row := findRow(t, alignment, "GET item"); len(row.Diffs) != 1 || row.Diffs[0] != "count" {
+		t.Fatalf("one-of choice should differ only by its rendered cardinality: %#v", row)
+	}
+}
+
 func TestAlignShapesMaximizesWildcardSiblingPairing(t *testing.T) {
 	wildcard := exactSpan("", "", "error", "", "500")
 	server := exactSpan("", "server", "unset", "", "")
@@ -116,6 +132,27 @@ func TestAlignShapesMaximizesWildcardSiblingPairing(t *testing.T) {
 	alignment := AlignShapes(left, right)
 	if alignment.Summary.Matched != 3 || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 {
 		t.Fatalf("detail scoring sacrificed a compatible sibling match: %#v", alignment.Summary)
+	}
+}
+
+func TestAlignShapesMaximizesCompatibleTracePairs(t *testing.T) {
+	server := exactSpan("", "server", "unset", "GET /api/items", "200")
+	client := exactSpan("", "client", "unset", "process item", "")
+	wildcard := exactSpan("", "", "unset", "", "")
+	trace := func(roots ...SpanGroup) TraceGroup {
+		return TraceGroup{Count: 1, ExactCount: true, MinCount: 1, MaxCount: 1, Roots: roots}
+	}
+	left := &ScenarioShape{Traces: []TraceGroup{
+		trace(wildcard, server), // Matches either right trace, with a higher score for the first.
+		trace(server),
+	}}
+	right := &ScenarioShape{Traces: []TraceGroup{
+		trace(server, client),
+		trace(client),
+	}}
+	alignment := AlignShapes(left, right)
+	if alignment.Summary.TraceMatched != 2 || alignment.Summary.TraceLeftOnly != 0 || alignment.Summary.TraceRightOnly != 0 {
+		t.Fatalf("greedy trace choice lost a compatible pair: %#v", alignment.Summary)
 	}
 }
 
