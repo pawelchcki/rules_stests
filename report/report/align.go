@@ -85,6 +85,12 @@ func alignedSpanMatchScore(left, right alignedSpan) int {
 	if left.card == right.card {
 		score += 2
 	}
+	if canonicalChildrenKey(left) == canonicalChildrenKey(right) {
+		// Sibling order is not meaningful. When otherwise-identical parents
+		// have different descendants, prefer the pairing that keeps their
+		// equivalent subtrees together.
+		score += 1
+	}
 	return score
 }
 
@@ -177,12 +183,16 @@ func spanNodeFromKey(key string) SpanNode {
 }
 
 func canonicalSpanKey(span alignedSpan) string {
+	return strings.Join([]string{span.keyString, span.node.Status, span.node.HTTPStatus, span.card, canonicalChildrenKey(span)}, "\x1f")
+}
+
+func canonicalChildrenKey(span alignedSpan) string {
 	children := make([]string, 0, len(span.children))
 	for _, child := range span.children {
 		children = append(children, canonicalSpanKey(child))
 	}
 	sort.Strings(children)
-	return strings.Join([]string{span.keyString, span.node.Status, span.node.HTTPStatus, span.card, strings.Join(children, "\x1e")}, "\x1f")
+	return strings.Join(children, "\x1e")
 }
 
 // chooseCandidates jointly picks candidates for sibling groups. Each choice

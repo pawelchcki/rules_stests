@@ -71,6 +71,23 @@ func TestAlignShapesPairsReorderedDuplicateSiblingsByDetails(t *testing.T) {
 	}
 }
 
+func TestAlignShapesPairsDuplicateParentsByChildSubtree(t *testing.T) {
+	childA := exactSpan("worker", "consumer", "unset", "receive a", "")
+	childB := exactSpan("worker", "consumer", "unset", "receive b", "")
+	parent := func(child SpanGroup) SpanGroup {
+		return exactSpan("server", "internal", "unset", "process item", "", child)
+	}
+	root := func(children ...SpanGroup) SpanGroup {
+		return exactSpan("server", "server", "unset", "GET /api/items", "200", children...)
+	}
+	left := shapeOf("left", root(parent(childA), parent(childB)))
+	right := shapeOf("right", root(parent(childB), parent(childA)))
+	alignment := AlignShapes(left, right)
+	if alignment.Summary.Matched != 5 || alignment.Summary.Differing != 0 || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 {
+		t.Fatalf("reordered duplicate parents did not keep child subtrees together: %#v", alignment.Summary)
+	}
+}
+
 func TestAlignShapesMatchesReorderedMultiRootTraces(t *testing.T) {
 	first := exactSpan("consumer", "consumer", "unset", "receive alpha", "absent")
 	second := exactSpan("consumer", "consumer", "unset", "receive beta", "absent")

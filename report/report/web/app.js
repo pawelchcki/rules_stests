@@ -614,18 +614,24 @@ function syncControlsFromHash() {
     const pairs = [['category', 'category'], ['language', 'language'], ['support', 'support'],
       ['verification', 'verification'], ['basis', 'basis']];
     for (const pair of pairs) {
-      if (params.get(pair[0]) !== null) $(pair[1]).value = params.get(pair[0]);
+      $(pair[1]).value = params.get(pair[0]) || '';
     }
-    if (params.get('q') !== null) $('search').value = params.get('q');
+    $('search').value = params.get('q') || '';
     $('verified-only').checked = params.get('verifiedOnly') === '1';
   }
   return state.section;
+}
+
+function scrollToSection(section) {
+  const target = document.getElementById(section);
+  if (target) target.scrollIntoView();
 }
 
 function applyHash() {
   const section = syncControlsFromHash();
   if (section === 'compare') renderCompare();
   else if (section === 'features') renderFeatures();
+  scrollToSection(section);
 }
 
 function setup() {
@@ -668,9 +674,10 @@ function setup() {
   renderCoverageGrid();
   renderGlossary();
   renderReceipts();
-  syncControlsFromHash();
+  const initialSection = syncControlsFromHash();
   renderFeatures();
   renderCompare();
+  scrollToSection(initialSection);
 }
 
 setup();
