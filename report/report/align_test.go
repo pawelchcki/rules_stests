@@ -134,6 +134,25 @@ func TestAlignShapesMaximizesSiblingDetailScoreGlobally(t *testing.T) {
 	}
 }
 
+func TestAlignShapesMinimizesDifferingRowsSymmetrically(t *testing.T) {
+	clientB := exactSpan("", "client", "unset", "B", "")
+	anyKindB := exactSpan("", "", "unset", "B", "")
+	clientUnnamed := exactSpan("", "client", "", "", "")
+	left := shapeOf("left", clientB, anyKindB)
+	right := shapeOf("right", clientUnnamed, clientB)
+	for _, pair := range [][2]*ScenarioShape{{left, right}, {right, left}} {
+		alignment := AlignShapes(pair[0], pair[1])
+		if alignment.Summary.Matched != 2 || alignment.Summary.Differing != 1 || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 {
+			t.Fatalf("rendered-difference tie-break depended on orientation: %#v", alignment.Summary)
+		}
+		for _, row := range alignment.Traces[0].Spans {
+			if row.Left != nil && row.Right != nil && row.Left.Name == "B" && row.Right.Name == "B" && row.Left.Kind == "client" && row.Right.Kind == "client" && len(row.Diffs) != 0 {
+				t.Fatalf("identical concrete spans were not paired: %#v", row)
+			}
+		}
+	}
+}
+
 func TestAlignShapesChoosesWildcardAlternativeByDetails(t *testing.T) {
 	unnamedError := exactSpan("", "server", "error", "", "500")
 	unnamedUnset := exactSpan("", "server", "unset", "", "500")

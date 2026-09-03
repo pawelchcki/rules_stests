@@ -121,6 +121,16 @@ func alignedSpanMatchScore(left, right alignedSpan) int {
 	// recognizing byte-for-byte equivalent child lists.
 	childMatches, childDetail := pairedSpanListScore(left.children, right.children)
 	score += childMatches*1000 + childDetail
+	// When structural detail ties across a whole assignment, prefer the
+	// orientation-independent pairing that produces the least noisy report.
+	// An exact rendered row gets an extra bonus so one exact plus one differing
+	// pair wins over two partially differing pairs with the same field total.
+	const renderedFieldCount = 6
+	differenceCount := len(spanDiffs(left, right))
+	score += renderedFieldCount - differenceCount
+	if differenceCount == 0 {
+		score += renderedFieldCount + 1
+	}
 	return score
 }
 
