@@ -651,7 +651,11 @@ func traceMatchScore(left, right resolvedTrace) int {
 	if left.coverage == right.coverage {
 		total += 10
 	}
-	return matched*100000 + total - (len(left.roots)+len(right.roots)-2*matched)*10000
+	score := matched*100000 + total - (len(left.roots)+len(right.roots)-2*matched)*10000
+	// A shared root always makes two trace groups compatible. Keep the
+	// unmatched-root penalty for ranking compatible pairs without letting it
+	// cross the negative sentinel used for incompatible pairs.
+	return max(0, score)
 }
 
 func maximumCardinalityTracePairs(left, right []resolvedTrace) ([]int, []bool) {

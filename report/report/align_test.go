@@ -415,6 +415,21 @@ func TestAlignShapesMaximizesCompatibleTracePairs(t *testing.T) {
 	}
 }
 
+func TestAlignShapesKeepsSparseRootOverlapCompatible(t *testing.T) {
+	shared := exactSpan("", "server", "unset", "GET /shared", "200")
+	leftRoots := []SpanGroup{shared}
+	for index := 0; index < 11; index++ {
+		leftRoots = append(leftRoots, exactSpan("", "client", "unset", fmt.Sprintf("extra-%02d", index), ""))
+	}
+	alignment := AlignShapes(shapeOf("left", leftRoots...), shapeOf("right", shared))
+	if alignment.Summary.TraceMatched != 1 || alignment.Summary.TraceLeftOnly != 0 || alignment.Summary.TraceRightOnly != 0 {
+		t.Fatalf("shared root did not keep trace groups compatible: %#v", alignment.Summary)
+	}
+	if alignment.Summary.Matched != 1 || alignment.Summary.LeftOnly != 11 || alignment.Summary.RightOnly != 0 {
+		t.Fatalf("sparse root overlap produced the wrong span alignment: %#v", alignment.Summary)
+	}
+}
+
 func TestAlignShapesCoordinatesTraceOneOfChoices(t *testing.T) {
 	a := exactSpan("", "server", "unset", "GET a", "200")
 	b := exactSpan("", "server", "unset", "GET b", "200")

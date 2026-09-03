@@ -473,8 +473,8 @@ function renderFeatures() {
     if (search && !(feature.name.toLowerCase().includes(search) || feature.id.toLowerCase().includes(search))) return false;
     if (support && !manifests.some((m) => (feature.support[m.language] || 'unknown') === support)) return false;
     const states = manifests.map((m) => (data.verification[feature.id] || {})[m.profile] || { state: 'not_exercised' });
-    if (verification && !states.some((v) => v.state === verification)) return false;
-    if (basis && !states.some((v) => v.basis === basis)) return false;
+    if ((verification || basis) && !states.some((v) =>
+      (!verification || v.state === verification) && (!basis || v.basis === basis))) return false;
     return true;
   });
 
