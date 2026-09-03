@@ -36,19 +36,39 @@ func findRow(t *testing.T, alignment *ShapeAlignment, name string) SpanMatch {
 
 func TestNormalizeSpanNameCollapsesRouteParameters(t *testing.T) {
 	tests := map[string]string{
-		"GET /api/articles/<slug>":  "get api/articles/*",
-		"GET /api/articles/:slug":   "get api/articles/*",
-		"GET /api/articles/{slug}":  "get api/articles/*",
-		"GET /api/articles/%{slug}": "get api/articles/*",
-		"GET   /api/tags":           "get api/tags",
-		"SELECT  …  articles_tag":   "select … articles_tag",
-		"SELECT value::text":        "select value::text",
-		"SELECT value::integer":     "select value::integer",
+		"GET /api/articles/<slug>":    "get api/articles/*",
+		"GET /api/articles/:slug":     "get api/articles/*",
+		"GET /api/articles/{slug}":    "get api/articles/*",
+		"GET /api/articles/%{slug}":   "get api/articles/*",
+		"GET   /api/tags":             "get api/tags",
+		"SELECT  …  articles_tag":     "select … articles_tag",
+		"SELECT value::text":          "select value::text",
+		"SELECT value::integer":       "select value::integer",
+		"SELECT '{\"tenant\":\"a\"}'": "select '{\"tenant\":\"a\"}'",
 	}
 	for input, want := range tests {
 		if got := NormalizeSpanName(input); got != want {
 			t.Errorf("NormalizeSpanName(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestAlignShapesResolvesNestedChoicesAgainstPairedParents(t *testing.T) {
+	a := exactSpan("", "client", "unset", "A", "200")
+	b := exactSpan("", "client", "unset", "B", "200")
+	choice := SpanGroup{Cardinality: "one_of", MinCount: 1, MaxCount: 1, Alternatives: []SpanGroup{a, b}}
+	p1 := func(children ...SpanGroup) SpanGroup {
+		return exactSpan("", "server", "unset", "P1", "200", children...)
+	}
+	p2 := func(children ...SpanGroup) SpanGroup {
+		return exactSpan("", "server", "unset", "P2", "200", children...)
+	}
+	alignment := AlignShapes(shapeOf("left", p1(choice), p2(a)), shapeOf("right", p1(b), p2(a)))
+	if alignment.Summary.Matched != 4 || alignment.Summary.Differing != 1 || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 {
+		t.Fatalf("nested choice was resolved before its parent pair: %#v", alignment.Summary)
+	}
+	if row := findRow(t, alignment, "B"); row.Kind != "matched" || strings.Join(row.Diffs, ",") != "count" {
+		t.Fatalf("nested choice did not retain the paired child's only count difference: %#v", row)
 	}
 }
 

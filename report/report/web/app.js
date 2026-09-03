@@ -316,7 +316,9 @@ function renderAlignment(alignment, flipped, options) {
       : (kind === 'left_only'
         ? '<span class="badge state-bad"><span class="icon">◀</span>left only</span>'
         : '<span class="badge state-ok"><span class="icon">▶</span>right only</span>');
-    const cards = [left && left.card, right && right.card].filter(Boolean).join(' / ');
+    const cards = traceCardDiffers
+      ? (left.card || '×1') + ' / ' + (right.card || '×1')
+      : [left && left.card, right && right.card].filter(Boolean).join(' / ');
     const coverage = [left && left.coverage, right && right.coverage].filter(Boolean).join(' / ');
     return '<details class="trace-group" open><summary>' + kindBadge +
       '<strong>' + esc(label) + '</strong>' +

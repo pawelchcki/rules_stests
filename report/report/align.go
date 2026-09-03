@@ -20,12 +20,12 @@ var whitespacePattern = regexp.MustCompile(`\s+`)
 // the parameter syntax used by a framework still align.
 func NormalizeSpanName(name string) string {
 	normalized := strings.ToLower(strings.TrimSpace(name))
-	normalized = pathParameterPattern.ReplaceAllString(normalized, "*")
-	normalized = colonPathParameterPattern.ReplaceAllString(normalized, "${1}*")
 	normalized = whitespacePattern.ReplaceAllString(normalized, " ")
 	fields := strings.Split(normalized, " ")
 	for i, field := range fields {
 		if strings.HasPrefix(field, "/") && len(field) > 1 {
+			field = pathParameterPattern.ReplaceAllString(field, "*")
+			field = colonPathParameterPattern.ReplaceAllString(field, "${1}*")
 			fields[i] = strings.TrimPrefix(field, "/")
 		}
 	}
@@ -33,14 +33,15 @@ func NormalizeSpanName(name string) string {
 }
 
 type alignedSpan struct {
-	node      SpanNode
-	card      string
-	minCount  int
-	maxCount  int
-	exact     bool
-	altCount  int
-	children  []alignedSpan
-	keyString string
+	node        SpanNode
+	card        string
+	minCount    int
+	maxCount    int
+	exact       bool
+	altCount    int
+	children    []alignedSpan
+	childGroups []SpanGroup
+	keyString   string
 }
 
 func spanKey(node SpanNode) string {
@@ -154,6 +155,7 @@ func resolveSpanGroup(group SpanGroup, opposite, oppositeDetails map[string]int)
 		keyString: spanKey(group.Span),
 	}
 	span.card = formatCard(minCount, maxCount, group.ExactCount, 0)
+	span.childGroups = group.Span.Children
 	span.children = chooseCandidates(group.Span.Children, opposite, oppositeDetails)
 	return []alignedSpan{span}
 }
@@ -533,6 +535,15 @@ func maximumCardinalityPairs(left, right []alignedSpan, score func(alignedSpan, 
 	})
 }
 
+func resolvePairedChildren(left, right alignedSpan) ([]alignedSpan, []alignedSpan) {
+	if left.childGroups == nil && right.childGroups == nil {
+		return left.children, right.children
+	}
+	leftKeys, rightKeys := candidateKeys(left.childGroups), candidateKeys(right.childGroups)
+	leftDetails, rightDetails := candidateDetailKeys(left.childGroups), candidateDetailKeys(right.childGroups)
+	return chooseCandidates(left.childGroups, rightKeys, rightDetails), chooseCandidates(right.childGroups, leftKeys, leftDetails)
+}
+
 // matchSpans pairs two sibling lists and emits depth-annotated rows in a
 // stable order: matched pairs first (in left order), then spans that exist only
 // on the left, then spans only on the right.
@@ -561,7 +572,8 @@ func matchSpans(left, right []alignedSpan, depth int, summary *AlignSummary) []S
 			RightCard: rightSpan.card,
 			Diffs:     diffs,
 		})
-		rows = append(rows, matchSpans(leftSpan.children, rightSpan.children, depth+1, summary)...)
+		leftChildren, rightChildren := resolvePairedChildren(leftSpan, rightSpan)
+		rows = append(rows, matchSpans(leftChildren, rightChildren, depth+1, summary)...)
 	}
 	for _, span := range leftOnly {
 		rows = append(rows, onlyRows(span, "left_only", depth, summary)...)
