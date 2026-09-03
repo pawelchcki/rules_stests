@@ -105,9 +105,13 @@ func alignedSpanMatchScore(left, right alignedSpan) int {
 	}
 	if left.node.Status != "" && left.node.Status == right.node.Status {
 		score += 8
+	} else if left.node.Status == "" && right.node.Status == "" {
+		score += 2
 	}
 	if left.node.HTTPStatus != "" && left.node.HTTPStatus == right.node.HTTPStatus {
 		score += 4
+	} else if left.node.HTTPStatus == "" && right.node.HTTPStatus == "" {
+		score += 2
 	}
 	if left.card == right.card {
 		score += 2
@@ -264,11 +268,11 @@ func choosePairedCandidates(leftGroups, rightGroups []SpanGroup) ([]alignedSpan,
 			choices[leftIndex][rightIndex], compatible[leftIndex][rightIndex] = bestSpanPair(leftGroups[leftIndex], rightGroups[rightIndex])
 		}
 	}
-	matchedRight, _ := maximumWeightMaximumCardinalityPairs(len(leftGroups), len(rightGroups), func(leftIndex, rightIndex int) int {
+	matchedRight, _ := maximumWeightMaximumCardinalityPairs(len(leftGroups), len(rightGroups), func(leftIndex, rightIndex int) (int, bool) {
 		if !compatible[leftIndex][rightIndex] {
-			return -1
+			return 0, false
 		}
-		return choices[leftIndex][rightIndex].score
+		return choices[leftIndex][rightIndex].score, true
 	})
 	for leftIndex, rightIndex := range matchedRight {
 		if rightIndex < 0 {
@@ -374,7 +378,7 @@ func maximumWeightAssignment(weights [][]int) []int {
 // larger than all possible detail scores, then maximizes the total weight.
 // The result therefore preserves the greatest number of matches while making
 // the globally best detail-aware pairing among those matchings.
-func maximumWeightMaximumCardinalityPairs(leftCount, rightCount int, score func(int, int) int) ([]int, []bool) {
+func maximumWeightMaximumCardinalityPairs(leftCount, rightCount int, score func(int, int) (int, bool)) ([]int, []bool) {
 	matchedRight := make([]int, leftCount)
 	for index := range matchedRight {
 		matchedRight[index] = -1
@@ -383,17 +387,34 @@ func maximumWeightMaximumCardinalityPairs(leftCount, rightCount int, score func(
 	if leftCount == 0 || rightCount == 0 {
 		return matchedRight, usedRight
 	}
-	scores, highest := make([][]int, leftCount), 0
+	scores := make([][]int, leftCount)
+	compatible := make([][]bool, leftCount)
+	lowest, highest, found := 0, 0, false
 	for leftIndex := 0; leftIndex < leftCount; leftIndex++ {
 		scores[leftIndex] = make([]int, rightCount)
+		compatible[leftIndex] = make([]bool, rightCount)
 		for rightIndex := 0; rightIndex < rightCount; rightIndex++ {
-			scores[leftIndex][rightIndex] = score(leftIndex, rightIndex)
-			if scores[leftIndex][rightIndex] > highest {
+			scores[leftIndex][rightIndex], compatible[leftIndex][rightIndex] = score(leftIndex, rightIndex)
+			if !compatible[leftIndex][rightIndex] {
+				continue
+			}
+			if !found || scores[leftIndex][rightIndex] < lowest {
+				lowest = scores[leftIndex][rightIndex]
+			}
+			if !found || scores[leftIndex][rightIndex] > highest {
 				highest = scores[leftIndex][rightIndex]
 			}
+			found = true
 		}
 	}
-	bonus := (highest + 1) * (min(leftCount, rightCount) + 1)
+	if !found {
+		return matchedRight, usedRight
+	}
+	// Shift every compatible detail score by the same amount. This preserves
+	// ordering even when a valid scorer uses negative values, while reserving
+	// edge presence—not a numeric sentinel—to express compatibility.
+	detailRange := highest - lowest
+	bonus := (detailRange + 1) * (min(leftCount, rightCount) + 1)
 	size := leftCount + rightCount
 	weights := make([][]int, size)
 	for index := range weights {
@@ -401,15 +422,15 @@ func maximumWeightMaximumCardinalityPairs(leftCount, rightCount int, score func(
 	}
 	for leftIndex := 0; leftIndex < leftCount; leftIndex++ {
 		for rightIndex := 0; rightIndex < rightCount; rightIndex++ {
-			if scores[leftIndex][rightIndex] >= 0 {
-				weights[leftIndex][rightIndex] = bonus + scores[leftIndex][rightIndex]
+			if compatible[leftIndex][rightIndex] {
+				weights[leftIndex][rightIndex] = bonus + scores[leftIndex][rightIndex] - lowest
 			}
 		}
 	}
 	assignment := maximumWeightAssignment(weights)
 	for leftIndex := 0; leftIndex < leftCount; leftIndex++ {
 		rightIndex := assignment[leftIndex]
-		if rightIndex < rightCount && scores[leftIndex][rightIndex] >= 0 {
+		if rightIndex < rightCount && compatible[leftIndex][rightIndex] {
 			matchedRight[leftIndex], usedRight[rightIndex] = rightIndex, true
 		}
 	}
@@ -417,8 +438,9 @@ func maximumWeightMaximumCardinalityPairs(leftCount, rightCount int, score func(
 }
 
 func maximumCardinalityPairs(left, right []alignedSpan, score func(alignedSpan, alignedSpan) int) ([]int, []bool) {
-	return maximumWeightMaximumCardinalityPairs(len(left), len(right), func(leftIndex, rightIndex int) int {
-		return score(left[leftIndex], right[rightIndex])
+	return maximumWeightMaximumCardinalityPairs(len(left), len(right), func(leftIndex, rightIndex int) (int, bool) {
+		value := score(left[leftIndex], right[rightIndex])
+		return value, value >= 0
 	})
 }
 
@@ -567,8 +589,8 @@ func bestTracePair(leftIndex int, leftGroup TraceGroup, rightIndex int, rightGro
 	best, found, bestKey := tracePairChoice{}, false, ""
 	for _, left := range traceGroupCandidates(leftIndex, leftGroup) {
 		for _, right := range traceGroupCandidates(rightIndex, rightGroup) {
-			score := traceMatchScore(left, right)
-			if score < 0 {
+			score, compatible := traceMatchScore(left, right)
+			if !compatible {
 				continue
 			}
 			key := canonicalTraceKey(left) + "\x1c" + canonicalTraceKey(right)
@@ -592,11 +614,11 @@ func choosePairedTraceCandidates(leftGroups, rightGroups []TraceGroup) ([]resolv
 			choices[leftIndex][rightIndex], compatible[leftIndex][rightIndex] = bestTracePair(leftIndex, leftGroups[leftIndex], rightIndex, rightGroups[rightIndex])
 		}
 	}
-	matchedRight, _ := maximumWeightMaximumCardinalityPairs(len(leftGroups), len(rightGroups), func(leftIndex, rightIndex int) int {
+	matchedRight, _ := maximumWeightMaximumCardinalityPairs(len(leftGroups), len(rightGroups), func(leftIndex, rightIndex int) (int, bool) {
 		if !compatible[leftIndex][rightIndex] {
-			return -1
+			return 0, false
 		}
-		return choices[leftIndex][rightIndex].score
+		return choices[leftIndex][rightIndex].score, true
 	})
 	for leftIndex, rightIndex := range matchedRight {
 		if rightIndex < 0 {
@@ -612,7 +634,7 @@ func choosePairedTraceCandidates(leftGroups, rightGroups []TraceGroup) ([]resolv
 // root pairing, then uses the same detail-aware score as sibling alignment so
 // equivalent multi-root traces remain stable when authored in a different
 // order.
-func traceMatchScore(left, right resolvedTrace) int {
+func traceMatchScore(left, right resolvedTrace) (int, bool) {
 	if left.rootGroups != nil || right.rootGroups != nil {
 		left.roots, right.roots = choosePairedCandidates(left.rootGroups, right.rootGroups)
 	}
@@ -640,7 +662,7 @@ func traceMatchScore(left, right resolvedTrace) int {
 		total += rootScore(left.roots[leftIndex], right.roots[rightIndex])
 	}
 	if matched == 0 {
-		return -1
+		return 0, false
 	}
 	// Root compatibility decides the pair first. Card and coverage then keep
 	// otherwise-identical root sets paired with their semantically equivalent
@@ -651,15 +673,11 @@ func traceMatchScore(left, right resolvedTrace) int {
 	if left.coverage == right.coverage {
 		total += 10
 	}
-	score := matched*100000 + total - (len(left.roots)+len(right.roots)-2*matched)*10000
-	// A shared root always makes two trace groups compatible. Keep the
-	// unmatched-root penalty for ranking compatible pairs without letting it
-	// cross the negative sentinel used for incompatible pairs.
-	return max(0, score)
+	return matched*100000 + total - (len(left.roots)+len(right.roots)-2*matched)*10000, true
 }
 
 func maximumCardinalityTracePairs(left, right []resolvedTrace) ([]int, []bool) {
-	return maximumWeightMaximumCardinalityPairs(len(left), len(right), func(leftIndex, rightIndex int) int {
+	return maximumWeightMaximumCardinalityPairs(len(left), len(right), func(leftIndex, rightIndex int) (int, bool) {
 		return traceMatchScore(left[leftIndex], right[rightIndex])
 	})
 }

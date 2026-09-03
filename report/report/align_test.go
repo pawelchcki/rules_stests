@@ -149,6 +149,23 @@ func TestAlignShapesChoosesWildcardAlternativeByDetails(t *testing.T) {
 	}
 }
 
+func TestAlignShapesRewardsEquallyUnspecifiedDetails(t *testing.T) {
+	concrete := exactSpan("", "client", "error", "B", "500")
+	unspecifiedClient := exactSpan("", "client", "", "", "")
+	unspecifiedKind := exactSpan("", "", "error", "", "500")
+	choice := func(alternatives ...SpanGroup) SpanGroup {
+		return SpanGroup{Cardinality: "one_of", MinCount: 1, MaxCount: 1, Alternatives: alternatives}
+	}
+	left := shapeOf("left", choice(concrete, unspecifiedClient))
+	right := shapeOf("right", choice(unspecifiedClient, unspecifiedKind))
+	for _, pair := range [][2]*ScenarioShape{{left, right}, {right, left}} {
+		alignment := AlignShapes(pair[0], pair[1])
+		if alignment.Summary.Matched != 1 || alignment.Summary.Differing != 0 || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 {
+			t.Fatalf("unspecified alternatives were resolved asymmetrically: %#v", alignment.Summary)
+		}
+	}
+}
+
 func TestAlignShapesPrefersTraceGroupsWithTheSameRootSet(t *testing.T) {
 	a := exactSpan("", "server", "unset", "A", "200")
 	b := exactSpan("", "server", "unset", "B", "200")
@@ -427,6 +444,27 @@ func TestAlignShapesKeepsSparseRootOverlapCompatible(t *testing.T) {
 	}
 	if alignment.Summary.Matched != 1 || alignment.Summary.LeftOnly != 11 || alignment.Summary.RightOnly != 0 {
 		t.Fatalf("sparse root overlap produced the wrong span alignment: %#v", alignment.Summary)
+	}
+}
+
+func TestAlignShapesPreservesNegativeTraceScoreOrdering(t *testing.T) {
+	shared := exactSpan("", "server", "unset", "X", "200")
+	traceWith := func(marker string, side string) TraceGroup {
+		roots := []SpanGroup{
+			shared,
+			exactSpan("", "server", "unset", marker+"-1", "200"),
+			exactSpan("", "server", "unset", marker+"-2", "200"),
+		}
+		for index := 0; index < 20; index++ {
+			roots = append(roots, exactSpan("", "client", "unset", fmt.Sprintf("%s-%s-%02d", marker, side, index), ""))
+		}
+		return TraceGroup{Count: 1, ExactCount: true, MinCount: 1, MaxCount: 1, Roots: roots}
+	}
+	left := &ScenarioShape{Traces: []TraceGroup{traceWith("A", "left"), traceWith("B", "left")}}
+	right := &ScenarioShape{Traces: []TraceGroup{traceWith("B", "right"), traceWith("A", "right")}}
+	alignment := AlignShapes(left, right)
+	if alignment.Summary.TraceMatched != 2 || alignment.Summary.Matched != 6 || alignment.Summary.LeftOnly != 40 || alignment.Summary.RightOnly != 40 {
+		t.Fatalf("negative compatible scores lost their relative ordering: %#v", alignment.Summary)
 	}
 }
 

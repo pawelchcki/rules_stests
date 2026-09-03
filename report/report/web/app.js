@@ -519,11 +519,11 @@ function renderFeatures() {
           : '';
         return '<td>' + badge('verification', state.state) + basisBadge + assertion + evidence + '</td>';
       }).join('');
-      const seen = [];
+      const upstreamLanguages = language ? [language] : [];
       for (const manifest of manifests) {
-        if (!seen.includes(manifest.language)) seen.push(manifest.language);
+        if (!upstreamLanguages.includes(manifest.language)) upstreamLanguages.push(manifest.language);
       }
-      const upstream = seen.map((lang) =>
+      const upstream = upstreamLanguages.map((lang) =>
         '<div>' + esc(lang) + ' ' + badge('support', feature.support[lang] || 'unknown') + '</div>').join('');
       const optionality = feature.optional === 'X'
         ? '<span class="badge state-neutral" title="Optional in the upstream specification">optional</span>'
