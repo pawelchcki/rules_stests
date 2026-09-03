@@ -367,6 +367,17 @@ func TestAlignShapesSelectsOneOfAlternativeByDetails(t *testing.T) {
 	}
 }
 
+func TestAlignShapesPrefersExactRawNameAmongNormalizedAlternatives(t *testing.T) {
+	braces := exactSpan("", "server", "unset", "GET /x/{id}", "200")
+	colon := exactSpan("", "server", "unset", "GET /x/:id", "200")
+	choice := SpanGroup{Cardinality: "one_of", MinCount: 1, MaxCount: 1, Alternatives: []SpanGroup{braces, colon}}
+	alignment := AlignShapes(shapeOf("left", choice), shapeOf("right", colon))
+	row := findRow(t, alignment, "GET /x/:id")
+	if row.Kind != "matched" || strings.Contains(strings.Join(row.Diffs, ","), "name") {
+		t.Fatalf("exact raw-name alternative was not preferred: %#v", row)
+	}
+}
+
 func TestAlignShapesMaximizesWildcardSiblingPairing(t *testing.T) {
 	wildcard := exactSpan("", "", "error", "", "500")
 	server := exactSpan("", "server", "unset", "", "")

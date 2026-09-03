@@ -79,6 +79,12 @@ func spanMatchScore(left, right SpanNode) int {
 			return -1
 		}
 		score += 100
+		// Normalization establishes structural compatibility, while an exact
+		// authored name avoids displaying a needless name difference when both
+		// normalized and exact alternatives are available.
+		if left.Name == right.Name {
+			score++
+		}
 	} else if leftName == "" && rightName == "" {
 		// Prefer two equally-unspecified matchers over consuming a concrete
 		// sibling with a wildcard.
