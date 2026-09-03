@@ -54,8 +54,10 @@ func spanMatchScore(left, right SpanNode) int {
 			return -1
 		}
 		score += 10
-	} else if left.Kind != "" || right.Kind != "" {
-		score++
+	} else if left.Kind == "" && right.Kind == "" {
+		// Prefer two equally-unspecified matchers over consuming a concrete
+		// sibling with a wildcard.
+		score += 2
 	}
 	leftName, rightName := NormalizeSpanName(left.Name), NormalizeSpanName(right.Name)
 	if leftName != "" && rightName != "" {
@@ -478,6 +480,10 @@ func onlyRows(span alignedSpan, kind string, depth int, summary *AlignSummary) [
 type resolvedTrace struct {
 	index    int
 	card     string
+	minCount int
+	maxCount int
+	exact    bool
+	altCount int
 	coverage string
 	roots    []alignedSpan
 	label    string
@@ -489,7 +495,7 @@ func canonicalTraceKey(trace resolvedTrace) string {
 		roots = append(roots, canonicalSpanKey(root))
 	}
 	sort.Strings(roots)
-	return strings.Join([]string{trace.card, strings.Join(roots, "\x1e")}, "\x1f")
+	return strings.Join([]string{trace.card, trace.coverage, strings.Join(roots, "\x1e")}, "\x1f")
 }
 
 func traceGroupCandidates(index int, group TraceGroup, opposite, oppositeDetails map[string]int) []resolvedTrace {
@@ -497,14 +503,23 @@ func traceGroupCandidates(index int, group TraceGroup, opposite, oppositeDetails
 		var candidates []resolvedTrace
 		for _, alternative := range group.Alternatives {
 			for _, candidate := range traceGroupCandidates(index, alternative, opposite, oppositeDetails) {
-				candidate.card = formatCard(group.MinCount, group.MaxCount, false, len(group.Alternatives))
+				// A cardinality wrapper around a one-of holds a single
+				// alternative; keep the inner choice count in that case.
+				if len(group.Alternatives) > 1 {
+					candidate.altCount = len(group.Alternatives)
+				}
+				if group.Cardinality != "" && group.Cardinality != "one_of" {
+					candidate.minCount, candidate.maxCount, candidate.exact = group.MinCount, group.MaxCount, false
+				}
+				candidate.card = formatCard(candidate.minCount, candidate.maxCount, candidate.exact, candidate.altCount)
 				candidates = append(candidates, candidate)
 			}
 		}
 		return candidates
 	}
 	minCount, maxCount := traceBounds(group)
-	trace := resolvedTrace{index: index, card: formatCard(minCount, maxCount, group.ExactCount, 0), coverage: group.Coverage}
+	trace := resolvedTrace{index: index, minCount: minCount, maxCount: maxCount, exact: group.ExactCount, coverage: group.Coverage}
+	trace.card = formatCard(trace.minCount, trace.maxCount, trace.exact, trace.altCount)
 	trace.roots = chooseCandidates(group.Roots, opposite, oppositeDetails)
 	if len(trace.roots) > 0 {
 		trace.label = strings.TrimSpace(trace.roots[0].node.Name)
@@ -650,6 +665,15 @@ func traceMatchScore(left, right resolvedTrace) int {
 	}
 	if matched == 0 {
 		return -1
+	}
+	// Root compatibility decides the pair first. Card and coverage then keep
+	// otherwise-identical root sets paired with their semantically equivalent
+	// trace group rather than relying on authored order.
+	if left.card == right.card {
+		total += 100
+	}
+	if left.coverage == right.coverage {
+		total += 10
 	}
 	return matched*100000 + total - (len(left.roots)+len(right.roots)-2*matched)*10000
 }

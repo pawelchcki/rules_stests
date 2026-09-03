@@ -83,6 +83,18 @@ func TestAlignShapesPrefersWildcardSiblingsWithMatchingSpecificity(t *testing.T)
 	}
 }
 
+func TestAlignShapesPrefersEquallyUnspecifiedSiblingKinds(t *testing.T) {
+	unnamed := exactSpan("", "", "error", "A", "500")
+	server := exactSpan("", "server", "error", "A", "500")
+	root := func(children ...SpanGroup) SpanGroup {
+		return exactSpan("", "server", "unset", "GET /items", "200", children...)
+	}
+	alignment := AlignShapes(shapeOf("left", root(unnamed, server)), shapeOf("right", root(unnamed, server)))
+	if alignment.Summary.Differing != 0 || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 {
+		t.Fatalf("wildcard kinds were cross-paired: %#v", alignment.Summary)
+	}
+}
+
 func TestAlignShapesPrefersTraceGroupsWithTheSameRootSet(t *testing.T) {
 	a := exactSpan("", "server", "unset", "A", "200")
 	b := exactSpan("", "server", "unset", "B", "200")
@@ -106,6 +118,40 @@ func TestAlignShapesCarriesTraceCoverageDifferences(t *testing.T) {
 	match := alignment.Traces[0]
 	if match.Left.Coverage != "complete" || match.Right.Coverage != "partial" {
 		t.Fatalf("trace coverage was omitted from alignment: %#v", match)
+	}
+}
+
+func TestAlignShapesPrefersTraceGroupsWithMatchingMetadata(t *testing.T) {
+	root := exactSpan("", "server", "unset", "GET /items", "200")
+	trace := func(count int, coverage string) TraceGroup {
+		return TraceGroup{Count: count, ExactCount: true, MinCount: count, MaxCount: count, Coverage: coverage, Roots: []SpanGroup{root}}
+	}
+	left := &ScenarioShape{Traces: []TraceGroup{trace(1, "complete"), trace(2, "partial")}}
+	right := &ScenarioShape{Traces: []TraceGroup{trace(2, "partial"), trace(1, "complete")}}
+	alignment := AlignShapes(left, right)
+	if alignment.Summary.TraceMatched != 2 || alignment.Summary.Differing != 0 {
+		t.Fatalf("trace groups were not paired by matching metadata: %#v", alignment.Summary)
+	}
+	for _, match := range alignment.Traces {
+		if match.Left.Card != match.Right.Card || match.Left.Coverage != match.Right.Coverage {
+			t.Fatalf("trace metadata was cross-paired: %#v", match)
+		}
+	}
+}
+
+func TestAlignShapesPreservesTraceChoiceThroughCardinalityWrapper(t *testing.T) {
+	a := exactSpan("", "server", "unset", "A", "200")
+	b := exactSpan("", "server", "unset", "B", "200")
+	trace := func(root SpanGroup) TraceGroup {
+		return TraceGroup{Count: 1, ExactCount: true, MinCount: 1, MaxCount: 1, Coverage: "complete", Roots: []SpanGroup{root}}
+	}
+	choice := TraceGroup{Cardinality: "one_of", MinCount: 1, MaxCount: 1, Alternatives: []TraceGroup{trace(a), trace(b)}}
+	optional := TraceGroup{Cardinality: "optional", MinCount: 0, MaxCount: 1, Alternatives: []TraceGroup{choice}}
+	left := &ScenarioShape{Traces: []TraceGroup{optional}}
+	right := &ScenarioShape{Traces: []TraceGroup{trace(a)}}
+	alignment := AlignShapes(left, right)
+	if len(alignment.Traces) != 1 || alignment.Traces[0].Left.Card != "one of 2 · optional" {
+		t.Fatalf("wrapped trace choice label was lost: %#v", alignment.Traces)
 	}
 }
 
