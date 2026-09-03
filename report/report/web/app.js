@@ -271,6 +271,22 @@ function visibleDifferingGroups(alignment, hideScope) {
     row.kind === 'matched' && visibleDiffs(row, hideScope).length > 0).length, 0);
 }
 
+// Alignment rows are a pre-order traversal. Keep every differing/one-sided row
+// together with its ancestor chain so indentation never loses its tree context.
+function differenceRows(rows, hideScope) {
+  const keep = new Set();
+  const ancestors = [];
+  rows.forEach((row, index) => {
+    ancestors.length = row.depth;
+    if (row.kind !== 'matched' || visibleDiffs(row, hideScope).length > 0) {
+      for (const ancestor of ancestors) keep.add(ancestor);
+      keep.add(index);
+    }
+    ancestors[row.depth] = index;
+  });
+  return rows.filter((_, index) => keep.has(index));
+}
+
 function renderAlignment(alignment, flipped, options) {
   if (!alignment || !alignment.traces.length) {
     return '<p class="muted">No traces to align.</p>';
@@ -285,11 +301,10 @@ function renderAlignment(alignment, flipped, options) {
     const left = flipped ? trace.right : trace.left;
     const right = flipped ? trace.left : trace.right;
     const kind = flipKind(trace.kind);
-    const rows = trace.spans.filter((row) => {
-      const diffs = visibleDiffs(row, options.hideScope);
-      if (!options.differencesOnly) return true;
-      return row.kind !== 'matched' || diffs.length > 0;
-    }).map((row) => {
+    const visibleRows = options.differencesOnly
+      ? differenceRows(trace.spans, options.hideScope)
+      : trace.spans;
+    const rows = visibleRows.map((row) => {
       const diffs = visibleDiffs(row, options.hideScope);
       const rowKind = flipKind(row.kind);
       const tone = rowKind === 'matched' ? (diffs.length ? 'row-differs' : 'row-matched') : 'row-' + rowKind;
@@ -441,7 +456,6 @@ function renderFeatures() {
   const verification = $('verification').value;
   const basis = $('basis').value;
   const search = $('search').value.trim().toLowerCase();
-  const verifiedOnly = $('verified-only').checked;
   if (readHash().section === 'features') {
     const params = new URLSearchParams();
     const pairs = [['category', category], ['language', language], ['support', support],
@@ -449,19 +463,17 @@ function renderFeatures() {
     for (const pair of pairs) {
       if (pair[1]) params.set(pair[0], pair[1]);
     }
-    if (verifiedOnly) params.set('verifiedOnly', '1');
     writeHash('features', params);
   }
 
   const manifests = language ? data.manifests.filter((m) => m.language === language) : data.manifests;
-  const wantedVerification = verifiedOnly ? 'verified' : verification;
 
   const matches = data.features.filter((feature) => {
     if (category && feature.category !== category) return false;
     if (search && !(feature.name.toLowerCase().includes(search) || feature.id.toLowerCase().includes(search))) return false;
     if (support && !manifests.some((m) => (feature.support[m.language] || 'unknown') === support)) return false;
     const states = manifests.map((m) => (data.verification[feature.id] || {})[m.profile] || { state: 'not_exercised' });
-    if (wantedVerification && !states.some((v) => v.state === wantedVerification)) return false;
+    if (verification && !states.some((v) => v.state === verification)) return false;
     if (basis && !states.some((v) => v.basis === basis)) return false;
     return true;
   });
@@ -622,7 +634,10 @@ function syncControlsFromHash() {
       $(pair[1]).value = params.get(pair[0]) || '';
     }
     $('search').value = params.get('q') || '';
-    $('verified-only').checked = params.get('verifiedOnly') === '1';
+    // Keep accepting the old checkbox-only hash while emitting one canonical
+    // verification filter from now on.
+    if (params.get('verifiedOnly') === '1') $('verification').value = 'verified';
+    $('verified-only').checked = $('verification').value === 'verified';
   }
   return state.section;
 }
@@ -669,9 +684,17 @@ function setup() {
     $('right').value = left;
     renderCompare();
   });
-  for (const id of ['category', 'language', 'support', 'verification', 'basis', 'verified-only']) {
+  for (const id of ['category', 'language', 'support', 'basis']) {
     $(id).addEventListener('change', renderFeatures);
   }
+  $('verification').addEventListener('change', () => {
+    $('verified-only').checked = $('verification').value === 'verified';
+    renderFeatures();
+  });
+  $('verified-only').addEventListener('change', () => {
+    $('verification').value = $('verified-only').checked ? 'verified' : '';
+    renderFeatures();
+  });
   $('search').addEventListener('input', renderFeatures);
   window.addEventListener('hashchange', applyHash);
 
