@@ -2,6 +2,7 @@ package report
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -222,6 +223,65 @@ func TestAlignShapesPairsDuplicateParentsByChildSubtree(t *testing.T) {
 	alignment := AlignShapes(left, right)
 	if alignment.Summary.Matched != 5 || alignment.Summary.Differing != 0 || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 {
 		t.Fatalf("reordered duplicate parents did not keep child subtrees together: %#v", alignment.Summary)
+	}
+}
+
+func TestAlignShapesScoresPartialChildSubtreeMatches(t *testing.T) {
+	a := exactSpan("", "client", "unset", "A", "")
+	b := exactSpan("", "client", "unset", "B", "")
+	c := exactSpan("", "client", "unset", "C", "")
+	d := exactSpan("", "client", "unset", "D", "")
+	parent := func(children ...SpanGroup) SpanGroup {
+		return exactSpan("", "server", "unset", "P", "", children...)
+	}
+	choice := SpanGroup{Cardinality: "one_of", MinCount: 1, MaxCount: 1, Alternatives: []SpanGroup{
+		parent(a, c),
+		parent(b, c),
+	}}
+	alignment := AlignShapes(shapeOf("left", choice), shapeOf("right", parent(b, d)))
+	if alignment.Summary.Matched != 2 || alignment.Summary.LeftOnly != 1 || alignment.Summary.RightOnly != 1 {
+		t.Fatalf("partial child overlap did not select the better parent alternative: %#v", alignment.Summary)
+	}
+	if row := findRow(t, alignment, "B"); row.Kind != "matched" || row.Left == nil || row.Right == nil {
+		t.Fatalf("shared child was not retained: %#v", row)
+	}
+}
+
+func TestAlignShapesHandlesManyIndependentAlternatives(t *testing.T) {
+	const groupCount = 12
+	leftChildren := make([]SpanGroup, 0, groupCount)
+	rightChildren := make([]SpanGroup, 0, groupCount)
+	for index := 0; index < groupCount; index++ {
+		first := exactSpan("", "client", "unset", fmt.Sprintf("A-%02d", index), "")
+		second := exactSpan("", "client", "unset", fmt.Sprintf("B-%02d", index), "")
+		leftChildren = append(leftChildren, SpanGroup{Cardinality: "one_of", MinCount: 1, MaxCount: 1, Alternatives: []SpanGroup{first, second}})
+		rightChildren = append(rightChildren, SpanGroup{Cardinality: "one_of", MinCount: 1, MaxCount: 1, Alternatives: []SpanGroup{second, first}})
+	}
+	root := func(children []SpanGroup) SpanGroup {
+		return exactSpan("", "server", "unset", "root", "", children...)
+	}
+	alignment := AlignShapes(shapeOf("left", root(leftChildren)), shapeOf("right", root(rightChildren)))
+	if alignment.Summary.Matched != groupCount+1 || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 {
+		t.Fatalf("independent alternatives did not align: %#v", alignment.Summary)
+	}
+}
+
+func TestAlignShapesHandlesManyIndependentTraceAlternatives(t *testing.T) {
+	const groupCount = 12
+	leftTraces := make([]TraceGroup, 0, groupCount)
+	rightTraces := make([]TraceGroup, 0, groupCount)
+	trace := func(root SpanGroup) TraceGroup {
+		return TraceGroup{Count: 1, ExactCount: true, MinCount: 1, MaxCount: 1, Roots: []SpanGroup{root}}
+	}
+	for index := 0; index < groupCount; index++ {
+		first := trace(exactSpan("", "server", "unset", fmt.Sprintf("GET /a/%02d", index), "200"))
+		second := trace(exactSpan("", "server", "unset", fmt.Sprintf("GET /b/%02d", index), "200"))
+		leftTraces = append(leftTraces, TraceGroup{Cardinality: "one_of", MinCount: 1, MaxCount: 1, Alternatives: []TraceGroup{first, second}})
+		rightTraces = append(rightTraces, TraceGroup{Cardinality: "one_of", MinCount: 1, MaxCount: 1, Alternatives: []TraceGroup{second, first}})
+	}
+	alignment := AlignShapes(&ScenarioShape{Traces: leftTraces}, &ScenarioShape{Traces: rightTraces})
+	if alignment.Summary.TraceMatched != groupCount || alignment.Summary.TraceLeftOnly != 0 || alignment.Summary.TraceRightOnly != 0 {
+		t.Fatalf("independent trace alternatives did not align: %#v", alignment.Summary)
 	}
 }
 

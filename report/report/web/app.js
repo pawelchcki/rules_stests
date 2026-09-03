@@ -614,6 +614,14 @@ function renderGlossary() {
 }
 
 // ---------------------------------------------------------------- bootstrap
+function resetCompareControls() {
+  $('left').value = data.manifests[0].profile;
+  $('right').value = (data.manifests[1] || data.manifests[0]).profile;
+  $('scenario').value = data.scenarios[0];
+  $('differences-only').checked = false;
+  $('hide-scope').checked = false;
+}
+
 // syncControlsFromHash copies deep-link parameters into the form controls
 // without rendering, so bootstrap can seed the controls before the first paint
 // and never overwrite an incoming link with the defaults.
@@ -622,6 +630,7 @@ function syncControlsFromHash() {
   markNav(state.section);
   const params = state.params;
   if (state.section === 'compare') {
+    resetCompareControls();
     if (params.get('left') && manifestByProfile.has(params.get('left'))) $('left').value = params.get('left');
     if (params.get('right') && manifestByProfile.has(params.get('right'))) $('right').value = params.get('right');
     if (params.get('scenario') && data.scenarios.includes(params.get('scenario'))) $('scenario').value = params.get('scenario');
@@ -660,14 +669,13 @@ function setup() {
     (m.unexercised ? ' (not exercised)' : '') + '</option>').join('');
   $('left').innerHTML = options;
   $('right').innerHTML = options;
-  $('left').value = data.manifests[0].profile;
-  $('right').value = (data.manifests[1] || data.manifests[0]).profile;
   $('scenario').innerHTML = data.scenarios.map((scenario) => {
     const states = data.manifests.map((m) => coverageByKey.get(m.profile + ' ' + scenario) || 'unavailable');
     const exact = states.filter((s) => s === 'exact_shape').length;
     return '<option value="' + esc(scenario) + '">' + esc(scenario) + ' — ' + exact + ' exact of ' +
       data.manifests.length + '</option>';
   }).join('');
+  resetCompareControls();
 
   const categories = [];
   for (const feature of data.features) {

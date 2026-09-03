@@ -106,12 +106,11 @@ func alignedSpanMatchScore(left, right alignedSpan) int {
 	if left.card == right.card {
 		score += 2
 	}
-	if canonicalChildrenKey(left) == canonicalChildrenKey(right) {
-		// Sibling order is not meaningful. When otherwise-identical parents
-		// have different descendants, prefer the pairing that keeps their
-		// equivalent subtrees together.
-		score += 1
-	}
+	// Sibling order is not meaningful. Reward the best child assignment so
+	// partially overlapping subtrees stay together too, rather than only
+	// recognizing byte-for-byte equivalent child lists.
+	childMatches, childDetail := pairedSpanListScore(left.children, right.children)
+	score += childMatches*1000 + childDetail
 	return score
 }
 
@@ -189,44 +188,22 @@ func canonicalChildrenKey(span alignedSpan) string {
 	return strings.Join(children, "\x1e")
 }
 
-func spanCandidateLists(groups []SpanGroup) [][]alignedSpan {
-	lists := [][]alignedSpan{{}}
+func canonicalSpanCandidates(groups []SpanGroup) []alignedSpan {
+	spans := make([]alignedSpan, 0, len(groups))
 	for _, group := range groups {
 		candidates := resolveSpanGroup(group)
 		if len(candidates) == 0 {
 			continue
 		}
-		next := make([][]alignedSpan, 0, len(lists)*len(candidates))
-		for _, list := range lists {
-			for _, candidate := range candidates {
-				picked := append([]alignedSpan(nil), list...)
-				next = append(next, append(picked, candidate))
+		best, bestKey := candidates[0], canonicalSpanKey(candidates[0])
+		for _, candidate := range candidates[1:] {
+			if key := canonicalSpanKey(candidate); key < bestKey {
+				best, bestKey = candidate, key
 			}
 		}
-		lists = next
+		spans = append(spans, best)
 	}
-	return lists
-}
-
-func canonicalSpanListKey(spans []alignedSpan) string {
-	keys := make([]string, 0, len(spans))
-	for _, span := range spans {
-		keys = append(keys, canonicalSpanKey(span))
-	}
-	sort.Strings(keys)
-	return strings.Join(keys, "\x1d")
-}
-
-func canonicalSpanCandidates(groups []SpanGroup) []alignedSpan {
-	lists := spanCandidateLists(groups)
-	best := lists[0]
-	bestKey := canonicalSpanListKey(best)
-	for _, candidate := range lists[1:] {
-		if key := canonicalSpanListKey(candidate); key < bestKey {
-			best, bestKey = candidate, key
-		}
-	}
-	return append([]alignedSpan(nil), best...)
+	return spans
 }
 
 func pairedSpanListScore(left, right []alignedSpan) (int, int) {
@@ -242,28 +219,59 @@ func pairedSpanListScore(left, right []alignedSpan) (int, int) {
 	return matched, detail
 }
 
-// choosePairedCandidates evaluates the alternatives from both sibling lists
-// together. This avoids each side selecting a candidate that exists only in
-// the other side's discarded alternatives, and lets the assignment optimizer
-// decide which concrete node a wildcard should consume.
-func choosePairedCandidates(leftGroups, rightGroups []SpanGroup) ([]alignedSpan, []alignedSpan) {
-	leftLists, rightLists := spanCandidateLists(leftGroups), spanCandidateLists(rightGroups)
-	bestMatched, bestDetail, bestKey := -1, -1, ""
-	var bestLeft, bestRight []alignedSpan
-	for _, left := range leftLists {
-		for _, right := range rightLists {
-			matched, detail := pairedSpanListScore(left, right)
-			key := canonicalSpanListKey(left) + "\x1c" + canonicalSpanListKey(right)
-			if matched > bestMatched ||
-				(matched == bestMatched && detail > bestDetail) ||
-				(matched == bestMatched && detail == bestDetail && (bestKey == "" || key < bestKey)) {
-				bestMatched, bestDetail, bestKey = matched, detail, key
-				bestLeft = append([]alignedSpan(nil), left...)
-				bestRight = append([]alignedSpan(nil), right...)
+type spanPairChoice struct {
+	left  alignedSpan
+	right alignedSpan
+	score int
+}
+
+func bestSpanPair(leftGroup, rightGroup SpanGroup) (spanPairChoice, bool) {
+	best, found, bestKey := spanPairChoice{}, false, ""
+	for _, left := range resolveSpanGroup(leftGroup) {
+		for _, right := range resolveSpanGroup(rightGroup) {
+			score := alignedSpanMatchScore(left, right)
+			if score < 0 {
+				continue
+			}
+			key := canonicalSpanKey(left) + "\x1c" + canonicalSpanKey(right)
+			if !found || score > best.score || (score == best.score && key < bestKey) {
+				best, found, bestKey = spanPairChoice{left: left, right: right, score: score}, true, key
 			}
 		}
 	}
-	return bestLeft, bestRight
+	return best, found
+}
+
+// choosePairedCandidates makes each authored sibling group one assignment
+// vertex. Each edge selects the best pair of alternatives for just those two
+// groups, so independent one-of groups are coordinated without constructing
+// the Cartesian product of every complete sibling list.
+func choosePairedCandidates(leftGroups, rightGroups []SpanGroup) ([]alignedSpan, []alignedSpan) {
+	left := canonicalSpanCandidates(leftGroups)
+	right := canonicalSpanCandidates(rightGroups)
+	choices := make([][]spanPairChoice, len(leftGroups))
+	compatible := make([][]bool, len(leftGroups))
+	for leftIndex := range leftGroups {
+		choices[leftIndex] = make([]spanPairChoice, len(rightGroups))
+		compatible[leftIndex] = make([]bool, len(rightGroups))
+		for rightIndex := range rightGroups {
+			choices[leftIndex][rightIndex], compatible[leftIndex][rightIndex] = bestSpanPair(leftGroups[leftIndex], rightGroups[rightIndex])
+		}
+	}
+	matchedRight, _ := maximumWeightMaximumCardinalityPairs(len(leftGroups), len(rightGroups), func(leftIndex, rightIndex int) int {
+		if !compatible[leftIndex][rightIndex] {
+			return -1
+		}
+		return choices[leftIndex][rightIndex].score
+	})
+	for leftIndex, rightIndex := range matchedRight {
+		if rightIndex < 0 {
+			continue
+		}
+		left[leftIndex] = choices[leftIndex][rightIndex].left
+		right[rightIndex] = choices[leftIndex][rightIndex].right
+	}
+	return left, right
 }
 
 func spanRef(span alignedSpan) *SpanNode {
@@ -525,65 +533,73 @@ func traceGroupCandidates(index int, group TraceGroup) []resolvedTrace {
 	return []resolvedTrace{trace}
 }
 
-func traceCandidateLists(groups []TraceGroup) [][]resolvedTrace {
-	lists := [][]resolvedTrace{{}}
+func canonicalTraceCandidates(groups []TraceGroup) []resolvedTrace {
+	traces := make([]resolvedTrace, 0, len(groups))
 	for index, group := range groups {
 		candidates := traceGroupCandidates(index, group)
 		if len(candidates) == 0 {
 			continue
 		}
-		next := make([][]resolvedTrace, 0, len(lists)*len(candidates))
-		for _, list := range lists {
-			for _, candidate := range candidates {
-				picked := append([]resolvedTrace(nil), list...)
-				next = append(next, append(picked, candidate))
+		best, bestKey := candidates[0], canonicalTraceKey(candidates[0])
+		for _, candidate := range candidates[1:] {
+			if key := canonicalTraceKey(candidate); key < bestKey {
+				best, bestKey = candidate, key
 			}
 		}
-		lists = next
+		traces = append(traces, best)
 	}
-	return lists
+	return traces
 }
 
-func canonicalTraceListKey(traces []resolvedTrace) string {
-	keys := make([]string, 0, len(traces))
-	for _, trace := range traces {
-		keys = append(keys, canonicalTraceKey(trace))
-	}
-	sort.Strings(keys)
-	return strings.Join(keys, "\x1d")
+type tracePairChoice struct {
+	left  resolvedTrace
+	right resolvedTrace
+	score int
 }
 
-func pairedTraceListScore(left, right []resolvedTrace) (int, int) {
-	matchedRight, _ := maximumCardinalityTracePairs(left, right)
-	matched, detail := 0, 0
+func bestTracePair(leftIndex int, leftGroup TraceGroup, rightIndex int, rightGroup TraceGroup) (tracePairChoice, bool) {
+	best, found, bestKey := tracePairChoice{}, false, ""
+	for _, left := range traceGroupCandidates(leftIndex, leftGroup) {
+		for _, right := range traceGroupCandidates(rightIndex, rightGroup) {
+			score := traceMatchScore(left, right)
+			if score < 0 {
+				continue
+			}
+			key := canonicalTraceKey(left) + "\x1c" + canonicalTraceKey(right)
+			if !found || score > best.score || (score == best.score && key < bestKey) {
+				best, found, bestKey = tracePairChoice{left: left, right: right, score: score}, true, key
+			}
+		}
+	}
+	return best, found
+}
+
+func choosePairedTraceCandidates(leftGroups, rightGroups []TraceGroup) ([]resolvedTrace, []resolvedTrace) {
+	left := canonicalTraceCandidates(leftGroups)
+	right := canonicalTraceCandidates(rightGroups)
+	choices := make([][]tracePairChoice, len(leftGroups))
+	compatible := make([][]bool, len(leftGroups))
+	for leftIndex := range leftGroups {
+		choices[leftIndex] = make([]tracePairChoice, len(rightGroups))
+		compatible[leftIndex] = make([]bool, len(rightGroups))
+		for rightIndex := range rightGroups {
+			choices[leftIndex][rightIndex], compatible[leftIndex][rightIndex] = bestTracePair(leftIndex, leftGroups[leftIndex], rightIndex, rightGroups[rightIndex])
+		}
+	}
+	matchedRight, _ := maximumWeightMaximumCardinalityPairs(len(leftGroups), len(rightGroups), func(leftIndex, rightIndex int) int {
+		if !compatible[leftIndex][rightIndex] {
+			return -1
+		}
+		return choices[leftIndex][rightIndex].score
+	})
 	for leftIndex, rightIndex := range matchedRight {
 		if rightIndex < 0 {
 			continue
 		}
-		matched++
-		detail += traceMatchScore(left[leftIndex], right[rightIndex])
+		left[leftIndex] = choices[leftIndex][rightIndex].left
+		right[rightIndex] = choices[leftIndex][rightIndex].right
 	}
-	return matched, detail
-}
-
-func choosePairedTraceCandidates(leftGroups, rightGroups []TraceGroup) ([]resolvedTrace, []resolvedTrace) {
-	leftLists, rightLists := traceCandidateLists(leftGroups), traceCandidateLists(rightGroups)
-	bestMatched, bestDetail, bestKey := -1, -1, ""
-	var bestLeft, bestRight []resolvedTrace
-	for _, left := range leftLists {
-		for _, right := range rightLists {
-			matched, detail := pairedTraceListScore(left, right)
-			key := canonicalTraceListKey(left) + "\x1c" + canonicalTraceListKey(right)
-			if matched > bestMatched ||
-				(matched == bestMatched && detail > bestDetail) ||
-				(matched == bestMatched && detail == bestDetail && (bestKey == "" || key < bestKey)) {
-				bestMatched, bestDetail, bestKey = matched, detail, key
-				bestLeft = append([]resolvedTrace(nil), left...)
-				bestRight = append([]resolvedTrace(nil), right...)
-			}
-		}
-	}
-	return bestLeft, bestRight
+	return left, right
 }
 
 // traceMatchScore treats roots as an unordered set. It rewards each compatible
