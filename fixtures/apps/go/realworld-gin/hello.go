@@ -1,13 +1,17 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
+	"syscall"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/sys/unix"
 
 	"github.com/gothinkster/golang-gin-realworld-example-app/articles"
 	"github.com/gothinkster/golang-gin-realworld-example-app/common"
@@ -57,6 +61,21 @@ func parseServeAddress(argv []string) (string, error) {
 	return net.JoinHostPort(host, port), nil
 }
 
+func listen(address string) (net.Listener, error) {
+	config := net.ListenConfig{
+		Control: func(_, _ string, connection syscall.RawConn) error {
+			var optionErr error
+			if err := connection.Control(func(fd uintptr) {
+				optionErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEPORT, 1)
+			}); err != nil {
+				return err
+			}
+			return optionErr
+		},
+	}
+	return config.Listen(context.Background(), "tcp", address)
+}
+
 func main() {
 	address, err := parseServeAddress(os.Args[1:])
 	if err != nil {
@@ -104,7 +123,11 @@ func main() {
 		})
 	})
 
-	if err := r.Run(address); err != nil {
-		log.Fatal("failed to start server:", err)
+	listener, err := listen(address)
+	if err != nil {
+		log.Fatalf("failed to bind server: %v", err)
+	}
+	if err := http.Serve(listener, r); err != nil {
+		log.Fatalf("failed to start server: %v", err)
 	}
 }

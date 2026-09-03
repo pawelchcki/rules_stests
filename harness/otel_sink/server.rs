@@ -9,12 +9,12 @@ use alloc::vec::Vec;
 use core::ffi::CStr;
 use core::time::Duration;
 use rustix::fd::OwnedFd;
-use rustix::net::sockopt::{Timeout, set_socket_reuseport, set_socket_timeout};
+use rustix::net::sockopt::{set_socket_reuseport, set_socket_timeout, Timeout};
 use rustix::net::{
-    AddressFamily, Ipv4Addr, SocketAddrAny, SocketAddrV4, SocketType, acceptfrom, bind, listen,
-    socket,
+    acceptfrom, bind, listen, socket, AddressFamily, Ipv4Addr, SocketAddrAny, SocketAddrV4,
+    SocketType,
 };
-use rustix::time::{ClockId, clock_gettime};
+use rustix::time::{clock_gettime, ClockId};
 
 const MAX_CAPTURE_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CAPTURE_RECORDS: usize = 4096;
@@ -135,14 +135,23 @@ fn handle_connection(
         }
         return;
     }
-    if request.method == "POST" && (request.path == "/reset" || request.path == "/reset/traces") {
+    if request.method == "POST"
+        && matches!(
+            request.path.as_str(),
+            "/reset" | "/reset/traces" | "/reset/traces-and-metrics"
+        )
+    {
         if request.path == "/reset" {
             records.clear();
             *frozen_records = None;
         } else {
-            records.retain(|record| record.signal != "traces");
+            let retain = |record: &Record| {
+                record.signal != "traces"
+                    && (request.path != "/reset/traces-and-metrics" || record.signal != "metrics")
+            };
+            records.retain(&retain);
             if let Some(snapshot) = frozen_records {
-                snapshot.retain(|record| record.signal != "traces");
+                snapshot.retain(retain);
             }
         }
         *validation_stats = ValidationStats::default();

@@ -4,11 +4,67 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestResetStartupTelemetryWaitsForTraceAndClearsAllSignals(t *testing.T) {
+	statsCalls := 0
+	resetPath := ""
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/stats":
+			statsCalls++
+			if statsCalls == 1 {
+				response.Write([]byte(`{"trace_requests":0,"trace_spans":0,"metric_requests":0}`))
+			} else if statsCalls == 2 {
+				response.Write([]byte(`{"trace_requests":1,"trace_spans":1,"metric_requests":0}`))
+			} else {
+				response.Write([]byte(`{"trace_requests":1,"trace_spans":1,"metric_requests":1}`))
+			}
+		case "/reset/traces-and-metrics":
+			resetPath = request.URL.Path
+			response.Write([]byte("{}\n"))
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+
+	err := resetStartupTelemetryAt(
+		server.Client(), server.URL, time.Second, 5*time.Millisecond, time.Millisecond,
+		map[string]bool{"traces": true, "metrics": true},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if statsCalls < 3 {
+		t.Fatalf("startup reset happened before a trace arrived; stats calls = %d", statsCalls)
+	}
+	if resetPath != "/reset/traces-and-metrics" {
+		t.Fatalf("reset path = %q, want selective startup reset", resetPath)
+	}
+}
+
+func TestResetStartupTelemetryRejectsEmptySink(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Write([]byte(`{"trace_requests":0,"trace_spans":0}`))
+	}))
+	defer server.Close()
+
+	err := resetStartupTelemetryAt(
+		server.Client(), server.URL, 10*time.Millisecond, time.Millisecond, time.Millisecond,
+		map[string]bool{"traces": true},
+	)
+	if err == nil || !strings.Contains(err.Error(), "did not arrive and quiesce") {
+		t.Fatalf("empty sink error = %v", err)
+	}
+}
 
 func TestEmitFailedCapture(t *testing.T) {
 	root := t.TempDir()

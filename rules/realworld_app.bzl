@@ -17,6 +17,7 @@ REALWORLD_APPS = {
         rootfs = Label("//harness:aiohttp_rootfs"),
         command = _SERVER_ARGS,
         so_reuseport_aware = True,
+        retry_bind = False,
         expected_start_duration = "3s",
         manual = False,
     ),
@@ -25,6 +26,7 @@ REALWORLD_APPS = {
         rootfs = Label("//harness:django_rootfs"),
         command = _SERVER_ARGS,
         so_reuseport_aware = True,
+        retry_bind = False,
         expected_start_duration = "3s",
         manual = False,
     ),
@@ -33,6 +35,7 @@ REALWORLD_APPS = {
         rootfs = Label("//harness:rails_rootfs"),
         command = ["server", "--binding", "127.0.0.1", "--port", "$${PORT}"],
         so_reuseport_aware = False,
+        retry_bind = False,
         expected_start_duration = "4s",
         manual = not RUBY_IMAGES_PUBLISHED,
     ),
@@ -42,7 +45,10 @@ REALWORLD_APPS = {
         binary = "opt/app/bin/realworld-gin",
         otel_binary = "opt/app/bin/realworld-gin-otel",
         command = _SERVER_ARGS,
+        # The locked OCI predates the source-level SO_REUSEPORT listener.
+        # Keep handoff mode until that image is republished.
         so_reuseport_aware = False,
+        retry_bind = True,
         expected_start_duration = "3s",
         manual = False,
     ),
@@ -115,7 +121,8 @@ def _service_suffix(name):
 
 def _launcher_args(application, rootfs, instance, injection = None, binary = None):
     modes = {"python": "app", "ruby": "app-ruby", "exec": "app-exec"}
-    args = [modes[application.runtime]]
+    mode = "app-exec-retry-bind" if application.runtime == "exec" and application.retry_bind else modes[application.runtime]
+    args = [mode]
     if injection:
         args.extend(injection.flags)
     args.extend([instance, _rlocation(rootfs)])
