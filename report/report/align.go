@@ -161,7 +161,7 @@ func subtreeKeys(spans []alignedSpan, into map[string]int) {
 // structurally-identical alternatives, such as a status or HTTP response.
 func subtreeDetailKeys(spans []alignedSpan, into map[string]int) {
 	for _, span := range spans {
-		key := strings.Join([]string{span.keyString, span.node.Status, span.node.HTTPStatus}, "\x1f")
+		key := strings.Join([]string{span.keyString, span.node.Status, span.node.HTTPStatus, fmt.Sprintf("%d:%d:%t", span.minCount, span.maxCount, span.exact)}, "\x1f")
 		into[key]++
 		subtreeDetailKeys(span.children, into)
 	}
@@ -527,18 +527,35 @@ func chooseTraceCandidates(groups []TraceGroup, opposite, oppositeDetails map[st
 			keys, details := map[string]int{}, map[string]int{}
 			subtreeKeys(candidate.roots, keys)
 			subtreeDetailKeys(candidate.roots, details)
-			delta := 0
+			delta, consumed := 0, map[string]int{}
 			for item, count := range keys {
-				delta += min(count, available[item])
+				taken := min(count, available[item])
+				consumed[item] = taken
+				delta += taken
+				for remaining := count - taken; remaining > 0; remaining-- {
+					bestKey, bestScore := "", -1
+					for oppositeKey, availableCount := range available {
+						if availableCount-consumed[oppositeKey] <= 0 {
+							continue
+						}
+						if score := spanMatchScore(spanNodeFromKey(item), spanNodeFromKey(oppositeKey)); score > bestScore {
+							bestKey, bestScore = oppositeKey, score
+						}
+					}
+					if bestScore < 0 {
+						break
+					}
+					consumed[bestKey]++
+					delta++
+				}
 			}
 			for item, count := range details {
 				delta += min(count, detailAvailable[item]) * 10
 			}
-			consumed, detailConsumed := map[string]int{}, map[string]int{}
-			for item, count := range keys {
-				consumed[item] = min(count, available[item])
-				available[item] -= consumed[item]
+			for item, count := range consumed {
+				available[item] -= count
 			}
+			detailConsumed := map[string]int{}
 			for item, count := range details {
 				detailConsumed[item] = min(count, detailAvailable[item])
 				detailAvailable[item] -= detailConsumed[item]
