@@ -467,11 +467,12 @@ function renderFeatures() {
   }
 
   const manifests = language ? data.manifests.filter((m) => m.language === language) : data.manifests;
+  const upstreamLanguages = language ? [language] : [...new Set(manifests.map((m) => m.language))];
 
   const matches = data.features.filter((feature) => {
     if (category && feature.category !== category) return false;
     if (search && !(feature.name.toLowerCase().includes(search) || feature.id.toLowerCase().includes(search))) return false;
-    if (support && !manifests.some((m) => (feature.support[m.language] || 'unknown') === support)) return false;
+    if (support && !upstreamLanguages.some((lang) => (feature.support[lang] || 'unknown') === support)) return false;
     const states = manifests.map((m) => (data.verification[feature.id] || {})[m.profile] || { state: 'not_exercised' });
     if ((verification || basis) && !states.some((v) =>
       (!verification || v.state === verification) && (!basis || v.basis === basis))) return false;
@@ -519,10 +520,6 @@ function renderFeatures() {
           : '';
         return '<td>' + badge('verification', state.state) + basisBadge + assertion + evidence + '</td>';
       }).join('');
-      const upstreamLanguages = language ? [language] : [];
-      for (const manifest of manifests) {
-        if (!upstreamLanguages.includes(manifest.language)) upstreamLanguages.push(manifest.language);
-      }
       const upstream = upstreamLanguages.map((lang) =>
         '<div>' + esc(lang) + ' ' + badge('support', feature.support[lang] || 'unknown') + '</div>').join('');
       const optionality = feature.optional === 'X'
