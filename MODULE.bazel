@@ -13,16 +13,6 @@ bazel_dep(name = "aspect_bazel_lib", version = "2.21.1")
 bazel_dep(name = "package_metadata", version = "0.0.7")
 bazel_dep(name = "platforms", version = "1.1.0")
 
-# rules_rs 0.0.102 pins immutable Ubuntu zlib packages, but its archive URLs
-# stop resolving once Ubuntu supersedes the package. Launchpad retains those
-# exact checksummed artifacts permanently.
-single_version_override(
-    module_name = "rules_rs",
-    patch_strip = 1,
-    patches = ["//bazel:rules_rs_launchpad_zlib.patch"],
-    version = "0.0.102",
-)
-
 # No `name =` here: rules_go rejects a named SDK in a non-root module, which
 # would break importing this module as a dependency.
 go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
