@@ -42,11 +42,46 @@ func TestNormalizeSpanNameCollapsesRouteParameters(t *testing.T) {
 		"GET /api/articles/%{slug}": "get api/articles/*",
 		"GET   /api/tags":           "get api/tags",
 		"SELECT  …  articles_tag":   "select … articles_tag",
+		"SELECT value::text":        "select value::text",
+		"SELECT value::integer":     "select value::integer",
 	}
 	for input, want := range tests {
 		if got := NormalizeSpanName(input); got != want {
 			t.Errorf("NormalizeSpanName(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestAlignShapesPairsReorderedDuplicateSiblingsByDetails(t *testing.T) {
+	ok := exactSpan("http", "client", "unset", "GET item", "200")
+	notFound := repeated(2, exactSpan("http", "client", "error", "GET item", "404"))
+	root := func(children ...SpanGroup) SpanGroup {
+		return exactSpan("server", "server", "unset", "GET /api/items", "200", children...)
+	}
+	left := shapeOf("left", root(ok, notFound))
+	right := shapeOf("right", root(notFound, ok))
+	alignment := AlignShapes(left, right)
+	if alignment.Summary.Matched != 3 || alignment.Summary.Differing != 0 || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 {
+		t.Fatalf("reordered duplicate siblings did not align by details: %#v", alignment.Summary)
+	}
+	for _, row := range alignment.Traces[0].Spans {
+		if row.Kind == "matched" && len(row.Diffs) != 0 {
+			t.Fatalf("equivalent sibling pair was reported as different: %#v", row)
+		}
+	}
+}
+
+func TestAlignShapesMatchesReorderedMultiRootTraces(t *testing.T) {
+	first := exactSpan("consumer", "consumer", "unset", "receive alpha", "absent")
+	second := exactSpan("consumer", "consumer", "unset", "receive beta", "absent")
+	left := shapeOf("left", first, second)
+	right := shapeOf("right", second, first)
+	alignment := AlignShapes(left, right)
+	if alignment.Summary.TraceMatched != 1 || alignment.Summary.TraceLeftOnly != 0 || alignment.Summary.TraceRightOnly != 0 {
+		t.Fatalf("reordered multi-root traces did not align: %#v", alignment.Summary)
+	}
+	if alignment.Summary.Matched != 2 || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 {
+		t.Fatalf("reordered roots did not align as an unordered set: %#v", alignment.Summary)
 	}
 }
 

@@ -307,6 +307,7 @@ function renderAlignment(alignment, flipped, options) {
         spanCell(rightNode, rightCard, diffs, options.hideScope) + '</td>' +
         '<td class="row-flag">' + esc(flag) + '</td></tr>';
     }).join('');
+    if (options.differencesOnly && kind === 'matched' && !rows) return '';
     const label = (left && left.label) || (right && right.label) || 'trace';
     const kindBadge = kind === 'matched'
       ? '<span class="badge state-ok"><span class="icon">✓</span>matched</span>'
@@ -434,10 +435,11 @@ function renderFeatures() {
   if (readHash().section === 'features') {
     const params = new URLSearchParams();
     const pairs = [['category', category], ['language', language], ['support', support],
-      ['verification', verifiedOnly ? 'verified' : verification], ['basis', basis], ['q', search]];
+      ['verification', verification], ['basis', basis], ['q', search]];
     for (const pair of pairs) {
       if (pair[1]) params.set(pair[0], pair[1]);
     }
+    if (verifiedOnly) params.set('verifiedOnly', '1');
     writeHash('features', params);
   }
 
@@ -595,7 +597,7 @@ function syncControlsFromHash() {
       if (params.get(pair[0]) !== null) $(pair[1]).value = params.get(pair[0]);
     }
     if (params.get('q') !== null) $('search').value = params.get('q');
-    $('verified-only').checked = params.get('verification') === 'verified';
+    $('verified-only').checked = params.get('verifiedOnly') === '1';
   }
   return state.section;
 }

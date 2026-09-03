@@ -11,7 +11,8 @@ import (
 // see which spans exist on both sides, which differ, and which are unique to a
 // single implementation. It renders no verdict: matching is purely structural.
 
-var pathParameterPattern = regexp.MustCompile(`%?\{[^}]*\}|<[^>]*>|:[A-Za-z_][A-Za-z0-9_]*`)
+var pathParameterPattern = regexp.MustCompile(`%?\{[^}]*\}|<[^>]*>`)
+var colonPathParameterPattern = regexp.MustCompile(`(^|/):[A-Za-z_][A-Za-z0-9_]*`)
 var whitespacePattern = regexp.MustCompile(`\s+`)
 
 // NormalizeSpanName lowercases a span name, drops a leading slash on the route
@@ -20,6 +21,7 @@ var whitespacePattern = regexp.MustCompile(`\s+`)
 func NormalizeSpanName(name string) string {
 	normalized := strings.ToLower(strings.TrimSpace(name))
 	normalized = pathParameterPattern.ReplaceAllString(normalized, "*")
+	normalized = colonPathParameterPattern.ReplaceAllString(normalized, "${1}*")
 	normalized = whitespacePattern.ReplaceAllString(normalized, " ")
 	fields := strings.Split(normalized, " ")
 	for i, field := range fields {
@@ -63,6 +65,25 @@ func spanMatchScore(left, right SpanNode) int {
 		score += 100
 	} else if leftName != "" || rightName != "" {
 		score++
+	}
+	return score
+}
+
+// alignedSpanMatchScore keeps name and kind as the compatibility boundary,
+// then uses rendered details to pair otherwise-identical sibling spans.
+func alignedSpanMatchScore(left, right alignedSpan) int {
+	score := spanMatchScore(left.node, right.node)
+	if score < 0 {
+		return score
+	}
+	if left.node.Status != "" && left.node.Status == right.node.Status {
+		score += 8
+	}
+	if left.node.HTTPStatus != "" && left.node.HTTPStatus == right.node.HTTPStatus {
+		score += 4
+	}
+	if left.card == right.card {
+		score += 2
 	}
 	return score
 }
@@ -229,7 +250,7 @@ func matchSpans(left, right []alignedSpan, depth int, summary *AlignSummary) []S
 	var candidates []candidate
 	for leftIndex, leftSpan := range left {
 		for rightIndex, rightSpan := range right {
-			if score := spanMatchScore(leftSpan.node, rightSpan.node); score >= 0 {
+			if score := alignedSpanMatchScore(leftSpan, rightSpan); score >= 0 {
 				candidates = append(candidates, candidate{left: leftIndex, right: rightIndex, score: score})
 			}
 		}
@@ -367,6 +388,46 @@ func traceCandidateKeys(groups []TraceGroup) map[string]int {
 	return keys
 }
 
+// traceMatchScore treats roots as an unordered set. It rewards each compatible
+// root pairing, then uses the same detail-aware score as sibling alignment so
+// equivalent multi-root traces remain stable when authored in a different
+// order.
+func traceMatchScore(left, right resolvedTrace) int {
+	type candidate struct{ left, right, score int }
+	var candidates []candidate
+	for leftIndex, leftRoot := range left.roots {
+		for rightIndex, rightRoot := range right.roots {
+			score := alignedSpanMatchScore(leftRoot, rightRoot)
+			if score < 0 {
+				continue
+			}
+			leftHTTP, rightHTTP := leftRoot.node.HTTPStatus, rightRoot.node.HTTPStatus
+			if leftHTTP == "" || rightHTTP == "" || leftHTTP == rightHTTP {
+				score += 1000
+			}
+			if leftHTTP != "" && leftHTTP == rightHTTP {
+				score += 10
+			}
+			candidates = append(candidates, candidate{left: leftIndex, right: rightIndex, score: score})
+		}
+	}
+	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
+	usedLeft, usedRight := make([]bool, len(left.roots)), make([]bool, len(right.roots))
+	matched, total := 0, 0
+	for _, candidate := range candidates {
+		if usedLeft[candidate.left] || usedRight[candidate.right] {
+			continue
+		}
+		usedLeft[candidate.left], usedRight[candidate.right] = true, true
+		matched++
+		total += candidate.score
+	}
+	if matched == 0 {
+		return -1
+	}
+	return matched*100000 + total
+}
+
 // AlignShapes pairs the trace groups of two scenario shapes by root span and
 // aligns their spans. It works whether or not the shapes carry exact counts.
 func AlignShapes(left, right *ScenarioShape) *ShapeAlignment {
@@ -393,16 +454,9 @@ func AlignShapes(left, right *ScenarioShape) *ShapeAlignment {
 			if len(rightTrace.roots) == 0 {
 				continue
 			}
-			score := spanMatchScore(leftTrace.roots[0].node, rightTrace.roots[0].node)
+			score := traceMatchScore(leftTrace, rightTrace)
 			if score < 0 {
 				continue
-			}
-			leftHTTP, rightHTTP := leftTrace.roots[0].node.HTTPStatus, rightTrace.roots[0].node.HTTPStatus
-			if leftHTTP == "" || rightHTTP == "" || leftHTTP == rightHTTP {
-				score += 1000
-			}
-			if leftHTTP != "" && leftHTTP == rightHTTP {
-				score += 10
 			}
 			candidates = append(candidates, candidate{left: leftIndex, right: rightIndex, score: score})
 		}
