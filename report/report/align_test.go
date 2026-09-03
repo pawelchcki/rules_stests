@@ -71,6 +71,44 @@ func TestAlignShapesPairsReorderedDuplicateSiblingsByDetails(t *testing.T) {
 	}
 }
 
+func TestAlignShapesPrefersWildcardSiblingsWithMatchingSpecificity(t *testing.T) {
+	unnamed := exactSpan("", "server", "error", "", "500")
+	named := exactSpan("", "server", "error", "B", "500")
+	root := func(children ...SpanGroup) SpanGroup {
+		return exactSpan("", "server", "unset", "GET /items", "200", children...)
+	}
+	alignment := AlignShapes(shapeOf("left", root(unnamed, named)), shapeOf("right", root(unnamed, named)))
+	if alignment.Summary.Differing != 0 || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 {
+		t.Fatalf("wildcard siblings were cross-paired: %#v", alignment.Summary)
+	}
+}
+
+func TestAlignShapesPrefersTraceGroupsWithTheSameRootSet(t *testing.T) {
+	a := exactSpan("", "server", "unset", "A", "200")
+	b := exactSpan("", "server", "unset", "B", "200")
+	c := exactSpan("", "server", "unset", "C", "200")
+	trace := func(roots ...SpanGroup) TraceGroup {
+		return TraceGroup{Count: 1, ExactCount: true, MinCount: 1, MaxCount: 1, Coverage: "complete", Roots: roots}
+	}
+	left := &ScenarioShape{Traces: []TraceGroup{trace(a), trace(a, b, c)}}
+	right := &ScenarioShape{Traces: []TraceGroup{trace(a, b, c), trace(a)}}
+	alignment := AlignShapes(left, right)
+	if alignment.Summary.TraceMatched != 2 || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 {
+		t.Fatalf("trace groups were cross-paired: %#v", alignment.Summary)
+	}
+}
+
+func TestAlignShapesCarriesTraceCoverageDifferences(t *testing.T) {
+	root := exactSpan("", "server", "unset", "GET /items", "200")
+	left := &ScenarioShape{Traces: []TraceGroup{{Count: 1, ExactCount: true, MinCount: 1, MaxCount: 1, Coverage: "complete", Roots: []SpanGroup{root}}}}
+	right := &ScenarioShape{Traces: []TraceGroup{{Count: 1, ExactCount: true, MinCount: 1, MaxCount: 1, Coverage: "partial", Roots: []SpanGroup{root}}}}
+	alignment := AlignShapes(left, right)
+	match := alignment.Traces[0]
+	if match.Left.Coverage != "complete" || match.Right.Coverage != "partial" {
+		t.Fatalf("trace coverage was omitted from alignment: %#v", match)
+	}
+}
+
 func TestAlignShapesPairsDuplicateParentsByChildSubtree(t *testing.T) {
 	childA := exactSpan("worker", "consumer", "unset", "receive a", "")
 	childB := exactSpan("worker", "consumer", "unset", "receive b", "")

@@ -63,8 +63,10 @@ func spanMatchScore(left, right SpanNode) int {
 			return -1
 		}
 		score += 100
-	} else if leftName != "" || rightName != "" {
-		score++
+	} else if leftName == "" && rightName == "" {
+		// Prefer two equally-unspecified matchers over consuming a concrete
+		// sibling with a wildcard.
+		score += 2
 	}
 	return score
 }
@@ -474,10 +476,11 @@ func onlyRows(span alignedSpan, kind string, depth int, summary *AlignSummary) [
 }
 
 type resolvedTrace struct {
-	index int
-	card  string
-	roots []alignedSpan
-	label string
+	index    int
+	card     string
+	coverage string
+	roots    []alignedSpan
+	label    string
 }
 
 func canonicalTraceKey(trace resolvedTrace) string {
@@ -501,7 +504,7 @@ func traceGroupCandidates(index int, group TraceGroup, opposite, oppositeDetails
 		return candidates
 	}
 	minCount, maxCount := traceBounds(group)
-	trace := resolvedTrace{index: index, card: formatCard(minCount, maxCount, group.ExactCount, 0)}
+	trace := resolvedTrace{index: index, card: formatCard(minCount, maxCount, group.ExactCount, 0), coverage: group.Coverage}
 	trace.roots = chooseCandidates(group.Roots, opposite, oppositeDetails)
 	if len(trace.roots) > 0 {
 		trace.label = strings.TrimSpace(trace.roots[0].node.Name)
@@ -648,7 +651,7 @@ func traceMatchScore(left, right resolvedTrace) int {
 	if matched == 0 {
 		return -1
 	}
-	return matched*100000 + total
+	return matched*100000 + total - (len(left.roots)+len(right.roots)-2*matched)*10000
 }
 
 func maximumTraceMatchingSize(left, right []resolvedTrace, start int, usedRight []bool) int {
@@ -740,8 +743,8 @@ func AlignShapes(left, right *ScenarioShape) *ShapeAlignment {
 		alignment.Summary.TraceMatched++
 		match := TraceMatch{
 			Kind:  "matched",
-			Left:  &TraceRef{Index: leftTrace.index, Label: leftTrace.label, Card: leftTrace.card},
-			Right: &TraceRef{Index: rightTrace.index, Label: rightTrace.label, Card: rightTrace.card},
+			Left:  &TraceRef{Index: leftTrace.index, Label: leftTrace.label, Card: leftTrace.card, Coverage: leftTrace.coverage},
+			Right: &TraceRef{Index: rightTrace.index, Label: rightTrace.label, Card: rightTrace.card, Coverage: rightTrace.coverage},
 			Spans: matchSpans(leftTrace.roots, rightTrace.roots, 0, &alignment.Summary),
 		}
 		alignment.Traces = append(alignment.Traces, match)
@@ -758,7 +761,7 @@ func AlignShapes(left, right *ScenarioShape) *ShapeAlignment {
 
 func traceOnly(trace resolvedTrace, kind string, summary *AlignSummary) TraceMatch {
 	match := TraceMatch{Kind: kind}
-	reference := &TraceRef{Index: trace.index, Label: trace.label, Card: trace.card}
+	reference := &TraceRef{Index: trace.index, Label: trace.label, Card: trace.card, Coverage: trace.coverage}
 	if kind == "left_only" {
 		match.Left = reference
 	} else {

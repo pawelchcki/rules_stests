@@ -308,7 +308,8 @@ function renderAlignment(alignment, flipped, options) {
         '<td class="row-flag">' + esc(flag) + '</td></tr>';
     }).join('');
     const traceCardDiffers = kind === 'matched' && left && right && left.card !== right.card;
-    if (options.differencesOnly && kind === 'matched' && !rows && !traceCardDiffers) return '';
+    const traceCoverageDiffers = kind === 'matched' && left && right && left.coverage !== right.coverage;
+    if (options.differencesOnly && kind === 'matched' && !rows && !traceCardDiffers && !traceCoverageDiffers) return '';
     const label = (left && left.label) || (right && right.label) || 'trace';
     const kindBadge = kind === 'matched'
       ? '<span class="badge state-ok"><span class="icon">✓</span>matched</span>'
@@ -316,12 +317,14 @@ function renderAlignment(alignment, flipped, options) {
         ? '<span class="badge state-bad"><span class="icon">◀</span>left only</span>'
         : '<span class="badge state-ok"><span class="icon">▶</span>right only</span>');
     const cards = [left && left.card, right && right.card].filter(Boolean).join(' / ');
+    const coverage = [left && left.coverage, right && right.coverage].filter(Boolean).join(' / ');
     return '<details class="trace-group" open><summary>' + kindBadge +
       '<strong>' + esc(label) + '</strong>' +
       (cards ? '<span class="badge state-neutral">' + esc(cards) + '</span>' : '') +
+      (coverage ? '<span class="badge ' + (traceCoverageDiffers ? 'state-warn' : 'state-neutral') + '">coverage: ' + esc(coverage) + '</span>' : '') +
       '<span class="muted">trace group ' + (index + 1) + '</span></summary>' +
       '<table class="diff-table"><tbody>' + (rows || '<tr><td colspan="3" class="muted">' +
-        (traceCardDiffers ? 'Trace cardinality differs.' : 'No rows match the current filters.') + '</td></tr>') +
+        (traceCardDiffers ? 'Trace cardinality differs.' : (traceCoverageDiffers ? 'Trace coverage differs.' : 'No rows match the current filters.')) + '</td></tr>') +
       '</tbody></table></details>';
   }).join('');
 }

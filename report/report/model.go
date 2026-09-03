@@ -184,9 +184,10 @@ type AlignSummary struct {
 }
 
 type TraceRef struct {
-	Index int    `json:"index"`
-	Label string `json:"label"`
-	Card  string `json:"card,omitempty"`
+	Index    int    `json:"index"`
+	Label    string `json:"label"`
+	Card     string `json:"card,omitempty"`
+	Coverage string `json:"coverage,omitempty"`
 }
 
 type TraceMatch struct {
