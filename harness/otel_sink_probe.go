@@ -23,29 +23,16 @@ import (
 //go:embed scheme/otel_core.scm
 var otelCoreLibrary []byte
 
-const syntheticFeatureCapture = `((requests (
-  ((signal traces) (method "POST") (path "/v1/traces") (content-type "application/x-protobuf"))
-  ((signal metrics) (method "POST") (path "/v1/metrics") (content-type "application/x-protobuf"))
-  ((signal logs) (method "POST") (path "/v1/logs") (content-type "application/x-protobuf"))))
- (resources (
-  ((signal metrics) (attributes (("process.runtime.name" (string "go")))) (schema-url "https://opentelemetry.io/schemas/1.43.0"))))
- (scopes (
-  ((name "trace.scope") (schema-url "https://opentelemetry.io/schemas/1.11.0"))))
- (spans (
-  ((scope "trace.scope") (parent-class root) (parent-span-id "") (parent-valid #t)
-   (start 1) (end 4) (attributes (("string.key" (string "value")) ("integer.key" (integer 7))))
-   (events (
-    ((name "exception") (attributes (("exception.type" (string "ValueError")) ("exception.message" (string "bad")) ("exception.stacktrace" (long-string 300)) ("exception.escaped" (string "False")))))
-    ((name "exception") (attributes (("exception.type" (string "KeyError")) ("exception.message" (string "missing")) ("exception.stacktrace" (long-string 400)) ("exception.escaped" (string "True"))))))))
-  ((scope "trace.scope") (parent-class child) (parent-span-id "1111111111111111") (parent-valid #t)
-   (start 2) (end 3) (attributes (("string.key" (string "child")) ("integer.key" (integer 8)))) (events ()))))
- (metrics (
-  ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "counter") (description "counter description") (unit "{item}") (data-type sum) (monotonic #t))
-  ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "updown") (description "updown description") (unit "{item}") (data-type sum) (monotonic #f))
-  ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "histogram") (description "histogram description") (unit "ms") (data-type histogram) (monotonic absent))
-  ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "gauge") (description "gauge description") (unit "1") (data-type gauge) (monotonic absent))))
- (logs (
-  ((scope "logger.scope")))))`
+//go:embed testdata/synthetic_capture.scm
+var syntheticFeatureCaptureBytes []byte
+
+var syntheticFeatureCapture = string(syntheticFeatureCaptureBytes)
+
+// Mutation anchors that span more than one line of the fixture.
+const (
+	syntheticLogsBlock                 = " (logs (\n  ((scope \"logger.scope\") (schema-url \"https://opentelemetry.io/schemas/1.11.0\")))))"
+	syntheticLogsBlockWithoutSchemaURL = " (logs (\n  ((scope \"logger.scope\") (schema-url \"\")))))"
+)
 
 type sinkRecord struct {
 	Signal   string          `json:"signal"`
@@ -667,13 +654,59 @@ func main() {
 		{"metrics.the-sum-aggregation-is-available", strings.ReplaceAll(syntheticFeatureCapture, `(data-type sum)`, `(data-type summary)`)},
 		{"metrics.the-lastvalue-aggregation-is-available", strings.Replace(syntheticFeatureCapture, `(data-type gauge)`, `(data-type summary)`, 1)},
 		{"metrics.the-explicitbuckethistogram-aggregation-is-available", strings.Replace(syntheticFeatureCapture, `(data-type histogram)`, `(data-type summary)`, 1)},
-		{"logs.loggerprovider-get-logger", strings.Replace(syntheticFeatureCapture, " (logs (\n  ((scope \"logger.scope\")))))", " (logs ()))", 1)},
-		{"logs.logger-emit-logrecord", strings.Replace(syntheticFeatureCapture, " (logs (\n  ((scope \"logger.scope\")))))", " (logs ()))", 1)},
-		{"logs.otlp-http-exporter", strings.Replace(syntheticFeatureCapture, `((signal logs) (method "POST")`, `((signal traces) (method "POST")`, 1)},
-		{"resource.create-from-attributes", strings.Replace(syntheticFeatureCapture, `(attributes (("process.runtime.name" (string "go"))))`, `(attributes ())`, 1)},
+		{"logs.loggerprovider-get-logger", strings.Replace(syntheticFeatureCapture, syntheticLogsBlock, " (logs ()))", 1)},
+		{"logs.logger-emit-logrecord", strings.Replace(syntheticFeatureCapture, syntheticLogsBlock, " (logs ()))", 1)},
+		{"logs.otlp-http-exporter", strings.Replace(syntheticFeatureCapture, `(path "/v1/logs")`, `(path "/v1/logs/")`, 1)},
+		{"resource.create-from-attributes", strings.Replace(syntheticFeatureCapture, `(attributes (("process.runtime.name" (string "go")) ("service.name" (string "synthetic-service"))))`, `(attributes ())`, 1)},
 		{"resource.resource-detector-interface-mechanism", strings.Replace(syntheticFeatureCapture, `(string "go")`, `(string "rust")`, 1)},
 		{"resource.resource-detectors-populate-schema-url", strings.Replace(syntheticFeatureCapture, `(schema-url "https://opentelemetry.io/schemas/1.43.0")`, `(schema-url "")`, 1)},
 		{"exporters.otlp.otlp-http-binary-protobuf-exporter", strings.Replace(syntheticFeatureCapture, `(content-type "application/x-protobuf")`, `(content-type "application/json")`, 1)},
+		{"traces.tracerprovider.create-tracerprovider", strings.Replace(syntheticFeatureCapture, `(spans (`, `(spans ()) (unused-spans (`, 1)},
+		{"traces.span-attributes.setattribute", strings.NewReplacer(
+			`(attributes (("string.key" (string "value")) ("integer.key" (integer 7))))`, `(attributes ())`,
+			`(attributes (("string.key" (string "child")) ("integer.key" (integer 8))))`, `(attributes ())`,
+		).Replace(syntheticFeatureCapture)},
+		{"traces.spancontext.isvalid", strings.Replace(syntheticFeatureCapture, `(span-id "222222222222222a")`, `(span-id "0000000000000000")`, 1)},
+		{"traces.spancontext.conforms-to-the-w3c-tracecontext-spec", strings.Replace(syntheticFeatureCapture, `(trace-state "")`, `(trace-state "bad key=1")`, 1)},
+		{"traces.span.updatename", strings.Replace(syntheticFeatureCapture, `(name "GET /api/articles/:slug")`, `(name "HTTP GET")`, 1)},
+		{"traces.span.set-status-with-statuscode-unset-ok-error", strings.Replace(syntheticFeatureCapture, `(status-code 2)`, `(status-code 0)`, 1)},
+		{"traces.span-events.addevent", strings.Replace(syntheticFeatureCapture, `(events (`, `(events ()) (unused-events (`, 1)},
+		{"resource.retrieve-attributes", strings.Replace(syntheticFeatureCapture, `(attributes (("process.runtime.name" (string "go")) ("service.name" (string "synthetic-service"))))`, `(attributes ())`, 1)},
+		{"environment-variables.otel-service-name", strings.Replace(syntheticFeatureCapture, `("service.name" (string "synthetic-service"))`, `("service.name" (string "unknown_service:python"))`, 1)},
+		{"environment-variables.otel-traces-exporter", strings.Replace(syntheticFeatureCapture, `((signal traces) (received-unix-nano 1)`, `((signal metrics) (received-unix-nano 1)`, 1)},
+		{"environment-variables.otel-metrics-exporter", strings.ReplaceAll(syntheticFeatureCapture, `((signal metrics) (received-unix-nano`, `((signal traces) (received-unix-nano`)},
+		{"environment-variables.otel-logs-exporter", strings.Replace(syntheticFeatureCapture, `((signal logs) (received-unix-nano 4)`, `((signal traces) (received-unix-nano 4)`, 1)},
+		{"environment-variables.otel-metric-export-interval", strings.Replace(syntheticFeatureCapture, `((signal metrics) (received-unix-nano 3)`, `((signal traces) (received-unix-nano 3)`, 1)},
+		{"metrics.instrument-names-conform-to-the-specified-syntax", strings.Replace(syntheticFeatureCapture, `(name "counter")`, `(name "9counter")`, 1)},
+		{"metrics.instrument-units-conform-to-the-specified-syntax", strings.Replace(syntheticFeatureCapture, `(unit "ms")`, `(unit "µs")`, 1)},
+		{"metrics.instrument-descriptions-conform-to-the-specified-syntax", strings.Replace(syntheticFeatureCapture, `(description "gauge description")`, `(description 7)`, 1)},
+		{"metrics.the-default-aggregation-is-available", strings.Replace(syntheticFeatureCapture, `(data-type histogram)`, `(data-type summary)`, 1)},
+		{"exporters.otlp.honors-the-user-agent-spec", strings.Replace(syntheticFeatureCapture, `("user-agent" "OTel-OTLP-Exporter-Python/1.44.0")`, `("user-agent" "curl/8.0.0")`, 1)},
+		{"exporters.otlp.schemaurl-in-resourcespans-and-scopespans", strings.Replace(syntheticFeatureCapture, `(schema-url "https://opentelemetry.io/schemas/1.11.0")`, `(schema-url "")`, 1)},
+		{"exporters.otlp.schemaurl-in-resourcemetrics-and-scopemetrics", strings.NewReplacer(
+			`(schema-url "https://opentelemetry.io/schemas/1.43.0")`, `(schema-url "")`,
+			`(scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0")`, `(scope-version "1.2.3") (schema-url "")`,
+		).Replace(syntheticFeatureCapture)},
+		{"exporters.otlp.schemaurl-in-resourcelogs-and-scopelogs", strings.Replace(syntheticFeatureCapture, syntheticLogsBlock, syntheticLogsBlockWithoutSchemaURL, 1)},
+	}
+	// Every capture shape a proof rule asserts must also have a negative
+	// mutation, or a shape that is trivially true would still read as proof.
+	mutatedShapes := map[string]bool{}
+	for _, failure := range featureFailures {
+		if failure.capture == syntheticFeatureCapture {
+			fatal(fmt.Errorf("mutation for %s did not change the synthetic capture", failure.featureID))
+		}
+		mutatedShapes[syntheticShapeByFeature[failure.featureID]] = true
+	}
+	uncoveredShapes := []string{}
+	for featureID, shape := range syntheticShapeByFeature {
+		if !mutatedShapes[shape] {
+			uncoveredShapes = append(uncoveredShapes, shape+" ("+featureID+")")
+		}
+	}
+	if len(uncoveredShapes) > 0 {
+		sort.Strings(uncoveredShapes)
+		fatal(fmt.Errorf("capture shapes without a negative mutation: %s", strings.Join(uncoveredShapes, ", ")))
 	}
 	for _, failure := range featureFailures {
 		assertSyntheticShapeFailure(endpoint, failure.featureID, syntheticShapeByFeature[failure.featureID], failure.capture)

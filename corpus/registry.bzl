@@ -36,6 +36,7 @@ OTEL_CORE_LIBRARIES = [
     "otel/proofs/logs.scm",
     "otel/proofs/resource.scm",
     "otel/proofs/exporters.scm",
+    "otel/proofs/environment.scm",
     "otel/proofs.scm",
     "realworld/route.scm",
     "realworld/scenarios.scm",
