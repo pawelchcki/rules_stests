@@ -43,18 +43,7 @@ jobs:
       - name: Prove two clean builds are identical
         id: reproducible
         shell: bash
-        run: |
-          set -euo pipefail
-          for build in a b; do
-            docker buildx build --no-cache --platform linux/amd64 --provenance=false --sbom=false \
-              --build-arg SOURCE_DATE_EPOCH=0 \
-              --output "type=oci,dest=/tmp/ruby-agent-${build}.tar,rewrite-timestamp=true,oci-mediatypes=true,compression=gzip,force-compression=true" \
-              "${CONTEXT}"
-          done
-          digest_a="$(tar -xOf /tmp/ruby-agent-a.tar index.json | jq -r '.manifests[0].digest')"
-          digest_b="$(tar -xOf /tmp/ruby-agent-b.tar index.json | jq -r '.manifests[0].digest')"
-          test "${digest_a}" = "${digest_b}"
-          echo "digest=${digest_a}" >> "${GITHUB_OUTPUT}"
+        run: tools/prove_reproducible_build.sh ruby-agent "${CONTEXT}" >>"${GITHUB_OUTPUT}"
 
       - name: Publish immutable payload
         id: publish

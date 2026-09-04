@@ -3,7 +3,8 @@
   (import (scheme base))
   (begin
 (define traces-proof-rules
-  '(("traces.tracerprovider.get-a-tracer" (assertion trace/scope-associated) (evidence requires-immutable-source))
+  '(("traces.tracerprovider.create-tracerprovider" (assertion span/present) (evidence requires-immutable-source))
+    ("traces.tracerprovider.get-a-tracer" (assertion trace/scope-associated) (evidence requires-immutable-source))
     ("traces.tracerprovider.get-a-tracer-with-schema-url" (assertion trace/schema-url-present) (evidence requires-immutable-source))
     ("traces.tracerprovider.associate-tracer-with-instrumentationscope" (assertion trace/scope-associated) (evidence requires-immutable-source))
     ("traces.tracer.create-a-new-span" (assertion span/present) (evidence requires-immutable-source))
@@ -13,6 +14,13 @@
     ("traces.span.end" (assertion span/all-completed) (evidence wire-sufficient))
     ("traces.span-attributes.string-type" (assertion span/string-attribute-present) (evidence wire-sufficient))
     ("traces.span-attributes.signed-int64-type" (assertion span/int64-attribute-present) (evidence wire-sufficient))
+    ("traces.span-attributes.setattribute" (assertion span/attributes-present) (evidence wire-sufficient))
+    ("traces.spancontext.isvalid" (assertion span/ids-valid) (evidence wire-sufficient))
+    ("traces.spancontext.conforms-to-the-w3c-tracecontext-spec" (assertion span/w3c-trace-context-valid) (evidence wire-sufficient))
+    ("traces.sampling.idgenerators" (assertion span/ids-valid) (evidence requires-immutable-source))
+    ("traces.span.updatename" (assertion span/server-name-is-route) (evidence requires-immutable-source))
+    ("traces.span.set-status-with-statuscode-unset-ok-error" (assertion span/status-error-present) (evidence wire-sufficient))
+    ("traces.span-events.addevent" (assertion span/events-present) (evidence requires-immutable-source))
     ("traces.span-exceptions.recordexception" (assertion span/exception-events-complete) (evidence requires-immutable-source))
     ("traces.span-exceptions.recordexception-with-extra-parameters" (assertion span/exception-events-complete) (evidence requires-immutable-source))))
   ))

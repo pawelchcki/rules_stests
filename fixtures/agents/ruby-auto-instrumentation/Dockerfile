@@ -21,8 +21,23 @@ RUN bundle _4.0.3_ config set deployment true \
     && cp -a /bundle/ruby/3.3.0/. /rootfs/otel-auto-instrumentation-ruby/ \
     && cp -a vendor /rootfs/otel-auto-instrumentation-ruby/vendor
 COPY activation.rb /rootfs/otel-auto-instrumentation-ruby/activation.rb
+# Two things here would otherwise defeat the reproducible-build check.
+#
+# RubyGems keeps the native-extension build logs purely as diagnostics, and both
+# embed randomness: gem_make.out records the random temporary install directory
+# RubyGems picks, and mkmf.log records the random object filenames GCC picks
+# under /tmp. The compiled bigdecimal.so is already byte-identical between
+# builds, so dropping the two logs costs nothing.
+#
+# Under `--jobs=4` RubyGems sometimes creates a gem's directory implicitly from
+# the process umask before it applies the mode recorded in the gem, so the same
+# directory comes out 0777 in one build and 0755 in the next. Every directory in
+# this payload is meant to be 0755, so state that outright rather than depend on
+# the interleaving; it also keeps world-writable directories out of the image.
 RUN test -f /rootfs/otel-auto-instrumentation-ruby/activation.rb \
     && test -d /rootfs/otel-auto-instrumentation-ruby/gems \
+    && find /rootfs \( -name mkmf.log -o -name gem_make.out \) -type f -delete \
+    && find /rootfs -type d -exec chmod 0755 {} + \
     && find /rootfs -xdev -exec touch -h -d @0 {} +
 
 FROM scratch
