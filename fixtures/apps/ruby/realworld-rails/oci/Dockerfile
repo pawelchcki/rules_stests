@@ -29,13 +29,17 @@ COPY db db
 COPY test test
 COPY bin bin
 COPY Rakefile config.ru ./
-# Two things in this stage are otherwise irreproducible. The native-extension
+# Three things in this stage are otherwise irreproducible. The native-extension
 # build logs RubyGems keeps for diagnostics embed the random temporary paths
 # RubyGems and GCC pick, so they are deleted; the compiled extensions themselves
 # are already deterministic. And `db:prepare` stamps wall-clock timestamps into
 # the seed database's ar_internal_metadata, so they are pinned to the epoch
 # alongside the existing schema_migrations rewrite. Rails only reads the
-# `environment` value back, never the timestamps.
+# `environment` value back, never the timestamps. And under `--jobs=4` RubyGems
+# sometimes creates a gem's directory from the process umask before applying the
+# mode recorded in the gem, so directory modes are stated outright; every
+# directory here is meant to be 0755, and the writable state directories get
+# their access from the ownership set below.
 RUN DATABASE_PATH=/tmp/realworld-test.sqlite3 bundle _4.0.3_ exec ruby bin/rails db:test:prepare \
     && DATABASE_PATH=/tmp/realworld-test.sqlite3 bundle _4.0.3_ exec ruby bin/rails test \
     && mkdir -p /rootfs/opt/app/src/tmp/cache /rootfs/opt/app/src/tmp/pids /rootfs/opt/app/seed /rootfs/opt/app/bin /rootfs/opt/app/ruby /rootfs/data /rootfs/lib /rootfs/lib64 /rootfs/usr/lib /rootfs/usr/share \
@@ -50,6 +54,7 @@ RUN DATABASE_PATH=/tmp/realworld-test.sqlite3 bundle _4.0.3_ exec ruby bin/rails
     && cp -a /usr/lib/x86_64-linux-gnu /rootfs/usr/lib/ \
     && mkdir -p /rootfs/etc/ssl/certs && cp -L /etc/ssl/certs/ca-certificates.crt /rootfs/etc/ssl/certs/ \
     && find /rootfs \( -name mkmf.log -o -name gem_make.out \) -type f -delete \
+    && find /rootfs -type d -exec chmod 0755 {} + \
     && find /rootfs -xdev -exec touch -h -d @0 {} + \
     && chown -R 65532:65532 /rootfs/data /rootfs/opt/app/seed /rootfs/opt/app/src/tmp
 COPY --from=launcher /out/app /rootfs/opt/app/bin/app
