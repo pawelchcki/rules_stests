@@ -21,8 +21,15 @@ RUN bundle _4.0.3_ config set deployment true \
     && cp -a /bundle/ruby/3.3.0/. /rootfs/otel-auto-instrumentation-ruby/ \
     && cp -a vendor /rootfs/otel-auto-instrumentation-ruby/vendor
 COPY activation.rb /rootfs/otel-auto-instrumentation-ruby/activation.rb
+# RubyGems keeps the native-extension build logs purely as diagnostics, and both
+# embed randomness that defeats the reproducible-build check: gem_make.out
+# records the random temporary install directory RubyGems picks, and mkmf.log
+# records the random object filenames GCC picks under /tmp. The compiled
+# bigdecimal.so is already byte-identical between builds, so dropping the two
+# logs makes the whole payload reproducible without changing what it ships.
 RUN test -f /rootfs/otel-auto-instrumentation-ruby/activation.rb \
     && test -d /rootfs/otel-auto-instrumentation-ruby/gems \
+    && find /rootfs \( -name mkmf.log -o -name gem_make.out \) -type f -delete \
     && find /rootfs -xdev -exec touch -h -d @0 {} +
 
 FROM scratch
