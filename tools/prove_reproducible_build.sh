@@ -47,7 +47,10 @@ if [[ "${digest_a}" == "${digest_b}" ]]; then
   exit 0
 fi
 
-echo "::error::two clean builds of ${name} produced different manifests: ${digest_a} != ${digest_b}"
+# Only the digest belongs on stdout, which the caller captures; the report goes
+# to stderr so it lands in the build log rather than in GITHUB_OUTPUT.
+exec >&2
+echo "two clean builds of ${name} produced different manifests: ${digest_a} != ${digest_b}"
 
 echo "--- manifest"
 diff -u "${work}/manifest-a.json" "${work}/manifest-b.json" || true
