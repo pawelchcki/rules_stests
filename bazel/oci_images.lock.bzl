@@ -24,8 +24,8 @@ OTEL_RUBY = struct(
 OCI_IMAGES = {
     "rails_realworld": struct(
         repository = "ghcr.io/pawelchcki/rules_stest_apps",
-        digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-        tree = "unpublished",
+        digest = "sha256:839fe7da9721b4c79b65a0b5a584ab4c5c5985db6077a7a63fc1ad15e38b3502",
+        tree = "53bb2b5a16ee8940ee557340b38cef426fa01393",
     ),
     "gin_realworld": struct(
         repository = "ghcr.io/pawelchcki/rules_stest_apps",

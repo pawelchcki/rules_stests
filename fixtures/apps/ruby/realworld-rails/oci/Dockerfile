@@ -42,7 +42,7 @@ COPY Rakefile config.ru ./
 # access from the ownership set below.
 RUN DATABASE_PATH=/tmp/realworld-test.sqlite3 bundle _4.0.3_ exec ruby bin/rails db:test:prepare \
     && DATABASE_PATH=/tmp/realworld-test.sqlite3 bundle _4.0.3_ exec ruby bin/rails test \
-    && mkdir -p /rootfs/opt/app/src/tmp/cache /rootfs/opt/app/src/tmp/pids /rootfs/opt/app/seed /rootfs/opt/app/bin /rootfs/opt/app/ruby /rootfs/data /rootfs/lib /rootfs/lib64 /rootfs/usr/lib /rootfs/usr/share \
+    && mkdir -p /rootfs/opt/app/src/tmp/cache /rootfs/opt/app/src/tmp/pids /rootfs/opt/app/src/tmp/sockets /rootfs/opt/app/seed /rootfs/opt/app/bin /rootfs/opt/app/ruby /rootfs/data /rootfs/lib /rootfs/lib64 /rootfs/usr/lib /rootfs/usr/share \
     && cp -a app bin config db Gemfile Gemfile.lock Rakefile config.ru /rootfs/opt/app/src/ \
     && cp -a /opt/app/bundle /rootfs/opt/app/bundle \
     && cp -a /usr/local/. /rootfs/opt/app/ruby/ \
