@@ -29,15 +29,16 @@ COPY activation.rb /rootfs/otel-auto-instrumentation-ruby/activation.rb
 # under /tmp. The compiled bigdecimal.so is already byte-identical between
 # builds, so dropping the two logs costs nothing.
 #
-# Under `--jobs=4` RubyGems sometimes creates a gem's directory implicitly from
-# the process umask before it applies the mode recorded in the gem, so the same
-# directory comes out 0777 in one build and 0755 in the next. Every directory in
-# this payload is meant to be 0755, so state that outright rather than depend on
-# the interleaving; it also keeps world-writable directories out of the image.
+# Under `--jobs=4` RubyGems sometimes writes an entry from the process umask
+# instead of the mode recorded in the gem, so the same file or directory comes
+# out group- and world-writable in one build and not in the next. Nothing here
+# is meant to be writable by group or other, so say that outright rather than
+# depend on the interleaving; stripping only those bits keeps the executable
+# bits that the gem binstubs rely on.
 RUN test -f /rootfs/otel-auto-instrumentation-ruby/activation.rb \
     && test -d /rootfs/otel-auto-instrumentation-ruby/gems \
     && find /rootfs \( -name mkmf.log -o -name gem_make.out \) -type f -delete \
-    && find /rootfs -type d -exec chmod 0755 {} + \
+    && chmod -R go-w /rootfs \
     && find /rootfs -xdev -exec touch -h -d @0 {} +
 
 FROM scratch
