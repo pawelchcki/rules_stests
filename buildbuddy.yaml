@@ -21,16 +21,22 @@ actions:
             REPORT_REVISION="$(git rev-parse HEAD^1)"
           fi
           git checkout --detach "$REPORT_REVISION"
-          OTEL_TEST_REVISION="$REPORT_REVISION" bazel test \
+          # No revision is stamped here, so these results stay cacheable across
+          # commits; only the report run below needs a revision in its receipts.
+          # The report suite is excluded rather than run twice.
+          bazel test \
             --config=buildbuddy \
             --build_tests_only \
-            --local_test_jobs=8 \
-            --test_env=OTEL_TEST_REVISION \
+            --local_test_jobs=16 \
+            --test_tag_filters=-otel-report \
             //...
+          # The report run stays uncached: report/cmd/main.go refuses to assemble
+          # from a build event file that does not prove --nocache_test_results,
+          # because the report claims its evidence came from a fresh run.
           OTEL_TEST_REVISION="$REPORT_REVISION" bazel test \
             --config=buildbuddy \
             --nocache_test_results \
-            --local_test_jobs=8 \
+            --local_test_jobs=16 \
             --test_env=OTEL_TEST_REVISION \
             --build_event_json_file=otel-profile.bep.json \
             --nobuild_event_json_file_path_conversion \
@@ -41,11 +47,10 @@ actions:
             REPORT_REVISION="$REPORT_REVISION" \
             tools/assemble_otel_report.sh
           (cd examples/plugin_agent && \
-            OTEL_TEST_REVISION="$REPORT_REVISION" bazel test \
+            bazel test \
               --config=buildbuddy \
               --build_tests_only \
-              --local_test_jobs=8 \
-              --test_env=OTEL_TEST_REVISION \
+              --local_test_jobs=16 \
               //...)
           (cd examples/plugin_agent && \
             bazel build --config=buildbuddy //:otel_report_manifest)

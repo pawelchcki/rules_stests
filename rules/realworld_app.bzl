@@ -344,6 +344,9 @@ def _otel_targets(
         otel_sink = _SINK,
         otel_xfails = otel_xfails,
         service = ":" + otel_service,
-        tags = suite_tags,
+        # These are the runs the parity report reads receipts from, so CI runs
+        # them once, in the invocation that stamps a revision into the receipt.
+        # A broad run excludes the tag rather than repeating the work.
+        tags = suite_tags + ["otel-report"],
         **kwargs
     )
