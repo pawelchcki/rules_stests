@@ -17,7 +17,8 @@
 
 ; OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT caps how many attributes a span may carry, so
 ; a server span here keeps the first eight it sets and reports the rest as
-; dropped. Every clause of the shared contract still applies to the attributes
+; dropped. The contract names that eight, so an SDK that applied some other cap
+; is not the deployment this profile describes. Every clause of the shared contract still applies to the attributes
 ; that do arrive; the limit only says that some of the declared ones will not.
 (define profile
   (realworld-profile
@@ -41,7 +42,7 @@
       expected-log-policy
       (event-policy event-policy-for)
       (error-status-message expected-error-status-message-policy)
-      (attribute-limits 'enforced)
+      (attribute-limits 8)
       (server-scope server-scope-alias)
       (server-span-name render-server-span-name))
     (all (observed span/create-root))

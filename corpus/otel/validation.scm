@@ -125,7 +125,13 @@
                "instrumentation scope schema URL changed")))
     scopes))
 
-(define (enforced-limits? attribute-limits) (eq? attribute-limits 'enforced))
+; A deployment that caps span attributes declares the cap it configured, so the
+; contract can hold the export to that number rather than to whatever number the
+; SDK happened to apply.
+(define (attribute-count-limit attribute-limits)
+  (and (integer? attribute-limits) (> attribute-limits 0) attribute-limits))
+
+(define (enforced-limits? attribute-limits) (and (attribute-count-limit attribute-limits) #t))
 
 ; A deployment that caps attributes may lose a key the scope declares, but only
 ; a span that reports a positive dropped count actually lost one. Every other
@@ -139,10 +145,14 @@
 (define (validate-span-attributes span expected-scopes attribute-limits)
   (let* ((expected (scope-declaration expected-scopes (field 'scope span)))
          (attributes (field 'attributes span))
+         (limit (attribute-count-limit attribute-limits))
          (required (record-field expected 'required-keys))
          (allowed (record-field expected 'allowed-keys))
          (string-rules (record-field expected 'string-rules))
          (integer-keys (record-field expected 'integer-keys)))
+    (if limit
+        (check (<= (length attributes) limit) "span attribute count exceeds the configured limit")
+        #t)
     (check (every (lambda (entry) (member (car entry) allowed)) attributes) "unexpected span attribute")
     (for-each
       (lambda (entry)

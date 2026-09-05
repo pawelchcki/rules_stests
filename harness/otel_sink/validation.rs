@@ -302,6 +302,7 @@ fn summarize_exemplars(
     summary: &mut MetricPointSummary,
     exemplars: &[proto::Exemplar],
     spans: &BTreeSet<(String, String)>,
+    time: u64,
 ) {
     for exemplar in exemplars {
         summary.exemplars += 1;
@@ -314,10 +315,18 @@ fn summarize_exemplars(
         {
             summary.exemplars_with_trace_context += 1;
         }
-        if exemplar.time_unix_nano > 0 {
+        if exemplar_not_after_point(exemplar.time_unix_nano as i128, time as i128) {
             summary.exemplars_with_time += 1;
         }
     }
+}
+
+/// A measurement is taken before the point that carries it is collected, so an
+/// exemplar's timestamp may not be later than its point's. The other end is left
+/// open on purpose: a reservoir that survives a collection cycle legitimately
+/// reports a measurement older than the window the point reports.
+fn exemplar_not_after_point(exemplar_time: i128, time: i128) -> bool {
+    exemplar_time > 0 && exemplar_time <= time
 }
 
 fn summarize_window(summary: &mut MetricPointSummary, start: u64, time: u64) {
@@ -344,25 +353,25 @@ fn typed_metric_point_summary(
     match metric.data.as_ref() {
         Some(proto::metric::Data::Gauge(data)) => {
             for point in &data.data_points {
-                summarize_exemplars(&mut summary, &point.exemplars, spans);
+                summarize_exemplars(&mut summary, &point.exemplars, spans, point.time_unix_nano);
                 summarize_window(&mut summary, point.start_time_unix_nano, point.time_unix_nano);
             }
         }
         Some(proto::metric::Data::Sum(data)) => {
             for point in &data.data_points {
-                summarize_exemplars(&mut summary, &point.exemplars, spans);
+                summarize_exemplars(&mut summary, &point.exemplars, spans, point.time_unix_nano);
                 summarize_window(&mut summary, point.start_time_unix_nano, point.time_unix_nano);
             }
         }
         Some(proto::metric::Data::Histogram(data)) => {
             for point in &data.data_points {
-                summarize_exemplars(&mut summary, &point.exemplars, spans);
+                summarize_exemplars(&mut summary, &point.exemplars, spans, point.time_unix_nano);
                 summarize_window(&mut summary, point.start_time_unix_nano, point.time_unix_nano);
             }
         }
         Some(proto::metric::Data::ExponentialHistogram(data)) => {
             for point in &data.data_points {
-                summarize_exemplars(&mut summary, &point.exemplars, spans);
+                summarize_exemplars(&mut summary, &point.exemplars, spans, point.time_unix_nano);
                 summarize_window(&mut summary, point.start_time_unix_nano, point.time_unix_nano);
             }
         }
@@ -1417,6 +1426,7 @@ fn json_metric_point_summary(
             continue;
         };
         for point in array(json_field(value, "data_points", "dataPoints")) {
+            let point_time = integer(json_field(point, "time_unix_nano", "timeUnixNano"));
             for exemplar in array(json_field(point, "exemplars", "exemplars")) {
                 summary.exemplars += 1;
                 let trace = text(json_field(exemplar, "trace_id", "traceId"));
@@ -1427,7 +1437,10 @@ fn json_metric_point_summary(
                 {
                     summary.exemplars_with_trace_context += 1;
                 }
-                if integer(json_field(exemplar, "time_unix_nano", "timeUnixNano")) > 0 {
+                if exemplar_not_after_point(
+                    integer(json_field(exemplar, "time_unix_nano", "timeUnixNano")),
+                    point_time,
+                ) {
                     summary.exemplars_with_time += 1;
                 }
             }

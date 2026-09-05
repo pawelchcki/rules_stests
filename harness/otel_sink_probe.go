@@ -1039,6 +1039,16 @@ func main() {
 		fatal(fmt.Errorf("exemplar trace context was not matched against captured spans: %s", exemplarContextDump))
 	}
 	resetSink(endpoint)
+	// An exemplar samples a measurement the point collected, so a timestamp
+	// later than the point's is not the time that measurement was taken,
+	// however positive it is.
+	exemplarWindowMetrics := []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"metric.probe"},"metrics":[{"name":"exemplar.window","sum":{"aggregationTemporality":2,"isMonotonic":true,"dataPoints":[{"startTimeUnixNano":"10","timeUnixNano":"20","asInt":"1","exemplars":[{"timeUnixNano":"15","asInt":"1"},{"timeUnixNano":"5","asInt":"1"},{"timeUnixNano":"25","asInt":"1"}]}]}}]}]}]}`)
+	postJSON(endpoint, "/v1/metrics", "exemplar-window metrics", exemplarWindowMetrics)
+	exemplarWindowDump := freezeCapture(endpoint, "/dump.scm", "exemplar-window Scheme capture")
+	if !bytes.Contains(exemplarWindowDump, []byte("(exemplars 3) (exemplars-with-trace-context 0) (exemplars-with-time 2)")) {
+		fatal(fmt.Errorf("exemplar timestamps were not held to the point window: %s", exemplarWindowDump))
+	}
+	resetSink(endpoint)
 	invalidStatusSpan := append([]byte{}, lengthDelimited(0x0a, bytes.Repeat([]byte{0x11}, 16))...)
 	invalidStatusSpan = append(invalidStatusSpan, lengthDelimited(0x12, bytes.Repeat([]byte{0x22}, 8))...)
 	invalidStatusSpan = append(invalidStatusSpan, lengthDelimited(0x2a, []byte("GET /probe"))...)
