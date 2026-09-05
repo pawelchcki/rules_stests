@@ -58,11 +58,13 @@
     (all (observed span-context/is-remote))
     (all (observed context-propagation/b3-propagator))
     (all (observed environment-variables/otel-propagators))
-    (all (corroborated (sources python-propagation-api)
+    (all (corroborated (sources python-textmap-api)
                        context-propagation/textmappropagator
                        context-propagation/fields
-                       context-propagation/getter-argument
-                       context-propagation/global-propagator
+                       context-propagation/getter-argument))
+    (all (corroborated (sources python-propagation-api)
+                       context-propagation/global-propagator))
+    (all (corroborated (sources python-composite-propagator)
                        context-propagation/composite-propagator))
     (all (observed meter/resource-configurable))
     (all (observed metric/instrument-name-syntax))

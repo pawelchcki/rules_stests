@@ -123,11 +123,15 @@
     (scenario 'propagation (observed span-context/is-remote))
     (scenario 'propagation (observed context-propagation/tracecontext-propagator))
     (scenario 'propagation
-      (corroborated (sources python-propagation-api)
+      (corroborated (sources python-textmap-api)
                     context-propagation/textmappropagator
                     context-propagation/fields
-                    context-propagation/getter-argument
-                    context-propagation/global-propagator
+                    context-propagation/getter-argument))
+    (scenario 'propagation
+      (corroborated (sources python-propagation-api)
+                    context-propagation/global-propagator))
+    (scenario 'propagation
+      (corroborated (sources python-composite-propagator)
                     context-propagation/composite-propagator))
     (scenario 'unicode (corroborated (sources python-attributes-api) span/unicode-attribute))
     (all (observed meter/resource-configurable))

@@ -56,11 +56,15 @@
     (scenario 'propagation (observed span-context/is-remote))
     (scenario 'propagation (observed context-propagation/tracecontext-propagator))
     (scenario 'propagation
-      (corroborated (sources python-propagation-api)
+      (corroborated (sources python-textmap-api)
                     context-propagation/textmappropagator
                     context-propagation/fields
-                    context-propagation/getter-argument
-                    context-propagation/global-propagator
+                    context-propagation/getter-argument))
+    (scenario 'propagation
+      (corroborated (sources python-propagation-api)
+                    context-propagation/global-propagator))
+    (scenario 'propagation
+      (corroborated (sources python-composite-propagator)
                     context-propagation/composite-propagator))
     (scenario 'unicode (corroborated (sources python-attributes-api) span/unicode-attribute))
     (all (observed meter/resource-configurable))
@@ -84,7 +88,8 @@
     (all (corroborated (sources python-trace-api) tracer/scope-associated))
     (all (corroborated (sources python-trace-api) span/create))
     (all (corroborated (sources python-trace-api) span/create-with-active-parent))
-    (scenario 'errors_auth (corroborated (sources python-status-api) span/set-status))
+    (scenario 'errors_auth
+      (corroborated (sources python-span-api python-status-api) span/set-status))
     (scenario 'errors_auth
       (corroborated (sources python-trace-api django-exception-middleware) span/add-event))
     (scenario 'errors_auth

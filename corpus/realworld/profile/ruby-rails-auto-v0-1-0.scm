@@ -88,11 +88,15 @@
     (scenario 'propagation (observed span-context/is-remote))
     (scenario 'propagation (observed context-propagation/tracecontext-propagator))
     (scenario 'propagation
-      (corroborated (sources ruby-propagation-api)
+      (corroborated (sources ruby-textmap-api)
                     context-propagation/textmappropagator
                     context-propagation/fields
-                    context-propagation/getter-argument
-                    context-propagation/global-propagator
+                    context-propagation/getter-argument))
+    (scenario 'propagation
+      (corroborated (sources ruby-global-propagation-api)
+                    context-propagation/global-propagator))
+    (scenario 'propagation
+      (corroborated (sources ruby-composite-propagator)
                     context-propagation/composite-propagator))
     (all (observed environment-variables/otel-service-name))
     (all (observed environment-variables/otel-exporter-otlp))
