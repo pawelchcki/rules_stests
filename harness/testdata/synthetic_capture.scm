@@ -28,9 +28,9 @@
    (start 5) (end 6) (attributes ()) (events ())
    (status-code 0) (status-message "") (flags 769))))
  (metrics (
-  ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "counter") (description "counter description") (unit "{item}") (data-type sum) (aggregation-temporality delta) (monotonic #t))
-  ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "updown") (description "updown description") (unit "{item}") (data-type sum) (aggregation-temporality cumulative) (monotonic #f))
-  ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "histogram") (description "histogram description") (unit "ms") (data-type histogram) (aggregation-temporality delta) (monotonic absent))
-  ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "gauge") (description "gauge description") (unit "1") (data-type gauge) (aggregation-temporality absent) (monotonic absent))))
+  ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "counter") (description "counter description") (unit "{item}") (data-type sum) (aggregation-temporality delta) (data-points 2) (exemplars 2) (exemplars-with-trace-context 2) (exemplars-with-time 2) (points-with-start 2) (points-start-le-time 2) (monotonic #t))
+  ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "updown") (description "updown description") (unit "{item}") (data-type sum) (aggregation-temporality cumulative) (data-points 1) (exemplars 0) (exemplars-with-trace-context 0) (exemplars-with-time 0) (points-with-start 1) (points-start-le-time 1) (monotonic #f))
+  ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "histogram") (description "histogram description") (unit "ms") (data-type histogram) (aggregation-temporality delta) (data-points 1) (exemplars 1) (exemplars-with-trace-context 1) (exemplars-with-time 1) (points-with-start 1) (points-start-le-time 1) (monotonic absent))
+  ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "gauge") (description "gauge description") (unit "1") (data-type gauge) (aggregation-temporality absent) (data-points 1) (exemplars 0) (exemplars-with-trace-context 0) (exemplars-with-time 0) (points-with-start 0) (points-start-le-time 0) (monotonic absent))))
  (logs (
   ((scope "logger.scope") (schema-url "https://opentelemetry.io/schemas/1.11.0")))))

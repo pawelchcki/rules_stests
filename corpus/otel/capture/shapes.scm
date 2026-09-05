@@ -106,6 +106,14 @@
                         (memv character '(#\_ #\. #\- #\/))))
                   (loop (+ index 1)))))))
 
+(define (metric-total capture key)
+  (let loop ((metrics (items capture 'metrics)) (total 0))
+    (if (null? metrics)
+        total
+        (loop (cdr metrics)
+              (let ((value (field key (car metrics))))
+                (if (integer? value) (+ total value) total))))))
+
 (define (filter-temporality metrics)
   (let loop ((metrics metrics) (result '()))
     (if (null? metrics)
@@ -348,6 +356,25 @@
       (lambda (capture)
         (some (lambda (value) (eq? value 'delta))
               (filter-temporality (items capture 'metrics)))))
+    ; An exemplar is only recorded when a measurement is taken; the default
+    ; trace-based filter is what ties one to the span that was active.
+    (capture-shape 'metric/exemplars-present
+      (lambda (capture) (> (metric-total capture 'exemplars) 0)))
+    (capture-shape 'metric/exemplars-carry-trace-context
+      (lambda (capture)
+        (let ((total (metric-total capture 'exemplars)))
+          (and (> total 0) (= (metric-total capture 'exemplars-with-trace-context) total)))))
+    (capture-shape 'metric/exemplars-carry-time
+      (lambda (capture)
+        (let ((total (metric-total capture 'exemplars)))
+          (and (> total 0) (= (metric-total capture 'exemplars-with-time) total)))))
+    ; A series that accumulates reports the window it accumulated over. A gauge
+    ; has no window and reports no start, so the rule is about the points that
+    ; do: every one of them must precede the reading it belongs to.
+    (capture-shape 'metric/points-carry-start-window
+      (lambda (capture)
+        (let ((started (metric-total capture 'points-with-start)))
+          (and (> started 0) (= (metric-total capture 'points-start-le-time) started)))))
     (capture-shape 'metric/names-conform
       (lambda (capture)
         (every-metric? capture (lambda (metric) (metric-name-conformant? (field 'name metric))))))
