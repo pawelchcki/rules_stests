@@ -117,10 +117,10 @@ func TestCheckedInProfilePlanSnapshotsAndDescriptorOwnership(t *testing.T) {
 		implementations  []string
 	}
 	expectations := []expectation{
-		{args[3], "go-gin-otelbuild-v1-1-0", 21, 6, []string{"go-compile-v1.1", "go-runtime-v0.70"}},
-		{args[4], "python-aiohttp-auto-v0-65b0", 31, 8, []string{"python-sdk-v1.44", "python-auto-v0.65b0", "python-system-metrics-v0.65b0", "aiohttp-v0.65b0"}},
-		{args[5], "python-django-auto-v0-65b0", 32, 8, []string{"python-sdk-v1.44", "python-auto-v0.65b0", "python-system-metrics-v0.65b0", "django-v0.65b0"}},
-		{args[6], "ruby-rails-auto-v0-1-0", 14, 7, []string{"ruby-sdk-v1.11", "ruby-auto-v0.1", "rules-stests-ruby-auto-patch-v1", "rails-v0.40", "rack-v0.30", "active-record-v0.13"}},
+		{args[3], "go-gin-otelbuild-v1-1-0", 40, 18, []string{"go-compile-v1.1", "go-runtime-v0.70"}},
+		{args[4], "python-aiohttp-auto-v0-65b0", 54, 22, []string{"python-sdk-v1.44", "python-auto-v0.65b0", "python-system-metrics-v0.65b0", "aiohttp-v0.65b0"}},
+		{args[5], "python-django-auto-v0-65b0", 57, 23, []string{"python-sdk-v1.44", "python-auto-v0.65b0", "python-system-metrics-v0.65b0", "django-v0.65b0"}},
+		{args[6], "ruby-rails-auto-v0-1-0", 26, 14, []string{"ruby-sdk-v1.11", "ruby-auto-v0.1", "rules-stests-ruby-auto-patch-v1", "rails-v0.40", "rack-v0.30", "active-record-v0.13"}},
 	}
 	totalProofs, totalObserved, scopedExceptions := 0, 0, 0
 	for _, expected := range expectations {
@@ -158,7 +158,7 @@ func TestCheckedInProfilePlanSnapshotsAndDescriptorOwnership(t *testing.T) {
 		totalProofs += len(plan.Proofs)
 		totalObserved += observed
 	}
-	if totalProofs != 98 || totalObserved != 29 || scopedExceptions != 2 {
+	if totalProofs != 177 || totalObserved != 77 || scopedExceptions != 2 {
 		t.Fatalf("claim snapshot changed: proofs=%d observed=%d scoped-exceptions=%d", totalProofs, totalObserved, scopedExceptions)
 	}
 

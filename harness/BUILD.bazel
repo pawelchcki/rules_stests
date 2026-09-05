@@ -54,7 +54,10 @@ genrule(
 go_library(
     name = "otel_sink_probe_lib",
     srcs = ["otel_sink_probe.go"],
-    embedsrcs = [":otel_core_bundle"],
+    embedsrcs = [
+        ":otel_core_bundle",
+        "testdata/synthetic_capture.scm",
+    ],
     deps = ["//report:lib"],
     importpath = "github.com/pawelchcki/rules_stests/harness/otel_sink_probe",
     visibility = ["//visibility:private"],

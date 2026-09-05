@@ -16,8 +16,8 @@ OTEL_PYTHON = struct(
 # manual Ruby integration targets are enabled.
 OTEL_RUBY = struct(
     repository = "ghcr.io/pawelchcki/rules_stest_agents",
-    digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-    tree = "unpublished",
+    digest = "sha256:537b7b34e27e6479cf943d6f503312e74f11ec78222763c82934b368c7d555d2",
+    tree = "ad9770154c01419976abbd65721588ff68e78de0",
     version = "0.1.0",
 )
 

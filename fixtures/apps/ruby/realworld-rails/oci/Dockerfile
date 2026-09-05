@@ -29,6 +29,17 @@ COPY db db
 COPY test test
 COPY bin bin
 COPY Rakefile config.ru ./
+# Three things in this stage are otherwise irreproducible. The native-extension
+# build logs RubyGems keeps for diagnostics embed the random temporary paths
+# RubyGems and GCC pick, so they are deleted; the compiled extensions themselves
+# are already deterministic. And `db:prepare` stamps wall-clock timestamps into
+# the seed database's ar_internal_metadata, so they are pinned to the epoch
+# alongside the existing schema_migrations rewrite. Rails only reads the
+# `environment` value back, never the timestamps. And under `--jobs=4` RubyGems
+# sometimes writes an entry from the process umask instead of the mode recorded
+# in the gem, so group and other write bits are stripped outright; nothing here
+# is meant to be writable by them, and the writable state directories get their
+# access from the ownership set below.
 RUN DATABASE_PATH=/tmp/realworld-test.sqlite3 bundle _4.0.3_ exec ruby bin/rails db:test:prepare \
     && DATABASE_PATH=/tmp/realworld-test.sqlite3 bundle _4.0.3_ exec ruby bin/rails test \
     && mkdir -p /rootfs/opt/app/src/tmp/cache /rootfs/opt/app/src/tmp/pids /rootfs/opt/app/seed /rootfs/opt/app/bin /rootfs/opt/app/ruby /rootfs/data /rootfs/lib /rootfs/lib64 /rootfs/usr/lib /rootfs/usr/share \
@@ -37,11 +48,13 @@ RUN DATABASE_PATH=/tmp/realworld-test.sqlite3 bundle _4.0.3_ exec ruby bin/rails
     && cp -a /usr/local/. /rootfs/opt/app/ruby/ \
     && cp -a /usr/share/zoneinfo /rootfs/usr/share/ \
     && DATABASE_PATH=/rootfs/opt/app/seed/realworld.sqlite3 RAILS_ENV=production bundle _4.0.3_ exec ruby bin/rails db:prepare \
-    && bundle _4.0.3_ exec ruby -rsqlite3 -e 'p="/rootfs/opt/app/seed/realworld.sqlite3"; d=SQLite3::Database.new(p); d.execute("UPDATE schema_migrations SET version = version"); d.execute("VACUUM"); d.close' \
+    && bundle _4.0.3_ exec ruby -rsqlite3 -e 'p="/rootfs/opt/app/seed/realworld.sqlite3"; d=SQLite3::Database.new(p); d.execute("UPDATE schema_migrations SET version = version"); d.execute("UPDATE ar_internal_metadata SET created_at = ?, updated_at = ?", ["1970-01-01 00:00:00.000000"] * 2); d.execute("VACUUM"); d.close' \
     && cp -L /lib64/ld-linux-x86-64.so.2 /rootfs/lib64/ld-linux-x86-64.so.2 \
     && cp -a /lib/x86_64-linux-gnu /rootfs/lib/ \
     && cp -a /usr/lib/x86_64-linux-gnu /rootfs/usr/lib/ \
     && mkdir -p /rootfs/etc/ssl/certs && cp -L /etc/ssl/certs/ca-certificates.crt /rootfs/etc/ssl/certs/ \
+    && find /rootfs \( -name mkmf.log -o -name gem_make.out \) -type f -delete \
+    && chmod -R go-w /rootfs \
     && find /rootfs -xdev -exec touch -h -d @0 {} + \
     && chown -R 65532:65532 /rootfs/data /rootfs/opt/app/seed /rootfs/opt/app/src/tmp
 COPY --from=launcher /out/app /rootfs/opt/app/bin/app
