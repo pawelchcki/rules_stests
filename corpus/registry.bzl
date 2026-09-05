@@ -1,6 +1,7 @@
 """Single source of truth for the executable OpenTelemetry corpus."""
 
-REALWORLD_HURL_CASES = [
+# Scenarios that come from the pinned upstream RealWorld API spec archive.
+REALWORLD_UPSTREAM_HURL_CASES = [
     "articles",
     "auth",
     "comments",
@@ -15,6 +16,15 @@ REALWORLD_HURL_CASES = [
     "profiles",
     "tags",
 ]
+
+# Scenarios this repository owns, because they exercise OpenTelemetry behaviour
+# the upstream API conformance suite has no reason to cover.
+REALWORLD_LOCAL_HURL_CASES = {
+    "propagation": Label("//corpus:realworld/hurl/propagation.hurl"),
+    "unicode": Label("//corpus:realworld/hurl/unicode.hurl"),
+}
+
+REALWORLD_HURL_CASES = REALWORLD_UPSTREAM_HURL_CASES + sorted(REALWORLD_LOCAL_HURL_CASES)
 
 # Stak requires libraries to be defined before a program imports them. Keep this
 # list dependency ordered; it is shared by profile manifests and the sink probe.
@@ -37,6 +47,7 @@ OTEL_CORE_LIBRARIES = [
     "otel/proofs/resource.scm",
     "otel/proofs/exporters.scm",
     "otel/proofs/environment.scm",
+    "otel/proofs/propagation.scm",
     "otel/proofs.scm",
     "realworld/route.scm",
     "realworld/scenarios.scm",

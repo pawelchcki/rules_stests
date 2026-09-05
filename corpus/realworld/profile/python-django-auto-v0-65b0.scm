@@ -10,6 +10,7 @@
           (otel standard traces) (otel standard metrics)
           (otel standard logs) (otel standard resource) (otel standard exporters)
           (otel standard environment-variables)
+          (otel standard context-propagation)
           (realworld contract) (realworld route))
   (begin
 
@@ -111,6 +112,19 @@
     (all (observed span/set-attribute))
     (all (observed span-context/is-valid))
     (all (observed span-context/w3c-conformant))
+    ; Only a scenario that sends its own traceparent can show a parent that
+    ; arrived over the wire rather than from an enclosing in-process span.
+    (scenario 'propagation (observed span/create-with-context-parent))
+    (scenario 'propagation (observed span-context/is-remote))
+    (scenario 'propagation (observed context-propagation/tracecontext-propagator))
+    (scenario 'propagation
+      (corroborated (sources python-propagation-api)
+                    context-propagation/textmappropagator
+                    context-propagation/fields
+                    context-propagation/getter-argument
+                    context-propagation/global-propagator
+                    context-propagation/composite-propagator))
+    (scenario 'unicode (observed span/unicode-attribute))
     (all (observed meter/resource-configurable))
     (all (observed metric/instrument-name-syntax))
     (all (observed metric/instrument-unit-syntax))
@@ -127,7 +141,6 @@
     (all (corroborated (sources python-trace-api) tracer/scope-associated))
     (all (corroborated (sources python-trace-api) span/create))
     (all (corroborated (sources python-trace-api) span/create-with-active-parent))
-    (all (corroborated (sources python-trace-api) span/create-with-context-parent))
     (scenario 'errors_auth (observed span/set-status))
     (scenario 'errors_auth
       (corroborated (sources python-trace-api django-exception-middleware) span/add-event))

@@ -1,7 +1,11 @@
 """Sharded RealWorld Hurl tests using an atomic OpenTelemetry profile."""
 
 load("@rules_itest//:itest.bzl", "service_test")
-load("//corpus:registry.bzl", _CASES = "REALWORLD_HURL_CASES")
+load(
+    "//corpus:registry.bzl",
+    _CASES = "REALWORLD_HURL_CASES",
+    _LOCAL_CASES = "REALWORLD_LOCAL_HURL_CASES",
+)
 
 _HURL_ROOTFS = Label("//harness:hurl_rootfs")
 _DRIVER = Label("//harness:realworld_hurl")
@@ -15,7 +19,7 @@ def _rootpath(label):
 def _realworld_hurl_case_test(name, case, service, otel_sink = None,
                               otel_profile = None, otel_mode = "validate",
                               otel_xfail = "", flaky = False, tags = [], **kwargs):
-    spec = _SPEC_ANCHOR.same_package_label("hurl/{}.hurl".format(case))
+    spec = _LOCAL_CASES.get(case) or _SPEC_ANCHOR.same_package_label("hurl/{}.hurl".format(case))
     args = [
         "--service-suffix=" + str(service),
         "--jobs=1",

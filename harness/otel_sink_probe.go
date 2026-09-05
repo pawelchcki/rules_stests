@@ -624,9 +624,7 @@ func main() {
 	} else if status != http.StatusOK || !bytes.Contains(output, []byte("standalone validation passed")) {
 		fatal(fmt.Errorf("valid Scheme rule returned HTTP %d: %s", status, output))
 	}
-	for _, featureID := range syntheticFeatureIDs {
-		assertSyntheticShapePass(endpoint, featureID, syntheticShapeByFeature[featureID], syntheticFeatureCapture)
-	}
+	assertSyntheticShapesPass(endpoint, syntheticFeatureIDs, syntheticShapeByFeature, syntheticFeatureCapture)
 	featureFailures := []struct {
 		featureID string
 		capture   string
@@ -635,9 +633,16 @@ func main() {
 		{"traces.tracerprovider.get-a-tracer-with-schema-url", strings.Replace(syntheticFeatureCapture, `(schema-url "https://opentelemetry.io/schemas/1.11.0")`, `(schema-url "")`, 1)},
 		{"traces.tracer.create-a-new-span", strings.Replace(syntheticFeatureCapture, `(spans (`, `(spans ()) (unused-spans (`, 1)},
 		{"traces.span.create-root-span", strings.Replace(syntheticFeatureCapture, `(parent-class root)`, `(parent-class external)`, 1)},
-		{"traces.span.create-with-parent-from-context", strings.Replace(syntheticFeatureCapture, `(parent-class child)`, `(parent-class root)`, 1)},
+		{"traces.span.create-with-parent-from-context", strings.Replace(syntheticFeatureCapture, `(parent-class external)`, `(parent-class child)`, 1)},
+		{"traces.span.create-with-default-parent-active-span", strings.NewReplacer(
+			`(parent-class child)`, `(parent-class root)`,
+			`(parent-class external)`, `(parent-class root)`,
+		).Replace(syntheticFeatureCapture)},
 		{"traces.span.end", strings.Replace(syntheticFeatureCapture, `(start 1) (end 4)`, `(start 1) (end 0)`, 1)},
-		{"traces.span-attributes.string-type", strings.ReplaceAll(syntheticFeatureCapture, `("string.key" (string `, `("string.key" (bytes `)},
+		{"traces.span-attributes.string-type", strings.NewReplacer(
+			`("string.key" (string `, `("string.key" (bytes `,
+			`("unicode.key" (string `, `("unicode.key" (bytes `,
+		).Replace(syntheticFeatureCapture)},
 		{"traces.span-attributes.signed-int64-type", strings.ReplaceAll(syntheticFeatureCapture, `("integer.key" (integer `, `("integer.key" (double `)},
 		{"traces.span-exceptions.recordexception", strings.Replace(syntheticFeatureCapture, `(name "exception")`, `(name "not-exception")`, 1)},
 		{"metrics.meterprovider-provides-a-way-to-get-a-meter", strings.ReplaceAll(syntheticFeatureCapture, `(scope "meter.scope")`, `(scope "")`)},
@@ -663,13 +668,15 @@ func main() {
 		{"exporters.otlp.otlp-http-binary-protobuf-exporter", strings.Replace(syntheticFeatureCapture, `(content-type "application/x-protobuf")`, `(content-type "application/json")`, 1)},
 		{"traces.tracerprovider.create-tracerprovider", strings.Replace(syntheticFeatureCapture, `(spans (`, `(spans ()) (unused-spans (`, 1)},
 		{"traces.span-attributes.setattribute", strings.NewReplacer(
-			`(attributes (("string.key" (string "value")) ("integer.key" (integer 7))))`, `(attributes ())`,
+			`(attributes (("string.key" (string "value")) ("integer.key" (integer 7)) ("unicode.key" (string "ünïcødé"))))`, `(attributes ())`,
 			`(attributes (("string.key" (string "child")) ("integer.key" (integer 8))))`, `(attributes ())`,
 		).Replace(syntheticFeatureCapture)},
 		{"traces.spancontext.isvalid", strings.Replace(syntheticFeatureCapture, `(span-id "222222222222222a")`, `(span-id "0000000000000000")`, 1)},
 		{"traces.spancontext.conforms-to-the-w3c-tracecontext-spec", strings.Replace(syntheticFeatureCapture, `(trace-state "")`, `(trace-state "bad key=1")`, 1)},
 		{"traces.span.updatename", strings.Replace(syntheticFeatureCapture, `(name "GET /api/articles/:slug")`, `(name "HTTP GET")`, 1)},
 		{"traces.span.set-status-with-statuscode-unset-ok-error", strings.Replace(syntheticFeatureCapture, `(status-code 2)`, `(status-code 0)`, 1)},
+		{"traces.spancontext.isremote", strings.Replace(syntheticFeatureCapture, `(parent-class external)`, `(parent-class child)`, 1)},
+		{"traces.span-attributes.unicode-support-for-keys-and-string-values", strings.Replace(syntheticFeatureCapture, `("unicode.key" (string "ünïcødé"))`, `("unicode.key" (string "ascii"))`, 1)},
 		{"traces.span-events.addevent", strings.Replace(syntheticFeatureCapture, `(events (`, `(events ()) (unused-events (`, 1)},
 		{"resource.retrieve-attributes", strings.Replace(syntheticFeatureCapture, `(attributes (("process.runtime.name" (string "go")) ("service.name" (string "synthetic-service"))))`, `(attributes ())`, 1)},
 		{"environment-variables.otel-service-name", strings.Replace(syntheticFeatureCapture, `("service.name" (string "synthetic-service"))`, `("service.name" (string "unknown_service:python"))`, 1)},
@@ -1247,13 +1254,26 @@ func validateSyntheticShape(endpoint, featureID, shape, capture string) ([]byte,
 	return validateScheme(endpoint, source)
 }
 
-func assertSyntheticShapePass(endpoint, featureID, shape, capture string) {
-	output, status, err := validateSyntheticShape(endpoint, featureID, shape, capture)
+// Every rule's shape is asserted by one program rather than one program each:
+// the sink compiles the whole corpus bundle per request, so the compilation
+// dominates, and the probe's runtime would otherwise grow with the corpus.
+// assert-capture-shape raises a contract error naming the first shape that
+// fails, so a single program still reports which rule broke.
+func assertSyntheticShapesPass(endpoint string, featureIDs []string, shapeByFeature map[string]string, capture string) {
+	var source bytes.Buffer
+	source.Write(otelCoreLibrary)
+	source.WriteString("\n(import (scheme base) (otel capture shapes))\n(define probe-capture '")
+	source.WriteString(capture)
+	source.WriteString(")\n")
+	for _, featureID := range featureIDs {
+		fmt.Fprintf(&source, "(assert-capture-shape %q '%s probe-capture)\n", featureID, shapeByFeature[featureID])
+	}
+	output, status, err := validateScheme(endpoint, source.Bytes())
 	if err != nil {
 		fatal(err)
 	}
 	if status != http.StatusOK {
-		fatal(fmt.Errorf("passing capture shape returned HTTP %d: %s", status, output))
+		fatal(fmt.Errorf("passing capture shapes returned HTTP %d: %s", status, output))
 	}
 }
 

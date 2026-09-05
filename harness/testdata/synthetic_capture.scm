@@ -14,7 +14,7 @@
  (spans (
   ((scope "trace.scope") (trace-id "1111111111111111111111111111111a") (span-id "222222222222222a")
    (parent-span-id "") (parent-class root) (parent-valid #t) (trace-state "") (name "GET /api/articles/:slug") (kind 2)
-   (start 1) (end 4) (attributes (("string.key" (string "value")) ("integer.key" (integer 7))))
+   (start 1) (end 4) (attributes (("string.key" (string "value")) ("integer.key" (integer 7)) ("unicode.key" (string "ünïcødé"))))
    (events (
     ((name "exception") (time 2) (attributes (("exception.type" (string "ValueError")) ("exception.message" (string "bad")) ("exception.stacktrace" (long-string 300)) ("exception.escaped" (string "False")))))
     ((name "exception") (time 3) (attributes (("exception.type" (string "KeyError")) ("exception.message" (string "missing")) ("exception.stacktrace" (long-string 400)) ("exception.escaped" (string "True")))))))
@@ -22,7 +22,11 @@
   ((scope "trace.scope") (trace-id "1111111111111111111111111111111a") (span-id "333333333333333a")
    (parent-span-id "1111111111111111") (parent-class child) (parent-valid #t) (trace-state "") (name "SELECT articles") (kind 3)
    (start 2) (end 3) (attributes (("string.key" (string "child")) ("integer.key" (integer 8)))) (events ())
-   (status-code 0) (status-message "") (flags 256))))
+   (status-code 0) (status-message "") (flags 256))
+  ((scope "trace.scope") (trace-id "5555555555555555555555555555555a") (span-id "666666666666666a")
+   (parent-span-id "00f067aa0ba902b7") (parent-class external) (parent-valid #t) (trace-state "") (name "GET /api/tags") (kind 2)
+   (start 5) (end 6) (attributes ()) (events ())
+   (status-code 0) (status-message "") (flags 769))))
  (metrics (
   ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "counter") (description "counter description") (unit "{item}") (data-type sum) (monotonic #t))
   ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "updown") (description "updown description") (unit "{item}") (data-type sum) (monotonic #f))

@@ -10,10 +10,14 @@
     ("traces.tracer.create-a-new-span" (assertion span/present) (evidence requires-immutable-source))
     ("traces.span.create-root-span" (assertion span/root-present) (evidence wire-sufficient))
     ("traces.span.create-with-default-parent-active-span" (assertion span/parent-valid-present) (evidence requires-immutable-source))
-    ("traces.span.create-with-parent-from-context" (assertion span/parent-valid-present) (evidence requires-immutable-source))
+    ; A parent the capture never carried came in over the wire, which is what
+    ; separates a context extracted from a request from an in-process child.
+    ("traces.span.create-with-parent-from-context" (assertion span/external-parent-present) (evidence wire-sufficient))
+    ("traces.spancontext.isremote" (assertion span/external-parent-present) (evidence wire-sufficient))
     ("traces.span.end" (assertion span/all-completed) (evidence wire-sufficient))
     ("traces.span-attributes.string-type" (assertion span/string-attribute-present) (evidence wire-sufficient))
     ("traces.span-attributes.signed-int64-type" (assertion span/int64-attribute-present) (evidence wire-sufficient))
+    ("traces.span-attributes.unicode-support-for-keys-and-string-values" (assertion span/unicode-string-attribute-present) (evidence wire-sufficient))
     ("traces.span-attributes.setattribute" (assertion span/attributes-present) (evidence wire-sufficient))
     ("traces.spancontext.isvalid" (assertion span/ids-valid) (evidence wire-sufficient))
     ("traces.spancontext.conforms-to-the-w3c-tracecontext-spec" (assertion span/w3c-trace-context-valid) (evidence wire-sufficient))

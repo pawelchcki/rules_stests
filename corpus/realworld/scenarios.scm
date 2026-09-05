@@ -104,11 +104,18 @@
       (3 "GET" "/api/profiles/{username}" 200)
       (1 "POST" "/api/profiles/{username}/follow" 200)
       (2 "POST" "/api/users" 201))
+    ; The fifth element of an observation is the parent class the server span
+    ; must carry; it defaults to `root` for every scenario that omits it.
+    (propagation
+      (3 "GET" "/api/tags" 200 external)
+      (1 "POST" "/api/users" 201))
     (tags
       (1 "DELETE" "/api/articles/{slug}" 204)
       (1 "GET" "/api/tags" 200)
       (1 "POST" "/api/articles" 201)
-      (1 "POST" "/api/users" 201))))
+      (1 "POST" "/api/users" 201))
+    (unicode
+      (1 "GET" "/api/profiles/{username}" 404))))
 
 (define (expected-http-requests-for scenario)
   (let ((entry (assq scenario scenario-shapes)))

@@ -146,6 +146,25 @@
                      (or (and (memv (string-ref name index) '(#\: #\{ #\<)) #t)
                          (loop (+ index 1)))))))))
 
+; A parent the capture never carried could be remote or merely unexported, so
+; the OTLP is-remote bit decides. Requiring the exact parent span id as well
+; ties the span to the traceparent the scenario sent.
+(define (external-parent-span? span parent-span-id)
+  (let ((flags (field 'flags span)))
+    (and (eq? (field 'parent-class span) 'external)
+         (string=? (field 'parent-span-id span) parent-span-id)
+         (valid-hex? (field 'trace-id span) 32)
+         (integer? flags)
+         (= (modulo (quotient flags 256) 2) 1)
+         (= (modulo (quotient flags 512) 2) 1))))
+
+(define (non-ascii-string? value)
+  (and (string? value)
+       (let loop ((index 0))
+         (and (< index (string-length value))
+              (or (> (char->integer (string-ref value index)) 127)
+                  (loop (+ index 1)))))))
+
 (define (requests-for capture signal)
   (let loop ((requests (items capture 'requests)) (count 0))
     (if (null? requests)
@@ -241,6 +260,19 @@
     (capture-shape 'span/events-present
       (lambda (capture)
         (some (lambda (span) (pair? (field 'events span))) (items capture 'spans))))
+    ; The parent span id the propagation scenario sends in its traceparent.
+    (capture-shape 'span/external-parent-present
+      (lambda (capture)
+        (some (lambda (span) (external-parent-span? span "00f067aa0ba902b7"))
+              (items capture 'spans))))
+    (capture-shape 'span/unicode-string-attribute-present
+      (lambda (capture)
+        (some (lambda (span)
+                (some (lambda (entry)
+                        (and (tagged? 'string (cadr entry))
+                             (non-ascii-string? (cadr (cadr entry)))))
+                      (field 'attributes span)))
+              (items capture 'spans))))
     (capture-shape 'span/exception-events-complete
       (lambda (capture) (= (length (exception-events capture)) 2)))
     (capture-shape 'trace/scope-associated

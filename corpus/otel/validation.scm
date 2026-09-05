@@ -251,6 +251,22 @@
               (else (error "unknown error status-message policy" error-message-policy)))
         (check (string=? message "") "non-error span has a status message"))))
 
+; OTLP carries the W3C trace flags in the low byte and then a two-bit field for
+; whether the parent span context was remote: bit 8 says the field is populated,
+; bit 9 carries the answer. A runtime's declared flags already set bit 8, so a
+; span with a remote parent carries that value plus bit 9.
+;
+; The capture cannot tell a remote parent from a parent that simply was not
+; exported, so a span that has any parent may carry either value. A root span
+; has no parent at all and must never claim a remote one.
+(define remote-parent-flag 512)
+
+(define (allowed-span-flags expected-flags span)
+  (if (eq? (field 'parent-class span) 'root)
+      expected-flags
+      (append expected-flags
+              (map (lambda (flags) (+ flags remote-parent-flag)) expected-flags))))
+
 (define (validate-spans expected-scopes event-policy expected-flags expected-trace-state error-message-policy spans)
   (let ((event-mode (record-field event-policy 'mode))
         (expected-event-count (record-field event-policy 'occurrences)))
@@ -279,7 +295,8 @@
           (check (= (field 'dropped-events span) 0) "span dropped events")
           (check (= (field 'dropped-links span) 0) "span dropped links")
           (check (null? (field 'links span)) "span links changed")
-          (check (member (field 'flags span) expected-flags) "span flags changed")
+          (check (member (field 'flags span) (allowed-span-flags expected-flags span))
+                 "span flags changed")
           (validate-span-attributes span expected-scopes)
           (validate-events event-mode span)))
       spans)
