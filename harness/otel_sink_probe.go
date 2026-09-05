@@ -416,7 +416,7 @@ func main() {
 	if err != nil {
 		fatal(fmt.Errorf("connect for oversized protobuf: %w", err))
 	}
-	if _, err := fmt.Fprint(oversizedProtobufConnection, "POST /v1/metrics HTTP/1.1\r\nHost: sink\r\nContent-Type: application/x-protobuf\r\nContent-Length: 131073\r\nConnection: close\r\n\r\n"); err != nil {
+	if _, err := fmt.Fprint(oversizedProtobufConnection, "POST /v1/metrics HTTP/1.1\r\nHost: sink\r\nContent-Type: application/x-protobuf\r\nContent-Length: 1048577\r\nConnection: close\r\n\r\n"); err != nil {
 		fatal(fmt.Errorf("send oversized protobuf headers: %w", err))
 	}
 	oversizedProtobufResponse, err := http.ReadResponse(bufio.NewReader(oversizedProtobufConnection), &http.Request{Method: http.MethodPost})
