@@ -696,7 +696,9 @@ func main() {
 		{"metrics.the-metrics-sdk-samples-exemplars-from-measurements", strings.NewReplacer(`(exemplars 2)`, `(exemplars 0)`, `(exemplars 1)`, `(exemplars 0)`).Replace(syntheticFeatureCapture)},
 		{"metrics.exemplars-contain-the-associated-trace-id-and-span-id-of-the-active-span-in-the-context-when-the-measurement-was-taken", strings.Replace(syntheticFeatureCapture, `(exemplars-with-trace-context 2)`, `(exemplars-with-trace-context 1)`, 1)},
 		{"metrics.exemplars-contain-the-timestamp-when-the-measurement-was-taken", strings.Replace(syntheticFeatureCapture, `(exemplars-with-time 2)`, `(exemplars-with-time 1)`, 1)},
-		{"metrics.metric-sdk-supports-per-timeseries-cumulative-start-timestamps", strings.Replace(syntheticFeatureCapture, `(points-start-le-time 2)`, `(points-start-le-time 1)`, 1)},
+		// The cumulative series is the one the rule is about, so the mutation
+		// takes the start away from it rather than from the delta counter.
+		{"metrics.metric-sdk-supports-per-timeseries-cumulative-start-timestamps", strings.Replace(syntheticFeatureCapture, `(aggregation-temporality cumulative) (data-points 1) (exemplars 0) (exemplars-with-trace-context 0) (exemplars-with-time 0) (points-with-start 1) (points-start-le-time 1)`, `(aggregation-temporality cumulative) (data-points 1) (exemplars 0) (exemplars-with-trace-context 0) (exemplars-with-time 0) (points-with-start 0) (points-start-le-time 0)`, 1)},
 		{"metrics.the-default-aggregation-is-available", strings.Replace(syntheticFeatureCapture, `(data-type histogram)`, `(data-type summary)`, 1)},
 		{"exporters.otlp.honors-the-user-agent-spec", strings.Replace(syntheticFeatureCapture, `("user-agent" "OTel-OTLP-Exporter-Python/1.44.0")`, `("user-agent" "curl/8.0.0")`, 1)},
 		// The specified identifier carries a language and a version, so an
@@ -1019,6 +1021,19 @@ func main() {
 	invalidMetricDump := freezeCapture(endpoint, "/dump.scm", "invalid-metric-semantics Scheme capture")
 	if bytes.Count(invalidMetricDump, []byte("(data-points-valid #f)")) != 6 {
 		fatal(fmt.Errorf("invalid metric semantics were absent from Scheme capture: %s", invalidMetricDump))
+	}
+	resetSink(endpoint)
+	// An exemplar proves the association only when its ids name a span of this
+	// scenario: the span itself, or the parent a captured span names, which is
+	// what a measurement taken after its server span ended records. Ids that
+	// name neither are well formed and still no evidence.
+	exemplarContextTrace := []byte(`{"resourceSpans":[{"scopeSpans":[{"scope":{"name":"span.probe"},"spans":[{"traceId":"11111111111111111111111111111111","spanId":"2222222222222222","parentSpanId":"3333333333333333","name":"GET /probe","startTimeUnixNano":"1","endTimeUnixNano":"2"}]}]}]}`)
+	postJSON(endpoint, "/v1/traces", "exemplar-context trace", exemplarContextTrace)
+	exemplarContextMetrics := []byte(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"metric.probe"},"metrics":[{"name":"exemplar.context","gauge":{"dataPoints":[{"timeUnixNano":"9","asInt":"1","exemplars":[{"timeUnixNano":"9","asInt":"1","traceId":"11111111111111111111111111111111","spanId":"2222222222222222"},{"timeUnixNano":"9","asInt":"1","traceId":"11111111111111111111111111111111","spanId":"3333333333333333"},{"timeUnixNano":"9","asInt":"1","traceId":"11111111111111111111111111111111","spanId":"4444444444444444"}]}]}}]}]}]}`)
+	postJSON(endpoint, "/v1/metrics", "exemplar-context metrics", exemplarContextMetrics)
+	exemplarContextDump := freezeCapture(endpoint, "/dump.scm", "exemplar-context Scheme capture")
+	if !bytes.Contains(exemplarContextDump, []byte("(exemplars 3) (exemplars-with-trace-context 2)")) {
+		fatal(fmt.Errorf("exemplar trace context was not matched against captured spans: %s", exemplarContextDump))
 	}
 	resetSink(endpoint)
 	invalidStatusSpan := append([]byte{}, lengthDelimited(0x0a, bytes.Repeat([]byte{0x11}, 16))...)

@@ -127,6 +127,15 @@
 
 (define (enforced-limits? attribute-limits) (eq? attribute-limits 'enforced))
 
+; A deployment that caps attributes may lose a key the scope declares, but only
+; a span that reports a positive dropped count actually lost one. Every other
+; span still has to carry what it declares, so an instrumentation regression
+; that simply omits an attribute cannot hide behind the cap.
+(define (dropped-to-limit? span attribute-limits)
+  (and (enforced-limits? attribute-limits)
+       (let ((dropped (field 'dropped-attributes span)))
+         (and (integer? dropped) (> dropped 0)))))
+
 (define (validate-span-attributes span expected-scopes attribute-limits)
   (let* ((expected (scope-declaration expected-scopes (field 'scope span)))
          (attributes (field 'attributes span))
@@ -145,7 +154,7 @@
       (lambda (key)
         (let ((value (attribute attributes key))
               (rule (find (lambda (rule) (string=? (car rule) key)) string-rules)))
-          (if (and (enforced-limits? attribute-limits) (= (attribute-count attributes key) 0))
+          (if (and (dropped-to-limit? span attribute-limits) (= (attribute-count attributes key) 0))
               #t
               (begin
                 (check (= (attribute-count attributes key) 1) "required span attribute missing or duplicated")
@@ -155,14 +164,14 @@
       required)
     (for-each
       (lambda (rule)
-        (if (and (enforced-limits? attribute-limits) (= (attribute-count attributes (car rule)) 0))
+        (if (and (dropped-to-limit? span attribute-limits) (= (attribute-count attributes (car rule)) 0))
             #t
             (check (matches-value? (cadr rule) (attribute attributes (car rule))) "span string attribute mismatch")))
       string-rules)
     (for-each
       (lambda (key)
         (let ((value (attribute attributes key)))
-          (if (and (enforced-limits? attribute-limits) (= (attribute-count attributes key) 0))
+          (if (and (dropped-to-limit? span attribute-limits) (= (attribute-count attributes key) 0))
               #t
               (check (and (tagged-value? 'integer value) (>= (cadr value) 0)) "span integer attribute mismatch"))))
       integer-keys)
@@ -171,7 +180,7 @@
                                   (eq? (car (cadr rule)) 'loopback-port)))
                            string-rules)))
       (if (and host-rule
-               (not (and (enforced-limits? attribute-limits)
+               (not (and (dropped-to-limit? span attribute-limits)
                          (= (attribute-count attributes "net.host.name") 0))))
           (let ((host (attribute attributes "net.host.name"))
                 (port (attribute-integer attributes "net.host.port")))
@@ -267,16 +276,17 @@
 ; bit 9 carries the answer. A runtime's declared flags already set bit 8, so a
 ; span with a remote parent carries that value plus bit 9.
 ;
-; The capture cannot tell a remote parent from a parent that simply was not
-; exported, so a span that has any parent may carry either value. A root span
-; has no parent at all and must never claim a remote one.
+; Only a parent the capture never carried could have arrived over the wire, so
+; that is the one case where either value is acceptable. A root span has no
+; parent at all, and a child whose parent is in the same capture has a local
+; one: neither may claim a remote parent.
 (define remote-parent-flag 512)
 
 (define (allowed-span-flags expected-flags span)
-  (if (eq? (field 'parent-class span) 'root)
-      expected-flags
+  (if (eq? (field 'parent-class span) 'external)
       (append expected-flags
-              (map (lambda (flags) (+ flags remote-parent-flag)) expected-flags))))
+              (map (lambda (flags) (+ flags remote-parent-flag)) expected-flags))
+      expected-flags))
 
 (define (validate-spans expected-scopes event-policy expected-flags expected-trace-state error-message-policy attribute-limits spans)
   (let ((event-mode (record-field event-policy 'mode))

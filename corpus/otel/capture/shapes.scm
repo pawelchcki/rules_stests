@@ -122,6 +122,15 @@
           (loop (cdr metrics)
                 (if (eq? value 'absent) result (cons value result)))))))
 
+(define (cumulative-metrics capture)
+  (let loop ((metrics (items capture 'metrics)) (result '()))
+    (if (null? metrics)
+        (reverse result)
+        (loop (cdr metrics)
+              (if (eq? (field 'aggregation-temporality (car metrics)) 'cumulative)
+                  (cons (car metrics) result)
+                  result)))))
+
 (define (every-metric? capture predicate)
   (let ((metrics (items capture 'metrics)))
     (and (pair? metrics) (every predicate metrics))))
@@ -404,13 +413,22 @@
       (lambda (capture)
         (let ((total (metric-total capture 'exemplars)))
           (and (> total 0) (= (metric-total capture 'exemplars-with-time) total)))))
-    ; A series that accumulates reports the window it accumulated over. A gauge
-    ; has no window and reports no start, so the rule is about the points that
-    ; do: every one of them must precede the reading it belongs to.
+    ; A series that accumulates reports the window it accumulated over, so every
+    ; point of every cumulative metric carries a start that precedes its
+    ; reading. Counting starts across the whole capture instead would let one
+    ; well-formed series stand in for series that report no start at all. A
+    ; gauge has no window and is not held to the rule.
     (capture-shape 'metric/points-carry-start-window
       (lambda (capture)
-        (let ((started (metric-total capture 'points-with-start)))
-          (and (> started 0) (= (metric-total capture 'points-start-le-time) started)))))
+        (let ((cumulative (cumulative-metrics capture)))
+          (and (pair? cumulative)
+               (every (lambda (metric)
+                        (let ((points (field 'data-points metric)))
+                          (and (integer? points)
+                               (> points 0)
+                               (eqv? (field 'points-with-start metric) points)
+                               (eqv? (field 'points-start-le-time metric) points))))
+                      cumulative)))))
     (capture-shape 'metric/names-conform
       (lambda (capture)
         (every-metric? capture (lambda (metric) (metric-name-conformant? (field 'name metric))))))

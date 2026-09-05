@@ -110,7 +110,7 @@
                     context-propagation/getter-argument
                     context-propagation/global-propagator
                     context-propagation/composite-propagator))
-    (scenario 'unicode (observed span/unicode-attribute))
+    (scenario 'unicode (corroborated (sources go-compile-release) span/unicode-attribute))
     (all (observed meter/resource-configurable))
     (all (observed metric/instrument-name-syntax))
     (all (observed metric/instrument-unit-syntax))

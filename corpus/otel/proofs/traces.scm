@@ -17,7 +17,10 @@
     ("traces.span.end" (assertion span/all-completed) (evidence wire-sufficient))
     ("traces.span-attributes.string-type" (assertion span/string-attribute-present) (evidence wire-sufficient))
     ("traces.span-attributes.signed-int64-type" (assertion span/int64-attribute-present) (evidence wire-sufficient))
-    ("traces.span-attributes.unicode-support-for-keys-and-string-values" (assertion span/unicode-string-attribute-present) (evidence wire-sufficient))
+    ; The wire proves a non-ASCII string value survives the round trip. Server
+    ; instrumentation records everything under ASCII keys, so the key half of
+    ; the claim comes from the pinned attribute API instead.
+    ("traces.span-attributes.unicode-support-for-keys-and-string-values" (assertion span/unicode-string-attribute-present) (evidence requires-immutable-source))
     ("traces.span.attribute-collection-size-limit" (assertion span/attribute-limit-enforced) (evidence wire-sufficient))
     ("traces.sampling.spanlimits" (assertion span/attribute-limit-enforced) (evidence requires-immutable-source))
     ("traces.sampling.attribute-limits" (assertion span/attribute-limit-enforced) (evidence requires-immutable-source))

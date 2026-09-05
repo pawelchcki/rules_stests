@@ -2,7 +2,7 @@ use crate::data::{Payload, Record};
 use crate::otlp_json;
 use crate::proto;
 use crate::trace_forest::{self, Forest, Group, Node, Trace};
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -42,6 +42,7 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
             }
         }
     }
+    let exemplar_spans = exemplar_context_index(&span_index, &span_parents);
     let mut output = String::from("((requests (\n");
     write_requests(&mut output, records);
     output.push_str("))\n(resources (\n");
@@ -150,7 +151,7 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                             aggregation_temporality,
                             monotonic,
                         ) = typed_metric_data(metric);
-                        let point_summary = typed_metric_point_summary(metric);
+                        let point_summary = typed_metric_point_summary(metric, &exemplar_spans);
                         output.push_str("  ((scope ");
                         string(
                             &mut output,
@@ -275,13 +276,41 @@ pub struct MetricPointSummary {
     pub start_le_time: usize,
 }
 
-fn summarize_exemplars(summary: &mut MetricPointSummary, exemplars: &[proto::Exemplar]) {
+/// The ids an exemplar may name and still be evidence of the association: a
+/// span the capture exported, or the parent a captured span names. A
+/// measurement taken once its server span has ended is recorded against that
+/// span's parent, which in a propagated trace is the remote span the capture
+/// never carried. Anything outside this set belongs to no span the scenario
+/// produced.
+fn exemplar_context_index(
+    span_index: &BTreeMap<(String, String), usize>,
+    span_parents: &BTreeMap<(String, String), String>,
+) -> BTreeSet<(String, String)> {
+    let mut index: BTreeSet<(String, String)> = span_index.keys().cloned().collect();
+    for ((trace_id, _), parent_id) in span_parents {
+        if !parent_id.is_empty() {
+            index.insert(span_key(trace_id, parent_id));
+        }
+    }
+    index
+}
+
+/// The claimed feature is that an exemplar carries the context of the span that
+/// was active when the measurement was taken, so a well-formed but unrelated id
+/// pair is not evidence: the ids have to name a span of this scenario.
+fn summarize_exemplars(
+    summary: &mut MetricPointSummary,
+    exemplars: &[proto::Exemplar],
+    spans: &BTreeSet<(String, String)>,
+) {
     for exemplar in exemplars {
         summary.exemplars += 1;
         if exemplar.trace_id.len() == 16
             && exemplar.span_id.len() == 8
-            && exemplar.trace_id.iter().any(|byte| *byte != 0)
-            && exemplar.span_id.iter().any(|byte| *byte != 0)
+            && spans.contains(&span_key(
+                &hex_text(&exemplar.trace_id),
+                &hex_text(&exemplar.span_id),
+            ))
         {
             summary.exemplars_with_trace_context += 1;
         }
@@ -301,7 +330,10 @@ fn summarize_window(summary: &mut MetricPointSummary, start: u64, time: u64) {
     }
 }
 
-fn typed_metric_point_summary(metric: &proto::Metric) -> MetricPointSummary {
+fn typed_metric_point_summary(
+    metric: &proto::Metric,
+    spans: &BTreeSet<(String, String)>,
+) -> MetricPointSummary {
     let mut summary = MetricPointSummary {
         exemplars: 0,
         exemplars_with_trace_context: 0,
@@ -312,25 +344,25 @@ fn typed_metric_point_summary(metric: &proto::Metric) -> MetricPointSummary {
     match metric.data.as_ref() {
         Some(proto::metric::Data::Gauge(data)) => {
             for point in &data.data_points {
-                summarize_exemplars(&mut summary, &point.exemplars);
+                summarize_exemplars(&mut summary, &point.exemplars, spans);
                 summarize_window(&mut summary, point.start_time_unix_nano, point.time_unix_nano);
             }
         }
         Some(proto::metric::Data::Sum(data)) => {
             for point in &data.data_points {
-                summarize_exemplars(&mut summary, &point.exemplars);
+                summarize_exemplars(&mut summary, &point.exemplars, spans);
                 summarize_window(&mut summary, point.start_time_unix_nano, point.time_unix_nano);
             }
         }
         Some(proto::metric::Data::Histogram(data)) => {
             for point in &data.data_points {
-                summarize_exemplars(&mut summary, &point.exemplars);
+                summarize_exemplars(&mut summary, &point.exemplars, spans);
                 summarize_window(&mut summary, point.start_time_unix_nano, point.time_unix_nano);
             }
         }
         Some(proto::metric::Data::ExponentialHistogram(data)) => {
             for point in &data.data_points {
-                summarize_exemplars(&mut summary, &point.exemplars);
+                summarize_exemplars(&mut summary, &point.exemplars, spans);
                 summarize_window(&mut summary, point.start_time_unix_nano, point.time_unix_nano);
             }
         }
@@ -817,6 +849,7 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
     let strings_valid = !payloads.iter().any(has_malformed_json_string);
     let span_index = span_index(&payloads);
     let span_parents = span_parents(&payloads);
+    let exemplar_spans = exemplar_context_index(&span_index, &span_parents);
     let mut output = String::from("((requests (\n");
     for record in records {
         output.push_str("  ((signal ");
@@ -1012,7 +1045,7 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                         aggregation_temporality,
                         monotonic,
                     ) = json_metric_data(metric);
-                    let point_summary = json_metric_point_summary(metric);
+                    let point_summary = json_metric_point_summary(metric, &exemplar_spans);
                     output.push_str("  ((scope ");
                     string(&mut output, text(scope.get("name")));
                     output.push_str(") (scope-version ");
@@ -1362,7 +1395,10 @@ fn resource_wrappers<'a>(payload: &'a Value, signal: &str) -> Vec<&'a Value> {
 
 /// The JSON mirror of typed_metric_point_summary, so a capture decoded from
 /// OTLP/JSON carries the same fields as one decoded from protobuf.
-fn json_metric_point_summary(metric: &Value) -> MetricPointSummary {
+fn json_metric_point_summary(
+    metric: &Value,
+    spans: &BTreeSet<(String, String)>,
+) -> MetricPointSummary {
     let mut summary = MetricPointSummary {
         exemplars: 0,
         exemplars_with_trace_context: 0,
@@ -1387,8 +1423,7 @@ fn json_metric_point_summary(metric: &Value) -> MetricPointSummary {
                 let span = text(json_field(exemplar, "span_id", "spanId"));
                 if trace.len() == 32
                     && span.len() == 16
-                    && trace.bytes().any(|byte| byte != b'0')
-                    && span.bytes().any(|byte| byte != b'0')
+                    && spans.contains(&span_key(trace, span))
                 {
                     summary.exemplars_with_trace_context += 1;
                 }
