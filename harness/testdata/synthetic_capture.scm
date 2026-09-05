@@ -23,7 +23,7 @@
    (parent-span-id "1111111111111111") (parent-class child) (parent-valid #t) (trace-state "") (name "SELECT articles") (kind 3)
    (start 2) (end 3) (attributes (("string.key" (string "child")) ("integer.key" (integer 8)))) (events ())
    (status-code 0) (status-message "") (flags 256))
-  ((scope "trace.scope") (trace-id "5555555555555555555555555555555a") (span-id "666666666666666a")
+  ((scope "trace.scope") (trace-id "4bf92f3577b34da6a3ce929d0e0e4736") (span-id "666666666666666a")
    (parent-span-id "00f067aa0ba902b7") (parent-class external) (parent-valid #t) (trace-state "") (name "GET /api/tags") (kind 2)
    (start 5) (end 6) (attributes ()) (events ())
    (status-code 0) (status-message "") (flags 769))

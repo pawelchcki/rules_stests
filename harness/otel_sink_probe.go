@@ -680,6 +680,9 @@ func main() {
 		{"traces.span.updatename", strings.Replace(syntheticFeatureCapture, `(name "GET /api/articles/:slug")`, `(name "HTTP GET")`, 1)},
 		{"traces.span.set-status-with-statuscode-unset-ok-error", strings.Replace(syntheticFeatureCapture, `(status-code 2)`, `(status-code 0)`, 1)},
 		{"traces.spancontext.isremote", strings.Replace(syntheticFeatureCapture, `(parent-class external)`, `(parent-class child)`, 1)},
+		// Keeping the propagated parent while starting a trace of the server's
+		// own is not the incoming trace being continued.
+		{"traces.spancontext.isremote", strings.Replace(syntheticFeatureCapture, `(trace-id "4bf92f3577b34da6a3ce929d0e0e4736")`, `(trace-id "5555555555555555555555555555555a")`, 1)},
 		{"traces.span-attributes.unicode-support-for-keys-and-string-values", strings.Replace(syntheticFeatureCapture, `("unicode.key" (string "ünïcødé"))`, `("unicode.key" (string "ascii"))`, 1)},
 		{"environment-variables.otel-span-attribute-count-limit", strings.Replace(syntheticFeatureCapture, `(dropped-attributes 4)`, `(dropped-attributes 0)`, 1)},
 		{"traces.span-events.addevent", strings.Replace(syntheticFeatureCapture, `(events (`, `(events ()) (unused-events (`, 1)},

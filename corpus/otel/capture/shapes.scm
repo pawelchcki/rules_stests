@@ -172,16 +172,26 @@
                          (loop (+ index 1)))))))))
 
 ; A parent the capture never carried could be remote or merely unexported, so
-; the OTLP is-remote bit decides. Requiring the exact parent span id as well
-; ties the span to the traceparent the scenario sent.
-(define (external-parent-span? span parent-span-id)
+; the OTLP is-remote bit decides. Requiring the exact parent span id and one of
+; the trace ids the scenario sent ties the span to the incoming headers: an
+; extractor that keeps the parent but starts a trace of its own did not
+; continue the caller's trace.
+(define (external-parent-span? span parent-span-id trace-ids)
   (let ((flags (field 'flags span)))
     (and (eq? (field 'parent-class span) 'external)
          (string=? (field 'parent-span-id span) parent-span-id)
-         (valid-hex? (field 'trace-id span) 32)
+         (and (member (field 'trace-id span) trace-ids) #t)
          (integer? flags)
          (= (modulo (quotient flags 256) 2) 1)
          (= (modulo (quotient flags 512) 2) 1))))
+
+; The parent span id and trace ids the propagation scenarios send, in their
+; W3C traceparent and in their B3 headers alike.
+(define propagated-parent-span-id "00f067aa0ba902b7")
+(define propagated-trace-ids
+  '("4bf92f3577b34da6a3ce929d0e0e4736"
+    "8c1e0a5b6d2f47398a4b0c7e1d5f3a92"
+    "b3f7d21c9e6a48059c7d2e8f4a1b6035"))
 
 ; https://opentelemetry.io/docs/specs/otel/protocol/exporter/#user-agent
 ; The specified identifier is OTel-OTLP-Exporter-<language>/<version>. Matching
@@ -307,10 +317,11 @@
     (capture-shape 'span/events-present
       (lambda (capture)
         (some (lambda (span) (pair? (field 'events span))) (items capture 'spans))))
-    ; The parent span id the propagation scenario sends in its traceparent.
+    ; The context the propagation scenarios send in their request headers.
     (capture-shape 'span/external-parent-present
       (lambda (capture)
-        (some (lambda (span) (external-parent-span? span "00f067aa0ba902b7"))
+        (some (lambda (span)
+                (external-parent-span? span propagated-parent-span-id propagated-trace-ids))
               (items capture 'spans))))
     (capture-shape 'span/unicode-string-attribute-present
       (lambda (capture)
