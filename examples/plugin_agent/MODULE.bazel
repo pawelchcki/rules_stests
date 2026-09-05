@@ -2,6 +2,9 @@ module(name = "rules_stests_example")
 
 bazel_dep(name = "rules_stests", version = "0.0.0")
 
+# Needed by --config=local, which points --host_platform at @platforms//host.
+bazel_dep(name = "platforms", version = "1.1.0")
+
 local_path_override(
     module_name = "rules_stests",
     path = "../..",

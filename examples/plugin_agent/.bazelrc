@@ -1,1 +1,7 @@
 try-import %workspace%/../../.bazelrc
+
+# The imported platform labels are written for the root module. In this module
+# they must be resolved through the apparent repo name of that dependency.
+# Later flags win, so these override the imported values.
+common --extra_execution_platforms=@rules_stests//bazel/platforms:rbe_linux_amd64
+common --host_platform=@rules_stests//bazel/platforms:rbe_linux_amd64

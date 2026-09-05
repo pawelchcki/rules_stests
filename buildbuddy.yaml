@@ -3,8 +3,10 @@ actions:
     visibility: PUBLIC
     container_image: ubuntu-24.04
     resource_requests:
-      cpu: 32
-      memory: 32GB
+      # The runner only orchestrates Bazel; all actions execute on the
+      # self-hosted RBE fleet.
+      cpu: 4
+      memory: 8GB
     triggers:
       push:
         branches:
@@ -27,7 +29,6 @@ actions:
           bazel test \
             --config=buildbuddy \
             --build_tests_only \
-            --local_test_jobs=16 \
             --test_tag_filters=-otel-report \
             //...
           # The report run stays uncached: report/cmd/main.go refuses to assemble
@@ -36,7 +37,6 @@ actions:
           OTEL_TEST_REVISION="$REPORT_REVISION" bazel test \
             --config=buildbuddy \
             --nocache_test_results \
-            --local_test_jobs=16 \
             --test_env=OTEL_TEST_REVISION \
             --build_event_json_file=otel-profile.bep.json \
             --nobuild_event_json_file_path_conversion \
@@ -50,8 +50,7 @@ actions:
             bazel test \
               --config=buildbuddy \
               --build_tests_only \
-              --local_test_jobs=16 \
-              //...)
+                //...)
           (cd examples/plugin_agent && \
             bazel build --config=buildbuddy //:otel_report_manifest)
           # Files written here are published as BuildBuddy workflow artifacts.
