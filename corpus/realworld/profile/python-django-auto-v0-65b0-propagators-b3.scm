@@ -72,7 +72,7 @@
     (all (observed metric/exemplar-trace-context))
     (all (observed metric/exemplar-timestamp))
     (all (observed metric/cumulative-start-timestamps))
-    (all (corroborated (sources python-aggregation-api) metric/exemplar-filter-trace-based))
+    (all (corroborated (sources python-exemplar-filter) metric/exemplar-filter-trace-based))
     (all (observed exporter/otlp-user-agent))
     (all (observed environment-variables/otel-service-name))
     (all (observed environment-variables/otel-exporter-otlp))

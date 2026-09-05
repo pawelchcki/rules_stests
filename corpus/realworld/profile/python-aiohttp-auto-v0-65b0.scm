@@ -129,7 +129,7 @@
                     context-propagation/getter-argument
                     context-propagation/global-propagator
                     context-propagation/composite-propagator))
-    (scenario 'unicode (corroborated (sources python-trace-api) span/unicode-attribute))
+    (scenario 'unicode (corroborated (sources python-attributes-api) span/unicode-attribute))
     (all (observed meter/resource-configurable))
     (all (observed metric/instrument-name-syntax))
     (all (observed metric/instrument-unit-syntax))
@@ -138,7 +138,7 @@
     (all (observed metric/exemplar-trace-context))
     (all (observed metric/exemplar-timestamp))
     (all (observed metric/cumulative-start-timestamps))
-    (all (corroborated (sources python-aggregation-api) metric/exemplar-filter-trace-based))
+    (all (corroborated (sources python-exemplar-filter) metric/exemplar-filter-trace-based))
     (all (observed exporter/otlp-user-agent))
     (all (observed environment-variables/otel-service-name))
     (all (observed environment-variables/otel-exporter-otlp))
