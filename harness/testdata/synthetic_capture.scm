@@ -28,9 +28,9 @@
    (start 5) (end 6) (attributes ()) (events ())
    (status-code 0) (status-message "") (flags 769))))
  (metrics (
-  ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "counter") (description "counter description") (unit "{item}") (data-type sum) (monotonic #t))
-  ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "updown") (description "updown description") (unit "{item}") (data-type sum) (monotonic #f))
-  ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "histogram") (description "histogram description") (unit "ms") (data-type histogram) (monotonic absent))
-  ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "gauge") (description "gauge description") (unit "1") (data-type gauge) (monotonic absent))))
+  ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "counter") (description "counter description") (unit "{item}") (data-type sum) (aggregation-temporality delta) (monotonic #t))
+  ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "updown") (description "updown description") (unit "{item}") (data-type sum) (aggregation-temporality cumulative) (monotonic #f))
+  ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "histogram") (description "histogram description") (unit "ms") (data-type histogram) (aggregation-temporality delta) (monotonic absent))
+  ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "gauge") (description "gauge description") (unit "1") (data-type gauge) (aggregation-temporality absent) (monotonic absent))))
  (logs (
   ((scope "logger.scope") (schema-url "https://opentelemetry.io/schemas/1.11.0")))))

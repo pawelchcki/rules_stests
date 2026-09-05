@@ -75,12 +75,26 @@ OTEL_PROFILES = {
     ),
     "python-django-auto-v0-65b0": struct(
         runtime = "otel/runtime/python-auto-v0-65b0.scm",
+        parts = ["realworld/profile/parts/python-django-auto-v0-65b0.scm"],
         implementations = [
             "otel/implementation/python-sdk-v1.44.0.scm",
             "otel/implementation/python-auto-v0.65b0.scm",
             "otel/implementation/django-v0.65b0.scm",
         ],
         signals = ["traces", "metrics", "logs"],
+    ),
+    "python-django-auto-v0-65b0-temporality-delta": struct(
+        runtime = "otel/runtime/python-auto-v0-65b0.scm",
+        parts = ["realworld/profile/parts/python-django-auto-v0-65b0.scm"],
+        implementations = [
+            "otel/implementation/python-sdk-v1.44.0.scm",
+            "otel/implementation/python-auto-v0.65b0.scm",
+            "otel/implementation/django-v0.65b0.scm",
+        ],
+        signals = ["traces", "metrics", "logs"],
+        # One scenario is enough: the variable changes how every metric point is
+        # reported, not what any particular request produces.
+        scenarios = ["tags"],
     ),
     "ruby-rails-auto-v0-1-0": struct(
         runtime = "otel/runtime/ruby-auto-v0-1-0.scm",
@@ -96,12 +110,17 @@ OTEL_PROFILES = {
 def declare_otel_profiles(otel_realworld_profile):
     """Declares every registered profile and its normalized proof-plan view."""
     for profile_id, declaration in OTEL_PROFILES.items():
+        # A variant profile shares its base profile's contract through a parts
+        # library, which has to be defined before the profile that imports it.
+        parts = getattr(declaration, "parts", [])
+        scenarios = getattr(declaration, "scenarios", None)
         otel_realworld_profile(
             name = profile_id,
             specification = "realworld/profile/{}.scm".format(profile_id),
             implementation_libraries = declaration.implementations,
-            runtime_libraries = [declaration.runtime],
+            runtime_libraries = [declaration.runtime] + parts,
             shape_root = "realworld/shape/{}".format(profile_id),
             signals = declaration.signals,
+            scenarios = scenarios if scenarios else REALWORLD_HURL_CASES,
             standard_registry = ":otel_standard_registry",
         )

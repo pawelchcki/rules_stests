@@ -1,4 +1,4 @@
-(define-library (realworld profile python-django-auto-v0-65b0)
+(define-library (realworld profile python-django-auto-v0-65b0-temporality-delta)
   (export profile)
   (import (scheme base)
           (otel profile)
@@ -15,10 +15,22 @@
           (realworld contract) (realworld route))
   (begin
 
+; OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta changes one clause of
+; the shared contract and nothing else, so this profile restates that clause and
+; inherits every other clause from the parts library the base profile uses.
+;
+; It runs one scenario, because the variable governs how every metric point is
+; reported rather than what any particular request produces. Claims that only a
+; another scenario can prove are therefore left to the base profile.
+(define delta-metric-aggregation
+  (metric-aggregation
+    (temporality 'delta-preference)
+    (assq 'monotonic-sums (cdr expected-metric-aggregation))))
+
 (define profile
   (realworld-profile
-    (id 'python-django-auto-v0-65b0)
-    (display-name "Python Django (auto 0.65b0)")
+    (id 'python-django-auto-v0-65b0-temporality-delta)
+    (display-name "Python Django (auto 0.65b0, delta temporality)")
     (language 'python)
     (framework "Django")
     (implementation (compose python-sdk-v1.44 python-auto-v0.65b0
@@ -31,7 +43,7 @@
       (apply span-scopes expected-scopes)
       (apply metric-scopes expected-metric-scopes)
       (apply metric-descriptors expected-metric-descriptors)
-      expected-metric-aggregation
+      delta-metric-aggregation
       (apply metric-point-schemas expected-metric-point-schemas)
       (apply log-scopes expected-log-scopes)
       expected-log-policy
@@ -50,19 +62,6 @@
     (all (observed span/set-attribute))
     (all (observed span-context/is-valid))
     (all (observed span-context/w3c-conformant))
-    ; Only a scenario that sends its own traceparent can show a parent that
-    ; arrived over the wire rather than from an enclosing in-process span.
-    (scenario 'propagation (observed span/create-with-context-parent))
-    (scenario 'propagation (observed span-context/is-remote))
-    (scenario 'propagation (observed context-propagation/tracecontext-propagator))
-    (scenario 'propagation
-      (corroborated (sources python-propagation-api)
-                    context-propagation/textmappropagator
-                    context-propagation/fields
-                    context-propagation/getter-argument
-                    context-propagation/global-propagator
-                    context-propagation/composite-propagator))
-    (scenario 'unicode (observed span/unicode-attribute))
     (all (observed meter/resource-configurable))
     (all (observed metric/instrument-name-syntax))
     (all (observed metric/instrument-unit-syntax))
@@ -74,18 +73,14 @@
     (all (observed environment-variables/otel-metrics-exporter))
     (all (observed environment-variables/otel-logs-exporter))
     (all (observed environment-variables/otel-metric-export-interval))
+    (all (observed environment-variables/otel-exporter-otlp-metrics-temporality-preference))
+    (all (observed exporter/otlp-metric-temporality-preference))
+    (all (corroborated (sources python-aggregation-api) metric/reader-temporality-by-instrument-kind))
     (all (corroborated (sources django-instrumentation) tracer/get))
     (all (corroborated (sources python-trace-api) tracer/get-with-schema-url))
     (all (corroborated (sources python-trace-api) tracer/scope-associated))
     (all (corroborated (sources python-trace-api) span/create))
     (all (corroborated (sources python-trace-api) span/create-with-active-parent))
-    (scenario 'errors_auth (observed span/set-status))
-    (scenario 'errors_auth
-      (corroborated (sources python-trace-api django-exception-middleware) span/add-event))
-    (scenario 'errors_auth
-      (corroborated (sources python-trace-api django-exception-middleware)
-                    span/record-exception
-                    span/record-exception-with-parameters))
     (all (corroborated (sources python-resource-api) resource/create-from-attributes))
     (all (corroborated (sources python-meter-api) meter/get))
     (all (corroborated (sources python-meter-api) meter/get-with-version-schema))
@@ -104,7 +99,6 @@
     (all (corroborated (sources python-logger-api) logger/get))
     (all (corroborated (sources python-trace-api) tracer-provider/create))
     (all (corroborated (sources python-trace-api) sampling/id-generator))
-    (scenario 'articles (corroborated (sources django-instrumentation) span/update-name))
     (all (corroborated (sources python-resource-api) resource/retrieve-attributes))
     (all (corroborated (sources python-trace-api) exporter/otlp-traces-schema-url))
     (all (corroborated (sources python-meter-sdk) exporter/otlp-metrics-schema-url))

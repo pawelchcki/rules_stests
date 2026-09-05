@@ -106,6 +106,14 @@
                         (memv character '(#\_ #\. #\- #\/))))
                   (loop (+ index 1)))))))
 
+(define (filter-temporality metrics)
+  (let loop ((metrics metrics) (result '()))
+    (if (null? metrics)
+        (reverse result)
+        (let ((value (field 'aggregation-temporality (car metrics))))
+          (loop (cdr metrics)
+                (if (eq? value 'absent) result (cons value result)))))))
+
 (define (every-metric? capture predicate)
   (let ((metrics (items capture 'metrics)))
     (and (pair? metrics) (every predicate metrics))))
@@ -334,6 +342,12 @@
         (every-metric? capture
                        (lambda (metric)
                          (and (memq (field 'data-type metric) '(sum gauge histogram)) #t)))))
+    ; Delta is never a default: an exporter reports it only when configured to.
+    ; Which instruments switch is the contract's business, not the rule's.
+    (capture-shape 'metric/delta-temporality
+      (lambda (capture)
+        (some (lambda (value) (eq? value 'delta))
+              (filter-temporality (items capture 'metrics)))))
     (capture-shape 'metric/names-conform
       (lambda (capture)
         (every-metric? capture (lambda (metric) (metric-name-conformant? (field 'name metric))))))

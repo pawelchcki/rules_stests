@@ -71,6 +71,14 @@ _PROFILE_IDS = sorted(OTEL_PROFILES)
 _PLAN_LABELS = ["//corpus:" + profile_id + ".proof_plan" for profile_id in _PROFILE_IDS]
 _SPEC_LABELS = ["//corpus:realworld/profile/{}.scm".format(profile_id) for profile_id in _PROFILE_IDS]
 
+# A profile family that has environment-variable variants keeps its contract in
+# a shared parts library, so descriptor ownership is asserted over both.
+_PARTS_LABELS = sorted({
+    "//corpus:" + part: None
+    for profile_id in _PROFILE_IDS
+    for part in getattr(OTEL_PROFILES[profile_id], "parts", [])
+})
+
 # Alignment goldens run over authored shapes for the tags scenario.
 _ALIGN_SHAPE_LABELS = [
     "//corpus:realworld/shape/python-django-auto-v0-65b0/tags.scm",
@@ -91,6 +99,9 @@ go_test(
         for label in _SPEC_LABELS
     ] + ["$(rootpath //corpus:realworld/contract.scm)"] + [
         "$(rootpath {})".format(label)
+        for label in _PARTS_LABELS
+    ] + [
+        "$(rootpath {})".format(label)
         for label in _ALIGN_SHAPE_LABELS
     ],
     data = [
@@ -98,6 +109,6 @@ go_test(
         "data/spec-compliance-matrix.md",
         "//corpus:otel_standard_registry_json",
         "//corpus:realworld/contract.scm",
-    ] + _PLAN_LABELS + _SPEC_LABELS + _ALIGN_SHAPE_LABELS,
+    ] + _PLAN_LABELS + _SPEC_LABELS + _PARTS_LABELS + _ALIGN_SHAPE_LABELS,
     embed = [":lib"],
 )

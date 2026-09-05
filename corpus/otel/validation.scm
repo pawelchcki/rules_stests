@@ -377,6 +377,17 @@
         (check (= (attribute-count metadata (car entry)) 1) "metric metadata is duplicated")))
     metadata))
 
+; A contract usually names one temporality for every aggregation. The delta
+; preference is the exception: OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE
+; = delta asks for delta where delta is meaningful, which leaves non-monotonic
+; sums cumulative because a running total has no delta reading. Naming the
+; preference keeps that per-instrument rule in the contract rather than
+; relaxing the check to accept either value everywhere.
+(define (expected-temporality declared data-type monotonic)
+  (if (eq? declared 'delta-preference)
+      (if (and (eq? data-type 'sum) (eq? monotonic #f)) 'cumulative 'delta)
+      declared))
+
 (define (validate-metric-aggregation expected metric)
   (let ((data-type (field 'data-type metric))
         (temporality (field 'aggregation-temporality metric))
@@ -397,7 +408,9 @@
     (if expected
         (begin
           (if (member data-type '(sum histogram exponential-histogram))
-              (check (eq? temporality (record-field expected 'temporality)) "metric aggregation temporality changed")
+              (check (eq? temporality
+                          (expected-temporality (record-field expected 'temporality) data-type monotonic))
+                     "metric aggregation temporality changed")
               #t)
           (if (eq? data-type 'sum)
               (check (eq? monotonic (if (member (field 'name metric) (record-field expected 'monotonic-sums)) #t #f))

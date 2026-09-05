@@ -21,6 +21,7 @@
     ("metrics.instrument-units-conform-to-the-specified-syntax" (assertion metric/units-conform) (evidence wire-sufficient))
     ("metrics.instrument-descriptions-conform-to-the-specified-syntax" (assertion metric/descriptions-conform) (evidence wire-sufficient))
     ("metrics.meterprovider-allows-a-resource-to-be-specified" (assertion metric/resource-associated) (evidence wire-sufficient))
+    ("metrics.the-metrics-reader-implementation-supports-configuring-the-default-temporality-on-the-basis-of-instrument-kind" (assertion metric/delta-temporality) (evidence requires-immutable-source))
     ("metrics.the-default-aggregation-is-available" (assertion metric/default-aggregations) (evidence requires-immutable-source))
     ("metrics.a-specified-resource-can-be-associated-with-all-the-produced-metrics-from-any-meter-from-the-meterprovider" (assertion metric/resource-associated) (evidence wire-sufficient))
     ("metrics.the-supplied-name-version-and-schema-url-arguments-passed-to-the-meterprovider-are-used-to-create-an-instrumentationscope-instance-stored-in-the-meter" (assertion metric/scope-version-schema-present) (evidence requires-immutable-source))
