@@ -2,7 +2,7 @@
 
 load("@rules_itest//:itest.bzl", "itest_service", "service_test")
 load("//bazel:oci_images.lock.bzl", "RUBY_IMAGES_PUBLISHED")
-load("//rules:hurl_test.bzl", "REALWORLD_HURL_CASES", "realworld_hurl_test_suite")
+load("//rules:hurl_test.bzl", "REALWORLD_BASE_HURL_CASES", "realworld_hurl_test_suite")
 
 _SINK = Label("//harness:otel_sink_service")
 _LAUNCHER = Label("//harness:oci_bundle")
@@ -156,7 +156,7 @@ def realworld_app_suite(
         expected_start_duration = None,
         manual = None,
         tags = [],
-        scenarios = REALWORLD_HURL_CASES,
+        scenarios = REALWORLD_BASE_HURL_CASES,
         variants = {},
         flaky = False,
         **kwargs):

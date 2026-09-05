@@ -3,6 +3,7 @@
 load("@rules_itest//:itest.bzl", "service_test")
 load(
     "//corpus:registry.bzl",
+    _BASE_CASES = "REALWORLD_BASE_HURL_CASES",
     _CASES = "REALWORLD_HURL_CASES",
     _LOCAL_CASES = "REALWORLD_LOCAL_HURL_CASES",
 )
@@ -12,6 +13,7 @@ _DRIVER = Label("//harness:realworld_hurl")
 _SPEC_ANCHOR = Label("@realworld_api_specs//:hurl_all")
 
 REALWORLD_HURL_CASES = _CASES
+REALWORLD_BASE_HURL_CASES = _BASE_CASES
 
 def _rootpath(label):
     return "$(rlocationpath {})".format(str(label))
@@ -52,7 +54,7 @@ def realworld_hurl_test_suite(name, service, otel_sink = None,
                               otel_profile = None, otel_candidates = True,
                               otel_flaky_reason = "", otel_flaky_cases = {},
                               otel_xfails = {}, flaky = False, tags = [],
-                              cases = REALWORLD_HURL_CASES, **kwargs):
+                              cases = REALWORLD_BASE_HURL_CASES, **kwargs):
     """Creates one test per RealWorld scenario from one atomic profile label."""
     if bool(otel_sink) != bool(otel_profile):
         fail("otel_sink and the atomic otel_profile label must be supplied together")

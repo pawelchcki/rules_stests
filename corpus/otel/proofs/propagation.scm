@@ -13,5 +13,9 @@
     ("context-propagation.fields" (assertion span/external-parent-present) (evidence requires-immutable-source))
     ("context-propagation.getter-argument" (assertion span/external-parent-present) (evidence requires-immutable-source))
     ("context-propagation.global-propagator" (assertion span/external-parent-present) (evidence requires-immutable-source))
-    ("context-propagation.composite-propagator" (assertion span/external-parent-present) (evidence requires-immutable-source))))
+    ("context-propagation.composite-propagator" (assertion span/external-parent-present) (evidence requires-immutable-source))
+    ; A deployment configured for B3 alone reads no traceparent, so a remote
+    ; parent can only have come from the B3 headers the scenario sent.
+    ("context-propagation.b3-propagator" (assertion span/external-parent-present) (evidence wire-sufficient))
+    ("environment-variables.otel-propagators" (assertion span/external-parent-present) (evidence wire-sufficient))))
   ))

@@ -109,6 +109,9 @@
     (propagation
       (3 "GET" "/api/tags" 200 external)
       (1 "POST" "/api/users" 201))
+    (propagation_b3
+      (3 "GET" "/api/tags" 200 external)
+      (1 "POST" "/api/users" 201))
     (tags
       (1 "DELETE" "/api/articles/{slug}" 204)
       (1 "GET" "/api/tags" 200)

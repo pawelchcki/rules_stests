@@ -21,8 +21,20 @@ REALWORLD_UPSTREAM_HURL_CASES = [
 # the upstream API conformance suite has no reason to cover.
 REALWORLD_LOCAL_HURL_CASES = {
     "propagation": Label("//corpus:realworld/hurl/propagation.hurl"),
+    "propagation_b3": Label("//corpus:realworld/hurl/propagation_b3.hurl"),
     "unicode": Label("//corpus:realworld/hurl/unicode.hurl"),
 }
+
+# Scenarios that only make sense under a particular OTEL_* setting, so only the
+# variant configured for them runs them.
+REALWORLD_VARIANT_HURL_CASES = ["propagation_b3"]
+
+# What every profile runs unless it says otherwise.
+REALWORLD_BASE_HURL_CASES = REALWORLD_UPSTREAM_HURL_CASES + sorted([
+    case
+    for case in REALWORLD_LOCAL_HURL_CASES
+    if case not in REALWORLD_VARIANT_HURL_CASES
+])
 
 REALWORLD_HURL_CASES = REALWORLD_UPSTREAM_HURL_CASES + sorted(REALWORLD_LOCAL_HURL_CASES)
 
@@ -96,6 +108,17 @@ OTEL_PROFILES = {
         # reported, not what any particular request produces.
         scenarios = ["tags"],
     ),
+    "python-django-auto-v0-65b0-propagators-b3": struct(
+        runtime = "otel/runtime/python-auto-v0-65b0.scm",
+        parts = ["realworld/profile/parts/python-django-auto-v0-65b0.scm"],
+        implementations = [
+            "otel/implementation/python-sdk-v1.44.0.scm",
+            "otel/implementation/python-auto-v0.65b0.scm",
+            "otel/implementation/django-v0.65b0.scm",
+        ],
+        signals = ["traces", "metrics", "logs"],
+        scenarios = ["propagation_b3"],
+    ),
     "ruby-rails-auto-v0-1-0": struct(
         runtime = "otel/runtime/ruby-auto-v0-1-0.scm",
         implementations = [
@@ -121,6 +144,6 @@ def declare_otel_profiles(otel_realworld_profile):
             runtime_libraries = [declaration.runtime] + parts,
             shape_root = "realworld/shape/{}".format(profile_id),
             signals = declaration.signals,
-            scenarios = scenarios if scenarios else REALWORLD_HURL_CASES,
+            scenarios = scenarios if scenarios else REALWORLD_BASE_HURL_CASES,
             standard_registry = ":otel_standard_registry",
         )
