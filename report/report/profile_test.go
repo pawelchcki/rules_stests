@@ -111,20 +111,41 @@ func TestCheckedInProfilePlanSnapshotsAndDescriptorOwnership(t *testing.T) {
 		return filepath.Join(os.Getenv("TEST_SRCDIR"), os.Getenv("TEST_WORKSPACE"), path)
 	}
 	type expectation struct {
-		path             string
-		profile          string
 		proofs, observed int
 		implementations  []string
+		// The source that must define this profile's descriptor composition:
+		// its own specification, or the parts library it shares with the
+		// variants of the same profile family.
+		descriptorSource string
 	}
-	expectations := []expectation{
-		{args[3], "go-gin-otelbuild-v1-1-0", 21, 6, []string{"go-compile-v1.1", "go-runtime-v0.70"}},
-		{args[4], "python-aiohttp-auto-v0-65b0", 31, 8, []string{"python-sdk-v1.44", "python-auto-v0.65b0", "python-system-metrics-v0.65b0", "aiohttp-v0.65b0"}},
-		{args[5], "python-django-auto-v0-65b0", 32, 8, []string{"python-sdk-v1.44", "python-auto-v0.65b0", "python-system-metrics-v0.65b0", "django-v0.65b0"}},
-		{args[6], "ruby-rails-auto-v0-1-0", 14, 7, []string{"ruby-sdk-v1.11", "ruby-auto-v0.1", "rules-stests-ruby-auto-patch-v1", "rails-v0.40", "rack-v0.30", "active-record-v0.13"}},
+	expectations := map[string]expectation{
+		"go-gin-otelbuild-v1-1-0": {49, 22, []string{"go-compile-v1.1", "go-runtime-v0.70"},
+			"corpus/realworld/profile/go-gin-otelbuild-v1-1-0.scm"},
+		"python-aiohttp-auto-v0-65b0": {67, 30, []string{"python-sdk-v1.44", "python-auto-v0.65b0", "python-system-metrics-v0.65b0", "aiohttp-v0.65b0"},
+			"corpus/realworld/profile/python-aiohttp-auto-v0-65b0.scm"},
+		"python-django-auto-v0-65b0": {70, 31, []string{"python-sdk-v1.44", "python-auto-v0.65b0", "python-system-metrics-v0.65b0", "django-v0.65b0"},
+			"corpus/realworld/profile/parts/python-django-auto-v0-65b0.scm"},
+		"python-django-auto-v0-65b0-propagators-b3": {65, 30, []string{"python-sdk-v1.44", "python-auto-v0.65b0", "python-system-metrics-v0.65b0", "django-v0.65b0"},
+			"corpus/realworld/profile/parts/python-django-auto-v0-65b0.scm"},
+		"python-django-auto-v0-65b0-span-limits": {60, 28, []string{"python-sdk-v1.44", "python-auto-v0.65b0", "python-system-metrics-v0.65b0", "django-v0.65b0"},
+			"corpus/realworld/profile/parts/python-django-auto-v0-65b0.scm"},
+		"python-django-auto-v0-65b0-temporality-delta": {59, 28, []string{"python-sdk-v1.44", "python-auto-v0.65b0", "python-system-metrics-v0.65b0", "django-v0.65b0"},
+			"corpus/realworld/profile/parts/python-django-auto-v0-65b0.scm"},
+		"ruby-rails-auto-v0-1-0": {33, 17, []string{"ruby-sdk-v1.11", "ruby-auto-v0.1", "rules-stests-ruby-auto-patch-v1", "rails-v0.40", "rack-v0.30", "active-record-v0.13"},
+			"corpus/realworld/profile/ruby-rails-auto-v0-1-0.scm"},
+	}
+	// Bazel passes the plans, then the specifications, then the neutral
+	// contract, then the parts libraries, all in sorted profile order. Index the
+	// plans by the profile each one names rather than by position, so adding a
+	// variant cannot silently re-point an expectation at another profile.
+	planCount := len(expectations)
+	if len(args) < 3+2*planCount+1 {
+		t.Fatalf("want at least %d runfile arguments, got %d", 3+2*planCount+1, len(args))
 	}
 	totalProofs, totalObserved, scopedExceptions := 0, 0, 0
-	for _, expected := range expectations {
-		data, err := os.ReadFile(runfile(expected.path))
+	seen := map[string]bool{}
+	for _, path := range args[3 : 3+planCount] {
+		data, err := os.ReadFile(runfile(path))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -132,8 +153,16 @@ func TestCheckedInProfilePlanSnapshotsAndDescriptorOwnership(t *testing.T) {
 		if err := json.Unmarshal(data, &plan); err != nil {
 			t.Fatal(err)
 		}
-		if plan.Profile != expected.profile || len(plan.Proofs) != expected.proofs || !reflect.DeepEqual(plan.Implementations, expected.implementations) {
-			t.Fatalf("normalized snapshot changed for %s: %#v", expected.profile, plan)
+		expected, ok := expectations[plan.Profile]
+		if !ok {
+			t.Fatalf("plan %s names unregistered profile %q", path, plan.Profile)
+		}
+		if seen[plan.Profile] {
+			t.Fatalf("profile %q has more than one plan", plan.Profile)
+		}
+		seen[plan.Profile] = true
+		if len(plan.Proofs) != expected.proofs || !reflect.DeepEqual(plan.Implementations, expected.implementations) {
+			t.Fatalf("normalized snapshot changed for %s: %#v", plan.Profile, plan)
 		}
 		observed := 0
 		for _, proof := range plan.Proofs {
@@ -148,30 +177,37 @@ func TestCheckedInProfilePlanSnapshotsAndDescriptorOwnership(t *testing.T) {
 			}
 		}
 		if observed != expected.observed {
-			t.Fatalf("%s has %d observed proofs, want %d", expected.profile, observed, expected.observed)
+			t.Fatalf("%s has %d observed proofs, want %d", plan.Profile, observed, expected.observed)
 		}
 		for name, href := range plan.Sources {
 			if err := validateImmutableSource(href); err != nil {
-				t.Fatalf("%s source %s: %v", expected.profile, name, err)
+				t.Fatalf("%s source %s: %v", plan.Profile, name, err)
 			}
 		}
 		totalProofs += len(plan.Proofs)
 		totalObserved += observed
 	}
-	if totalProofs != 98 || totalObserved != 29 || scopedExceptions != 2 {
+	if len(seen) != planCount {
+		t.Fatalf("saw %d plans, want %d", len(seen), planCount)
+	}
+	if totalProofs != 403 || totalObserved != 186 || scopedExceptions != 2 {
 		t.Fatalf("claim snapshot changed: proofs=%d observed=%d scoped-exceptions=%d", totalProofs, totalObserved, scopedExceptions)
 	}
 
-	for _, path := range args[7:11] {
+	owners := map[string]bool{}
+	for _, expected := range expectations {
+		owners[expected.descriptorSource] = true
+	}
+	for path := range owners {
 		source, err := os.ReadFile(runfile(path))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !bytes.Contains(source, []byte("(define expected-metric-descriptors")) {
-			t.Fatalf("concrete profile %s does not own its descriptor composition", path)
+			t.Fatalf("%s does not own its descriptor composition", path)
 		}
 	}
-	contract, err := os.ReadFile(runfile(args[11]))
+	contract, err := os.ReadFile(runfile(args[3+2*planCount]))
 	if err != nil {
 		t.Fatal(err)
 	}

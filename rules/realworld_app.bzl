@@ -2,7 +2,7 @@
 
 load("@rules_itest//:itest.bzl", "itest_service", "service_test")
 load("//bazel:oci_images.lock.bzl", "RUBY_IMAGES_PUBLISHED")
-load("//rules:hurl_test.bzl", "REALWORLD_HURL_CASES", "realworld_hurl_test_suite")
+load("//rules:hurl_test.bzl", "REALWORLD_BASE_HURL_CASES", "realworld_hurl_test_suite")
 
 _SINK = Label("//harness:otel_sink_service")
 _LAUNCHER = Label("//harness:oci_bundle")
@@ -106,6 +106,21 @@ def ruby_auto_injection(rootfs = Label("//harness:otel_ruby_rootfs")):
         require = [payload + "/activation.rb", payload + "/gems"],
     )
 
+def otel_variant(profile, env, scenarios):
+    """Declares one OTEL_* environment variant of an instrumented suite.
+
+    A variant is its own profile, so it owns the contract clause the variable
+    changes, its own recorded shapes, its own receipts, and its own column in
+    the parity report.
+    """
+    if not profile:
+        fail("an OpenTelemetry variant requires its own profile label")
+    if not env:
+        fail("an OpenTelemetry variant must set at least one environment variable")
+    if not scenarios:
+        fail("an OpenTelemetry variant must run at least one scenario")
+    return struct(profile = profile, env = env, scenarios = scenarios)
+
 def _rlocation(label):
     return "$(rlocationpath {})".format(label)
 
@@ -141,7 +156,8 @@ def realworld_app_suite(
         expected_start_duration = None,
         manual = None,
         tags = [],
-        scenarios = REALWORLD_HURL_CASES,
+        scenarios = REALWORLD_BASE_HURL_CASES,
+        variants = {},
         flaky = False,
         **kwargs):
     """Emits services, probes, and sharded Hurl tests for a catalog app."""
@@ -213,20 +229,84 @@ def realworld_app_suite(
 
     if not profile:
         return
+    _otel_targets(
+        name = name,
+        application = application,
+        rootfs = selected_rootfs,
+        injection = injection,
+        otel_binary = otel_binary,
+        instance = instance or app + "-otel",
+        profile = profile,
+        env = env,
+        scenarios = scenarios,
+        common = common,
+        suite_tags = suite_tags,
+        flaky = flaky,
+        otel_candidates = otel_candidates,
+        otel_flaky_reason = otel_flaky_reason,
+        otel_flaky_cases = otel_flaky_cases,
+        otel_xfails = otel_xfails,
+        **kwargs
+    )
+    for variant_name in sorted(variants):
+        variant = variants[variant_name]
+        # A variant inherits the suite's exporter environment and then states
+        # only the variables it is there to exercise, so the two runs differ by
+        # exactly the declaration in this table.
+        variant_env = dict(otlp_env() if env == None else env)
+        variant_env.update(variant.env)
+        _otel_targets(
+            name = name + "_" + variant_name,
+            application = application,
+            rootfs = selected_rootfs,
+            injection = injection,
+            otel_binary = otel_binary,
+            instance = instance or app + "-otel",
+            profile = variant.profile,
+            env = variant_env,
+            scenarios = variant.scenarios,
+            common = common,
+            suite_tags = suite_tags,
+            flaky = flaky,
+            otel_candidates = otel_candidates,
+            otel_flaky_reason = otel_flaky_reason,
+            otel_flaky_cases = {},
+            otel_xfails = {},
+            **kwargs
+        )
+
+def _otel_targets(
+        name,
+        application,
+        rootfs,
+        injection,
+        otel_binary,
+        instance,
+        profile,
+        env,
+        scenarios,
+        common,
+        suite_tags,
+        flaky,
+        otel_candidates,
+        otel_flaky_reason,
+        otel_flaky_cases,
+        otel_xfails,
+        **kwargs):
+    """Emits the instrumented service, its probes, and its sharded Hurl tests."""
     otel_service = name + "_otel_service"
-    instrumented_instance = instance or app + "-otel"
     service_env = dict(otlp_env() if env == None else env)
     if application.runtime != "exec" and not injection and "OTEL_SERVICE_NAME" not in service_env:
-        service_env["OTEL_SERVICE_NAME"] = instrumented_instance
-    data = [selected_rootfs]
+        service_env["OTEL_SERVICE_NAME"] = instance
+    data = [rootfs]
     if injection:
         data.append(injection.rootfs)
     itest_service(
         name = otel_service,
         args = _launcher_args(
             application,
-            selected_rootfs,
-            instrumented_instance,
+            rootfs,
+            instance,
             injection = injection,
             binary = otel_binary or (application.otel_binary if application.runtime == "exec" else None),
         ),

@@ -16,16 +16,16 @@ OTEL_PYTHON = struct(
 # manual Ruby integration targets are enabled.
 OTEL_RUBY = struct(
     repository = "ghcr.io/pawelchcki/rules_stest_agents",
-    digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-    tree = "unpublished",
+    digest = "sha256:537b7b34e27e6479cf943d6f503312e74f11ec78222763c82934b368c7d555d2",
+    tree = "ad9770154c01419976abbd65721588ff68e78de0",
     version = "0.1.0",
 )
 
 OCI_IMAGES = {
     "rails_realworld": struct(
         repository = "ghcr.io/pawelchcki/rules_stest_apps",
-        digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-        tree = "unpublished",
+        digest = "sha256:ba5fafa30c4e0e76f06f65ae7981048a03d776eb5366602ddc02ecdcd1f6b88d",
+        tree = "2ffcfd52d7541dce85d7b39e06afdc12359844ae",
     ),
     "gin_realworld": struct(
         repository = "ghcr.io/pawelchcki/rules_stest_apps",

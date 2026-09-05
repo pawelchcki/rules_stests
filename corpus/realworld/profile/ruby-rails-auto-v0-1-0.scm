@@ -9,6 +9,8 @@
           (otel implementation rails-v0.40.0)
           (otel standard traces) (otel standard logs)
           (otel standard resource) (otel standard exporters)
+          (otel standard environment-variables)
+          (otel standard context-propagation)
           (realworld contract) (realworld route))
   (begin
 
@@ -77,11 +79,34 @@
     (all (observed logger/emit))
     (all (observed log/otlp-http-exporter))
     (all (observed exporter/otlp-http-binary-protobuf))
+    (all (observed span/set-attribute))
+    (all (observed span-context/is-valid))
+    (all (observed span-context/w3c-conformant))
+    ; Only a scenario that sends its own traceparent can show a parent that
+    ; arrived over the wire rather than from an enclosing in-process span.
+    (scenario 'propagation (observed span/create-with-context-parent))
+    (scenario 'propagation (observed span-context/is-remote))
+    (scenario 'propagation (observed context-propagation/tracecontext-propagator))
+    (scenario 'propagation
+      (corroborated (sources ruby-propagation-api)
+                    context-propagation/textmappropagator
+                    context-propagation/fields
+                    context-propagation/getter-argument
+                    context-propagation/global-propagator
+                    context-propagation/composite-propagator))
+    (all (observed environment-variables/otel-service-name))
+    (all (observed environment-variables/otel-exporter-otlp))
+    (all (observed environment-variables/otel-traces-exporter))
+    (all (observed environment-variables/otel-logs-exporter))
     (all (corroborated (sources rails-instrumentation rack-instrumentation) tracer/get))
     (all (corroborated (sources ruby-trace-api) tracer/scope-associated))
     (all (corroborated (sources ruby-trace-api) span/create))
     (all (corroborated (sources ruby-trace-api) span/create-with-active-parent))
-    (all (corroborated (sources ruby-trace-api) span/create-with-context-parent))
     (all (corroborated (sources ruby-resource-api) resource/create-from-attributes))
-    (all (corroborated (sources ruby-logger-api) logger/get))))
+    (all (corroborated (sources ruby-logger-api) logger/get))
+    (all (corroborated (sources ruby-trace-api) tracer-provider/create))
+    (all (corroborated (sources ruby-trace-api) sampling/id-generator))
+    (scenario 'articles (corroborated (sources rack-instrumentation) span/update-name))
+    (all (corroborated (sources ruby-resource-api) resource/retrieve-attributes))
+    (all (corroborated (sources ruby-logger-api) log/batch-processor))))
   ))

@@ -125,7 +125,9 @@
                "instrumentation scope schema URL changed")))
     scopes))
 
-(define (validate-span-attributes span expected-scopes)
+(define (enforced-limits? attribute-limits) (eq? attribute-limits 'enforced))
+
+(define (validate-span-attributes span expected-scopes attribute-limits)
   (let* ((expected (scope-declaration expected-scopes (field 'scope span)))
          (attributes (field 'attributes span))
          (required (record-field expected 'required-keys))
@@ -143,25 +145,34 @@
       (lambda (key)
         (let ((value (attribute attributes key))
               (rule (find (lambda (rule) (string=? (car rule) key)) string-rules)))
-          (check (= (attribute-count attributes key) 1) "required span attribute missing or duplicated")
-          (if (or rule (member key integer-keys))
+          (if (and (enforced-limits? attribute-limits) (= (attribute-count attributes key) 0))
               #t
-              (check (nonempty-string-value? value) "required span string attribute mismatch"))))
+              (begin
+                (check (= (attribute-count attributes key) 1) "required span attribute missing or duplicated")
+                (if (or rule (member key integer-keys))
+                    #t
+                    (check (nonempty-string-value? value) "required span string attribute mismatch"))))))
       required)
     (for-each
       (lambda (rule)
-        (check (matches-value? (cadr rule) (attribute attributes (car rule))) "span string attribute mismatch"))
+        (if (and (enforced-limits? attribute-limits) (= (attribute-count attributes (car rule)) 0))
+            #t
+            (check (matches-value? (cadr rule) (attribute attributes (car rule))) "span string attribute mismatch")))
       string-rules)
     (for-each
       (lambda (key)
         (let ((value (attribute attributes key)))
-          (check (and (tagged-value? 'integer value) (>= (cadr value) 0)) "span integer attribute mismatch")))
+          (if (and (enforced-limits? attribute-limits) (= (attribute-count attributes key) 0))
+              #t
+              (check (and (tagged-value? 'integer value) (>= (cadr value) 0)) "span integer attribute mismatch"))))
       integer-keys)
     (let ((host-rule (find (lambda (rule)
                              (and (string=? (car rule) "net.host.name")
                                   (eq? (car (cadr rule)) 'loopback-port)))
                            string-rules)))
-      (if host-rule
+      (if (and host-rule
+               (not (and (enforced-limits? attribute-limits)
+                         (= (attribute-count attributes "net.host.name") 0))))
           (let ((host (attribute attributes "net.host.name"))
                 (port (attribute-integer attributes "net.host.port")))
             (check (and (tagged-value? 'string host)
@@ -251,7 +262,23 @@
               (else (error "unknown error status-message policy" error-message-policy)))
         (check (string=? message "") "non-error span has a status message"))))
 
-(define (validate-spans expected-scopes event-policy expected-flags expected-trace-state error-message-policy spans)
+; OTLP carries the W3C trace flags in the low byte and then a two-bit field for
+; whether the parent span context was remote: bit 8 says the field is populated,
+; bit 9 carries the answer. A runtime's declared flags already set bit 8, so a
+; span with a remote parent carries that value plus bit 9.
+;
+; The capture cannot tell a remote parent from a parent that simply was not
+; exported, so a span that has any parent may carry either value. A root span
+; has no parent at all and must never claim a remote one.
+(define remote-parent-flag 512)
+
+(define (allowed-span-flags expected-flags span)
+  (if (eq? (field 'parent-class span) 'root)
+      expected-flags
+      (append expected-flags
+              (map (lambda (flags) (+ flags remote-parent-flag)) expected-flags))))
+
+(define (validate-spans expected-scopes event-policy expected-flags expected-trace-state error-message-policy attribute-limits spans)
   (let ((event-mode (record-field event-policy 'mode))
         (expected-event-count (record-field event-policy 'occurrences)))
     (check (> (length spans) 0) "capture contains no spans")
@@ -275,12 +302,15 @@
           (check (and (> (field 'start span) 0) (>= (field 'end span) (field 'start span)))
                  "span timestamps are not ordered")
           (validate-span-status error-message-policy span)
-          (check (= (field 'dropped-attributes span) 0) "span dropped attributes")
+          (if (enforced-limits? attribute-limits)
+              #t
+              (check (= (field 'dropped-attributes span) 0) "span dropped attributes"))
           (check (= (field 'dropped-events span) 0) "span dropped events")
           (check (= (field 'dropped-links span) 0) "span dropped links")
           (check (null? (field 'links span)) "span links changed")
-          (check (member (field 'flags span) expected-flags) "span flags changed")
-          (validate-span-attributes span expected-scopes)
+          (check (member (field 'flags span) (allowed-span-flags expected-flags span))
+                 "span flags changed")
+          (validate-span-attributes span expected-scopes attribute-limits)
           (validate-events event-mode span)))
       spans)
     (check (= expected-event-count
@@ -360,6 +390,17 @@
         (check (= (attribute-count metadata (car entry)) 1) "metric metadata is duplicated")))
     metadata))
 
+; A contract usually names one temporality for every aggregation. The delta
+; preference is the exception: OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE
+; = delta asks for delta where delta is meaningful, which leaves non-monotonic
+; sums cumulative because a running total has no delta reading. Naming the
+; preference keeps that per-instrument rule in the contract rather than
+; relaxing the check to accept either value everywhere.
+(define (expected-temporality declared data-type monotonic)
+  (if (eq? declared 'delta-preference)
+      (if (and (eq? data-type 'sum) (eq? monotonic #f)) 'cumulative 'delta)
+      declared))
+
 (define (validate-metric-aggregation expected metric)
   (let ((data-type (field 'data-type metric))
         (temporality (field 'aggregation-temporality metric))
@@ -380,7 +421,9 @@
     (if expected
         (begin
           (if (member data-type '(sum histogram exponential-histogram))
-              (check (eq? temporality (record-field expected 'temporality)) "metric aggregation temporality changed")
+              (check (eq? temporality
+                          (expected-temporality (record-field expected 'temporality) data-type monotonic))
+                     "metric aggregation temporality changed")
               #t)
           (if (eq? data-type 'sum)
               (check (eq? monotonic (if (member (field 'name metric) (record-field expected 'monotonic-sums)) #t #f))
@@ -528,7 +571,7 @@
                "log trace context is incomplete")))
     logs))
 
-(define (validate-capture expected-resource-attributes expected-resource-schema-url expected-scopes expected-metric-scopes expected-metric-descriptors expected-metric-aggregation expected-metric-point-schemas expected-log-scopes log-policy event-policy expected-span-flags expected-trace-state error-message-policy expected-span-buckets bucket-validator capture)
+(define (validate-capture expected-resource-attributes expected-resource-schema-url expected-scopes expected-metric-scopes expected-metric-descriptors expected-metric-aggregation expected-metric-point-schemas expected-log-scopes log-policy event-policy expected-span-flags expected-trace-state error-message-policy expected-attribute-limits expected-span-buckets bucket-validator capture)
   (let ((requests (field 'requests capture))
         (resources (field 'resources capture))
         (scopes (field 'scopes capture))
@@ -544,7 +587,7 @@
     (validate-requests (expected-signals expected-metric-scopes expected-log-scopes) requests)
     (validate-resources expected-resource-attributes expected-resource-schema-url resources)
     (validate-scopes expected-scopes scopes)
-    (validate-spans expected-scopes event-policy expected-span-flags expected-trace-state error-message-policy spans)
+    (validate-spans expected-scopes event-policy expected-span-flags expected-trace-state error-message-policy expected-attribute-limits spans)
     (bucket-validator expected-span-buckets expected-scopes spans)
     (validate-metrics expected-metric-scopes expected-metric-descriptors expected-metric-aggregation expected-metric-point-schemas metrics)
     (validate-logs expected-log-scopes log-policy logs)
@@ -570,6 +613,9 @@
       (if exact? (record-field contract 'span-flags) '(0 1 256 257))
       (if exact? (record-field contract 'trace-state) #f)
       (if exact? (record-field contract 'error-status-message) 'any)
+      ; Unlike the clauses above, this one describes the deployment rather than
+      ; how strictly it is read, so a relaxed run honours it too.
+      (record-field/default contract 'attribute-limits 'complete)
       expected-span-buckets
       validate-contract-buckets
       capture)))

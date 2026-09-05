@@ -199,6 +199,18 @@ func runRubyApp(injection injection, instance, rootArg, command string, args []s
 	return execRubyApp(root, injection, otelRoot, instance, command, args)
 }
 
+func stringSliceContainsAny(values []string, wanted ...string) bool {
+	for _, value := range values {
+		name, _, _ := strings.Cut(value, "=")
+		for _, candidate := range wanted {
+			if name == candidate {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 type rubyExecution struct {
 	loader      string
 	arguments   []string
@@ -227,13 +239,20 @@ func rubyAppExecution(root string, injection injection, otelRoot, instance, comm
 		"BUNDLE_GEMFILE": true, "BUNDLE_PATH": true, "DATABASE_PATH": true, "GEM_HOME": true, "GEM_PATH": true,
 		"LD_LIBRARY_PATH": true, "OTEL_RUBY_ADDITIONAL_GEM_PATH": true, "REALWORLD_BUNDLE_ROOT": true, "RUBYLIB": true, "RUBYOPT": true,
 	}
-	environment := make([]string, 0, len(inherited)+9)
+	environment := make([]string, 0, len(inherited)+10)
+	present := make(map[string]bool, len(inherited))
 	for _, entry := range inherited {
 		key, _, _ := strings.Cut(entry, "=")
 		if !blocked[key] {
+			present[key] = true
 			environment = append(environment, entry)
 		}
 	}
+	// The image declares RAILS_ENV=production, but nothing here goes through a
+	// container runtime, so that declaration never reaches the process. Without
+	// it Rails boots in development against a database seeded and stamped for
+	// production, and its error handling differs from what the profile pins.
+	environment = appendDefaultEnvironment(environment, present, "RAILS_ENV", "production")
 	state := os.Getenv("APP_STATE_DIR")
 	if state == "" {
 		return rubyExecution{}, errors.New("APP_STATE_DIR is required after state preparation")
@@ -259,6 +278,12 @@ func rubyAppExecution(root string, injection injection, otelRoot, instance, comm
 	}
 	arguments := []string{loader, "--library-path", libraryPath, ruby, rails, command}
 	arguments = append(arguments, args...)
+	// The rootfs is read-only, but `rails server` writes its pidfile under the
+	// application root at tmp/pids/server.pid. Redirect it into the writable
+	// state directory unless the caller chose a location.
+	if command == "server" && !stringSliceContainsAny(args, "--pid", "-P") {
+		arguments = append(arguments, "--pid", filepath.Join(state, "server.pid"))
+	}
 	return rubyExecution{loader: loader, arguments: arguments, environment: environment}, nil
 }
 

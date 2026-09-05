@@ -8,6 +8,8 @@
           (otel implementation go-runtime-v0.70.0)
           (otel standard traces) (otel standard metrics)
           (otel standard resource) (otel standard exporters)
+          (otel standard environment-variables)
+          (otel standard context-propagation)
           (realworld contract) (realworld route))
   (begin
 
@@ -93,6 +95,31 @@
     (all (observed span/int64-attribute))
     (all (observed metric/resource-associated))
     (all (observed exporter/otlp-http-binary-protobuf))
+    (all (observed span/set-attribute))
+    (all (observed span-context/is-valid))
+    (all (observed span-context/w3c-conformant))
+    ; Only a scenario that sends its own traceparent can show a parent that
+    ; arrived over the wire rather than from an enclosing in-process span.
+    (scenario 'propagation (observed span/create-with-context-parent))
+    (scenario 'propagation (observed span-context/is-remote))
+    (scenario 'propagation (observed context-propagation/tracecontext-propagator))
+    (scenario 'propagation
+      (corroborated (sources go-compile-release)
+                    context-propagation/textmappropagator
+                    context-propagation/fields
+                    context-propagation/getter-argument
+                    context-propagation/global-propagator
+                    context-propagation/composite-propagator))
+    (scenario 'unicode (observed span/unicode-attribute))
+    (all (observed meter/resource-configurable))
+    (all (observed metric/instrument-name-syntax))
+    (all (observed metric/instrument-unit-syntax))
+    (all (observed metric/instrument-description-syntax))
+    (all (observed environment-variables/otel-service-name))
+    (all (observed environment-variables/otel-exporter-otlp))
+    (all (observed environment-variables/otel-traces-exporter))
+    (all (observed environment-variables/otel-metrics-exporter))
+    (all (observed environment-variables/otel-metric-export-interval))
     (all (corroborated (sources go-compile-release) tracer/get))
     (all (corroborated (sources go-compile-release) tracer/scope-associated))
     (all (corroborated (sources go-compile-release) span/create))
@@ -107,6 +134,13 @@
     (all (corroborated (sources go-runtime-source) metric/instrument-description))
     (all (corroborated (sources go-runtime-source) metric/sum-aggregation))
     (all (corroborated (sources go-compile-release) resource/detector-interface))
-    (all (corroborated (sources go-compile-release) resource/detector-schema-url))))
+    (all (corroborated (sources go-compile-release) resource/detector-schema-url))
+    (all (corroborated (sources go-compile-release) tracer-provider/create))
+    (all (corroborated (sources go-compile-release) sampling/id-generator))
+    (scenario 'articles (corroborated (sources go-compile-release) span/update-name))
+    (all (corroborated (sources go-compile-release) resource/retrieve-attributes))
+    (all (corroborated (sources go-compile-release) exporter/otlp-traces-schema-url))
+    (all (corroborated (sources go-runtime-source) exporter/otlp-metrics-schema-url))
+    (all (corroborated (sources go-runtime-source) metric/default-aggregation))))
 
   ))

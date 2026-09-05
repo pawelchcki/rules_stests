@@ -5,6 +5,7 @@
     severity attributes timestamps body event-name mode occurrences bucket-count scope kind status name parent http-status
     span-flags trace-state resource-schema-url resource-attributes span-scopes metric-scopes metric-descriptors
     metric-point-schemas log-scopes error-status-message server-scope server-span-name
+    attribute-limits
     span-scope metric-scope log-scope metric-descriptor point-schema metric-aggregation log-policy event-policy span-bucket
     capture-contract)
   (import (scheme base) (otel record))
@@ -53,6 +54,11 @@
 (define (metric-descriptors . values) (list 'metric-descriptors values))
 (define (metric-point-schemas . values) (list 'metric-point-schemas values))
 (define (log-scopes . values) (list 'log-scopes values))
+; 'complete means every declared attribute reaches the wire. 'enforced means a
+; span attribute limit is in force, so a span may report dropped attributes and
+; carry only some of the declared keys. Whichever keys do arrive are still held
+; to every rule the contract states about them.
+(define (attribute-limits value) (list 'attribute-limits value))
 (define (error-status-message value) (list 'error-status-message value))
 (define (server-scope value) (list 'server-scope value))
 (define (server-span-name value) (list 'server-span-name value))

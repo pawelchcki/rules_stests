@@ -684,8 +684,20 @@ func TestAlignRealShapesFlagsDatabaseCountDifferences(t *testing.T) {
 	runfile := func(path string) string {
 		return filepath.Join(os.Getenv("TEST_SRCDIR"), os.Getenv("TEST_WORKSPACE"), path)
 	}
-	load := func(profile, path string) *ScenarioShape {
-		data, err := os.ReadFile(runfile(path))
+	// Bazel supplies these among many other runfiles, so find each shape by the
+	// path it must have rather than by position in the argument list.
+	shapeArg := func(profile string) string {
+		suffix := "realworld/shape/" + profile + "/tags.scm"
+		for _, arg := range args {
+			if strings.HasSuffix(arg, suffix) {
+				return arg
+			}
+		}
+		t.Fatalf("no tags shape runfile for %s", profile)
+		return ""
+	}
+	load := func(profile string) *ScenarioShape {
+		data, err := os.ReadFile(runfile(shapeArg(profile)))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -695,8 +707,8 @@ func TestAlignRealShapesFlagsDatabaseCountDifferences(t *testing.T) {
 		}
 		return &shape
 	}
-	django := load("python-django-auto-v0-65b0", args[12])
-	aiohttp := load("python-aiohttp-auto-v0-65b0", args[13])
+	django := load("python-django-auto-v0-65b0")
+	aiohttp := load("python-aiohttp-auto-v0-65b0")
 	alignment := AlignShapes(django, aiohttp)
 	if alignment == nil || alignment.Summary.TraceMatched == 0 {
 		t.Fatalf("django and aiohttp tags traces did not align: %#v", alignment)
@@ -734,7 +746,7 @@ func TestAlignRealShapesFlagsDatabaseCountDifferences(t *testing.T) {
 	if len(args) < 16 {
 		return
 	}
-	gin, rails := load("go-gin-otelbuild-v1-1-0", args[14]), load("ruby-rails-auto-v0-1-0", args[15])
+	gin, rails := load("go-gin-otelbuild-v1-1-0"), load("ruby-rails-auto-v0-1-0")
 	cross := AlignShapes(gin, rails)
 	if cross == nil || (cross.Summary.LeftOnly == 0 && cross.Summary.RightOnly == 0) {
 		t.Fatalf("expected framework-specific spans between gin and rails: %#v", cross)

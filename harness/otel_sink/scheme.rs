@@ -16,7 +16,9 @@ const COMPILER_HEAP_CELLS: usize = 1 << 22;
 // bounds periodic metrics with a selective startup reset, but a contended
 // scenario can still collect several large Python system-metric batches.
 const VALIDATOR_HEAP_CELLS: usize = 1 << 22;
-const COMPILER_CALL_BUDGET: usize = 100_000_000;
+// The compiler walks the whole corpus bundle, so this budget tracks corpus
+// size rather than capture size; the validator budget below tracks the capture.
+const COMPILER_CALL_BUDGET: usize = 200_000_000;
 const VALIDATOR_CALL_BUDGET: usize = 100_000_000;
 const VM_OUTPUT_BUDGET: usize = 1 << 20;
 pub const CONTRACT_ASSERTION_MARKER: &str = "OTLP contract assertion:";
