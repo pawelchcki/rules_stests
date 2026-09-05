@@ -127,6 +127,8 @@ func TestCheckedInProfilePlanSnapshotsAndDescriptorOwnership(t *testing.T) {
 			"corpus/realworld/profile/parts/python-django-auto-v0-65b0.scm"},
 		"python-django-auto-v0-65b0-propagators-b3": {65, 30, []string{"python-sdk-v1.44", "python-auto-v0.65b0", "python-system-metrics-v0.65b0", "django-v0.65b0"},
 			"corpus/realworld/profile/parts/python-django-auto-v0-65b0.scm"},
+		"python-django-auto-v0-65b0-span-limits": {60, 28, []string{"python-sdk-v1.44", "python-auto-v0.65b0", "python-system-metrics-v0.65b0", "django-v0.65b0"},
+			"corpus/realworld/profile/parts/python-django-auto-v0-65b0.scm"},
 		"python-django-auto-v0-65b0-temporality-delta": {59, 28, []string{"python-sdk-v1.44", "python-auto-v0.65b0", "python-system-metrics-v0.65b0", "django-v0.65b0"},
 			"corpus/realworld/profile/parts/python-django-auto-v0-65b0.scm"},
 		"ruby-rails-auto-v0-1-0": {33, 17, []string{"ruby-sdk-v1.11", "ruby-auto-v0.1", "rules-stests-ruby-auto-patch-v1", "rails-v0.40", "rack-v0.30", "active-record-v0.13"},
@@ -188,7 +190,7 @@ func TestCheckedInProfilePlanSnapshotsAndDescriptorOwnership(t *testing.T) {
 	if len(seen) != planCount {
 		t.Fatalf("saw %d plans, want %d", len(seen), planCount)
 	}
-	if totalProofs != 343 || totalObserved != 158 || scopedExceptions != 2 {
+	if totalProofs != 403 || totalObserved != 186 || scopedExceptions != 2 {
 		t.Fatalf("claim snapshot changed: proofs=%d observed=%d scoped-exceptions=%d", totalProofs, totalObserved, scopedExceptions)
 	}
 

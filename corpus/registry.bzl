@@ -119,6 +119,17 @@ OTEL_PROFILES = {
         signals = ["traces", "metrics", "logs"],
         scenarios = ["propagation_b3"],
     ),
+    "python-django-auto-v0-65b0-span-limits": struct(
+        runtime = "otel/runtime/python-auto-v0-65b0.scm",
+        parts = ["realworld/profile/parts/python-django-auto-v0-65b0.scm"],
+        implementations = [
+            "otel/implementation/python-sdk-v1.44.0.scm",
+            "otel/implementation/python-auto-v0.65b0.scm",
+            "otel/implementation/django-v0.65b0.scm",
+        ],
+        signals = ["traces", "metrics", "logs"],
+        scenarios = ["tags"],
+    ),
     "ruby-rails-auto-v0-1-0": struct(
         runtime = "otel/runtime/ruby-auto-v0-1-0.scm",
         implementations = [

@@ -32,6 +32,11 @@ realworld_app_suite(
             env = {"OTEL_PROPAGATORS": "b3multi"},
             scenarios = ["propagation_b3"],
         ),
+        "span-limits": otel_variant(
+            profile = "//corpus:python-django-auto-v0-65b0-span-limits",
+            env = {"OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT": "8"},
+            scenarios = ["tags"],
+        ),
         "temporality-delta": otel_variant(
             profile = "//corpus:python-django-auto-v0-65b0-temporality-delta",
             env = {"OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "delta"},
@@ -80,6 +85,7 @@ _REPORT_PROFILES = [
     "//corpus:python-aiohttp-auto-v0-65b0",
     "//corpus:python-django-auto-v0-65b0",
     "//corpus:python-django-auto-v0-65b0-propagators-b3",
+    "//corpus:python-django-auto-v0-65b0-span-limits",
     "//corpus:python-django-auto-v0-65b0-temporality-delta",
     "//corpus:ruby-rails-auto-v0-1-0",
 ]
@@ -90,6 +96,7 @@ test_suite(
         ":aiohttp_otel_hurl_test",
         ":django_otel_hurl_test",
         ":django_propagators-b3_otel_hurl_test",
+        ":django_span-limits_otel_hurl_test",
         ":django_temporality-delta_otel_hurl_test",
         ":gin_otel_hurl_test",
     ] + ([":rails_otel_hurl_test"] if RUBY_IMAGES_PUBLISHED else []),

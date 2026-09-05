@@ -26,7 +26,11 @@
   ((scope "trace.scope") (trace-id "5555555555555555555555555555555a") (span-id "666666666666666a")
    (parent-span-id "00f067aa0ba902b7") (parent-class external) (parent-valid #t) (trace-state "") (name "GET /api/tags") (kind 2)
    (start 5) (end 6) (attributes ()) (events ())
-   (status-code 0) (status-message "") (flags 769))))
+   (status-code 0) (status-message "") (flags 769))
+  ((scope "trace.scope") (trace-id "7777777777777777777777777777777a") (span-id "888888888888888a")
+   (parent-span-id "") (parent-class root) (parent-valid #t) (trace-state "") (name "GET /api/tags") (kind 2)
+   (start 7) (end 8) (attributes (("capped.key" (string "kept")) ("capped.other" (string "kept")) ("capped.third" (string "kept")))) (events ())
+   (dropped-attributes 4) (status-code 0) (status-message "") (flags 257))))
  (metrics (
   ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "counter") (description "counter description") (unit "{item}") (data-type sum) (aggregation-temporality delta) (data-points 2) (exemplars 2) (exemplars-with-trace-context 2) (exemplars-with-time 2) (points-with-start 2) (points-start-le-time 2) (monotonic #t))
   ((scope "meter.scope") (scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0") (name "updown") (description "updown description") (unit "{item}") (data-type sum) (aggregation-temporality cumulative) (data-points 1) (exemplars 0) (exemplars-with-trace-context 0) (exemplars-with-time 0) (points-with-start 1) (points-start-le-time 1) (monotonic #f))

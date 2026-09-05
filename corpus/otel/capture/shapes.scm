@@ -289,6 +289,20 @@
                              (non-ascii-string? (cadr (cadr entry)))))
                       (field 'attributes span)))
               (items capture 'spans))))
+    ; A span that reports dropped attributes sits exactly at the cap, so no span
+    ; may carry more attributes than it does. That is the cap being in force,
+    ; without the rule having to know what the cap was set to.
+    (capture-shape 'span/attribute-limit-enforced
+      (lambda (capture)
+        (let ((spans (items capture 'spans)))
+          (some (lambda (span)
+                  (and (integer? (field 'dropped-attributes span))
+                       (> (field 'dropped-attributes span) 0)
+                       (every (lambda (other)
+                                (<= (length (field 'attributes other))
+                                    (length (field 'attributes span))))
+                              spans)))
+                spans))))
     (capture-shape 'span/exception-events-complete
       (lambda (capture) (= (length (exception-events capture)) 2)))
     (capture-shape 'trace/scope-associated

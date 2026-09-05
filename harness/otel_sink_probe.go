@@ -632,7 +632,7 @@ func main() {
 		{"traces.tracerprovider.get-a-tracer", strings.Replace(syntheticFeatureCapture, `((name "trace.scope")`, `((name "missing.scope")`, 1)},
 		{"traces.tracerprovider.get-a-tracer-with-schema-url", strings.Replace(syntheticFeatureCapture, `(schema-url "https://opentelemetry.io/schemas/1.11.0")`, `(schema-url "")`, 1)},
 		{"traces.tracer.create-a-new-span", strings.Replace(syntheticFeatureCapture, `(spans (`, `(spans ()) (unused-spans (`, 1)},
-		{"traces.span.create-root-span", strings.Replace(syntheticFeatureCapture, `(parent-class root)`, `(parent-class external)`, 1)},
+		{"traces.span.create-root-span", strings.ReplaceAll(syntheticFeatureCapture, `(parent-class root)`, `(parent-class external)`)},
 		{"traces.span.create-with-parent-from-context", strings.Replace(syntheticFeatureCapture, `(parent-class external)`, `(parent-class child)`, 1)},
 		{"traces.span.create-with-default-parent-active-span", strings.NewReplacer(
 			`(parent-class child)`, `(parent-class root)`,
@@ -642,6 +642,9 @@ func main() {
 		{"traces.span-attributes.string-type", strings.NewReplacer(
 			`("string.key" (string `, `("string.key" (bytes `,
 			`("unicode.key" (string `, `("unicode.key" (bytes `,
+			`("capped.key" (string `, `("capped.key" (bytes `,
+			`("capped.other" (string `, `("capped.other" (bytes `,
+			`("capped.third" (string `, `("capped.third" (bytes `,
 		).Replace(syntheticFeatureCapture)},
 		{"traces.span-attributes.signed-int64-type", strings.ReplaceAll(syntheticFeatureCapture, `("integer.key" (integer `, `("integer.key" (double `)},
 		{"traces.span-exceptions.recordexception", strings.Replace(syntheticFeatureCapture, `(name "exception")`, `(name "not-exception")`, 1)},
@@ -670,6 +673,7 @@ func main() {
 		{"traces.span-attributes.setattribute", strings.NewReplacer(
 			`(attributes (("string.key" (string "value")) ("integer.key" (integer 7)) ("unicode.key" (string "ünïcødé"))))`, `(attributes ())`,
 			`(attributes (("string.key" (string "child")) ("integer.key" (integer 8))))`, `(attributes ())`,
+			`(attributes (("capped.key" (string "kept")) ("capped.other" (string "kept")) ("capped.third" (string "kept"))))`, `(attributes ())`,
 		).Replace(syntheticFeatureCapture)},
 		{"traces.spancontext.isvalid", strings.Replace(syntheticFeatureCapture, `(span-id "222222222222222a")`, `(span-id "0000000000000000")`, 1)},
 		{"traces.spancontext.conforms-to-the-w3c-tracecontext-spec", strings.Replace(syntheticFeatureCapture, `(trace-state "")`, `(trace-state "bad key=1")`, 1)},
@@ -677,6 +681,7 @@ func main() {
 		{"traces.span.set-status-with-statuscode-unset-ok-error", strings.Replace(syntheticFeatureCapture, `(status-code 2)`, `(status-code 0)`, 1)},
 		{"traces.spancontext.isremote", strings.Replace(syntheticFeatureCapture, `(parent-class external)`, `(parent-class child)`, 1)},
 		{"traces.span-attributes.unicode-support-for-keys-and-string-values", strings.Replace(syntheticFeatureCapture, `("unicode.key" (string "ünïcødé"))`, `("unicode.key" (string "ascii"))`, 1)},
+		{"environment-variables.otel-span-attribute-count-limit", strings.Replace(syntheticFeatureCapture, `(dropped-attributes 4)`, `(dropped-attributes 0)`, 1)},
 		{"traces.span-events.addevent", strings.Replace(syntheticFeatureCapture, `(events (`, `(events ()) (unused-events (`, 1)},
 		{"resource.retrieve-attributes", strings.Replace(syntheticFeatureCapture, `(attributes (("process.runtime.name" (string "go")) ("service.name" (string "synthetic-service"))))`, `(attributes ())`, 1)},
 		{"environment-variables.otel-service-name", strings.Replace(syntheticFeatureCapture, `("service.name" (string "synthetic-service"))`, `("service.name" (string "unknown_service:python"))`, 1)},
