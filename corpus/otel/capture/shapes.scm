@@ -174,6 +174,28 @@
          (= (modulo (quotient flags 256) 2) 1)
          (= (modulo (quotient flags 512) 2) 1))))
 
+; https://opentelemetry.io/docs/specs/otel/protocol/exporter/#user-agent
+; The specified identifier is OTel-OTLP-Exporter-<language>/<version>. Matching
+; only the fixed prefix would credit an exporter that names neither a language
+; nor a version, so both segments are parsed.
+(define (otlp-user-agent? value)
+  (let ((prefix "OTel-OTLP-Exporter-"))
+    (and (string? value)
+         (string-prefix? prefix value)
+         (let* ((rest (substring value (string-length prefix) (string-length value)))
+                (slash (string-index rest #\/)))
+           (and slash
+                (> slash 0)
+                (let loop ((index 0))
+                  (or (= index slash)
+                      (and (let ((character (string-ref rest index)))
+                             (or (ascii-letter? character)
+                                 (ascii-digit? character)
+                                 (and (memv character '(#\- #\_ #\.)) #t)))
+                           (loop (+ index 1)))))
+                (< (+ slash 1) (string-length rest))
+                (ascii-digit? (string-ref rest (+ slash 1))))))))
+
 (define (non-ascii-string? value)
   (and (string? value)
        (let loop ((index 0))
@@ -455,14 +477,12 @@
                         (member (field 'content-type request)
                                 '("application/x-protobuf" "application/protobuf")))
                       requests)))))
-    ; https://opentelemetry.io/docs/specs/otel/protocol/exporter/#user-agent
     (capture-shape 'exporter/otel-user-agent
       (lambda (capture)
         (let ((requests (items capture 'requests)))
           (and (pair? requests)
                (every (lambda (request)
-                        (string-prefix? "OTel-OTLP-Exporter-"
-                                        (or (header-value request "user-agent") "")))
+                        (otlp-user-agent? (header-value request "user-agent")))
                       requests)))))
     (capture-shape 'exporter/traces-schema-url-present
       (lambda (capture)

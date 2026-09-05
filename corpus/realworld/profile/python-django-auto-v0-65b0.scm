@@ -84,7 +84,7 @@
     (all (corroborated (sources python-trace-api) tracer/scope-associated))
     (all (corroborated (sources python-trace-api) span/create))
     (all (corroborated (sources python-trace-api) span/create-with-active-parent))
-    (scenario 'errors_auth (observed span/set-status))
+    (scenario 'errors_auth (corroborated (sources python-trace-api) span/set-status))
     (scenario 'errors_auth
       (corroborated (sources python-trace-api django-exception-middleware) span/add-event))
     (scenario 'errors_auth

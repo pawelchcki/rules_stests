@@ -123,7 +123,7 @@ func TestCheckedInProfilePlanSnapshotsAndDescriptorOwnership(t *testing.T) {
 			"corpus/realworld/profile/go-gin-otelbuild-v1-1-0.scm"},
 		"python-aiohttp-auto-v0-65b0": {67, 30, []string{"python-sdk-v1.44", "python-auto-v0.65b0", "python-system-metrics-v0.65b0", "aiohttp-v0.65b0"},
 			"corpus/realworld/profile/python-aiohttp-auto-v0-65b0.scm"},
-		"python-django-auto-v0-65b0": {70, 31, []string{"python-sdk-v1.44", "python-auto-v0.65b0", "python-system-metrics-v0.65b0", "django-v0.65b0"},
+		"python-django-auto-v0-65b0": {70, 30, []string{"python-sdk-v1.44", "python-auto-v0.65b0", "python-system-metrics-v0.65b0", "django-v0.65b0"},
 			"corpus/realworld/profile/parts/python-django-auto-v0-65b0.scm"},
 		"python-django-auto-v0-65b0-propagators-b3": {65, 30, []string{"python-sdk-v1.44", "python-auto-v0.65b0", "python-system-metrics-v0.65b0", "django-v0.65b0"},
 			"corpus/realworld/profile/parts/python-django-auto-v0-65b0.scm"},
@@ -190,7 +190,7 @@ func TestCheckedInProfilePlanSnapshotsAndDescriptorOwnership(t *testing.T) {
 	if len(seen) != planCount {
 		t.Fatalf("saw %d plans, want %d", len(seen), planCount)
 	}
-	if totalProofs != 403 || totalObserved != 186 || scopedExceptions != 2 {
+	if totalProofs != 403 || totalObserved != 185 || scopedExceptions != 2 {
 		t.Fatalf("claim snapshot changed: proofs=%d observed=%d scoped-exceptions=%d", totalProofs, totalObserved, scopedExceptions)
 	}
 

@@ -699,6 +699,10 @@ func main() {
 		{"metrics.metric-sdk-supports-per-timeseries-cumulative-start-timestamps", strings.Replace(syntheticFeatureCapture, `(points-start-le-time 2)`, `(points-start-le-time 1)`, 1)},
 		{"metrics.the-default-aggregation-is-available", strings.Replace(syntheticFeatureCapture, `(data-type histogram)`, `(data-type summary)`, 1)},
 		{"exporters.otlp.honors-the-user-agent-spec", strings.Replace(syntheticFeatureCapture, `("user-agent" "OTel-OTLP-Exporter-Python/1.44.0")`, `("user-agent" "curl/8.0.0")`, 1)},
+		// The specified identifier carries a language and a version, so an
+		// exporter that stops at the fixed prefix stays unproven.
+		{"exporters.otlp.honors-the-user-agent-spec", strings.Replace(syntheticFeatureCapture, `("user-agent" "OTel-OTLP-Exporter-Python/1.44.0")`, `("user-agent" "OTel-OTLP-Exporter-")`, 1)},
+		{"exporters.otlp.honors-the-user-agent-spec", strings.Replace(syntheticFeatureCapture, `("user-agent" "OTel-OTLP-Exporter-Python/1.44.0")`, `("user-agent" "OTel-OTLP-Exporter-Python")`, 1)},
 		{"exporters.otlp.schemaurl-in-resourcespans-and-scopespans", strings.Replace(syntheticFeatureCapture, `(schema-url "https://opentelemetry.io/schemas/1.11.0")`, `(schema-url "")`, 1)},
 		{"exporters.otlp.schemaurl-in-resourcemetrics-and-scopemetrics", strings.NewReplacer(
 			`(schema-url "https://opentelemetry.io/schemas/1.43.0")`, `(schema-url "")`,

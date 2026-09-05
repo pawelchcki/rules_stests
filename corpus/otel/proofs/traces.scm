@@ -26,7 +26,10 @@
     ("traces.spancontext.conforms-to-the-w3c-tracecontext-spec" (assertion span/w3c-trace-context-valid) (evidence wire-sufficient))
     ("traces.sampling.idgenerators" (assertion span/ids-valid) (evidence requires-immutable-source))
     ("traces.span.updatename" (assertion span/server-name-is-route) (evidence requires-immutable-source))
-    ("traces.span.set-status-with-statuscode-unset-ok-error" (assertion span/status-error-present) (evidence wire-sufficient))
+    ; The wire shows every observed status is a valid code and that ERROR is
+    ; reachable; UNSET and OK, which server auto-instrumentation never sets on
+    ; its own, have to come from the pinned status API instead.
+    ("traces.span.set-status-with-statuscode-unset-ok-error" (assertion span/status-error-present) (evidence requires-immutable-source))
     ("traces.span-events.addevent" (assertion span/events-present) (evidence requires-immutable-source))
     ("traces.span-exceptions.recordexception" (assertion span/exception-events-complete) (evidence requires-immutable-source))
     ("traces.span-exceptions.recordexception-with-extra-parameters" (assertion span/exception-events-complete) (evidence requires-immutable-source))))
