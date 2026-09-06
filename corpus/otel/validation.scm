@@ -153,6 +153,10 @@
     (if limit
         (check (<= (length attributes) limit) "span attribute count exceeds the configured limit")
         #t)
+    (if (dropped-to-limit? span attribute-limits)
+        (check (= (length attributes) limit)
+               "span that dropped attributes did not reach the configured limit")
+        #t)
     (check (every (lambda (entry) (member (car entry) allowed)) attributes) "unexpected span attribute")
     (for-each
       (lambda (entry)

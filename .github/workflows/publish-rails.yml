@@ -83,6 +83,7 @@ jobs:
           test "$(docker buildx imagetools inspect "${IMAGE}@${DIGEST}" --raw | jq '[.layers[] | select(.size > 1024)] | length')" = 1
           python3 tools/update_oci_lock.py --name "${LOCK_NAME}" --digest "${DIGEST}" --tree "${tree_oid}"
           bazel test \
+            --config=local \
             //fixtures:rails_test \
             //fixtures:rails_hurl_test \
             //fixtures:rails_otel_test \
