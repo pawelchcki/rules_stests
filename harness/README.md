@@ -6,10 +6,43 @@ language installation.
 
 ## Launcher
 
-`oci_bundle` has four modes. `extract` verifies and overlays an OCI layout.
-`app` starts the bundled Python runtime, `app-ruby` starts the bundled Ruby and
-Rails runtime, and `app-exec` starts a self-contained binary. App-mode options
-must precede the instance, rootfs, and command; `--` ends option parsing.
+Extraction and launching are separate tools. `oci_rootfs_extract <layout>
+<rootfs> <single|multi>` verifies and overlays an OCI layout as a Bazel build
+action. `app_launcher --runtime=<python|ruby|native> --instance=<name>
+--rootfs=<directory> [injection options] -- <command> [arguments...]` consumes
+an already-materialized directory and executes the application directly.
+Both tools remain Go executables and can evolve independently.
+
+Corpora use the shared `corpus_service` macro from `//rules:defs.bzl`:
+
+```starlark
+corpus_service(
+    name = "my_service",
+    rootfs = ":my_app_rootfs",
+    runtime = "native",
+    instance = "my-app",
+    command = "opt/app/bin/my-app",
+    args = ["--port", "$${PORT}"],
+    autoassign_port = True,
+    http_health_check_address = "http://127.0.0.1:$${PORT}/healthz",
+)
+```
+
+`python` and `ruby` use the existing bundled runtime layouts and take an
+entrypoint/Rails command; `native` takes a rootfs-relative executable path.
+The optional `injection` accepts the existing `otel_injection`,
+`python_auto_injection`, and `ruby_auto_injection` configurations. The macro
+declares app/agent runfiles and forwards service environment, dependencies,
+health checks and lifecycle settings to `rules_itest`. Fixtures and examples
+call `corpus_service` explicitly for each service, including instrumentation
+variants. Separate `realworld_service_tests` calls attach RealWorld assertions
+to those named services.
+
+For services built directly by Bazel, use `exe = ":server"` and omit rootfs,
+runtime, instance, command and injection. Arguments, environment and runfiles
+go directly to that executable without bundled-runtime or seed-state setup.
+The OTel sink uses this form. Future corpora can use either form and attach
+their own tests; `corpus_service` imposes no RealWorld API contract.
 
 | Option | Meaning |
 | --- | --- |
@@ -28,7 +61,10 @@ in; inherited or explicit values win.
 Rootfs extraction is a cacheable Bazel action. It verifies manifest and layer
 digests, rejects paths escaping the output tree, applies OCI whiteouts, and
 preserves otherwise-empty symlink targets for tree artifacts. App state is
-private per service while immutable rootfs trees remain shared.
+private per service while immutable rootfs trees remain shared. It lives under
+`TEST_TMPDIR` unless `APP_STATE_DIR` is supplied. `rules_itest` owns service
+lifecycle within the Bazel test action; the launcher replaces itself with the
+application process and adds no container runtime or isolation layer.
 
 ## Hurl driver
 

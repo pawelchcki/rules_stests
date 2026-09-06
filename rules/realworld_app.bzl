@@ -1,13 +1,11 @@
 """Public RealWorld application and OpenTelemetry test-suite macros."""
 
-load("@rules_itest//:itest.bzl", "itest_service", "service_test")
 load("//bazel:oci_images.lock.bzl", "RUBY_IMAGES_PUBLISHED")
-load("//rules:hurl_test.bzl", "REALWORLD_BASE_HURL_CASES", "realworld_hurl_test_suite")
+load("//rules:corpus_service.bzl", "corpus_service")
+load("//rules:hurl_test.bzl", "REALWORLD_BASE_HURL_CASES")
+load("//rules:realworld_service_tests.bzl", "realworld_service_tests")
 
 _SINK = Label("//harness:otel_sink_service")
-_LAUNCHER = Label("//harness:oci_bundle")
-_PROBE = Label("//harness:api_probe")
-_EXIT0 = Label("@rules_itest//:exit0")
 
 _SERVER_ARGS = ["serve", "--host", "127.0.0.1", "--port", "$${PORT}"]
 
@@ -121,23 +119,14 @@ def otel_variant(profile, env, scenarios):
         fail("an OpenTelemetry variant must run at least one scenario")
     return struct(profile = profile, env = env, scenarios = scenarios)
 
-def _rlocation(label):
-    return "$(rlocationpath {})".format(label)
-
-def _service_suffix(name):
-    package = native.package_name()
-    return "//{}:{}".format(package, name) if package else "//:" + name
-
-def _launcher_args(application, rootfs, instance, injection = None, binary = None):
-    modes = {"python": "app", "ruby": "app-ruby", "exec": "app-exec"}
-    args = [modes[application.runtime]]
-    if injection:
-        args.extend(injection.flags)
-    args.extend([instance, _rlocation(rootfs)])
+def _service_config(application, binary = None):
     if application.runtime == "exec":
-        args.append(binary)
-    args.extend(application.command)
-    return args
+        return dict(runtime = "native", command = binary, args = application.command)
+    return dict(
+        runtime = application.runtime,
+        command = application.command[0],
+        args = application.command[1:],
+    )
 
 def realworld_app_suite(
         name,
@@ -179,7 +168,6 @@ def realworld_app_suite(
 
     common = {
         "autoassign_port": True,
-        "exe": _LAUNCHER,
         "expected_start_duration": duration,
         "http_health_check_address": "http://127.0.0.1:$${PORT}/api/tags",
         "shutdown_timeout": "10s",
@@ -189,40 +177,21 @@ def realworld_app_suite(
 
     if plain:
         plain_service = name + "_service"
-        itest_service(
+        corpus_service(
             name = plain_service,
-            args = _launcher_args(
-                application,
-                selected_rootfs,
-                app,
-                binary = application.binary if application.runtime == "exec" else None,
-            ),
-            data = [selected_rootfs],
+            rootfs = selected_rootfs,
+            instance = app,
             hygienic = False,
-            **common
+            **dict(common, **_service_config(
+                application,
+                binary = application.binary if application.runtime == "exec" else None,
+            ))
         )
-        service_test(
-            name = plain_service + "_hygiene_test",
-            flaky = flaky,
-            services = [":" + plain_service],
-            tags = suite_tags,
-            test = _EXIT0,
-        )
-        service_test(
-            name = name + "_test",
-            timeout = "moderate",
-            args = ["--service-suffix=" + _service_suffix(plain_service)],
-            flaky = flaky,
-            services = [":" + plain_service],
-            tags = suite_tags,
-            test = _PROBE,
-        )
-        realworld_hurl_test_suite(
-            name = name + "_hurl_test",
-            cases = scenarios,
-            flaky = flaky,
-            timeout = "moderate",
+        realworld_service_tests(
+            name = name,
             service = ":" + plain_service,
+            scenarios = scenarios,
+            flaky = flaky,
             tags = suite_tags,
             **kwargs
         )
@@ -298,55 +267,29 @@ def _otel_targets(
     service_env = dict(otlp_env() if env == None else env)
     if application.runtime != "exec" and not injection and "OTEL_SERVICE_NAME" not in service_env:
         service_env["OTEL_SERVICE_NAME"] = instance
-    data = [rootfs]
-    if injection:
-        data.append(injection.rootfs)
-    itest_service(
+    corpus_service(
         name = otel_service,
-        args = _launcher_args(
-            application,
-            rootfs,
-            instance,
-            injection = injection,
-            binary = otel_binary or (application.otel_binary if application.runtime == "exec" else None),
-        ),
-        data = data,
+        rootfs = rootfs,
+        instance = instance,
+        injection = injection,
         deps = [_SINK],
         env = service_env,
         hygienic = False,
-        **common
+        **dict(common, **_service_config(
+            application,
+            binary = otel_binary or (application.otel_binary if application.runtime == "exec" else None),
+        ))
     )
-    service_test(
-        name = otel_service + "_hygiene_test",
-        flaky = flaky,
-        services = [":" + otel_service],
-        tags = suite_tags,
-        test = _EXIT0,
-    )
-    service_test(
-        name = name + "_otel_test",
-        timeout = "moderate",
-        args = ["--service-suffix=" + _service_suffix(otel_service)],
-        flaky = flaky,
-        services = [":" + otel_service],
-        tags = suite_tags,
-        test = _PROBE,
-    )
-    realworld_hurl_test_suite(
-        name = name + "_otel_hurl_test",
-        cases = scenarios,
-        flaky = flaky,
-        timeout = "moderate",
+    realworld_service_tests(
+        name = name + "_otel",
+        service = ":" + otel_service,
+        profile = profile,
+        scenarios = scenarios,
         otel_candidates = otel_candidates,
         otel_flaky_reason = otel_flaky_reason,
         otel_flaky_cases = otel_flaky_cases,
-        otel_profile = profile,
-        otel_sink = _SINK,
         otel_xfails = otel_xfails,
-        service = ":" + otel_service,
-        # These are the runs the parity report reads receipts from, so CI runs
-        # them once, in the invocation that stamps a revision into the receipt.
-        # A broad run excludes the tag rather than repeating the work.
-        tags = suite_tags + ["otel-report"],
+        flaky = flaky,
+        tags = suite_tags,
         **kwargs
     )

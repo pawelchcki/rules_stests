@@ -3,6 +3,8 @@
 This module consumes `rules_stests` through the public API. It exercises a
 generic Python injection, a consumer-defined contract-mode profile using the
 Python preset, and an explicit Gin rootfs for compile-time instrumentation.
+Every service has its own `corpus_service` declaration; `realworld_service_tests`
+separately attaches checks to its label.
 
 Run `bazel test --build_tests_only //...` to analyze and build every suite, or
 run one sharded suite such as `bazel test //:aiohttp_otel_hurl_test`.
@@ -10,7 +12,7 @@ run one sharded suite such as `bazel test //:aiohttp_otel_hurl_test`.
 An Orchestrion, LoongSuite, or other compile-time Go integration uses the same
 Gin declaration: build the vendored `fixtures/apps/go/realworld-gin` app with
 the tool into a `FROM scratch` image, then substitute only `rootfs`,
-`otel_binary`, and `profile`.
+`command`, and the test suite's `profile`.
 
 The local override is for this repository's CI. Published consumers should
 remove it and select a released `rules_stests` version.

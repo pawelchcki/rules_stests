@@ -1,8 +1,9 @@
 load("@crates//:defs.bzl", "aliases", "all_crate_deps")
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
-load("@rules_itest//:itest.bzl", "itest_service", "service_test")
+load("@rules_itest//:itest.bzl", "service_test")
 load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
 load("//rules:oci_rootfs.bzl", "oci_rootfs")
+load("//rules:corpus_service.bzl", "corpus_service")
 load("//bazel:oci_images.lock.bzl", "OTEL_RUBY_PUBLISHED", "RUBY_IMAGES_PUBLISHED")
 load("//corpus:registry.bzl", "OTEL_CORE_LIBRARIES")
 
@@ -68,7 +69,7 @@ go_binary(
     embed = [":otel_sink_probe_lib"],
 )
 
-itest_service(
+corpus_service(
     name = "otel_sink_service",
     args = [
         "--port",
@@ -94,21 +95,45 @@ service_test(
 )
 
 go_library(
-    name = "oci_bundle_lib",
-    srcs = ["oci_bundle.go"],
-    importpath = "github.com/pawelchcki/rules_stests/harness/oci_bundle",
+    name = "oci_rootfs_extract_lib",
+    srcs = [
+        "bundle_paths.go",
+        "oci_rootfs_extract.go",
+    ],
+    importpath = "github.com/pawelchcki/rules_stests/harness/oci_rootfs_extract",
     visibility = ["//visibility:private"],
 )
 
 go_binary(
-    name = "oci_bundle",
-    embed = [":oci_bundle_lib"],
+    name = "oci_rootfs_extract",
+    embed = [":oci_rootfs_extract_lib"],
 )
 
 go_test(
-    name = "oci_bundle_test",
-    srcs = ["oci_bundle_test.go"],
-    embed = [":oci_bundle_lib"],
+    name = "oci_rootfs_extract_test",
+    srcs = ["oci_rootfs_extract_test.go"],
+    embed = [":oci_rootfs_extract_lib"],
+)
+
+go_library(
+    name = "app_launcher_lib",
+    srcs = [
+        "app_launcher.go",
+        "bundle_paths.go",
+    ],
+    importpath = "github.com/pawelchcki/rules_stests/harness/app_launcher",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "app_launcher",
+    embed = [":app_launcher_lib"],
+)
+
+go_test(
+    name = "app_launcher_test",
+    srcs = ["app_launcher_test.go"],
+    embed = [":app_launcher_lib"],
 )
 
 go_library(

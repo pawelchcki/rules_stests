@@ -2,85 +2,145 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
 
-func TestRemoveDanglingSymlinksPreservesEmptyDirectoryTarget(t *testing.T) {
-	root := t.TempDir()
-	lockDirectory := filepath.Join(root, "run", "lock")
-	if err := os.MkdirAll(lockDirectory, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	varDirectory := filepath.Join(root, "var")
-	if err := os.MkdirAll(varDirectory, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	lockLink := filepath.Join(varDirectory, "lock")
-	if err := os.Symlink("../run/lock", lockLink); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := removeDanglingSymlinks(root); err != nil {
-		t.Fatal(err)
-	}
-	info, err := os.Lstat(lockLink)
+func TestLaunchArgsPreserveApplicationFlags(t *testing.T) {
+	args := []string{"--runtime=python", "--instance=sample-otel", "--rootfs=app root", "--otel-rootfs=agent root", "--", "serve", "--runtime=app-option", "--port", "8123", "two words", ""}
+	got, err := parseLaunchArgs(args)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode()&os.ModeSymlink == 0 {
-		t.Fatalf("%s is no longer a symlink", lockLink)
-	}
-	if _, err := os.Stat(filepath.Join(lockDirectory, treeArtifactDirectoryMarker)); err != nil {
-		t.Fatalf("empty symlink target has no tree-artifact marker: %v", err)
+	want := launchConfig{runtime: "python", instance: "sample-otel", rootfs: "app root", otelRootfs: "agent root", injection: injection{otelRootfs: "agent root"}, command: "serve", args: args[6:]}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("launch configuration = %#v, want %#v", got, want)
 	}
 }
 
-func TestRemoveDanglingSymlinksRemovesMissingTarget(t *testing.T) {
-	root := t.TempDir()
-	link := filepath.Join(root, "missing")
-	if err := os.Symlink("does-not-exist", link); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := removeDanglingSymlinks(root); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Lstat(link); !os.IsNotExist(err) {
-		t.Fatalf("dangling symlink still exists: %v", err)
+func TestLaunchArgsRejectInvalidConfiguration(t *testing.T) {
+	for _, args := range [][]string{
+		{},
+		{"--runtime=unknown", "--instance=sample", "--rootfs=root", "--", "serve"},
+		{"--runtime=python", "--instance=../escape", "--rootfs=root", "--", "serve"},
+		{"--runtime=python", "--instance=sample", "--", "serve"},
+		{"--runtime=python", "--instance=sample", "--rootfs=root"},
+		{"--runtime=python", "--instance=sample", "--rootfs=root", "--otel-rootfs=", "--", "serve"},
+		{"--runtime=python", "--instance=sample", "--rootfs=root", "--otel-rootfs=one", "--otel-rootfs=two", "--", "serve"},
+	} {
+		if _, err := parseLaunchArgs(args); err == nil {
+			t.Errorf("accepted invalid arguments %q", args)
+		}
 	}
 }
 
-func TestRemoveDanglingSymlinksPreservesReadOnlyEmptyTarget(t *testing.T) {
-	root := t.TempDir()
-	target := filepath.Join(root, "target")
-	if err := os.Mkdir(target, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(target, 0o555); err != nil {
-		t.Fatal(err)
-	}
-	link := filepath.Join(root, "link")
-	if err := os.Symlink("target", link); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := removeDanglingSymlinks(root); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(target, treeArtifactDirectoryMarker)); err != nil {
-		t.Fatalf("read-only symlink target has no tree-artifact marker: %v", err)
-	}
-	info, err := os.Stat(target)
+func TestLaunchArgsPreserveGenericInjection(t *testing.T) {
+	got, err := parseLaunchArgs([]string{
+		"--runtime=ruby", "--instance=rails", "--rootfs=app", "--otel-rootfs=agent",
+		"--env=RUBYOPT=-r{otel_rootfs}/activation.rb", "--env=EMPTY=",
+		"--prepend-path=RUBYLIB=first", "--append-path=RUBYLIB=last",
+		"--require={otel_rootfs}/activation.rb", "--require={otel_rootfs}/gems",
+		"--", "server", "--binding", "127.0.0.1",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := info.Mode().Perm(); got != 0o555 {
-		t.Fatalf("target mode = %o, want 555", got)
+	want := injection{
+		otelRootfs:  "agent",
+		environment: []environmentEdit{{key: "RUBYOPT", value: "-r{otel_rootfs}/activation.rb"}, {key: "EMPTY", value: ""}},
+		prependPath: []environmentEdit{{key: "RUBYLIB", value: "first"}},
+		appendPath:  []environmentEdit{{key: "RUBYLIB", value: "last"}},
+		require:     []string{"{otel_rootfs}/activation.rb", "{otel_rootfs}/gems"},
 	}
-	if err := os.Chmod(target, 0o755); err != nil {
-		t.Fatalf("make target removable: %v", err)
+	if !reflect.DeepEqual(got.injection, want) {
+		t.Fatalf("injection = %#v, want %#v", got.injection, want)
+	}
+}
+
+// Run the real exec path in a child so replacing the process cannot terminate
+// the test runner. The fixture exits with a nonzero code to check propagation.
+func TestNativeLauncherExec(t *testing.T) {
+	if os.Getenv("RULES_STESTS_LAUNCH_CHILD") == "1" {
+		if err := run([]string{"--runtime=native", "--instance=sample", "--rootfs=" + os.Getenv("RULES_STESTS_APP_ROOT"), "--", "bin/app", "two words", "--port=8123", ""}); err != nil {
+			t.Fatal(err)
+		}
+		t.Fatal("exec returned without replacing the process")
+	}
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\nprintf '%s\\n' \"$APP_STATE_DIR\" \"$PWD\" \"$OTEL_SERVICE_NAME\" \"$#\" \"$1\" \"$2\" \"$3\"\nexit 23\n"
+	if err := os.WriteFile(filepath.Join(root, "bin", "app"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, serviceName := range []string{"", "caller-service"} {
+		t.Run("service-name="+serviceName, func(t *testing.T) {
+			t.Setenv("APP_STATE_DIR", "")
+			t.Setenv("TEST_TMPDIR", t.TempDir())
+			t.Setenv("RULES_STESTS_LAUNCH_CHILD", "1")
+			t.Setenv("RULES_STESTS_APP_ROOT", root)
+			t.Setenv("OTEL_SERVICE_NAME", serviceName)
+			environment := os.Environ()
+			if serviceName == "" {
+				for i, entry := range environment {
+					if strings.HasPrefix(entry, "OTEL_SERVICE_NAME=") {
+						environment = append(environment[:i], environment[i+1:]...)
+						break
+					}
+				}
+				serviceName = "sample"
+			}
+			binary, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			command := exec.Command(binary, "-test.run=^TestNativeLauncherExec$")
+			command.Env = environment
+			output, err := command.CombinedOutput()
+			if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 23 {
+				t.Fatalf("launcher result = %v; output: %s", err, output)
+			}
+			state := filepath.Join(os.Getenv("TEST_TMPDIR"), "rules_stests", "sample", "state")
+			want := strings.Join([]string{state, state, serviceName, "3", "two words", "--port=8123", "", ""}, "\n")
+			if string(output) != want {
+				t.Fatalf("output = %q, want %q", output, want)
+			}
+		})
+	}
+}
+
+func TestStateSeedDoesNotModifyRootfsOrExistingState(t *testing.T) {
+	root := t.TempDir()
+	seed := filepath.Join(root, "opt", "app", "seed", "realworld.sqlite3")
+	if err := os.MkdirAll(filepath.Dir(seed), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(seed, []byte("seed"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	state := t.TempDir()
+	t.Setenv("APP_STATE_DIR", state)
+	if err := prepareAppState(root, "sample"); err != nil {
+		t.Fatal(err)
+	}
+	database := filepath.Join(state, "realworld.sqlite3")
+	if got, err := os.ReadFile(database); err != nil || string(got) != "seed" {
+		t.Fatalf("seeded state = %q, %v", got, err)
+	}
+	if err := os.WriteFile(database, []byte("changed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareAppState(root, "sample"); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]string{seed: "seed", database: "changed"} {
+		if got, err := os.ReadFile(path); err != nil || string(got) != want {
+			t.Errorf("%s = %q, %v; want %q", path, got, err, want)
+		}
 	}
 }
 

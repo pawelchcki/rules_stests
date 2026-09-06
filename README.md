@@ -17,22 +17,37 @@ Injected agents supply data to the generic launcher:
 ```starlark
 load(
     "@rules_stests//rules:defs.bzl",
+    "corpus_service",
     "oci_rootfs",
     "otel_injection",
     "otlp_env",
-    "realworld_app_suite",
+    "realworld_service_tests",
 )
 
-realworld_app_suite(
-    name = "my_python",
-    app = "aiohttp",
-    profile = "@rules_stests//corpus:python-aiohttp-auto-v0-65b0",
+corpus_service(
+    name = "my_python_service",
+    rootfs = "@rules_stests//harness:aiohttp_rootfs",
+    runtime = "python",
+    instance = "my-python",
+    command = "serve",
+    args = ["--host", "127.0.0.1", "--port", "$${PORT}"],
     injection = otel_injection(
         rootfs = "//agent:rootfs",
         prepend_path = {"PYTHONPATH": "{otel_rootfs}/auto"},
         require = ["{otel_rootfs}/auto/sitecustomize.py"],
     ),
     env = otlp_env(),
+    deps = ["@rules_stests//harness:otel_sink_service"],
+    autoassign_port = True,
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    so_reuseport_aware = True,
+    hygienic = False,
+)
+
+realworld_service_tests(
+    name = "my_python",
+    service = ":my_python_service",
+    profile = "@rules_stests//corpus:python-aiohttp-auto-v0-65b0",
 )
 ```
 
@@ -40,13 +55,24 @@ Compile-time Go instrumentation supplies its own app image and binary:
 
 ```starlark
 oci_rootfs(name = "app_rootfs", image = ":instrumented_image")
-realworld_app_suite(
-    name = "my_go",
-    app = "gin",
+corpus_service(
+    name = "my_go_service",
     rootfs = ":app_rootfs",
-    otel_binary = "opt/app/bin/realworld-gin",
-    profile = ":my_profile",
+    runtime = "native",
+    instance = "my-go",
+    command = "opt/app/bin/realworld-gin",
+    args = ["serve", "--host", "127.0.0.1", "--port", "$${PORT}"],
     env = otlp_env(logs = False),
+    deps = ["@rules_stests//harness:otel_sink_service"],
+    autoassign_port = True,
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    hygienic = False,
+)
+
+realworld_service_tests(
+    name = "my_go",
+    service = ":my_go_service",
+    profile = ":my_profile",
 )
 ```
 
@@ -56,7 +82,7 @@ place its static executable in a `FROM scratch` image.
 Use `otel_realworld_profile` without shapes for contract mode. Candidate
 targets record observed topology; check reviewed candidates into a shape tree
 and set `shape_root` for exact mode. When a profile declares a scenario subset,
-pass the same list as `scenarios` to `realworld_app_suite` so only those receipt
+pass the same list as `scenarios` to `realworld_service_tests` so only those receipt
 shards are generated.
 
 Generate uncached receipt evidence and its build-event file before assembling a
@@ -82,11 +108,18 @@ by the consumer. See [`examples/plugin_agent`](examples/plugin_agent).
 
 ## Public API
 
-`rules/defs.bzl` exports `REALWORLD_APPS`, `REALWORLD_HURL_CASES`, `oci_rootfs`,
+`rules/defs.bzl` exports `REALWORLD_APPS`, `REALWORLD_HURL_CASES`, `corpus_service`, `oci_rootfs`,
 `otel_injection`, `python_auto_injection`, `ruby_auto_injection`, `otlp_env`,
-`realworld_app_suite`, `realworld_hurl_test_suite`,
+`realworld_service_tests`, `realworld_app_suite`, `realworld_hurl_test_suite`,
 `otel_realworld_profile`, `otel_standard_registry`, and
 `otel_report_manifest`.
+
+`corpus_service` is independent of RealWorld. A service built by Bazel can use
+`corpus_service(name = "queue", exe = "//queue:server", args = [...])` without
+an OCI image, bundled runtime, or RealWorld-specific state setup. Its corpus
+can attach its own tests. `realworld_service_tests` only adds RealWorld checks
+to an existing service. `realworld_app_suite` remains a compatibility
+convenience wrapper; fixtures and examples declare services explicitly.
 
 ## Repository structure
 
