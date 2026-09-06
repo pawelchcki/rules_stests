@@ -6,7 +6,8 @@ load(
     "otel_report_manifest",
     "otlp_env",
     "python_auto_injection",
-    "realworld_app_suite",
+    "corpus_service",
+    "realworld_service_tests",
 )
 
 package(default_visibility = ["//visibility:public"])
@@ -17,9 +18,13 @@ _PYTHON_ENV = otlp_env(extra = {
 
 _EXAMPLE_SCENARIOS = ["comments"]
 
-realworld_app_suite(
-    name = "aiohttp",
-    app = "aiohttp",
+corpus_service(
+    name = "aiohttp_otel_service",
+    rootfs = "@rules_stests//harness:aiohttp_rootfs",
+    runtime = "python",
+    instance = "aiohttp-otel",
+    command = "serve",
+    args = ["--host", "127.0.0.1", "--port", "$${PORT}"],
     env = _PYTHON_ENV,
     injection = otel_injection(
         rootfs = "@rules_stests//harness:otel_python_rootfs",
@@ -33,6 +38,18 @@ realworld_app_suite(
             "{otel_rootfs}/autoinstrumentation/opentelemetry/instrumentation/auto_instrumentation/sitecustomize.py",
         ],
     ),
+    deps = ["@rules_stests//harness:otel_sink_service"],
+    autoassign_port = True,
+    expected_start_duration = "3s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    hygienic = False,
+    shutdown_timeout = "10s",
+    so_reuseport_aware = True,
+)
+
+realworld_service_tests(
+    name = "aiohttp_otel",
+    service = ":aiohttp_otel_service",
     profile = "@rules_stests//corpus:python-aiohttp-auto-v0-65b0",
 )
 
@@ -49,11 +66,27 @@ otel_realworld_profile(
     scenarios = _EXAMPLE_SCENARIOS,
 )
 
-realworld_app_suite(
-    name = "example",
-    app = "aiohttp",
+corpus_service(
+    name = "example_otel_service",
+    rootfs = "@rules_stests//harness:aiohttp_rootfs",
+    runtime = "python",
+    instance = "aiohttp-otel",
+    command = "serve",
+    args = ["--host", "127.0.0.1", "--port", "$${PORT}"],
     env = _PYTHON_ENV,
     injection = python_auto_injection(),
+    deps = ["@rules_stests//harness:otel_sink_service"],
+    autoassign_port = True,
+    expected_start_duration = "3s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    hygienic = False,
+    shutdown_timeout = "10s",
+    so_reuseport_aware = True,
+)
+
+realworld_service_tests(
+    name = "example_otel",
+    service = ":example_otel_service",
     profile = ":example-aiohttp-auto-v0-65b0",
     scenarios = _EXAMPLE_SCENARIOS,
 )
@@ -64,18 +97,32 @@ oci_rootfs(
     single_payload = True,
 )
 
-realworld_app_suite(
-    name = "gin",
-    app = "gin",
+corpus_service(
+    name = "gin_otel_service",
+    runtime = "native",
+    instance = "gin-otel",
+    args = ["serve", "--host", "127.0.0.1", "--port", "$${PORT}"],
     env = otlp_env(
         logs = False,
         extra = {
             "OTEL_RESOURCE_ATTRIBUTES": "process.owner=nonroot",
         },
     ),
-    otel_binary = "opt/app/bin/realworld-gin-otel",
-    profile = "@rules_stests//corpus:go-gin-otelbuild-v1-1-0",
+    command = "opt/app/bin/realworld-gin-otel",
     rootfs = ":gin_rootfs",
+    deps = ["@rules_stests//harness:otel_sink_service"],
+    autoassign_port = True,
+    expected_start_duration = "3s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    hygienic = False,
+    shutdown_timeout = "10s",
+    so_reuseport_aware = True,
+)
+
+realworld_service_tests(
+    name = "gin_otel",
+    service = ":gin_otel_service",
+    profile = "@rules_stests//corpus:go-gin-otelbuild-v1-1-0",
 )
 
 test_suite(

@@ -1,78 +1,284 @@
-"""Reference applications and their exact OpenTelemetry contract tests."""
+"""Explicit reference services and their RealWorld contract tests."""
 
 load("//bazel:oci_images.lock.bzl", "RUBY_IMAGES_PUBLISHED")
-load("//rules:realworld_app.bzl", "otel_variant", "otlp_env", "python_auto_injection", "realworld_app_suite", "ruby_auto_injection")
+load("//rules:corpus_service.bzl", "corpus_service")
+load("//rules:realworld_app.bzl", "otlp_env", "python_auto_injection", "ruby_auto_injection")
+load("//rules:realworld_service_tests.bzl", "realworld_service_tests")
 load("//rules:otel_profile.bzl", "otel_report_manifest")
 
 package(default_visibility = ["//visibility:public"])
 
+_PYTHON_ARGS = ["--host", "127.0.0.1", "--port", "$${PORT}"]
 _PYTHON_ENV = otlp_env(extra = {
     "OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED": "true",
 })
+_RAILS_TAGS = [] if RUBY_IMAGES_PUBLISHED else ["manual"]
+_RAILS_ENV = otlp_env(
+    metrics = False,
+    per_signal_endpoints = True,
+    extra = {
+        "OTEL_EXPORTER_OTLP_COMPRESSION": "none",
+        "OTEL_RUBY_ENABLED_INSTRUMENTATIONS": "rack,rails,action_pack,active_record",
+    },
+)
+_GIN_ENV = otlp_env(
+    logs = False,
+    extra = {"OTEL_RESOURCE_ATTRIBUTES": "process.owner=nonroot"},
+)
 
-realworld_app_suite(
+corpus_service(
+    name = "aiohttp_service",
+    rootfs = "//harness:aiohttp_rootfs",
+    runtime = "python",
+    instance = "aiohttp",
+    command = "serve",
+    args = _PYTHON_ARGS,
+    so_reuseport_aware = True,
+    autoassign_port = True,
+    expected_start_duration = "3s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    hygienic = False,
+    shutdown_timeout = "10s",
+)
+
+realworld_service_tests(
     name = "aiohttp",
-    app = "aiohttp",
-    env = _PYTHON_ENV,
+    service = ":aiohttp_service",
+)
+
+corpus_service(
+    name = "aiohttp_otel_service",
+    rootfs = "//harness:aiohttp_rootfs",
+    runtime = "python",
+    instance = "aiohttp-otel",
+    command = "serve",
+    args = _PYTHON_ARGS,
     injection = python_auto_injection(),
-    plain = True,
+    env = _PYTHON_ENV,
+    deps = ["//harness:otel_sink_service"],
+    so_reuseport_aware = True,
+    autoassign_port = True,
+    expected_start_duration = "3s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    hygienic = False,
+    shutdown_timeout = "10s",
+)
+
+realworld_service_tests(
+    name = "aiohttp_otel",
+    service = ":aiohttp_otel_service",
     profile = "//corpus:python-aiohttp-auto-v0-65b0",
 )
 
-realworld_app_suite(
+corpus_service(
+    name = "django_service",
+    rootfs = "//harness:django_rootfs",
+    runtime = "python",
+    instance = "django",
+    command = "serve",
+    args = _PYTHON_ARGS,
+    so_reuseport_aware = True,
+    autoassign_port = True,
+    expected_start_duration = "3s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    hygienic = False,
+    shutdown_timeout = "10s",
+)
+
+realworld_service_tests(
     name = "django",
-    app = "django",
-    env = _PYTHON_ENV,
+    service = ":django_service",
+)
+
+corpus_service(
+    name = "django_otel_service",
+    rootfs = "//harness:django_rootfs",
+    runtime = "python",
+    instance = "django-otel",
+    command = "serve",
+    args = _PYTHON_ARGS,
     injection = python_auto_injection(),
-    plain = True,
+    env = _PYTHON_ENV,
+    deps = ["//harness:otel_sink_service"],
+    so_reuseport_aware = True,
+    autoassign_port = True,
+    expected_start_duration = "3s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    hygienic = False,
+    shutdown_timeout = "10s",
+)
+
+realworld_service_tests(
+    name = "django_otel",
+    service = ":django_otel_service",
     profile = "//corpus:python-django-auto-v0-65b0",
-    variants = {
-        "propagators-b3": otel_variant(
-            profile = "//corpus:python-django-auto-v0-65b0-propagators-b3",
-            env = {"OTEL_PROPAGATORS": "b3multi"},
-            scenarios = ["propagation_b3"],
-        ),
-        "span-limits": otel_variant(
-            profile = "//corpus:python-django-auto-v0-65b0-span-limits",
-            env = {"OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT": "8"},
-            scenarios = ["tags"],
-        ),
-        "temporality-delta": otel_variant(
-            profile = "//corpus:python-django-auto-v0-65b0-temporality-delta",
-            env = {"OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "delta"},
-            scenarios = ["tags"],
-        ),
-    },
 )
 
-realworld_app_suite(
+# Each environment variant declares its own service, profile and scenario subset.
+corpus_service(
+    name = "django_propagators-b3_otel_service",
+    rootfs = "//harness:django_rootfs",
+    runtime = "python",
+    instance = "django-otel",
+    command = "serve",
+    args = _PYTHON_ARGS,
+    injection = python_auto_injection(),
+    env = dict(_PYTHON_ENV, OTEL_PROPAGATORS = "b3multi"),
+    deps = ["//harness:otel_sink_service"],
+    so_reuseport_aware = True,
+    autoassign_port = True,
+    expected_start_duration = "3s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    hygienic = False,
+    shutdown_timeout = "10s",
+)
+
+realworld_service_tests(
+    name = "django_propagators-b3_otel",
+    service = ":django_propagators-b3_otel_service",
+    profile = "//corpus:python-django-auto-v0-65b0-propagators-b3",
+    scenarios = ["propagation_b3"],
+)
+
+corpus_service(
+    name = "django_span-limits_otel_service",
+    rootfs = "//harness:django_rootfs",
+    runtime = "python",
+    instance = "django-otel",
+    command = "serve",
+    args = _PYTHON_ARGS,
+    injection = python_auto_injection(),
+    env = dict(_PYTHON_ENV, OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT = "8"),
+    deps = ["//harness:otel_sink_service"],
+    so_reuseport_aware = True,
+    autoassign_port = True,
+    expected_start_duration = "3s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    hygienic = False,
+    shutdown_timeout = "10s",
+)
+
+realworld_service_tests(
+    name = "django_span-limits_otel",
+    service = ":django_span-limits_otel_service",
+    profile = "//corpus:python-django-auto-v0-65b0-span-limits",
+    scenarios = ["tags"],
+)
+
+corpus_service(
+    name = "django_temporality-delta_otel_service",
+    rootfs = "//harness:django_rootfs",
+    runtime = "python",
+    instance = "django-otel",
+    command = "serve",
+    args = _PYTHON_ARGS,
+    injection = python_auto_injection(),
+    env = dict(_PYTHON_ENV, OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE = "delta"),
+    deps = ["//harness:otel_sink_service"],
+    so_reuseport_aware = True,
+    autoassign_port = True,
+    expected_start_duration = "3s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    hygienic = False,
+    shutdown_timeout = "10s",
+)
+
+realworld_service_tests(
+    name = "django_temporality-delta_otel",
+    service = ":django_temporality-delta_otel_service",
+    profile = "//corpus:python-django-auto-v0-65b0-temporality-delta",
+    scenarios = ["tags"],
+)
+
+corpus_service(
+    name = "rails_service",
+    rootfs = "//harness:rails_rootfs",
+    runtime = "ruby",
+    instance = "rails",
+    command = "server",
+    args = ["--binding", "127.0.0.1", "--port", "$${PORT}"],
+    so_reuseport_aware = False,
+    tags = _RAILS_TAGS,
+    autoassign_port = True,
+    expected_start_duration = "4s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    hygienic = False,
+    shutdown_timeout = "10s",
+)
+
+realworld_service_tests(
     name = "rails",
-    app = "rails",
-    env = otlp_env(
-        metrics = False,
-        per_signal_endpoints = True,
-        extra = {
-            "OTEL_EXPORTER_OTLP_COMPRESSION": "none",
-            "OTEL_RUBY_ENABLED_INSTRUMENTATIONS": "rack,rails,action_pack,active_record",
-        },
-    ),
-    injection = ruby_auto_injection(),
-    plain = True,
-    profile = "//corpus:ruby-rails-auto-v0-1-0",
+    service = ":rails_service",
+    tags = _RAILS_TAGS,
 )
 
-# Gin's listener does not use SO_REUSEPORT, and its instrumentation is linked
-# into a second binary in the same image rather than injected as a rootfs.
-realworld_app_suite(
+corpus_service(
+    name = "rails_otel_service",
+    rootfs = "//harness:rails_rootfs",
+    runtime = "ruby",
+    instance = "rails-otel",
+    command = "server",
+    args = ["--binding", "127.0.0.1", "--port", "$${PORT}"],
+    injection = ruby_auto_injection(),
+    env = _RAILS_ENV,
+    deps = ["//harness:otel_sink_service"],
+    so_reuseport_aware = False,
+    tags = _RAILS_TAGS,
+    autoassign_port = True,
+    expected_start_duration = "4s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    hygienic = False,
+    shutdown_timeout = "10s",
+)
+
+realworld_service_tests(
+    name = "rails_otel",
+    service = ":rails_otel_service",
+    profile = "//corpus:ruby-rails-auto-v0-1-0",
+    tags = _RAILS_TAGS,
+)
+
+# Gin's instrumentation is linked into a second binary in the same image.
+corpus_service(
+    name = "gin_service",
+    rootfs = "//harness:gin_rootfs",
+    runtime = "native",
+    instance = "gin",
+    command = "opt/app/bin/realworld-gin",
+    args = ["serve", "--host", "127.0.0.1", "--port", "$${PORT}"],
+    so_reuseport_aware = True,
+    autoassign_port = True,
+    expected_start_duration = "3s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    hygienic = False,
+    shutdown_timeout = "10s",
+)
+
+realworld_service_tests(
     name = "gin",
-    app = "gin",
-    env = otlp_env(
-        logs = False,
-        extra = {
-            "OTEL_RESOURCE_ATTRIBUTES": "process.owner=nonroot",
-        },
-    ),
-    plain = True,
+    service = ":gin_service",
+)
+
+corpus_service(
+    name = "gin_otel_service",
+    rootfs = "//harness:gin_rootfs",
+    runtime = "native",
+    instance = "gin-otel",
+    command = "opt/app/bin/realworld-gin-otel",
+    args = ["serve", "--host", "127.0.0.1", "--port", "$${PORT}"],
+    env = _GIN_ENV,
+    deps = ["//harness:otel_sink_service"],
+    so_reuseport_aware = True,
+    autoassign_port = True,
+    expected_start_duration = "3s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    hygienic = False,
+    shutdown_timeout = "10s",
+)
+
+realworld_service_tests(
+    name = "gin_otel",
+    service = ":gin_otel_service",
     profile = "//corpus:go-gin-otelbuild-v1-1-0",
 )
 

@@ -1,8 +1,9 @@
 load("@crates//:defs.bzl", "aliases", "all_crate_deps")
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
-load("@rules_itest//:itest.bzl", "itest_service", "service_test")
+load("@rules_itest//:itest.bzl", "service_test")
 load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
 load("//rules:oci_rootfs.bzl", "oci_rootfs")
+load("//rules:corpus_service.bzl", "corpus_service")
 load("//bazel:oci_images.lock.bzl", "OTEL_RUBY_PUBLISHED", "RUBY_IMAGES_PUBLISHED")
 load("//corpus:registry.bzl", "OTEL_CORE_LIBRARIES")
 
@@ -68,7 +69,7 @@ go_binary(
     embed = [":otel_sink_probe_lib"],
 )
 
-itest_service(
+corpus_service(
     name = "otel_sink_service",
     args = [
         "--port",

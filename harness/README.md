@@ -33,8 +33,16 @@ entrypoint/Rails command; `native` takes a rootfs-relative executable path.
 The optional `injection` accepts the existing `otel_injection`,
 `python_auto_injection`, and `ruby_auto_injection` configurations. The macro
 declares app/agent runfiles and forwards service environment, dependencies,
-health checks and lifecycle settings to `rules_itest`. `realworld_app_suite`
-uses this same interface for plain services, instrumented services and variants.
+health checks and lifecycle settings to `rules_itest`. Fixtures and examples
+call `corpus_service` explicitly for each service, including instrumentation
+variants. Separate `realworld_service_tests` calls attach RealWorld assertions
+to those named services.
+
+For services built directly by Bazel, use `exe = ":server"` and omit rootfs,
+runtime, instance, command and injection. Arguments, environment and runfiles
+go directly to that executable without bundled-runtime or seed-state setup.
+The OTel sink uses this form. Future corpora can use either form and attach
+their own tests; `corpus_service` imposes no RealWorld API contract.
 
 | Option | Meaning |
 | --- | --- |

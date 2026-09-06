@@ -7,4 +7,5 @@ exports_files([
     "oci_rootfs.bzl",
     "otel_profile.bzl",
     "realworld_app.bzl",
+    "realworld_service_tests.bzl",
 ])
