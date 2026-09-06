@@ -3,7 +3,7 @@ load("//rules:otel_profile.bzl", "otel_realworld_profile", "otel_standard_regist
 
 package(default_visibility = ["//visibility:public"])
 
-exports_files(glob(["**/*.scm"]))
+exports_files(glob(["**/*.scm", "**/*.hurl"]))
 
 filegroup(
     name = "core_libraries",

@@ -10,16 +10,29 @@
     ("traces.tracer.create-a-new-span" (assertion span/present) (evidence requires-immutable-source))
     ("traces.span.create-root-span" (assertion span/root-present) (evidence wire-sufficient))
     ("traces.span.create-with-default-parent-active-span" (assertion span/parent-valid-present) (evidence requires-immutable-source))
-    ("traces.span.create-with-parent-from-context" (assertion span/parent-valid-present) (evidence requires-immutable-source))
+    ; A parent the capture never carried came in over the wire, which is what
+    ; separates a context extracted from a request from an in-process child.
+    ("traces.span.create-with-parent-from-context" (assertion span/external-parent-present) (evidence wire-sufficient))
+    ("traces.spancontext.isremote" (assertion span/external-parent-present) (evidence wire-sufficient))
     ("traces.span.end" (assertion span/all-completed) (evidence wire-sufficient))
     ("traces.span-attributes.string-type" (assertion span/string-attribute-present) (evidence wire-sufficient))
     ("traces.span-attributes.signed-int64-type" (assertion span/int64-attribute-present) (evidence wire-sufficient))
+    ; The wire proves a non-ASCII string value survives the round trip. Server
+    ; instrumentation records everything under ASCII keys, so the key half of
+    ; the claim comes from the pinned attribute API instead.
+    ("traces.span-attributes.unicode-support-for-keys-and-string-values" (assertion span/unicode-string-attribute-present) (evidence requires-immutable-source))
+    ("traces.span.attribute-collection-size-limit" (assertion span/attribute-limit-enforced) (evidence wire-sufficient))
+    ("traces.sampling.spanlimits" (assertion span/attribute-limit-enforced) (evidence requires-immutable-source))
+    ("traces.sampling.attribute-limits" (assertion span/attribute-limit-enforced) (evidence requires-immutable-source))
     ("traces.span-attributes.setattribute" (assertion span/attributes-present) (evidence wire-sufficient))
     ("traces.spancontext.isvalid" (assertion span/ids-valid) (evidence wire-sufficient))
     ("traces.spancontext.conforms-to-the-w3c-tracecontext-spec" (assertion span/w3c-trace-context-valid) (evidence wire-sufficient))
     ("traces.sampling.idgenerators" (assertion span/ids-valid) (evidence requires-immutable-source))
     ("traces.span.updatename" (assertion span/server-name-is-route) (evidence requires-immutable-source))
-    ("traces.span.set-status-with-statuscode-unset-ok-error" (assertion span/status-error-present) (evidence wire-sufficient))
+    ; The wire shows every observed status is a valid code and that ERROR is
+    ; reachable; UNSET and OK, which server auto-instrumentation never sets on
+    ; its own, have to come from the pinned status API instead.
+    ("traces.span.set-status-with-statuscode-unset-ok-error" (assertion span/status-error-present) (evidence requires-immutable-source))
     ("traces.span-events.addevent" (assertion span/events-present) (evidence requires-immutable-source))
     ("traces.span-exceptions.recordexception" (assertion span/exception-events-complete) (evidence requires-immutable-source))
     ("traces.span-exceptions.recordexception-with-extra-parameters" (assertion span/exception-events-complete) (evidence requires-immutable-source))))

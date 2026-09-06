@@ -2,7 +2,7 @@ use crate::data::{Payload, Record};
 use crate::otlp_json;
 use crate::proto;
 use crate::trace_forest::{self, Forest, Group, Node, Trace};
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -42,6 +42,7 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
             }
         }
     }
+    let exemplar_spans = exemplar_context_index(&span_index, &span_parents);
     let mut output = String::from("((requests (\n");
     write_requests(&mut output, records);
     output.push_str("))\n(resources (\n");
@@ -150,6 +151,7 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                             aggregation_temporality,
                             monotonic,
                         ) = typed_metric_data(metric);
+                        let point_summary = typed_metric_point_summary(metric, &exemplar_spans);
                         output.push_str("  ((scope ");
                         string(
                             &mut output,
@@ -179,11 +181,16 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                         typed_attributes(&mut output, &metric.metadata);
                         write!(
                             output,
-                            ") (scope-dropped-attributes {}) (data-type {data_type}) (aggregation-temporality {aggregation_temporality}) (monotonic {monotonic}) (data-points {data_points}) (data-points-valid {}) (point-attributes ",
+                            ") (scope-dropped-attributes {}) (data-type {data_type}) (aggregation-temporality {aggregation_temporality}) (monotonic {monotonic}) (data-points {data_points}) (data-points-valid {}) (exemplars {}) (exemplars-with-trace-context {}) (exemplars-with-time {}) (points-with-start {}) (points-start-le-time {}) (point-attributes ",
                             scope
                                 .map(|scope| scope.dropped_attributes_count)
                                 .unwrap_or(0),
-                            if data_points_valid { "#t" } else { "#f" }
+                            if data_points_valid { "#t" } else { "#f" },
+                            point_summary.exemplars,
+                            point_summary.exemplars_with_trace_context,
+                            point_summary.exemplars_with_time,
+                            point_summary.start_present,
+                            point_summary.start_le_time
                         )
                         .unwrap();
                         typed_metric_point_attributes(&mut output, metric);
@@ -256,6 +263,121 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
         "))\n(json-field-spellings-valid #t)\n(json-collections-valid #t)\n(json-strings-valid #t))\n",
     );
     Ok(output.into_bytes())
+}
+
+/// Aggregates over a metric's data points that the Scheme contract needs but
+/// could not afford to read point by point: a large scenario carries thousands
+/// of points, and the capture has a size budget.
+pub struct MetricPointSummary {
+    pub exemplars: usize,
+    pub exemplars_with_trace_context: usize,
+    pub exemplars_with_time: usize,
+    pub start_present: usize,
+    pub start_le_time: usize,
+}
+
+/// The ids an exemplar may name and still be evidence of the association: a
+/// span the capture exported, or the parent a captured span names. A
+/// measurement taken once its server span has ended is recorded against that
+/// span's parent, which in a propagated trace is the remote span the capture
+/// never carried. Anything outside this set belongs to no span the scenario
+/// produced.
+fn exemplar_context_index(
+    span_index: &BTreeMap<(String, String), usize>,
+    span_parents: &BTreeMap<(String, String), String>,
+) -> BTreeSet<(String, String)> {
+    let mut index: BTreeSet<(String, String)> = span_index.keys().cloned().collect();
+    for ((trace_id, _), parent_id) in span_parents {
+        if !parent_id.is_empty() {
+            index.insert(span_key(trace_id, parent_id));
+        }
+    }
+    index
+}
+
+/// The claimed feature is that an exemplar carries the context of the span that
+/// was active when the measurement was taken, so a well-formed but unrelated id
+/// pair is not evidence: the ids have to name a span of this scenario.
+fn summarize_exemplars(
+    summary: &mut MetricPointSummary,
+    exemplars: &[proto::Exemplar],
+    spans: &BTreeSet<(String, String)>,
+    time: u64,
+) {
+    for exemplar in exemplars {
+        summary.exemplars += 1;
+        if exemplar.trace_id.len() == 16
+            && exemplar.span_id.len() == 8
+            && spans.contains(&span_key(
+                &hex_text(&exemplar.trace_id),
+                &hex_text(&exemplar.span_id),
+            ))
+        {
+            summary.exemplars_with_trace_context += 1;
+        }
+        if exemplar_not_after_point(exemplar.time_unix_nano as i128, time as i128) {
+            summary.exemplars_with_time += 1;
+        }
+    }
+}
+
+/// A measurement is taken before the point that carries it is collected, so an
+/// exemplar's timestamp may not be later than its point's. The other end is left
+/// open on purpose: a reservoir that survives a collection cycle legitimately
+/// reports a measurement older than the window the point reports.
+fn exemplar_not_after_point(exemplar_time: i128, time: i128) -> bool {
+    exemplar_time > 0 && exemplar_time <= time
+}
+
+fn summarize_window(summary: &mut MetricPointSummary, start: u64, time: u64) {
+    if start == 0 {
+        return;
+    }
+    summary.start_present += 1;
+    if start <= time {
+        summary.start_le_time += 1;
+    }
+}
+
+fn typed_metric_point_summary(
+    metric: &proto::Metric,
+    spans: &BTreeSet<(String, String)>,
+) -> MetricPointSummary {
+    let mut summary = MetricPointSummary {
+        exemplars: 0,
+        exemplars_with_trace_context: 0,
+        exemplars_with_time: 0,
+        start_present: 0,
+        start_le_time: 0,
+    };
+    match metric.data.as_ref() {
+        Some(proto::metric::Data::Gauge(data)) => {
+            for point in &data.data_points {
+                summarize_exemplars(&mut summary, &point.exemplars, spans, point.time_unix_nano);
+                summarize_window(&mut summary, point.start_time_unix_nano, point.time_unix_nano);
+            }
+        }
+        Some(proto::metric::Data::Sum(data)) => {
+            for point in &data.data_points {
+                summarize_exemplars(&mut summary, &point.exemplars, spans, point.time_unix_nano);
+                summarize_window(&mut summary, point.start_time_unix_nano, point.time_unix_nano);
+            }
+        }
+        Some(proto::metric::Data::Histogram(data)) => {
+            for point in &data.data_points {
+                summarize_exemplars(&mut summary, &point.exemplars, spans, point.time_unix_nano);
+                summarize_window(&mut summary, point.start_time_unix_nano, point.time_unix_nano);
+            }
+        }
+        Some(proto::metric::Data::ExponentialHistogram(data)) => {
+            for point in &data.data_points {
+                summarize_exemplars(&mut summary, &point.exemplars, spans, point.time_unix_nano);
+                summarize_window(&mut summary, point.start_time_unix_nano, point.time_unix_nano);
+            }
+        }
+        _ => {}
+    }
+    summary
 }
 
 fn typed_metric_data(
@@ -736,6 +858,7 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
     let strings_valid = !payloads.iter().any(has_malformed_json_string);
     let span_index = span_index(&payloads);
     let span_parents = span_parents(&payloads);
+    let exemplar_spans = exemplar_context_index(&span_index, &span_parents);
     let mut output = String::from("((requests (\n");
     for record in records {
         output.push_str("  ((signal ");
@@ -931,6 +1054,7 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                         aggregation_temporality,
                         monotonic,
                     ) = json_metric_data(metric);
+                    let point_summary = json_metric_point_summary(metric, &exemplar_spans);
                     output.push_str("  ((scope ");
                     string(&mut output, text(scope.get("name")));
                     output.push_str(") (scope-version ");
@@ -952,13 +1076,18 @@ fn json_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                     attributes(&mut output, metric.get("metadata"));
                     write!(
                         output,
-                        ") (scope-dropped-attributes {}) (data-type {data_type}) (aggregation-temporality {aggregation_temporality}) (monotonic {monotonic}) (data-points {data_points}) (data-points-valid {}) (point-attributes ",
+                        ") (scope-dropped-attributes {}) (data-type {data_type}) (aggregation-temporality {aggregation_temporality}) (monotonic {monotonic}) (data-points {data_points}) (data-points-valid {}) (exemplars {}) (exemplars-with-trace-context {}) (exemplars-with-time {}) (points-with-start {}) (points-start-le-time {}) (point-attributes ",
                         integer(json_field(
                             scope,
                             "dropped_attributes_count",
                             "droppedAttributesCount"
                         )),
-                        if data_points_valid { "#t" } else { "#f" }
+                        if data_points_valid { "#t" } else { "#f" },
+                        point_summary.exemplars,
+                        point_summary.exemplars_with_trace_context,
+                        point_summary.exemplars_with_time,
+                        point_summary.start_present,
+                        point_summary.start_le_time
                     )
                     .unwrap();
                     json_metric_point_attributes(&mut output, metric);
@@ -1271,6 +1400,61 @@ fn resource_wrappers<'a>(payload: &'a Value, signal: &str) -> Vec<&'a Value> {
         _ => return Vec::new(),
     };
     array(json_field(payload, snake, camel)).iter().collect()
+}
+
+/// The JSON mirror of typed_metric_point_summary, so a capture decoded from
+/// OTLP/JSON carries the same fields as one decoded from protobuf.
+fn json_metric_point_summary(
+    metric: &Value,
+    spans: &BTreeSet<(String, String)>,
+) -> MetricPointSummary {
+    let mut summary = MetricPointSummary {
+        exemplars: 0,
+        exemplars_with_trace_context: 0,
+        exemplars_with_time: 0,
+        start_present: 0,
+        start_le_time: 0,
+    };
+    let data = metric.get("data").unwrap_or(metric);
+    for key in [
+        ("gauge", "gauge"),
+        ("sum", "sum"),
+        ("histogram", "histogram"),
+        ("exponential_histogram", "exponentialHistogram"),
+    ] {
+        let Some(value) = json_non_null_field(data, key.0, key.1) else {
+            continue;
+        };
+        for point in array(json_field(value, "data_points", "dataPoints")) {
+            let point_time = integer(json_field(point, "time_unix_nano", "timeUnixNano"));
+            for exemplar in array(json_field(point, "exemplars", "exemplars")) {
+                summary.exemplars += 1;
+                let trace = text(json_field(exemplar, "trace_id", "traceId"));
+                let span = text(json_field(exemplar, "span_id", "spanId"));
+                if trace.len() == 32
+                    && span.len() == 16
+                    && spans.contains(&span_key(trace, span))
+                {
+                    summary.exemplars_with_trace_context += 1;
+                }
+                if exemplar_not_after_point(
+                    integer(json_field(exemplar, "time_unix_nano", "timeUnixNano")),
+                    point_time,
+                ) {
+                    summary.exemplars_with_time += 1;
+                }
+            }
+            let start = integer(json_field(point, "start_time_unix_nano", "startTimeUnixNano"));
+            let time = integer(json_field(point, "time_unix_nano", "timeUnixNano"));
+            if start > 0 {
+                summary.start_present += 1;
+                if start <= time {
+                    summary.start_le_time += 1;
+                }
+            }
+        }
+    }
+    summary
 }
 
 fn json_metric_data(metric: &Value) -> (&'static str, usize, bool, &'static str, &'static str) {

@@ -7,14 +7,17 @@
   (let ((count (list-ref observation 0))
         (method (list-ref observation 1))
         (route (list-ref observation 2))
-        (response-status (list-ref observation 3)))
+        (response-status (list-ref observation 3))
+        ; A scenario that sends its own traceparent declares the parent class its
+        ; server spans must carry; every other scenario starts its own trace.
+        (parent-class (if (> (length observation) 4) (list-ref observation 4) 'root)))
     (span-bucket
       (bucket-count count)
       (scope server-scope)
       (kind 'server)
       (status 'unset)
       (name (exact (render-server-span-name method route)))
-      (parent 'root)
+      (parent parent-class)
       (http-status response-status))))
 
 (define (http-contract-buckets observations server-scope render-server-span-name)
