@@ -172,15 +172,15 @@
                          (loop (+ index 1)))))))))
 
 ; A parent the capture never carried could be remote or merely unexported, so
-; the OTLP is-remote bit decides. Requiring the exact parent span id and one of
-; the trace ids the scenario sent ties the span to the incoming headers: an
+; the OTLP is-remote bit decides. Requiring the exact parent span id and each
+; trace id the scenario sent ties every request to its incoming headers: an
 ; extractor that keeps the parent but starts a trace of its own did not
 ; continue the caller's trace.
-(define (external-parent-span? span parent-span-id trace-ids)
+(define (external-parent-span? span parent-span-id trace-id)
   (let ((flags (field 'flags span)))
     (and (eq? (field 'parent-class span) 'external)
          (string=? (field 'parent-span-id span) parent-span-id)
-         (and (member (field 'trace-id span) trace-ids) #t)
+         (string=? (field 'trace-id span) trace-id)
          (integer? flags)
          (= (modulo (quotient flags 256) 2) 1)
          (= (modulo (quotient flags 512) 2) 1))))
@@ -320,9 +320,13 @@
     ; The context the propagation scenarios send in their request headers.
     (capture-shape 'span/external-parent-present
       (lambda (capture)
-        (some (lambda (span)
-                (external-parent-span? span propagated-parent-span-id propagated-trace-ids))
-              (items capture 'spans))))
+        (let ((spans (items capture 'spans)))
+          (every
+            (lambda (trace-id)
+              (some (lambda (span)
+                      (external-parent-span? span propagated-parent-span-id trace-id))
+                    spans))
+            propagated-trace-ids))))
     (capture-shape 'span/unicode-string-attribute-present
       (lambda (capture)
         (some (lambda (span)

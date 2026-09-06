@@ -104,13 +104,15 @@
     (scenario 'propagation (observed span-context/is-remote))
     (scenario 'propagation (observed context-propagation/tracecontext-propagator))
     (scenario 'propagation
-      (corroborated (sources go-compile-release)
+      (corroborated (sources go-propagation-api)
                     context-propagation/textmappropagator
                     context-propagation/fields
                     context-propagation/getter-argument
-                    context-propagation/global-propagator
                     context-propagation/composite-propagator))
-    (scenario 'unicode (corroborated (sources go-compile-release) span/unicode-attribute))
+    (scenario 'propagation
+      (corroborated (sources go-global-propagation-api)
+                    context-propagation/global-propagator))
+    (scenario 'unicode (corroborated (sources go-attribute-api) span/unicode-attribute))
     (all (observed meter/resource-configurable))
     (all (observed metric/instrument-name-syntax))
     (all (observed metric/instrument-unit-syntax))
