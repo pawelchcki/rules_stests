@@ -11,6 +11,7 @@
           (otel standard traces) (otel standard metrics)
           (otel standard logs) (otel standard resource) (otel standard exporters)
           (otel standard environment-variables)
+          (otel standard context-propagation)
           (realworld contract) (realworld route))
   (begin
 
@@ -116,10 +117,32 @@
     (all (observed span/set-attribute))
     (all (observed span-context/is-valid))
     (all (observed span-context/w3c-conformant))
+    ; Only a scenario that sends its own traceparent can show a parent that
+    ; arrived over the wire rather than from an enclosing in-process span.
+    (scenario 'propagation (observed span/create-with-context-parent))
+    (scenario 'propagation (observed span-context/is-remote))
+    (scenario 'propagation (observed context-propagation/tracecontext-propagator))
+    (scenario 'propagation
+      (corroborated (sources python-textmap-api)
+                    context-propagation/textmappropagator
+                    context-propagation/fields
+                    context-propagation/getter-argument))
+    (scenario 'propagation
+      (corroborated (sources python-propagation-api)
+                    context-propagation/global-propagator))
+    (scenario 'propagation
+      (corroborated (sources python-composite-propagator)
+                    context-propagation/composite-propagator))
+    (scenario 'unicode (corroborated (sources python-attributes-api) span/unicode-attribute))
     (all (observed meter/resource-configurable))
     (all (observed metric/instrument-name-syntax))
     (all (observed metric/instrument-unit-syntax))
     (all (observed metric/instrument-description-syntax))
+    (all (observed metric/exemplar-sampling))
+    (all (observed metric/exemplar-trace-context))
+    (all (observed metric/exemplar-timestamp))
+    (all (observed metric/cumulative-start-timestamps))
+    (all (corroborated (sources python-exemplar-filter) metric/exemplar-filter-trace-based))
     (all (observed exporter/otlp-user-agent))
     (all (observed environment-variables/otel-service-name))
     (all (observed environment-variables/otel-exporter-otlp))
@@ -132,7 +155,6 @@
     (all (corroborated (sources python-trace-api) tracer/scope-associated))
     (all (corroborated (sources python-trace-api) span/create))
     (all (corroborated (sources python-trace-api) span/create-with-active-parent))
-    (all (corroborated (sources python-trace-api) span/create-with-context-parent))
     (all (corroborated (sources python-resource-api) resource/create-from-attributes))
     (all (corroborated (sources python-meter-api) meter/get))
     (all (corroborated (sources python-meter-api) meter/get-with-version-schema))

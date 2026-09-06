@@ -1,6 +1,6 @@
 """Atomic OpenTelemetry profile and generated standard-registry rules."""
 
-load("//corpus:registry.bzl", "REALWORLD_HURL_CASES")
+load("//corpus:registry.bzl", "REALWORLD_BASE_HURL_CASES", "REALWORLD_HURL_CASES")
 
 _RULESET_REPOSITORY = Label("//:MODULE.bazel").repo_name
 
@@ -203,7 +203,7 @@ def otel_realworld_profile(
         profile_id = None,
         scenario_shapes = {},
         shape_root = None,
-        scenarios = REALWORLD_HURL_CASES,
+        scenarios = REALWORLD_BASE_HURL_CASES,
         standard_registry = Label("//corpus:otel_standard_registry"),
         core_libraries = Label("//corpus:core_libraries"),
         program = Label("//corpus:realworld/programs/validate_profile.scm"),

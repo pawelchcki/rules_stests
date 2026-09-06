@@ -106,6 +106,31 @@
                         (memv character '(#\_ #\. #\- #\/))))
                   (loop (+ index 1)))))))
 
+(define (metric-total capture key)
+  (let loop ((metrics (items capture 'metrics)) (total 0))
+    (if (null? metrics)
+        total
+        (loop (cdr metrics)
+              (let ((value (field key (car metrics))))
+                (if (integer? value) (+ total value) total))))))
+
+(define (filter-temporality metrics)
+  (let loop ((metrics metrics) (result '()))
+    (if (null? metrics)
+        (reverse result)
+        (let ((value (field 'aggregation-temporality (car metrics))))
+          (loop (cdr metrics)
+                (if (eq? value 'absent) result (cons value result)))))))
+
+(define (cumulative-metrics capture)
+  (let loop ((metrics (items capture 'metrics)) (result '()))
+    (if (null? metrics)
+        (reverse result)
+        (loop (cdr metrics)
+              (if (eq? (field 'aggregation-temporality (car metrics)) 'cumulative)
+                  (cons (car metrics) result)
+                  result)))))
+
 (define (every-metric? capture predicate)
   (let ((metrics (items capture 'metrics)))
     (and (pair? metrics) (every predicate metrics))))
@@ -145,6 +170,57 @@
                 (and (< index (string-length name))
                      (or (and (memv (string-ref name index) '(#\: #\{ #\<)) #t)
                          (loop (+ index 1)))))))))
+
+; A parent the capture never carried could be remote or merely unexported, so
+; the OTLP is-remote bit decides. Requiring the exact parent span id and each
+; trace id the scenario sent ties every request to its incoming headers: an
+; extractor that keeps the parent but starts a trace of its own did not
+; continue the caller's trace.
+(define (external-parent-span? span parent-span-id trace-id)
+  (let ((flags (field 'flags span)))
+    (and (eq? (field 'parent-class span) 'external)
+         (string=? (field 'parent-span-id span) parent-span-id)
+         (string=? (field 'trace-id span) trace-id)
+         (integer? flags)
+         (= (modulo (quotient flags 256) 2) 1)
+         (= (modulo (quotient flags 512) 2) 1))))
+
+; The parent span id and trace ids the propagation scenarios send, in their
+; W3C traceparent and in their B3 headers alike.
+(define propagated-parent-span-id "00f067aa0ba902b7")
+(define propagated-trace-ids
+  '("4bf92f3577b34da6a3ce929d0e0e4736"
+    "8c1e0a5b6d2f47398a4b0c7e1d5f3a92"
+    "b3f7d21c9e6a48059c7d2e8f4a1b6035"))
+
+; https://opentelemetry.io/docs/specs/otel/protocol/exporter/#user-agent
+; The specified identifier is OTel-OTLP-Exporter-<language>/<version>. Matching
+; only the fixed prefix would credit an exporter that names neither a language
+; nor a version, so both segments are parsed.
+(define (otlp-user-agent? value)
+  (let ((prefix "OTel-OTLP-Exporter-"))
+    (and (string? value)
+         (string-prefix? prefix value)
+         (let* ((rest (substring value (string-length prefix) (string-length value)))
+                (slash (string-index rest #\/)))
+           (and slash
+                (> slash 0)
+                (let loop ((index 0))
+                  (or (= index slash)
+                      (and (let ((character (string-ref rest index)))
+                             (or (ascii-letter? character)
+                                 (ascii-digit? character)
+                                 (and (memv character '(#\- #\_ #\.)) #t)))
+                           (loop (+ index 1)))))
+                (< (+ slash 1) (string-length rest))
+                (ascii-digit? (string-ref rest (+ slash 1))))))))
+
+(define (non-ascii-string? value)
+  (and (string? value)
+       (let loop ((index 0))
+         (and (< index (string-length value))
+              (or (> (char->integer (string-ref value index)) 127)
+                  (loop (+ index 1)))))))
 
 (define (requests-for capture signal)
   (let loop ((requests (items capture 'requests)) (count 0))
@@ -241,6 +317,38 @@
     (capture-shape 'span/events-present
       (lambda (capture)
         (some (lambda (span) (pair? (field 'events span))) (items capture 'spans))))
+    ; The context the propagation scenarios send in their request headers.
+    (capture-shape 'span/external-parent-present
+      (lambda (capture)
+        (let ((spans (items capture 'spans)))
+          (every
+            (lambda (trace-id)
+              (some (lambda (span)
+                      (external-parent-span? span propagated-parent-span-id trace-id))
+                    spans))
+            propagated-trace-ids))))
+    (capture-shape 'span/unicode-string-attribute-present
+      (lambda (capture)
+        (some (lambda (span)
+                (some (lambda (entry)
+                        (and (tagged? 'string (cadr entry))
+                             (non-ascii-string? (cadr (cadr entry)))))
+                      (field 'attributes span)))
+              (items capture 'spans))))
+    ; A span that reports dropped attributes sits exactly at the cap, so no span
+    ; may carry more attributes than it does. That is the cap being in force,
+    ; without the rule having to know what the cap was set to.
+    (capture-shape 'span/attribute-limit-enforced
+      (lambda (capture)
+        (let ((spans (items capture 'spans)))
+          (some (lambda (span)
+                  (and (integer? (field 'dropped-attributes span))
+                       (> (field 'dropped-attributes span) 0)
+                       (every (lambda (other)
+                                (<= (length (field 'attributes other))
+                                    (length (field 'attributes span))))
+                              spans)))
+                spans))))
     (capture-shape 'span/exception-events-complete
       (lambda (capture) (= (length (exception-events capture)) 2)))
     (capture-shape 'trace/scope-associated
@@ -302,6 +410,40 @@
         (every-metric? capture
                        (lambda (metric)
                          (and (memq (field 'data-type metric) '(sum gauge histogram)) #t)))))
+    ; Delta is never a default: an exporter reports it only when configured to.
+    ; Which instruments switch is the contract's business, not the rule's.
+    (capture-shape 'metric/delta-temporality
+      (lambda (capture)
+        (some (lambda (value) (eq? value 'delta))
+              (filter-temporality (items capture 'metrics)))))
+    ; An exemplar is only recorded when a measurement is taken; the default
+    ; trace-based filter is what ties one to the span that was active.
+    (capture-shape 'metric/exemplars-present
+      (lambda (capture) (> (metric-total capture 'exemplars) 0)))
+    (capture-shape 'metric/exemplars-carry-trace-context
+      (lambda (capture)
+        (let ((total (metric-total capture 'exemplars)))
+          (and (> total 0) (= (metric-total capture 'exemplars-with-trace-context) total)))))
+    (capture-shape 'metric/exemplars-carry-time
+      (lambda (capture)
+        (let ((total (metric-total capture 'exemplars)))
+          (and (> total 0) (= (metric-total capture 'exemplars-with-time) total)))))
+    ; A series that accumulates reports the window it accumulated over, so every
+    ; point of every cumulative metric carries a start that precedes its
+    ; reading. Counting starts across the whole capture instead would let one
+    ; well-formed series stand in for series that report no start at all. A
+    ; gauge has no window and is not held to the rule.
+    (capture-shape 'metric/points-carry-start-window
+      (lambda (capture)
+        (let ((cumulative (cumulative-metrics capture)))
+          (and (pair? cumulative)
+               (every (lambda (metric)
+                        (let ((points (field 'data-points metric)))
+                          (and (integer? points)
+                               (> points 0)
+                               (eqv? (field 'points-with-start metric) points)
+                               (eqv? (field 'points-start-le-time metric) points))))
+                      cumulative)))))
     (capture-shape 'metric/names-conform
       (lambda (capture)
         (every-metric? capture (lambda (metric) (metric-name-conformant? (field 'name metric))))))
@@ -368,14 +510,12 @@
                         (member (field 'content-type request)
                                 '("application/x-protobuf" "application/protobuf")))
                       requests)))))
-    ; https://opentelemetry.io/docs/specs/otel/protocol/exporter/#user-agent
     (capture-shape 'exporter/otel-user-agent
       (lambda (capture)
         (let ((requests (items capture 'requests)))
           (and (pair? requests)
                (every (lambda (request)
-                        (string-prefix? "OTel-OTLP-Exporter-"
-                                        (or (header-value request "user-agent") "")))
+                        (otlp-user-agent? (header-value request "user-agent")))
                       requests)))))
     (capture-shape 'exporter/traces-schema-url-present
       (lambda (capture)

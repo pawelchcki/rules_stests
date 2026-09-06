@@ -233,6 +233,27 @@ func TestRubyExecutionIsolatesApplicationAndAgentEnvironment(t *testing.T) {
 		t.Fatal("plain execution activated the agent")
 	}
 
+	// The rootfs is read-only, so the server pidfile must land in the state
+	// directory rather than the application root's tmp/pids.
+	plainArgs := strings.Join(plain.arguments, " ")
+	if !strings.Contains(plainArgs, "--pid "+filepath.Join(state, "server.pid")) {
+		t.Fatalf("server invocation did not redirect its pidfile: %s", plainArgs)
+	}
+	chosen, err := rubyAppExecution(root, injection{}, "", "rails", "server", []string{"--pid", "/chosen.pid"}, inherited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(strings.Join(chosen.arguments, " "), "--pid") != 1 {
+		t.Fatalf("a caller-chosen pidfile was overridden: %v", chosen.arguments)
+	}
+	migrate, err := rubyAppExecution(root, injection{}, "", "rails", "db:migrate", nil, inherited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(migrate.arguments, " "), "--pid") {
+		t.Fatalf("a non-server command was given a pidfile: %v", migrate.arguments)
+	}
+
 	otel := t.TempDir()
 	payload := filepath.Join(otel, "otel-auto-instrumentation-ruby")
 	if err := os.MkdirAll(filepath.Join(payload, "gems"), 0o755); err != nil {

@@ -10,8 +10,13 @@ use rustix::net::{SendFlags, send};
 const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_HEADER_COUNT: usize = 128;
+// The two encodings carry the same payloads, so they get the same budget.
+// Protobuf had an eighth of it, which a single batch of Rails spans carrying
+// exception stack traces exceeds. The exporter reported only that it could not
+// export, and the scenario looked as though the application had never recorded
+// the exceptions at all.
 const MAX_JSON_REQUEST_BYTES: usize = 1024 * 1024;
-const MAX_PROTOBUF_REQUEST_BYTES: usize = 128 * 1024;
+const MAX_PROTOBUF_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_VALIDATION_SOURCE_BYTES: usize = 256 * 1024;
 
 pub(crate) struct Request {
@@ -224,6 +229,16 @@ pub(crate) fn read_request(connection: &OwnedFd) -> Result<Request, RequestError
 }
 
 pub(crate) fn respond(connection: &OwnedFd, status: u16, content_type: &str, body: &[u8]) {
+    // An exporter that is refused reports only that it could not export, and
+    // some cannot even decode a plain-text refusal, so the reason has to reach
+    // the log or a rejected batch looks like a batch that never happened.
+    if status >= 400 {
+        crate::platform::write_stderr(b"otel_sink: rejected request with ");
+        crate::platform::write_stderr(status.to_string().as_bytes());
+        crate::platform::write_stderr(b": ");
+        crate::platform::write_stderr(&body[..body.len().min(400)]);
+        crate::platform::write_stderr(b"\n");
+    }
     let reason = match status {
         200 => "OK",
         400 => "Bad Request",

@@ -97,7 +97,7 @@ harness/     rootfs launcher, Hurl driver, and OTLP validation sink
 fixtures/    reference declarations, apps, and agent image sources
 report/      proof plans, receipts, and HTML report assembly
 examples/    independently analyzed consumer modules
-bazel/       OCI locks and module extensions
+bazel/       OCI locks, module extensions, and RBE platforms
 tools/       maintainer and report scripts
 ```
 
@@ -128,6 +128,40 @@ by language by design. Rows are marked matched, matched-with-differences, or
 present on only one side; the page makes no parity judgement of its own. Views
 are deep-linkable through the URL hash, so a coverage cell or a receipt can link
 straight into the relevant comparison.
+
+## Remote execution
+
+Every Bazel action, tests included, runs by default on a self-hosted BuildBuddy
+executor fleet in the `linux-amd64-kvm` pool. Tests qualify because they never
+start a container: apps launch as plain processes from OCI rootfs runfiles, the
+OTLP collector is the in-tree Rust sink, and SQLite state is copied into
+`$TEST_TMPDIR`. The executors therefore run bare isolation and need no Docker.
+
+An API key is required and never lives in this repository. Put it in
+`~/.bazelrc`:
+
+```
+common --remote_header=x-buildbuddy-api-key=<key>
+```
+
+In CI the BuildBuddy Workflow injects the same credential, so local and CI runs
+share one cache and one executor fleet.
+
+To build offline or debug a test in isolation, opt out:
+
+```
+bazel test --config=local //harness/...
+```
+
+That drops the executor, the cache and the build event stream, and falls back to
+local sandboxed execution.
+
+Executor health is checked on the Bazzite host with
+`systemctl status buildbuddy-executor@ccd0.service` (and `@ccd1`). A third
+worker, `fedora-silverblue`, stays registered in `linux-amd64-bare` for another
+project; BuildBuddy schedules by exact pool, so it takes no work from here. It
+could be re-registered under `linux-amd64-kvm` for more capacity if that project
+agrees.
 
 ## Test tiers
 

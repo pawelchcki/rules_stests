@@ -114,7 +114,9 @@
     (all (corroborated (sources python-trace-api) tracer/scope-associated))
     (all (corroborated (sources python-trace-api) span/create))
     (all (corroborated (sources python-trace-api) span/create-with-active-parent))
-    (all (corroborated (sources python-trace-api) span/create-with-context-parent))
+    ; A parent that arrived over the wire can only be shown by a scenario that
+    ; sends its own traceparent, and this reduced example runs 'comments' only.
+    ; The upstream profile claims the feature from its 'propagation' scenario.
     (all (corroborated (sources python-resource-api) resource/create-from-attributes))
     (all (corroborated (sources python-meter-api) meter/get))
     (all (corroborated (sources python-meter-api) meter/get-with-version-schema))
