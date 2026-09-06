@@ -1,5 +1,6 @@
 """Public API for rules_stests."""
 
+load("//rules:corpus_service.bzl", _corpus_service = "corpus_service")
 load("//rules:hurl_test.bzl", _REALWORLD_HURL_CASES = "REALWORLD_HURL_CASES", _realworld_hurl_test_suite = "realworld_hurl_test_suite")
 load("//rules:oci_rootfs.bzl", _oci_rootfs = "oci_rootfs")
 load("//rules:otel_profile.bzl", _otel_realworld_profile = "otel_realworld_profile", _otel_report_manifest = "otel_report_manifest", _otel_standard_registry = "otel_standard_registry")
@@ -7,6 +8,7 @@ load("//rules:realworld_app.bzl", _REALWORLD_APPS = "REALWORLD_APPS", _otel_inje
 
 REALWORLD_APPS = _REALWORLD_APPS
 REALWORLD_HURL_CASES = _REALWORLD_HURL_CASES
+corpus_service = _corpus_service
 oci_rootfs = _oci_rootfs
 otel_injection = _otel_injection
 otel_realworld_profile = _otel_realworld_profile

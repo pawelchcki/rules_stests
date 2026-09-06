@@ -1,11 +1,11 @@
 """Public RealWorld application and OpenTelemetry test-suite macros."""
 
-load("@rules_itest//:itest.bzl", "itest_service", "service_test")
+load("@rules_itest//:itest.bzl", "service_test")
 load("//bazel:oci_images.lock.bzl", "RUBY_IMAGES_PUBLISHED")
+load("//rules:corpus_service.bzl", "corpus_service")
 load("//rules:hurl_test.bzl", "REALWORLD_BASE_HURL_CASES", "realworld_hurl_test_suite")
 
 _SINK = Label("//harness:otel_sink_service")
-_LAUNCHER = Label("//harness:oci_bundle")
 _PROBE = Label("//harness:api_probe")
 _EXIT0 = Label("@rules_itest//:exit0")
 
@@ -121,23 +121,18 @@ def otel_variant(profile, env, scenarios):
         fail("an OpenTelemetry variant must run at least one scenario")
     return struct(profile = profile, env = env, scenarios = scenarios)
 
-def _rlocation(label):
-    return "$(rlocationpath {})".format(label)
-
 def _service_suffix(name):
     package = native.package_name()
     return "//{}:{}".format(package, name) if package else "//:" + name
 
-def _launcher_args(application, rootfs, instance, injection = None, binary = None):
-    modes = {"python": "app", "ruby": "app-ruby", "exec": "app-exec"}
-    args = [modes[application.runtime]]
-    if injection:
-        args.extend(injection.flags)
-    args.extend([instance, _rlocation(rootfs)])
+def _service_config(application, binary = None):
     if application.runtime == "exec":
-        args.append(binary)
-    args.extend(application.command)
-    return args
+        return dict(runtime = "native", command = binary, args = application.command)
+    return dict(
+        runtime = application.runtime,
+        command = application.command[0],
+        args = application.command[1:],
+    )
 
 def realworld_app_suite(
         name,
@@ -179,7 +174,6 @@ def realworld_app_suite(
 
     common = {
         "autoassign_port": True,
-        "exe": _LAUNCHER,
         "expected_start_duration": duration,
         "http_health_check_address": "http://127.0.0.1:$${PORT}/api/tags",
         "shutdown_timeout": "10s",
@@ -189,17 +183,15 @@ def realworld_app_suite(
 
     if plain:
         plain_service = name + "_service"
-        itest_service(
+        corpus_service(
             name = plain_service,
-            args = _launcher_args(
-                application,
-                selected_rootfs,
-                app,
-                binary = application.binary if application.runtime == "exec" else None,
-            ),
-            data = [selected_rootfs],
+            rootfs = selected_rootfs,
+            instance = app,
             hygienic = False,
-            **common
+            **dict(common, **_service_config(
+                application,
+                binary = application.binary if application.runtime == "exec" else None,
+            ))
         )
         service_test(
             name = plain_service + "_hygiene_test",
@@ -298,23 +290,18 @@ def _otel_targets(
     service_env = dict(otlp_env() if env == None else env)
     if application.runtime != "exec" and not injection and "OTEL_SERVICE_NAME" not in service_env:
         service_env["OTEL_SERVICE_NAME"] = instance
-    data = [rootfs]
-    if injection:
-        data.append(injection.rootfs)
-    itest_service(
+    corpus_service(
         name = otel_service,
-        args = _launcher_args(
-            application,
-            rootfs,
-            instance,
-            injection = injection,
-            binary = otel_binary or (application.otel_binary if application.runtime == "exec" else None),
-        ),
-        data = data,
+        rootfs = rootfs,
+        instance = instance,
+        injection = injection,
         deps = [_SINK],
         env = service_env,
         hygienic = False,
-        **common
+        **dict(common, **_service_config(
+            application,
+            binary = otel_binary or (application.otel_binary if application.runtime == "exec" else None),
+        ))
     )
     service_test(
         name = otel_service + "_hygiene_test",

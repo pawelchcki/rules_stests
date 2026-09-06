@@ -94,21 +94,45 @@ service_test(
 )
 
 go_library(
-    name = "oci_bundle_lib",
-    srcs = ["oci_bundle.go"],
-    importpath = "github.com/pawelchcki/rules_stests/harness/oci_bundle",
+    name = "oci_rootfs_extract_lib",
+    srcs = [
+        "bundle_paths.go",
+        "oci_rootfs_extract.go",
+    ],
+    importpath = "github.com/pawelchcki/rules_stests/harness/oci_rootfs_extract",
     visibility = ["//visibility:private"],
 )
 
 go_binary(
-    name = "oci_bundle",
-    embed = [":oci_bundle_lib"],
+    name = "oci_rootfs_extract",
+    embed = [":oci_rootfs_extract_lib"],
 )
 
 go_test(
-    name = "oci_bundle_test",
-    srcs = ["oci_bundle_test.go"],
-    embed = [":oci_bundle_lib"],
+    name = "oci_rootfs_extract_test",
+    srcs = ["oci_rootfs_extract_test.go"],
+    embed = [":oci_rootfs_extract_lib"],
+)
+
+go_library(
+    name = "app_launcher_lib",
+    srcs = [
+        "app_launcher.go",
+        "bundle_paths.go",
+    ],
+    importpath = "github.com/pawelchcki/rules_stests/harness/app_launcher",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "app_launcher",
+    embed = [":app_launcher_lib"],
+)
+
+go_test(
+    name = "app_launcher_test",
+    srcs = ["app_launcher_test.go"],
+    embed = [":app_launcher_lib"],
 )
 
 go_library(

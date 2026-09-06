@@ -1,6 +1,7 @@
 package(default_visibility = ["//visibility:public"])
 
 exports_files([
+    "corpus_service.bzl",
     "defs.bzl",
     "hurl_test.bzl",
     "oci_rootfs.bzl",

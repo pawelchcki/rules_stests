@@ -8,7 +8,6 @@ def _oci_rootfs_impl(ctx):
 
     rootfs = ctx.actions.declare_directory(ctx.label.name)
     args = ctx.actions.args()
-    args.add("extract")
     args.add(image_file_list[0].path)
     args.add(rootfs.path)
     args.add("single" if ctx.attr.single_payload else "multi")
@@ -35,7 +34,7 @@ oci_rootfs = rule(
         "single_payload": attr.bool(default = False),
         "_extractor": attr.label(
             cfg = "exec",
-            default = Label("//harness:oci_bundle"),
+            default = Label("//harness:oci_rootfs_extract"),
             executable = True,
         ),
     },

@@ -82,7 +82,7 @@ by the consumer. See [`examples/plugin_agent`](examples/plugin_agent).
 
 ## Public API
 
-`rules/defs.bzl` exports `REALWORLD_APPS`, `REALWORLD_HURL_CASES`, `oci_rootfs`,
+`rules/defs.bzl` exports `REALWORLD_APPS`, `REALWORLD_HURL_CASES`, `corpus_service`, `oci_rootfs`,
 `otel_injection`, `python_auto_injection`, `ruby_auto_injection`, `otlp_env`,
 `realworld_app_suite`, `realworld_hurl_test_suite`,
 `otel_realworld_profile`, `otel_standard_registry`, and
