@@ -109,11 +109,11 @@ function readHash() {
   const parts = raw.split('?');
   return { section: parts[0] || 'overview', params: new URLSearchParams(parts[1] || '') };
 }
-function writeHash(section, params) {
+function writeHash(section, params, replace = false) {
   const query = params && params.toString();
   const next = '#' + section + (query ? '?' + query : '');
   if (location.hash !== next) {
-    history.pushState(null, '', next);
+    history[replace ? 'replaceState' : 'pushState'](null, '', next);
     updateNavigation(section);
   }
 }
@@ -629,8 +629,10 @@ function applyHash(focus = true) {
     for (let parent = target.parentElement; parent; parent = parent.parentElement) {
       if (parent.tagName === 'DETAILS') parent.open = true;
     }
+    target.scrollIntoView();
+  } else if (focus) {
+    $(section).querySelector('h2').focus({ preventScroll: true });
   }
-  if (focus) $(section).querySelector('h2').focus({ preventScroll: true });
 }
 function compareChanged() {
   const params = new URLSearchParams({ left: $('left').value, right: $('right').value, scenario: $('scenario').value });
@@ -639,14 +641,14 @@ function compareChanged() {
   writeHash('compare', params);
   renderCompare();
 }
-function featuresChanged() {
+function featuresChanged(replace = false) {
   const params = new URLSearchParams();
   for (const [key, id] of [['profile', 'feature-profile'], ['category', 'category'], ['language', 'language'],
     ['support', 'support'], ['verification', 'verification'], ['basis', 'basis'], ['q', 'search']]) {
     if ($(id).value) params.set(key, $(id).value);
   }
   if ($('feature-profile').value) selectedProfile = $('feature-profile').value;
-  writeHash('features', params);
+  writeHash('features', params, replace);
   if (params.toString()) collapsedCategories.clear();
   renderFeatures();
 }
@@ -671,7 +673,7 @@ function setup() {
     $('right').value = left;
     compareChanged();
   });
-  for (const id of ['feature-profile', 'category', 'language', 'support', 'basis']) $(id).addEventListener('change', featuresChanged);
+  for (const id of ['feature-profile', 'category', 'language', 'support', 'basis']) $(id).addEventListener('change', () => featuresChanged());
   $('verification').addEventListener('change', () => {
     $('verified-only').checked = $('verification').value === 'verified';
     featuresChanged();
@@ -680,7 +682,7 @@ function setup() {
     $('verification').value = $('verified-only').checked ? 'verified' : '';
     featuresChanged();
   });
-  $('search').addEventListener('input', featuresChanged);
+  $('search').addEventListener('input', () => featuresChanged(true));
   window.addEventListener('hashchange', () => applyHash());
   const source = data.metadata.source;
   $('meta').innerHTML = '<a href="' + esc(source.url) + '">Catalog revision ' + esc(source.revision) + '</a>' +
