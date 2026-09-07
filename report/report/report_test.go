@@ -45,7 +45,7 @@ func TestBuildModelSeparatesScenarioShapeAndContractCoverage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if model.Coverage[0].State != "contract_only" || model.Coverage[1].State != "exact_shape" {
+	if model.Coverage[0].State != "contract_only" || model.Coverage[1].State != "exact_shape" || !model.Coverage[0].Declared || !model.Coverage[1].Declared {
 		t.Fatalf("unexpected coverage %#v", model.Coverage)
 	}
 	if model.Verification[features[0].ID]["go"].State != "verified" || model.Verification[features[0].ID]["python"].State != "not_exercised" {
@@ -81,10 +81,10 @@ func TestBuildModelForProfilesPreservesScenarioMembership(t *testing.T) {
 		t.Fatalf("python verification scenarios = %#v", got)
 	}
 	wantCoverage := []CoverageCell{
-		{Profile: "go", Scenario: "articles", State: "contract_only"},
+		{Profile: "go", Scenario: "articles", State: "contract_only", Declared: true},
 		{Profile: "python", Scenario: "articles", State: "unavailable"},
 		{Profile: "go", Scenario: "auth", State: "unavailable"},
-		{Profile: "python", Scenario: "auth", State: "contract_only"},
+		{Profile: "python", Scenario: "auth", State: "contract_only", Declared: true},
 	}
 	if len(model.Coverage) != len(wantCoverage) {
 		t.Fatalf("coverage = %#v", model.Coverage)
@@ -183,7 +183,7 @@ func TestRenderHTMLIsSelfContainedAndEscapesData(t *testing.T) {
 	if strings.Contains(text, "</script><script>alert") {
 		t.Fatal("embedded JSON can terminate its script element")
 	}
-	if !strings.Contains(text, "OpenTelemetry feature parity") || !strings.Contains(text, "application/json") {
+	if !strings.Contains(text, "OpenTelemetry instrumentation status") || !strings.Contains(text, "application/json") {
 		t.Fatal("missing report shell or embedded model")
 	}
 	if strings.Contains(text, "<link rel=") || strings.Contains(text, "<script src=") {
@@ -210,7 +210,30 @@ func TestRenderHTMLWritesPreview(t *testing.T) {
 		directory = t.TempDir()
 	}
 	metadata, features, manifests, shapes, evidence := fixtureModel(t, true)
-	model, err := BuildModel(metadata, features, manifests, shapes, []string{"go", "python"}, []string{"case"}, evidence, fixtureProfileProofCoverage(features)...)
+	features = append(features,
+		Feature{ID: "metrics.gap", Category: "Metrics", Name: "Metric export", Support: map[string]string{"go": "supported"}},
+		Feature{ID: "logs.na", Category: "Logs", Name: "Log export"},
+		Feature{ID: "context.unknown", Category: "Context", Name: "Context propagation"},
+	)
+	manifests[0].Unexercised = true
+	manifests[0].Verifications = []Verification{
+		{FeatureID: "metrics.gap", State: "known_gap", Evidence: manifests[0].ProfileEvidence},
+		{FeatureID: "logs.na", State: "not_applicable", Evidence: manifests[0].ProfileEvidence},
+	}
+	ruby := manifests[1]
+	ruby.Profile, ruby.DisplayName, ruby.Language, ruby.Framework = "ruby", "Ruby", "ruby", "Rails"
+	manifests = append(manifests, ruby)
+	goShape, err := ParseScenarioShape("go", "case", "https://example.test/go-shape", strings.ReplaceAll(sampleScenarioShape, "SELECT ", "INSERT "))
+	if err != nil {
+		t.Fatal(err)
+	}
+	shapes = append(shapes, goShape)
+	coverages := fixtureProfileProofCoverage(features)
+	coverages[0].Claims = nil
+	coverages = append(coverages, ProfileProofCoverage{Profile: "ruby", Source: coverages[1].Source})
+	model, err := BuildModelForProfiles(metadata, features, manifests, shapes,
+		[]string{"go", "python", "ruby"}, []string{"case", "failure"},
+		map[string][]string{"go": {"case"}, "python": {"case", "failure"}, "ruby": {"failure"}}, evidence, coverages...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +241,14 @@ func TestRenderHTMLWritesPreview(t *testing.T) {
 		SchemaVersion: 1, Profile: "python", Scenario: "case", ValidationMode: "exact", Outcome: "verified",
 		CaptureSHA256: strings.Repeat("ab", 32), ProofPlanSHA256: strings.Repeat("cd", 32),
 		Proofs: []ReceiptProof{{FeatureID: features[1].ID, Assertion: "span/all-completed", Basis: "observed", Result: "pass"}},
+	}, {
+		SchemaVersion: 1, Profile: "python", Scenario: "failure", ValidationMode: "contract", Outcome: "xfail", XFailReason: "Fixture expected failure",
+	}, {
+		SchemaVersion: 1, Profile: "ruby", Scenario: "failure", ValidationMode: "contract", Outcome: "xfail", XFailReason: "Fixture expected failure",
 	}}
+	if model.Verification[features[0].ID]["go"].State != "not_exercised" || model.Verification["metrics.gap"]["go"].State != "known_gap" || model.Verification["logs.na"]["go"].State != "not_applicable" {
+		t.Fatal("preview conflates upstream support, gaps, and applicability")
+	}
 	html, err := RenderHTML(model)
 	if err != nil {
 		t.Fatal(err)
@@ -280,5 +310,34 @@ func TestBuildModelKeepsUnexercisedProfileWithoutVerifiedClaims(t *testing.T) {
 	}
 	if model.Verification[features[1].ID]["python"].State != "verified" {
 		t.Fatal("the exercised profile lost its verified claim")
+	}
+}
+
+// A declared scenario with no checks and an excluded scenario can both be
+// unavailable. Membership must survive rendering independently of that state.
+func TestCoverageDeclaredIsIndependentOfChecks(t *testing.T) {
+	metadata, features, manifests, _, evidence := fixtureModel(t, false)
+	manifests[0].BaseCoverage = "unavailable"
+	coverages := fixtureProfileProofCoverage(features)
+	for i := range coverages {
+		coverages[i].Claims = nil
+	}
+	model, err := BuildModelForProfiles(metadata, features, manifests, nil,
+		[]string{"go", "python"}, []string{"case", "excluded"},
+		map[string][]string{"go": {"case"}, "python": {"excluded"}}, evidence, coverages...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.Coverage[0].State != "unavailable" || !model.Coverage[0].Declared || model.Coverage[2].Declared {
+		t.Fatalf("membership inferred from checks: %#v", model.Coverage)
+	}
+	html, err := RenderHTML(model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{`"state":"unavailable","declared":true`, `"state":"unavailable","declared":false`} {
+		if !strings.Contains(string(html), expected) {
+			t.Fatalf("render omitted %s", expected)
+		}
 	}
 }

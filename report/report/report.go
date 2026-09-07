@@ -307,7 +307,7 @@ func BuildModelForProfiles(metadata CatalogMetadata, features []Feature, manifes
 			if profileScenarioSets[manifest.Profile][scenario] && shapeIndex[manifest.Profile+"\x00"+scenario] != nil {
 				state = "exact_shape"
 			}
-			model.Coverage = append(model.Coverage, CoverageCell{Profile: manifest.Profile, Scenario: scenario, State: state})
+			model.Coverage = append(model.Coverage, CoverageCell{Profile: manifest.Profile, Scenario: scenario, State: state, Declared: profileScenarioSets[manifest.Profile][scenario]})
 		}
 	}
 	for left := 0; left < len(profiles); left++ {

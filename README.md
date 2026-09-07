@@ -137,30 +137,48 @@ tools/       maintainer and report scripts
 ## Reading the report
 
 `//report:assemble` renders `feature-parity-report.html`, a single self-contained
-page whose front end lives in `report/report/web/`. Read it in three layers, each
-defined in the report's own glossary. An **upstream claim** is what the
-OpenTelemetry compliance matrix says a language supports. A **corpus
-verification** is what this repository's end-to-end suite actually asserted about
-a running implementation, and only an executable proof plan backed by a
-current-revision receipt can produce a `verified` state. An **evidence basis**
-says how that was proved: observed directly in a capture, or corroborated by an
-immutable upstream source. The three layers never substitute for one another.
+page whose front end lives in `report/report/web/`. Start with **Instrumentation
+status** and select one implementation. The default is the first implementation
+with a passing receipt, or the first listed implementation if none passed.
 
-Every language stays in the report regardless of image publication. A profile
-whose container images are unpublished produces no receipts, so assembly marks
-it unexercised: its checked-in shapes stay comparable and its upstream claims
-stay visible, but none of its features can reach `verified`. A partial receipt
-set remains a hard assembly failure, so an unexercised profile is always
-all-or-nothing rather than a silent hole.
+- **Verified here**: the listed assertion passed with accepted evidence from this build.
+- **Documented gap**: the report explicitly records an implementation gap.
+- **Unknown**: this report has no accepted proof for the feature.
+- **Not applicable**: the profile explicitly marks the feature as inapplicable.
 
-The Compare view pairs two implementations span by span. Trace groups match on
-their root span, then spans match on kind and normalized name, with route
-parameters collapsed so `api/articles/<slug>` and `api/articles/{slug}` align.
-Scope is shown for both sides but never used for pairing, because scopes differ
-by language by design. Rows are marked matched, matched-with-differences, or
-present on only one side; the page makes no parity judgement of its own. Views
-are deep-linkable through the URL hash, so a coverage cell or a receipt can link
-straight into the relevant comparison.
+Select a count to reveal its feature list. Categories start collapsed, with
+Traces, Metrics, and Logs first. “No implementation gaps recorded” does not mean
+full support: unknowns remain separate, and the current assembler does not
+populate documented gaps. Upstream support and language maturity are secondary
+reference information under **Upstream & feature details**.
+
+**Test coverage** preserves the selected implementation and describes which
+scenarios have telemetry checks and how detailed those checks are. **Trace
+structure specified** means a saved scenario shape exists; **Shared telemetry
+checks only** means the shared capture contract is defined. The independent
+**Result in this build** column uses receipts: **Passed**, **Expected failure**,
+or **No result for this build**. Scenarios outside the profile's declared set
+say **Not in this test suite** and do not count as missing tests.
+
+Only an executable proof plan backed by accepted current-revision receipts can
+produce verification. Expected failures never verify features. Profiles without
+receipts remain visibly unverified, even with saved shapes or upstream support
+claims. Assembly still rejects partial receipt sets; a profile producing no
+receipts must be explicitly declared unavailable. Assertions, evidence methods,
+and receipt hashes are available in expandable details and **Evidence**.
+
+**Compare traces** compares saved trace expectations. Trace groups match on their
+root span, then spans match on kind and normalized name, with route parameters
+collapsed so `api/articles/<slug>` and `api/articles/{slug}` align. Scope is shown
+but never used for pairing. Groups start collapsed; left-only and right-only
+structures have the same neutral styling. Differences carry no quality verdict.
+
+Only the active view is shown. Existing hash routes (`#overview`, `#coverage`,
+`#compare`, `#features`, `#receipts`, `#glossary`) and feature/comparison filters
+remain supported. Add `profile=<profile-id>` to select an implementation in
+status, coverage, or feature details. Feature links without `profile` retain
+all-implementation scope. Filtered feature links reveal their matching details;
+browser back/forward restores view and filter selections.
 
 ## Remote execution
 
