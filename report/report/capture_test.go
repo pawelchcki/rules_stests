@@ -105,6 +105,24 @@ func TestCapturePreservesSharedExternalLinkTargets(t *testing.T) {
 		t.Fatalf("distinct external targets were conflated: %+v", distinct.Spans)
 	}
 }
+func TestCapturePreservesSharedCapturedLinkTargets(t *testing.T) {
+	linked := func(trace, span, targetTrace int) map[string]any {
+		s := captureSpan(trace, span, 0, "source")
+		s["links"] = []any{map[string]any{"traceId": fmt.Sprintf("%032x", targetTrace), "spanId": fmt.Sprintf("%016x", 1)}}
+		return s
+	}
+	spans := func(secondTarget int) []map[string]any {
+		return []map[string]any{captureSpan(1, 1, 0, "target"), captureSpan(2, 1, 0, "target"), linked(3, 1, 1), linked(4, 1, secondTarget)}
+	}
+	shared := decodedFixture(t, "shared", spans(1)...)
+	distinct := decodedFixture(t, "distinct", spans(2)...)
+	if shared.Spans[2].LinkTargets[0] != shared.Spans[3].LinkTargets[0] || !strings.Contains(shared.Spans[2].LinkTargets[0], "shared target") {
+		t.Fatalf("shared captured target was lost: %+v", shared.Spans)
+	}
+	if strings.Contains(distinct.Spans[2].LinkTargets[0], "shared target") || strings.Contains(distinct.Spans[3].LinkTargets[0], "shared target") {
+		t.Fatalf("distinct captured targets were conflated: %+v", distinct.Spans)
+	}
+}
 func TestPlannedChecksDoNotInflateVerification(t *testing.T) {
 	proof := ProofPlanProof{FeatureID: "f", Assertion: "assert", Basis: "observed"}
 	model := ReportModel{Manifests: []Manifest{{Profile: "p"}, {Profile: "unavailable"}}, Coverage: []CoverageCell{{Profile: "p", Scenario: "pass", Declared: true}, {Profile: "p", Scenario: "xfail", Declared: true}, {Profile: "p", Scenario: "unrun", Declared: true}, {Profile: "p", Scenario: "excluded"}, {Profile: "unavailable", Scenario: "unrun", Declared: true}}, Verification: map[string]map[string]Verification{"f": {"p": {State: "verified"}, "unavailable": {State: "not_exercised"}}}, Receipts: []ValidationReceipt{{Profile: "p", Scenario: "pass", Outcome: "verified", Proofs: []ReceiptProof{{FeatureID: "f", Assertion: "assert", Basis: "observed", Result: "pass"}}}, {Profile: "p", Scenario: "xfail", Outcome: "xfail", XFailReason: "reason"}}}

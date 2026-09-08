@@ -26,6 +26,15 @@ const path = require('node:path');
   await route('#parity?profile=python');
   await page.click('nav a[href*="#health"]');await page.waitForTimeout(100);
   assert.equal(await page.inputValue('#profile'),'go');
+  const crossProfileMatch=await page.evaluate(()=>{
+    const feature=data.features[0];
+    data.verification[feature.id].go={state:'not_exercised',evidence:[]};
+    plannedByKey.delete('go '+feature.id);
+    $('check-coverage').value='none';$('verification').value='verified';renderFeatures();
+    return document.querySelectorAll('[data-feature="'+feature.id+'"]').length;
+  });
+  assert.equal(crossProfileMatch,0,'cell filters must match the same implementation');
+  await page.goto('about:blank');
   await route('');
   assert.equal(await page.locator('#features').isVisible(),true);
   assert.match(await page.locator('#feature-matrix').innerText(),/assertions defined/);

@@ -491,13 +491,14 @@ function renderFeatures() {
   const matches = data.features.filter((feature) => {
     if (readHash().params.get('feature') && readHash().params.get('feature') !== feature.id) return false;
     const coverage = $('check-coverage').value;
-    if (coverage && !manifests.some(m => (checksFor(m.profile,feature.id).length > 0) === (coverage === 'defined'))) return false;
     if (category && feature.category !== category) return false;
     if (search && !(feature.name.toLowerCase().includes(search) || feature.id.toLowerCase().includes(search))) return false;
     if (support && !upstreamLanguages.some((lang) => ((feature.support || {})[lang] || 'unknown') === support)) return false;
-    if ((verification || basis) && !manifests.some(m => {
+    if ((coverage || verification || basis) && !manifests.some(m => {
       const v=verificationFor(feature,m.profile);
-      return (!verification || v.state===verification) && (!basis || v.basis===basis || checksFor(m.profile,feature.id).some(c=>c.basis===basis));
+      const checks=checksFor(m.profile,feature.id);
+      return (!coverage || (checks.length > 0) === (coverage === 'defined')) &&
+        (!verification || v.state===verification) && (!basis || v.basis===basis || checks.some(c=>c.basis===basis));
     })) return false;
     return true;
   });

@@ -338,7 +338,7 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 	for _, children := range externalParents {
 		sort.Strings(children)
 	}
-	externalLinkSources := map[string][]string{}
+	linkTargetSources := map[string][]string{}
 	for i := range d.Spans {
 		for linkIndex, l := range array(d.Spans[i].Fields["links"]) {
 			link := object(l)
@@ -351,12 +351,10 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 				return fail(e)
 			}
 			key := tid + "/" + sid
-			if _, captured := ids[key]; !captured {
-				externalLinkSources[key] = append(externalLinkSources[key], fmt.Sprintf("%s link %d", path(i), linkIndex))
-			}
+			linkTargetSources[key] = append(linkTargetSources[key], fmt.Sprintf("%s link %d", path(i), linkIndex))
 		}
 	}
-	for _, sources := range externalLinkSources {
+	for _, sources := range linkTargetSources {
 		sort.Strings(sources)
 	}
 	for i := range d.Spans {
@@ -393,11 +391,9 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 				if j == i {
 					target = "self"
 				}
-			} else {
-				key := tid + "/" + sid
-				if sources := externalLinkSources[key]; len(sources) > 1 {
-					target += " (shared target " + digest([]byte(canonical(sources)))[:12] + ")"
-				}
+			}
+			if sources := linkTargetSources[tid+"/"+sid]; len(sources) > 1 {
+				target += " (shared target " + digest([]byte(canonical(sources)))[:12] + ")"
 			}
 			d.Spans[i].LinkTargets = append(d.Spans[i].LinkTargets, target)
 		}
