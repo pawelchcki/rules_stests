@@ -254,6 +254,16 @@ function otherProfileWithShape(profile, scenario) {
   return fallback ? fallback.profile : profile;
 }
 
+function otherProfileForCapture(profile, scenario) {
+  for (const manifest of data.manifests) {
+    if (manifest.profile !== profile && captureByKey.has(manifest.profile + '/' + scenario)) return manifest.profile;
+  }
+  for (const manifest of data.manifests) {
+    if (manifest.profile !== profile && receiptFor(manifest.profile, scenario)) return manifest.profile;
+  }
+  return otherProfileWithShape(profile, scenario);
+}
+
 function renderCoverageGrid() {
   const declared = data.coverage.filter((c) => c.profile === selectedProfile && c.declared);
   $('coverage-summary').textContent = declared.length + ' scenarios in this test suite; ' +
@@ -573,7 +583,7 @@ function renderReceipts() {
     '<th>Proofs</th><th>Capture SHA-256</th></tr></thead>';
   const rows = receipts.map((receipt) => {
     const manifest = manifestByProfile.get(receipt.profile);
-    const other = otherProfileWithShape(receipt.profile, receipt.scenario);
+    const other = otherProfileForCapture(receipt.profile, receipt.scenario);
     const params = new URLSearchParams({ left: receipt.profile, right: other, scenario: receipt.scenario });
     const proofs = (receipt.proofs || []).map((proof) =>
       '<li>' + esc(proof.featureId) + ' <code>' + esc(proof.assertion) + '</code> ' +

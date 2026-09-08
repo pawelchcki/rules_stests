@@ -15,6 +15,14 @@ const path = require('node:path');
   await page.click('#parity-scenarios summary');await page.waitForSelector('#parity-scenarios li');
   const pythonOverviewLink=await page.locator('#parity-overview tbody tr td').nth(1).locator('a').getAttribute('href');
   assert.match(pythonOverviewLink,/left=python/);assert.match(pythonOverviewLink,/right=go/);
+  const capturedPeer=await page.evaluate(()=>{
+    const unavailable={...data.manifests[0],profile:'unavailable'};
+    data.manifests.splice(1,0,unavailable);shapeByKey.set('unavailable case',{});
+    const selected=otherProfileForCapture('go','case');
+    data.manifests.splice(1,1);shapeByKey.delete('unavailable case');
+    return selected;
+  });
+  assert.equal(capturedPeer,'python','receipt parity links must prefer a captured peer');
   await page.evaluate(()=>{const trace=data.captureComparisons[0].traces[0];trace.left.card='';trace.right.card='';renderCompare();});
   assert.match(await page.locator('.capture-trace > summary').innerText(),/×1 \/ ×1/);
   await page.evaluate(()=>{data.scenarios.push('undeclared');renderParityOverview();});

@@ -55,6 +55,24 @@ func TestCaptureNormalizesNullAnyValueVariants(t *testing.T) {
 		t.Fatalf("null AnyValue variants differ:\n%s\n%s", canonical(a), canonical(b))
 	}
 }
+func TestInternIndexesCanonicalMetadata(t *testing.T) {
+	items := []map[string]any{}
+	indexes := map[string]int{}
+	first := map[string]any{"name": "scope", "attributes": []any{map[string]any{"key": "b"}, map[string]any{"key": "a"}}}
+	equivalent := map[string]any{"attributes": []any{map[string]any{"key": "b"}, map[string]any{"key": "a"}}, "name": "scope"}
+	if got := intern(&items, indexes, first); got != 0 {
+		t.Fatalf("first metadata index = %d, want 0", got)
+	}
+	if got := intern(&items, indexes, equivalent); got != 0 {
+		t.Fatalf("equivalent metadata index = %d, want 0", got)
+	}
+	if got := intern(&items, indexes, map[string]any{"name": "other"}); got != 1 {
+		t.Fatalf("distinct metadata index = %d, want 1", got)
+	}
+	if len(items) != 2 || len(indexes) != 2 {
+		t.Fatalf("metadata interning mismatch: %d items, %d indexes", len(items), len(indexes))
+	}
+}
 func TestCaptureGroupingOccurrencesAndReorderedExports(t *testing.T) {
 	a, b, c, d := captureSpan(1, 1, 0, "GET /tags"), captureSpan(1, 2, 1, "db"), captureSpan(2, 3, 0, "GET /tags"), captureSpan(2, 4, 3, "db")
 	b["attributes"] = []any{map[string]any{"key": "query", "value": map[string]any{"stringValue": "first"}}}

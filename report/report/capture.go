@@ -190,15 +190,15 @@ func identity(v any, width int, optional bool) (string, error) {
 	}
 	return s, nil
 }
-func intern(items *[]map[string]any, v map[string]any) int {
+func intern(items *[]map[string]any, indexes map[string]int, v map[string]any) int {
 	key := canonical(v)
-	for i, x := range *items {
-		if canonical(x) == key {
-			return i
-		}
+	if i, ok := indexes[key]; ok {
+		return i
 	}
 	*items = append(*items, v)
-	return len(*items) - 1
+	i := len(*items) - 1
+	indexes[key] = i
+	return i
 }
 func metadataFields(v any, schema any, scope bool) map[string]any {
 	m := defaults(object(v), map[string]any{"attributes": []any{}, "droppedAttributesCount": "0"})
@@ -261,6 +261,8 @@ func semanticSpanProjection(d *CaptureDataset, index int, includeScope bool) map
 func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 	d = CaptureDataset{Key: receipt.Profile + "/" + receipt.Scenario, Profile: receipt.Profile, Scenario: receipt.Scenario, Revision: receipt.Revision, Outcome: receipt.Outcome}
 	d.Shape = ScenarioShape{Profile: d.Profile, Scenario: d.Scenario, ExactCounts: true, Scopes: map[string]int{}, Statuses: map[string]int{}}
+	resourceIndexes := map[string]int{}
+	scopeIndexes := map[string]int{}
 	fail := func(err error) CaptureDataset {
 		d.Diagnostics = append(d.Diagnostics, err.Error())
 		d.Shape.Traces = nil
@@ -313,8 +315,8 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 				if len(spans) == 0 {
 					continue
 				}
-				ri := intern(&d.Resources, metadataFields(rs["resource"], rs["schemaUrl"], false))
-				si := intern(&d.Scopes, metadataFields(ss["scope"], ss["schemaUrl"], true))
+				ri := intern(&d.Resources, resourceIndexes, metadataFields(rs["resource"], rs["schemaUrl"], false))
+				si := intern(&d.Scopes, scopeIndexes, metadataFields(ss["scope"], ss["schemaUrl"], true))
 				for _, span := range spans {
 					fields := object(span)
 					if fields == nil {
