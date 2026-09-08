@@ -50,6 +50,16 @@ type CaptureSpanMatch struct {
 
 func object(v any) map[string]any { m, _ := v.(map[string]any); return m }
 func array(v any) []any           { a, _ := v.([]any); return a }
+func repeatedField(v any, name string) ([]any, error) {
+	if v == nil {
+		return nil, nil
+	}
+	items, ok := v.([]any)
+	if !ok {
+		return nil, fmt.Errorf("unreadable %s", name)
+	}
+	return items, nil
+}
 func str(v any) string {
 	if v == nil {
 		return ""
@@ -208,24 +218,36 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 			continue
 		}
 		payload := object(normalizeWire(r["payload"]))
-		resources, ok := payload["resourceSpans"].([]any)
-		if !ok {
-			return fail(fmt.Errorf("unreadable resourceSpans"))
+		if payload == nil {
+			return fail(fmt.Errorf("unreadable trace payload"))
+		}
+		resources, err := repeatedField(payload["resourceSpans"], "resourceSpans")
+		if err != nil {
+			return fail(err)
 		}
 		for _, resource := range resources {
 			rs := object(resource)
-			ri := intern(&d.Resources, metadataFields(rs["resource"], rs["schemaUrl"], false))
-			groups, ok := rs["scopeSpans"].([]any)
-			if !ok {
-				return fail(fmt.Errorf("unreadable scopeSpans"))
+			if rs == nil {
+				return fail(fmt.Errorf("unreadable resourceSpan"))
+			}
+			groups, err := repeatedField(rs["scopeSpans"], "scopeSpans")
+			if err != nil {
+				return fail(err)
 			}
 			for _, group := range groups {
 				ss := object(group)
-				si := intern(&d.Scopes, metadataFields(ss["scope"], ss["schemaUrl"], true))
-				spans, ok := ss["spans"].([]any)
-				if !ok {
-					return fail(fmt.Errorf("unreadable spans"))
+				if ss == nil {
+					return fail(fmt.Errorf("unreadable scopeSpan"))
 				}
+				spans, err := repeatedField(ss["spans"], "spans")
+				if err != nil {
+					return fail(err)
+				}
+				if len(spans) == 0 {
+					continue
+				}
+				ri := intern(&d.Resources, metadataFields(rs["resource"], rs["schemaUrl"], false))
+				si := intern(&d.Scopes, metadataFields(ss["scope"], ss["schemaUrl"], true))
 				for _, span := range spans {
 					fields := object(span)
 					if fields == nil {

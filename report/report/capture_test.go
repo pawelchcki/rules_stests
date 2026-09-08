@@ -78,6 +78,18 @@ func TestCapturePartialAndDiagnostics(t *testing.T) {
 		})
 	}
 }
+func TestCaptureTreatsOmittedRepeatedTraceFieldsAsEmpty(t *testing.T) {
+	raw := []byte(`[
+		{"signal":"traces","payload":{}},
+		{"signal":"traces","payload":{"resourceSpans":null}},
+		{"signal":"traces","payload":{"resourceSpans":[{}, {"scopeSpans":null}, {"scopeSpans":[{}, {"spans":null}]}]}},
+		{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"kept"}]}]}]}}
+	]`)
+	d := DecodeCapture(ValidationReceipt{}, raw)
+	if len(d.Diagnostics) > 0 || len(d.Spans) != 1 || str(d.Spans[0].Fields["name"]) != "kept" {
+		t.Fatalf("empty trace wrappers discarded valid spans: %+v", d)
+	}
+}
 func TestCaptureLinksAndEventOrder(t *testing.T) {
 	s := captureSpan(1, 1, 0, "root")
 	s["events"] = []any{map[string]any{"name": "second"}, map[string]any{"name": "first"}}
