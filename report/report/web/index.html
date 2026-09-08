@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>OpenTelemetry instrumentation status</title>
+<title>OpenTelemetry implementation report</title>
 <style>
 __STYLE__
 </style>
@@ -11,19 +11,16 @@ __STYLE__
 <body>
 <nav class="top">
   <ul>
-    <li><a href="#overview">Instrumentation status</a></li>
-    <li><a href="#languages">Languages</a></li>
-    <li><a href="#coverage">Test coverage</a></li>
-    <li><a href="#compare">Compare traces</a></li>
-    <li><a href="#features">Upstream &amp; feature details</a></li>
+    <li><a href="#health">Implementation health</a></li>
+    <li><a href="#parity">RealWorld parity</a></li>
     <li><a href="#receipts">Evidence</a></li>
     <li><a href="#glossary">Glossary</a></li>
   </ul>
 </nav>
 
 <header>
-  <h1>OpenTelemetry instrumentation status</h1>
-  <p class="lede">What this build verified, which implementation gaps are documented, and what remains unknown.</p>
+  <h1>OpenTelemetry implementation report</h1>
+  <p class="lede">Implementation feature health and RealWorld instrumentation parity, with separate evidence and comparison views.</p>
 </header>
 
 <main>
@@ -45,21 +42,14 @@ __STYLE__
     <div class="language-grid" id="language-grid"></div>
   </section>
 
-  <section class="panel" id="coverage" hidden>
-    <h2 tabindex="-1">Test coverage</h2>
-    <label class="profile-picker">Implementation<select id="coverage-profile"></select></label>
-    <p class="section-note">Coverage describes which scenarios have telemetry checks and how detailed those checks are.
-      Saved expectations describe checks; receipts show the result in this build. Expected failures never verify a feature.</p>
-    <p id="coverage-summary"></p>
-    <div class="scroll"><table id="coverage-grid"></table></div>
-  </section>
-
   <section class="panel" id="compare" hidden>
-    <h2 tabindex="-1">Compare traces</h2>
-    <p class="section-note">Compare saved trace expectations, independently of results in this build. Differences do not indicate better or worse instrumentation. Traces are paired by root span, then spans are paired by kind and
-    normalized name. Scope is reported but never used for pairing, because scopes differ by
-    language by design.</p>
+    <h2 tabindex="-1">RealWorld parity</h2>
+    <p>Same RealWorld application and scenarios across tested implementation configurations.</p>
+    <div class="scroll"><table id="parity-overview"></table></div>
+    <p class="section-note">Structural correspondence pairs root structure, span kind, normalized name and child structure. Scope never determines pairing. Differences are neutral and do not change implementation health.</p>
     <div class="filters">
+      <label>Comparison source<select id="comparison-source"><option value="captured">Captured telemetry</option><option value="saved">Saved expectations</option></select></label>
+      <label>Field view<select id="field-view"><option value="semantic">Semantic differences</option><option value="raw">Raw fields and timing</option></select></label>
       <label>Left implementation<select id="left"></select></label>
       <label>Right implementation<select id="right"></select></label>
       <label>Scenario<select id="scenario"></select></label>
@@ -67,16 +57,27 @@ __STYLE__
       <label class="toggle"><input type="checkbox" id="differences-only"> Differences only</label>
       <label class="toggle"><input type="checkbox" id="hide-scope"> Hide scope differences</label>
     </div>
+    <div id="parity-scenarios"></div>
+    <p id="comparison-context"></p>
     <div class="compare-summary" id="compare-summary"></div>
     <div id="compare-body"></div>
     <details><summary>Scenario across all implementations</summary>
     <div class="scroll"><table id="scenario-overview"></table></div></details>
+  <details id="coverage"><summary>Scenario and check coverage</summary>
+    <h2 tabindex="-1">Test coverage</h2>
+    <label class="profile-picker">Implementation<select id="coverage-profile"></select></label>
+    <p class="section-note">Coverage describes which scenarios have telemetry checks and how detailed those checks are.
+      Saved expectations describe checks; receipts show the result in this build. Expected failures never verify a feature.</p>
+    <p id="coverage-summary"></p>
+    <div class="scroll"><table id="coverage-grid"></table></div>
+  </details>
   </section>
 
+
   <section class="panel" id="features" hidden>
-    <h2 tabindex="-1">Upstream &amp; feature details</h2>
-    <p class="section-note">Upstream support claims beside what this corpus verified, per
-    implementation. Verified states are produced only by executable proof plans.</p>
+    <h2 tabindex="-1">Implementation health</h2>
+    <p class="section-note">Checks defined, results from this build, and upstream support claims are distinct. Counts describe authored assertions and their associated test executions, not completeness against the specification. Configurations remain separate; applications and frameworks are supporting fixtures.</p>
+    <p>Failure attribution, specification interpretation evidence, and undocumented gaps: unavailable or unrecorded. Unknown does not mean zero defects. Upstream claims apply at their recorded language scope.</p>
     <details><summary>Language maturity and catalog sources</summary>
       <div class="meta" id="meta"></div><div class="scroll"><table id="maturity"></table></div>
     </details>
@@ -85,7 +86,8 @@ __STYLE__
       <label>Category<select id="category"><option value="">All categories</option></select></label>
       <label>Language<select id="language"><option value="">All languages</option></select></label>
       <label>Upstream support<select id="support"><option value="">Any support</option><option>supported</option><option>unsupported</option><option>n/a</option><option>unknown</option></select></label>
-      <label>Verification<select id="verification"><option value="">Any verification</option><option value="verified">Verified here</option><option value="known_gap">Documented gap</option><option value="not_exercised">Unknown</option><option value="not_applicable">Not applicable</option></select></label>
+      <label>Coverage<select id="check-coverage"><option value="">Any coverage</option><option value="defined">Checks defined</option><option value="none">No checks defined</option></select></label>
+      <label>Results from this build<select id="verification"><option value="">Any verification</option><option value="verified">Verified here</option><option value="known_gap">Documented gap</option><option value="not_exercised">Unknown</option><option value="not_applicable">Not applicable</option></select></label>
       <label>Evidence basis<select id="basis"><option value="">Any basis</option><option>observed</option><option>corroborated</option></select></label>
       <label>Search<input type="search" id="search" placeholder="feature name or id"></label>
       <label class="toggle"><input type="checkbox" id="verified-only"> Verified here only</label>

@@ -126,7 +126,12 @@ func alignedSpanMatchScore(left, right alignedSpan) int {
 	// An exact rendered row gets an extra bonus so one exact plus one differing
 	// pair wins over two partially differing pairs with the same field total.
 	const renderedFieldCount = 6
-	differenceCount := len(spanDiffs(left, right))
+	differenceCount := 0
+	for _, field := range spanDiffs(left, right) {
+		if field != "scope" {
+			differenceCount++
+		}
+	}
 	score += renderedFieldCount - differenceCount
 	if differenceCount == 0 {
 		score += renderedFieldCount + 1

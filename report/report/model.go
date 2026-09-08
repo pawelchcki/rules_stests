@@ -136,12 +136,13 @@ type SpanGroup struct {
 }
 
 type SpanNode struct {
-	Scope      string      `json:"scope"`
-	Kind       string      `json:"kind"`
-	Status     string      `json:"status"`
-	Name       string      `json:"name"`
-	HTTPStatus string      `json:"httpStatus"`
-	Children   []SpanGroup `json:"children,omitempty"`
+	Occurrences []int       `json:"occurrences,omitempty"`
+	Scope       string      `json:"scope"`
+	Kind        string      `json:"kind"`
+	Status      string      `json:"status"`
+	Name        string      `json:"name"`
+	HTTPStatus  string      `json:"httpStatus"`
+	Children    []SpanGroup `json:"children,omitempty"`
 }
 
 type CoverageCell struct {
@@ -210,14 +211,17 @@ type SpanMatch struct {
 }
 
 type ReportModel struct {
-	GeneratedFrom string                             `json:"generatedFrom"`
-	Metadata      CatalogMetadata                    `json:"metadata"`
-	Features      []Feature                          `json:"features"`
-	Manifests     []Manifest                         `json:"manifests"`
-	Verification  map[string]map[string]Verification `json:"verification"`
-	Scenarios     []string                           `json:"scenarios"`
-	Coverage      []CoverageCell                     `json:"coverage"`
-	Shapes        []ScenarioShape                    `json:"shapes"`
-	Receipts      []ValidationReceipt                `json:"receipts,omitempty"`
-	Comparisons   []Comparison                       `json:"comparisons"`
+	PlannedChecks      []PlannedCheck                     `json:"plannedChecks,omitempty"`
+	Captures           []CaptureDataset                   `json:"captures,omitempty"`
+	CaptureComparisons []CaptureComparison                `json:"captureComparisons,omitempty"`
+	GeneratedFrom      string                             `json:"generatedFrom"`
+	Metadata           CatalogMetadata                    `json:"metadata"`
+	Features           []Feature                          `json:"features"`
+	Manifests          []Manifest                         `json:"manifests"`
+	Verification       map[string]map[string]Verification `json:"verification"`
+	Scenarios          []string                           `json:"scenarios"`
+	Coverage           []CoverageCell                     `json:"coverage"`
+	Shapes             []ScenarioShape                    `json:"shapes"`
+	Receipts           []ValidationReceipt                `json:"receipts,omitempty"`
+	Comparisons        []Comparison                       `json:"comparisons"`
 }

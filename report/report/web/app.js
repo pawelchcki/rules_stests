@@ -107,11 +107,13 @@ function comparisonFor(left, right, scenario) {
 function readHash() {
   const raw = location.hash.replace(/^#/, '');
   const parts = raw.split('?');
-  return { section: parts[0] || 'overview', params: new URLSearchParams(parts[1] || '') };
+  return { section: parts[0] || 'health', params: new URLSearchParams(parts[1] || '') };
 }
 function writeHash(section, params, replace = false) {
   const query = params && params.toString();
-  const next = '#' + section + (query ? '?' + query : '');
+  const publicSection = section === 'features' ? 'health' : section === 'compare' ? 'parity' : section;
+  if (Object.hasOwn(destinationState,publicSection)) destinationState[publicSection] = query || '';
+  const next = '#' + publicSection + (query ? '?' + query : '');
   if (location.hash !== next) {
     history[replace ? 'replaceState' : 'pushState'](null, '', next);
     updateNavigation(section);
@@ -120,14 +122,13 @@ function writeHash(section, params, replace = false) {
 const defaultProfile = (data.manifests.find((m) => (data.receipts || []).some((r) =>
   r.profile === m.profile && r.outcome === 'verified')) || data.manifests[0] || {}).profile || '';
 let selectedProfile = defaultProfile;
+const destinationState = {health: '', parity: ''};
 function updateNavigation(section) {
+  const destination = section === 'features' ? 'health' : section === 'compare' ? 'parity' : section;
   for (const link of document.querySelectorAll('nav.top a')) {
-    const destination = link.hash.split('?')[0].slice(1);
-    if (destination === section) link.setAttribute('aria-current', 'page');
-    else link.removeAttribute('aria-current');
-    if (destination === 'overview' || destination === 'coverage') {
-      link.hash = destination + '?' + new URLSearchParams({ profile: selectedProfile });
-    }
+    const name = link.hash.split('?')[0].slice(1);
+    if (name === destination) link.setAttribute('aria-current','page'); else link.removeAttribute('aria-current');
+    if (Object.hasOwn(destinationState,name)) link.hash=name+(destinationState[name]?'?'+destinationState[name]:'');
   }
 }
 function verificationFor(feature, profile) {
@@ -390,6 +391,14 @@ function renderScenarioOverview(scenario) {
 }
 
 function renderCompare() {
+  renderParityOverview();
+  renderScenarioOverview($('scenario').value);
+  $('scenario-overview').closest('details').hidden = $('comparison-source').value === 'captured';
+  renderParityScenarios();
+  renderCoverageGrid();
+  if ($('comparison-source').value === 'captured') {renderCaptureComparison(); return;}
+  $('comparison-context').textContent = 'Saved expectations · authored checks, independently of captures and results from this build.';
+
   const left = $('left').value;
   const right = $('right').value;
   const scenario = $('scenario').value;
@@ -466,7 +475,7 @@ function renderCompare() {
 }
 
 // ------------------------------------------------------------ feature matrix
-const collapsedCategories = new Set(categoryNames());
+const collapsedCategories = new Set();
 
 function renderFeatures() {
   const category = $('category').value;
@@ -480,18 +489,22 @@ function renderFeatures() {
   const upstreamLanguages = language ? [language] : [...new Set(manifests.map((m) => m.language))];
 
   const matches = data.features.filter((feature) => {
+    if (readHash().params.get('feature') && readHash().params.get('feature') !== feature.id) return false;
+    const coverage = $('check-coverage').value;
+    if (coverage && !manifests.some(m => (checksFor(m.profile,feature.id).length > 0) === (coverage === 'defined'))) return false;
     if (category && feature.category !== category) return false;
     if (search && !(feature.name.toLowerCase().includes(search) || feature.id.toLowerCase().includes(search))) return false;
     if (support && !upstreamLanguages.some((lang) => ((feature.support || {})[lang] || 'unknown') === support)) return false;
-    const states = manifests.map((m) => (data.verification[feature.id] || {})[m.profile] || { state: 'not_exercised' });
-    if ((verification || basis) && !states.some((v) =>
-      (!verification || v.state === verification) && (!basis || v.basis === basis))) return false;
+    if ((verification || basis) && !manifests.some(m => {
+      const v=verificationFor(feature,m.profile);
+      return (!verification || v.state===verification) && (!basis || v.basis===basis || checksFor(m.profile,feature.id).some(c=>c.basis===basis));
+    })) return false;
     return true;
   });
 
   const header = '<thead><tr><th>Feature</th><th>Upstream</th>' + manifests.map((m) => {
     const counts = verificationCounts(m.profile);
-    return '<th>' + esc(m.displayName) + '<br><small>' + counts.verified + ' verified</small></th>';
+    return '<th>' + esc(m.language + ' · ' + m.instrumentationVersion) + '<br><small>' + esc(m.profile) + '</small><br><small>' + counts.verified + ' verified</small></th>';
   }).join('') + '</tr></thead>';
 
   const byCategory = new Map();
@@ -520,15 +533,7 @@ function renderFeatures() {
     body += features.map((feature) => {
       const cells = manifests.map((manifest) => {
         const state = (data.verification[feature.id] || {})[manifest.profile] || { state: 'not_exercised', evidence: [] };
-        const evidence = (state.evidence || []).map((item) =>
-          '<a class="evidence" href="' + esc(item.href) + '">' + esc(item.label) + '</a>').join('');
-        const basisBadge = state.basis ? ' ' + badge('basis', state.basis) : '';
-        const assertion = state.assertion
-          ? '<details><summary class="assertion">assertion</summary><code>' + esc(state.assertion) + '</code>' +
-            (state.scenarios && state.scenarios.length ? '<div class="assertion">' + esc(state.scenarios.join(', ')) + '</div>' : '') +
-            '</details>'
-          : '';
-        return '<td>' + badge('verification', state.state) + basisBadge + assertion + evidence + '</td>';
+        return '<td>' + healthCell(feature,manifest,state) + '</td>';
       }).join('');
       const upstream = upstreamLanguages.map((lang) =>
         '<div>' + esc(lang) + ' ' + badge('support', (feature.support || {})[lang] || 'unknown') + '</div>').join('');
@@ -574,7 +579,7 @@ function renderReceipts() {
       badge('basis', proof.basis) + ' <span class="muted">' + esc(proof.result) + '</span></li>').join('');
     return '<tr><td>' + esc(manifest ? manifest.displayName : receipt.profile) +
       '<div class="muted">' + esc(manifest ? (manifest.shortLabel || '') : '') + '</div></td>' +
-      '<td><a href="#compare?' + params.toString() + '">' + esc(receipt.scenario) + '</a></td>' +
+      '<td><a href="#parity?' + params.toString() + '">' + esc(receipt.scenario) + '</a></td>' +
       '<td>' + badge('receipt', receipt.outcome) +
       (receipt.xfailReason ? '<div class="muted">' + esc(receipt.xfailReason) + '</div>' : '') + '</td>' +
       '<td>' + badge('coverage', receipt.validationMode === 'exact' ? 'exact_shape' : 'contract_only') + '</td>' +
@@ -629,19 +634,25 @@ function syncControlsFromHash() {
   // Retain direct table anchors as well as the six view routes.
   const target = $(state.section);
   const parent = target && target.closest('section.panel');
-  const section = VIEWS.includes(state.section) ? state.section : parent ? parent.id : 'overview';
+  const aliases = {health:'features', overview:'features', status:'features', language:'features', languages:'features', parity:'compare', compare:'compare', coverage:'compare', 'coverage-grid':'compare', 'scenario-overview':'compare'};
+  const section = aliases[state.section] || (VIEWS.includes(state.section) ? state.section : parent ? parent.id : 'features');
+  const destination = section === 'features' ? 'health' : section === 'compare' ? 'parity' : section;
+  if (Object.hasOwn(destinationState,destination)) destinationState[destination] = params.toString();
   if (manifestByProfile.has(params.get('profile'))) selectedProfile = params.get('profile');
   else if (section === 'overview' || section === 'coverage') selectedProfile = defaultProfile;
   $('profile').value = selectedProfile;
   $('coverage-profile').value = selectedProfile;
   if (section === 'compare') {
+    $('comparison-source').value = params.get('source') || (['compare','compare-body','compare-summary','scenario-overview'].includes(state.section) ? 'saved' : 'captured');
+    destinationState.parity = new URLSearchParams({...Object.fromEntries(params), source:$('comparison-source').value}).toString();
+    $('field-view').value = params.get('view') === 'raw' ? 'raw' : 'semantic';
     $('left').value = manifestByProfile.has(params.get('left')) ? params.get('left') : (data.manifests[0] || {}).profile || '';
     $('right').value = manifestByProfile.has(params.get('right')) ? params.get('right') : (data.manifests[1] || data.manifests[0] || {}).profile || '';
     $('scenario').value = data.scenarios.includes(params.get('scenario')) ? params.get('scenario') : data.scenarios[0] || '';
     $('differences-only').checked = params.get('differencesOnly') === '1';
     $('hide-scope').checked = params.get('hideScope') === '1';
   } else if (section === 'features') {
-    for (const id of ['category', 'language', 'support', 'verification', 'basis']) $(id).value = params.get(id) || '';
+    for (const id of ['category', 'language', 'support', 'verification', 'basis', 'check-coverage']) $(id).value = params.get(id) || '';
     $('feature-profile').value = manifestByProfile.has(params.get('profile')) ? params.get('profile') : '';
     $('search').value = params.get('q') || '';
     if (params.get('verifiedOnly') === '1') $('verification').value = 'verified';
@@ -654,24 +665,29 @@ function syncControlsFromHash() {
 }
 function applyHash(focus = true) {
   const section = syncControlsFromHash();
-  for (const id of VIEWS) $(id).hidden = id !== section;
+  document.documentElement.style.setProperty('--nav-height',document.querySelector('nav.top').offsetHeight+'px');
+  for (const id of VIEWS) if (id !== 'coverage') $(id).hidden = id !== section;
+  if (readHash().section === 'coverage' || readHash().section === 'coverage-grid') $('coverage').open = true;
   if (section === 'overview') renderOverview();
   else if (section === 'languages') renderLanguages();
   else if (section === 'coverage') renderCoverageGrid();
   else if (section === 'compare') renderCompare();
   else if (section === 'features') renderFeatures();
   const target = $(readHash().section);
-  if (target && target.id !== section) {
+  if (target && target.id !== section && target.closest('section.panel')?.id === section) {
     for (let parent = target.parentElement; parent; parent = parent.parentElement) {
       if (parent.tagName === 'DETAILS') parent.open = true;
     }
     target.scrollIntoView();
   } else if (focus) {
-    $(section).querySelector('h2').focus();
+    $(section).querySelector('h2').focus({preventScroll:true});
+    $(section).scrollIntoView({block:'start'});
   }
 }
 function compareChanged() {
   const params = new URLSearchParams({ left: $('left').value, right: $('right').value, scenario: $('scenario').value });
+  params.set('source',$('comparison-source').value);
+  params.set('view',$('field-view').value);
   if ($('differences-only').checked) params.set('differencesOnly', '1');
   if ($('hide-scope').checked) params.set('hideScope', '1');
   writeHash('compare', params);
@@ -680,7 +696,7 @@ function compareChanged() {
 function featuresChanged(replace = false) {
   const params = new URLSearchParams();
   for (const [key, id] of [['profile', 'feature-profile'], ['category', 'category'], ['language', 'language'],
-    ['support', 'support'], ['verification', 'verification'], ['basis', 'basis'], ['q', 'search']]) {
+    ['support', 'support'], ['verification', 'verification'], ['basis', 'basis'], ['q', 'search'], ['check-coverage','check-coverage']]) {
     if ($(id).value) params.set(key, $(id).value);
   }
   if ($('feature-profile').value) selectedProfile = $('feature-profile').value;
@@ -700,17 +716,17 @@ function setup() {
     selectedProfile = $(id).value;
     const params = readHash().params;
     params.set('profile', selectedProfile);
-    writeHash(id === 'profile' ? 'overview' : 'coverage', params);
+    writeHash(id === 'profile' ? 'features' : 'compare', params);
     applyHash(false);
   });
-  for (const id of ['left', 'right', 'scenario', 'differences-only', 'hide-scope']) $(id).addEventListener('change', compareChanged);
+  for (const id of ['left', 'right', 'scenario', 'differences-only', 'hide-scope','comparison-source','field-view']) $(id).addEventListener('change', compareChanged);
   $('swap').addEventListener('click', () => {
     const left = $('left').value;
     $('left').value = $('right').value;
     $('right').value = left;
     compareChanged();
   });
-  for (const id of ['feature-profile', 'category', 'language', 'support', 'basis']) $(id).addEventListener('change', () => featuresChanged());
+  for (const id of ['feature-profile', 'category', 'language', 'support', 'basis','check-coverage']) $(id).addEventListener('change', () => featuresChanged());
   $('verification').addEventListener('change', () => {
     $('verified-only').checked = $('verification').value === 'verified';
     featuresChanged();
@@ -733,4 +749,169 @@ function setup() {
   renderReceipts();
   applyHash(false);
 }
+// Captured data is stored once; comparisons contain occurrence references only.
+const captureByKey = new Map((data.captures || []).map((d) => [d.key, d]));
+const plannedByKey = new Map();
+for (const check of data.plannedChecks || []) {
+  const key = check.profile + ' ' + check.featureId;
+  if (!plannedByKey.has(key)) plannedByKey.set(key, []);
+  plannedByKey.get(key).push(check);
+}
+function checksFor(profile, feature) { return plannedByKey.get(profile + ' ' + feature) || []; }
+function healthCell(feature, manifest, state) {
+  const checks = checksFor(manifest.profile, feature.id);
+  const counts = checks.reduce((a,c) => [a[0]+c.passed,a[1]+c.expectedFailure,a[2]+c.noResult], [0,0,0]);
+  const params = new URLSearchParams({profile:manifest.profile, feature:feature.id});
+  return badge('verification', state.state) + '<p>' + checks.length + ' assertions defined</p><p>' + counts[0] +
+    ' passed / ' + counts[1] + ' expected failure / ' + counts[2] + ' no result</p>' +
+    '<details data-feature="' + esc(feature.id) + '"' + (readHash().params.get('feature') === feature.id ? ' open' : '') +
+    '><summary>Checks and evidence</summary><p>Test fixture: RealWorld · ' + esc(manifest.framework) +
+    '</p><p>Configuration: ' + esc(manifest.profile) + ' · ' + esc(manifest.instrumentationVersion) + '</p>' +
+    '<a href="#health?' + esc(params.toString()) + '">Link to this feature cell</a>' +
+    checks.map(c => '<p><code>' + esc(c.assertion) + '</code> ' + '<span class="badge state-neutral">Planned basis: '+esc(c.basis)+'</span></p>' +
+      c.evidence.map(e => '<a class="evidence" href="' + esc(e.href) + '">' + esc(e.label) + '</a>').join('') +
+      '<ul>' + c.executions.map(e => '<li>' + esc(e.scenario) + ': ' + badge('receipt',e.outcome) +
+        (e.reason ? ' · ' + esc(e.reason) + ' · Individual feature outcome unknown.' : '') + '</li>').join('') + '</ul>').join('') +
+    (!checks.length ? '<p>No authored checks recorded for this feature.</p>' : '') + featureDetails(feature,state) + '</details>';
+}
+function stable(value) {
+  if (Array.isArray(value)) return '[' + value.map(stable).join(',') + ']';
+  if (value && typeof value === 'object') return '{' + Object.keys(value).sort().map(k => JSON.stringify(k)+':'+stable(value[k])).join(',') + '}';
+  return JSON.stringify(value);
+}
+function captureFields(dataset, index, raw, hideScope) {
+  const span = dataset.spans[index];
+  const fields = {...span.fields};
+  if (!raw) {
+    for (const key of ['traceId','spanId','parentSpanId','startTimeUnixNano','endTimeUnixNano']) delete fields[key];
+    fields.events = (fields.events || []).map(e => { const x={...e}; delete x.timeUnixNano; return x; });
+    fields.links = (fields.links || []).map((l,i) => { const x={...l}; delete x.traceId; delete x.spanId; x.relationship=span.linkTargets[i]; return x; });
+    fields.parentRelationship = span.parent;
+  }
+  const result = {span:fields, resource:dataset.resources[span.resource]};
+  if (!hideScope) result.scope = dataset.scopes[span.scope];
+  return result;
+}
+function flattenFields(value, path='', out={}) {
+  if (value && typeof value==='object' && !Array.isArray(value) && Object.keys(value).length) {
+    for (const key of Object.keys(value).sort()) flattenFields(value[key],path ? path+'.'+key : key,out);
+  } else out[path]=value;
+  return out;
+}
+function fieldVariants(dataset, refs, raw, hideScope) {
+  const result={};
+  for (const index of refs || []) {
+    const fields=flattenFields(captureFields(dataset,index,raw,hideScope));
+    for (const [key,value] of Object.entries(fields)) {
+      if (!result[key]) result[key]=new Map();
+      const token=stable(value);
+      const entry=result[key].get(token) || {value,refs:[]};entry.refs.push(index);result[key].set(token,entry);
+    }
+  }
+  return result;
+}
+function variantSignature(variants) {
+  return [...(variants || new Map()).entries()].map(([key,v])=>[key,v.refs.length]).sort((a,b)=>a[0].localeCompare(b[0]));
+}
+function captureRowDiff(l,r,row,raw,hideScope) {
+  const lv=l ? fieldVariants(l,row.left,raw,hideScope) : {}, rv=r ? fieldVariants(r,row.right,raw,hideScope) : {};
+  const keys=[...new Set([...Object.keys(lv),...Object.keys(rv)])].sort();
+  return {lv,rv,keys,diffs:keys.filter(k=>stable(variantSignature(lv[k]))!==stable(variantSignature(rv[k])))};
+}
+function parityLink(extra={}) {
+  const params=new URLSearchParams({left:$('left').value,right:$('right').value,scenario:$('scenario').value,source:$('comparison-source').value,view:$('field-view').value});
+  if ($('hide-scope').checked) params.set('hideScope','1');
+  if ($('differences-only').checked) params.set('differencesOnly','1');
+  for (const [k,v] of Object.entries(extra)) params.set(k,v);
+  return '#parity?'+params;
+}
+function renderParityOverview() {
+  $('parity-overview').innerHTML='<thead><tr><th>Scenario · Captured telemetry availability</th>'+data.manifests.map(m=>'<th>'+esc(m.shortLabel || m.displayName)+'</th>').join('')+'</tr></thead><tbody>'+data.scenarios.map(s=>'<tr><th>'+esc(s)+'</th>'+data.manifests.map(m=>{
+    const d=captureByKey.get(m.profile+'/'+s),r=receiptFor(m.profile,s);
+    return '<td><a href="'+esc(parityLink({left:m.profile,scenario:s,source:'captured'}))+'">'+(d ? d.diagnostics ? 'Comparison diagnostic' : d.shape.traceCount+' traces / '+d.spans.length+' spans' : 'Capture unavailable')+'</a><br>'+badge('receipt',r ? r.outcome : 'missing')+'</td>';
+  }).join('')+'</tr>').join('')+'</tbody>';
+}
+function capturePair(left,right,scenario) {
+  const direct=(data.captureComparisons || []).find(c=>c.scenario===scenario && c.left===left+'/'+scenario && c.right===right+'/'+scenario);
+  if (direct) return direct.traces;
+  const reverse=(data.captureComparisons || []).find(c=>c.scenario===scenario && c.right===left+'/'+scenario && c.left===right+'/'+scenario);
+  if (reverse) return reverse.traces.map(t=>({left:t.right,right:t.left,spans:t.spans.map(s=>({depth:s.depth,left:s.right,right:s.left}))}));
+  // One side remains inspectable even when no corresponding capture exists.
+  const traces=[];
+  for (const side of ['left','right']) {
+    const d=captureByKey.get((side==='left'?left:right)+'/'+scenario);
+    if (!d || d.diagnostics) continue;
+    for (const [index,t] of (d.shape.traces || []).entries()) {
+      const rows=[];
+      const walk=(groups,depth)=>{for (const g of groups || []) {rows.push({depth,[side]:g.span.occurrences});walk(g.span.children,depth+1);}};
+      walk(t.roots,0);traces.push({[side]:{index,label:'Trace group '+(index+1),card:'×'+t.count,coverage:t.coverage},spans:rows});
+    }
+  }
+  return traces;
+}
+function renderCaptureComparison() {
+  const left=$('left').value,right=$('right').value,scenario=$('scenario').value;
+  const l=captureByKey.get(left+'/'+scenario),r=captureByKey.get(right+'/'+scenario);
+  const raw=$('field-view').value==='raw',hideScope=$('hide-scope').checked,differencesOnly=$('differences-only').checked;
+  $('comparison-context').textContent='Captured telemetry · '+(raw?'Raw fields and timing':'Semantic differences: literal IDs and absolute timestamps excluded; parent/link relationships retained')+'. Structural correspondence is not a health verdict.';
+  const context=(d,p)=>'<p><strong>'+esc(profileLabel(p))+'</strong>: '+(d ? 'revision <code>'+esc(d.revision)+'</code> · '+badge('receipt',d.outcome)+(receiptFor(p,scenario)?.xfailReason ? ' · '+esc(receiptFor(p,scenario).xfailReason) : '')+(d.diagnostics ? '<p>'+esc(d.diagnostics.join('; '))+'</p>' : '') : 'Capture unavailable: '+(coverageState(p,scenario)==='excluded' ? 'scenario is not declared for this configuration.' : 'no accepted capture from this build.'))+'</p>';
+  if (left===right) { $('compare-summary').innerHTML='';$('compare-body').innerHTML='<p>Choose two different implementations to compare.</p>';return; }
+  const traces=capturePair(left,right,scenario);
+  let differing=0,matched=0,only=0;
+  const prepared=traces.map(t=>({...t,spans:t.spans.map(row=>{const result=captureRowDiff(l,r,row,raw,hideScope);if (row.left && row.right) {matched++;if(result.diffs.length) differing++;} else only++;return {...row,...result,kind:row.left&&row.right?'matched':row.left?'left_only':'right_only'};})}));
+  $('compare-summary').textContent=matched+' corresponding span groups · '+differing+' differing · '+only+' one-sided';
+  $('compare-body').innerHTML=context(l,left)+context(r,right)+[l,r].filter(d=>d?.diagnostics && d.spans?.length).map(d=>'<details data-diagnostic="'+esc(d.key)+'"><summary>Inspect decoded spans without topology · '+esc(profileLabel(d.profile))+'</summary><div></div></details>').join('')+prepared.map((t,ti)=>{
+    const rows=differencesOnly?differenceRows(t.spans,false):t.spans;
+    const traceDiff=!t.left || !t.right || t.left.card!==t.right.card || t.left.coverage!==t.right.coverage;
+    if (!rows.length && !traceDiff) return '';
+    return '<details class="capture-trace" data-trace="'+ti+'"><summary>Trace group '+(ti+1)+' · '+esc((t.left?.card || '—')+' / '+(t.right?.card || '—'))+' · '+esc((t.left?.coverage || 'absent')+' / '+(t.right?.coverage || 'absent'))+'</summary><div class="capture-tree"></div></details>';
+  }).join('')+(!traces.length?'<p>No trace topology available for comparison.</p>':'');
+  for (const detail of $('compare-body').querySelectorAll('[data-diagnostic]')) detail.addEventListener('toggle',()=>{
+    if (!detail.open || detail.dataset.loaded) return;detail.dataset.loaded='1';
+    const d=captureByKey.get(detail.dataset.diagnostic);
+    detail.querySelector('div').innerHTML=d.spans.map((s,i)=>'<details><summary>Occurrence '+i+'</summary><pre>'+esc(JSON.stringify(captureFields(d,i,true,false),null,2))+'</pre></details>').join('');
+  });
+  for (const detail of $('compare-body').querySelectorAll('[data-trace]')) {
+    const ti=Number(detail.dataset.trace),t=prepared[ti];
+    detail.addEventListener('toggle',()=>{
+      if (!detail.open || detail.dataset.loaded) return; detail.dataset.loaded='1';
+      const rows=differencesOnly?differenceRows(t.spans,false):t.spans;
+      detail.querySelector('.capture-tree').innerHTML='<a href="'+esc(parityLink({trace:ti}))+'">Link to trace group</a><table><thead><tr><th>Span structure</th><th>Left / right occurrences</th><th>Fields</th></tr></thead><tbody>'+rows.map(row=>{
+        const ri=t.spans.indexOf(row),ref=row.left?.[0] ?? row.right?.[0],ds=row.left?l:r;
+        return '<tr><td style="padding-left:'+(10+row.depth*18)+'px">'+esc(ds.spans[ref].fields.kind)+' · '+esc(ds.spans[ref].fields.name)+'</td><td>'+(row.left?.length || 0)+' / '+(row.right?.length || 0)+'</td><td><details data-row="'+ri+'"><summary>'+row.diffs.length+' field differences · '+(row.kind==='matched'?'structural correspondence':'one side only')+'</summary><div></div></details></td></tr>';
+      }).join('')+'</tbody></table>';
+      for (const cell of detail.querySelectorAll('[data-row]')) {
+        const ri=Number(cell.dataset.row),row=t.spans[ri];
+        cell.addEventListener('toggle',()=>{
+          if (!cell.open || cell.dataset.loaded) return;cell.dataset.loaded='1';
+          const variants=(v,d)=>[...(v || new Map()).values()].map(x=>'<pre>'+esc(JSON.stringify(x.value,null,2))+'</pre><details data-capture="'+esc(d.key)+'" data-refs="'+x.refs.join(',')+'"><summary>×'+x.refs.length+' · Occurrence references</summary><div class="occurrence-buttons"></div></details>').join('') || 'not present';
+          cell.querySelector('div').innerHTML='<a href="'+esc(parityLink({trace:ti,row:ri}))+'">Link to span fields</a><div class="capture-field-scroll"><table class="capture-fields"><thead><tr><th>Field</th><th>'+esc(profileLabel(left))+'</th><th>'+esc(profileLabel(right))+'</th></tr></thead><tbody>'+row.keys.filter(k=>!differencesOnly || row.diffs.includes(k)).map(k=>'<tr><th>'+esc(k)+(row.diffs.includes(k)?' · differs':'')+'</th><td>'+variants(row.lv[k],l)+'</td><td>'+variants(row.rv[k],r)+'</td></tr>').join('')+'</tbody></table></div><div class="occurrence-detail"></div>';
+          for (const occurrence of cell.querySelectorAll('[data-refs]')) occurrence.addEventListener('toggle',()=>{
+            if (!occurrence.open || occurrence.dataset.loaded) return;occurrence.dataset.loaded='1';
+            occurrence.querySelector('div').innerHTML=occurrence.dataset.refs.split(',').map(i=>'<button type="button" data-occurrence="'+i+'">'+i+'</button>').join(' ');
+            for (const b of occurrence.querySelectorAll('button')) b.addEventListener('click',()=>{
+              const ds=captureByKey.get(occurrence.dataset.capture),i=Number(b.dataset.occurrence);
+              cell.querySelector('.occurrence-detail').innerHTML='<h4>Occurrence '+i+' · original IDs and timing</h4><pre>'+esc(JSON.stringify(captureFields(ds,i,true,false),null,2))+'</pre>';
+            });
+          });
+        });
+        if (readHash().params.get('row')===String(ri) && readHash().params.get('trace')===String(ti)) cell.open=true;
+      }
+    });
+    if (readHash().params.get('trace')===String(ti)) detail.open=true;
+  }
+}
+function renderParityScenarios() {
+  const l=$('left').value,r=$('right').value,raw=$('field-view').value==='raw',hide=$('hide-scope').checked;
+  $('parity-scenarios').innerHTML='<details><summary>Scenario-level differences for selected implementations</summary><ul>'+data.scenarios.map(s=>{
+    let label='Saved expectations';
+    if ($('comparison-source').value==='captured') {
+      const ld=captureByKey.get(l+'/'+s),rd=captureByKey.get(r+'/'+s);
+      if (!ld || !rd || ld.diagnostics || rd.diagnostics) label='comparison unavailable';
+      else {let n=0;for(const t of capturePair(l,r,s)) {if(!t.left || !t.right || t.left.card!==t.right.card || t.left.coverage!==t.right.coverage)n++;for(const row of t.spans) if(!row.left || !row.right || captureRowDiff(ld,rd,row,raw,hide).diffs.length)n++;}label=n+' differing groups';}
+    }
+    return '<li><a href="'+esc(parityLink({scenario:s}))+'">'+esc(s)+'</a> · '+label+'</li>';
+  }).join('')+'</ul></details>';
+}
+
 setup();

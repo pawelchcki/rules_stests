@@ -183,7 +183,7 @@ func TestRenderHTMLIsSelfContainedAndEscapesData(t *testing.T) {
 	if strings.Contains(text, "</script><script>alert") {
 		t.Fatal("embedded JSON can terminate its script element")
 	}
-	if !strings.Contains(text, "OpenTelemetry instrumentation status") || !strings.Contains(text, "application/json") {
+	if !strings.Contains(text, "OpenTelemetry implementation report") || !strings.Contains(text, "application/json") {
 		t.Fatal("missing report shell or embedded model")
 	}
 	if strings.Contains(text, "<link rel=") || strings.Contains(text, "<script src=") {
