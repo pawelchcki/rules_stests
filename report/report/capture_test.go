@@ -90,6 +90,15 @@ func TestCaptureTreatsOmittedRepeatedTraceFieldsAsEmpty(t *testing.T) {
 		t.Fatalf("empty trace wrappers discarded valid spans: %+v", d)
 	}
 }
+func TestCaptureRejectsCollidingWireFieldSpellings(t *testing.T) {
+	raw := []byte(`[{"signal":"traces","payload":{"resource_spans":[],"resourceSpans":[{"scopeSpans":[]}]}}]`)
+	for i := 0; i < 20; i++ {
+		d := DecodeCapture(ValidationReceipt{}, raw)
+		if len(d.Diagnostics) != 1 || !strings.Contains(d.Diagnostics[0], "duplicate OTLP JSON field spellings") {
+			t.Fatalf("wire-field collision was not deterministic: %+v", d)
+		}
+	}
+}
 func TestCaptureLinksAndEventOrder(t *testing.T) {
 	s := captureSpan(1, 1, 0, "root")
 	s["events"] = []any{map[string]any{"name": "second"}, map[string]any{"name": "first"}}
@@ -133,6 +142,21 @@ func TestCapturePreservesSharedCapturedLinkTargets(t *testing.T) {
 	}
 	if strings.Contains(distinct.Spans[2].LinkTargets[0], "shared target") || strings.Contains(distinct.Spans[3].LinkTargets[0], "shared target") {
 		t.Fatalf("distinct captured targets were conflated: %+v", distinct.Spans)
+	}
+}
+func TestCapturePreservesCapturedParentOccurrenceIdentity(t *testing.T) {
+	span := func(trace, id, parent int, name, value string) map[string]any {
+		s := captureSpan(trace, id, parent, name)
+		s["attributes"] = []any{map[string]any{"key": "variant", "value": map[string]any{"stringValue": value}}}
+		return s
+	}
+	left := decodedFixture(t, "left", span(1, 1, 0, "parent", "A"), span(1, 2, 1, "child", "X"), span(2, 1, 0, "parent", "B"), span(2, 2, 1, "child", "Y"))
+	right := decodedFixture(t, "right", span(1, 1, 0, "parent", "A"), span(1, 2, 1, "child", "Y"), span(2, 1, 0, "parent", "B"), span(2, 2, 1, "child", "X"))
+	if left.Spans[1].Parent != right.Spans[1].Parent {
+		t.Fatalf("the same semantic parent was not stable: %q != %q", left.Spans[1].Parent, right.Spans[1].Parent)
+	}
+	if left.Spans[1].Parent == right.Spans[3].Parent {
+		t.Fatalf("child X was reassigned without changing its parent relationship: %q", left.Spans[1].Parent)
 	}
 }
 func TestPlannedChecksDoNotInflateVerification(t *testing.T) {

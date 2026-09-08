@@ -81,16 +81,20 @@ func defaults(m map[string]any, values map[string]any) map[string]any {
 
 // Only protocol field spellings are normalized. Attribute names live in `key`
 // values and are never rewritten. Decimal strings preserve 64-bit precision in JS.
-func normalizeWire(v any) any {
+func normalizeWire(v any) (any, error) {
 	switch v := v.(type) {
 	case json.Number:
-		return v.String()
+		return v.String(), nil
 	case []any:
 		out := make([]any, len(v))
 		for i, c := range v {
-			out[i] = normalizeWire(c)
+			var err error
+			out[i], err = normalizeWire(c)
+			if err != nil {
+				return nil, err
+			}
 		}
-		return out
+		return out, nil
 	case map[string]any:
 		out := map[string]any{}
 		for k, c := range v {
@@ -101,17 +105,24 @@ func normalizeWire(v any) any {
 					key += strings.ToUpper(p[:1]) + p[1:]
 				}
 			}
-			out[key] = normalizeWire(c)
+			if _, exists := out[key]; exists {
+				return nil, fmt.Errorf("duplicate OTLP JSON field spellings for %q", key)
+			}
+			value, err := normalizeWire(c)
+			if err != nil {
+				return nil, err
+			}
+			out[key] = value
 		}
 		// prost's AnyValue wraps the oneof in an additional `value` object.
 		if len(out) == 1 {
 			if value, exists := out["value"]; exists && value == nil {
-				return map[string]any{}
+				return map[string]any{}, nil
 			}
 			if inner := object(out["value"]); inner != nil {
 				for k := range inner {
 					if strings.HasSuffix(k, "Value") {
-						return inner
+						return inner, nil
 					}
 				}
 			}
@@ -143,9 +154,9 @@ func normalizeWire(v any) any {
 			}
 			out["bytesValue"] = base64.StdEncoding.EncodeToString(raw)
 		}
-		return out
+		return out, nil
 	default:
-		return v
+		return v, nil
 	}
 }
 func enumValue(v any, prefix string, names []string) string {
@@ -193,6 +204,45 @@ func metadataFields(v any, schema any, scope bool) map[string]any {
 	return map[string]any{"metadata": m, "schemaUrl": str(schema)}
 }
 
+func semanticSpanProjection(d *CaptureDataset, index int) map[string]any {
+	span := d.Spans[index]
+	fields := map[string]any{}
+	for key, value := range span.Fields {
+		switch key {
+		case "traceId", "spanId", "parentSpanId", "startTimeUnixNano", "endTimeUnixNano", "events", "links":
+			continue
+		default:
+			fields[key] = value
+		}
+	}
+	events := []any{}
+	for _, value := range array(span.Fields["events"]) {
+		event := map[string]any{}
+		for key, field := range object(value) {
+			if key != "timeUnixNano" {
+				event[key] = field
+			}
+		}
+		events = append(events, event)
+	}
+	fields["events"] = events
+	links := []any{}
+	for i, value := range array(span.Fields["links"]) {
+		link := map[string]any{}
+		for key, field := range object(value) {
+			if key != "traceId" && key != "spanId" {
+				link[key] = field
+			}
+		}
+		if i < len(span.LinkTargets) {
+			link["relationship"] = span.LinkTargets[i]
+		}
+		links = append(links, link)
+	}
+	fields["links"] = links
+	return map[string]any{"span": fields, "resource": d.Resources[span.Resource], "scope": d.Scopes[span.Scope]}
+}
+
 // DecodeCapture handles trace readability errors as diagnostics. The assembler
 // has already checked these bytes against the accepted receipt digest.
 func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
@@ -217,7 +267,11 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 		if str(r["signal"]) != "traces" {
 			continue
 		}
-		payload := object(normalizeWire(r["payload"]))
+		normalized, err := normalizeWire(r["payload"])
+		if err != nil {
+			return fail(err)
+		}
+		payload := object(normalized)
 		if payload == nil {
 			return fail(fmt.Errorf("unreadable trace payload"))
 		}
@@ -350,16 +404,6 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 		}
 		return path(parents[i]) + " / " + label
 	}
-	externalParents := map[string][]string{}
-	for i := range d.Spans {
-		if parents[i] < 0 && parentIDs[i] != "" {
-			key := traceIDs[i] + "/" + parentIDs[i]
-			externalParents[key] = append(externalParents[key], fingerprints[i])
-		}
-	}
-	for _, children := range externalParents {
-		sort.Strings(children)
-	}
 	linkTargetSources := map[string][]string{}
 	for i := range d.Spans {
 		for linkIndex, l := range array(d.Spans[i].Fields["links"]) {
@@ -380,13 +424,6 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 		sort.Strings(sources)
 	}
 	for i := range d.Spans {
-		if parents[i] >= 0 {
-			d.Spans[i].Parent = path(parents[i])
-		} else if parentIDs[i] != "" {
-			d.Spans[i].Parent = "external parent (partial trace), children structure " + digest([]byte(canonical(externalParents[traceIDs[i]+"/"+parentIDs[i]])))
-		} else {
-			d.Spans[i].Parent = "root"
-		}
 		for _, l := range array(d.Spans[i].Fields["links"]) {
 			link := object(l)
 			tid, e := identity(link["traceId"], 16, false)
@@ -418,6 +455,43 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 				target += " (shared target " + digest([]byte(canonical(sources)))[:12] + ")"
 			}
 			d.Spans[i].LinkTargets = append(d.Spans[i].LinkTargets, target)
+		}
+	}
+	occurrenceKeys := make([]string, len(d.Spans))
+	var occurrenceKey func(int) string
+	occurrenceKey = func(i int) string {
+		if occurrenceKeys[i] != "" {
+			return occurrenceKeys[i]
+		}
+		parent := "root"
+		if parents[i] >= 0 {
+			parent = occurrenceKey(parents[i])
+		} else if parentIDs[i] != "" {
+			parent = "external parent"
+		}
+		occurrenceKeys[i] = digest([]byte(canonical([]any{parent, semanticSpanProjection(&d, i)})))[:12]
+		return occurrenceKeys[i]
+	}
+	for i := range d.Spans {
+		occurrenceKey(i)
+	}
+	externalParents := map[string][]string{}
+	for i := range d.Spans {
+		if parents[i] < 0 && parentIDs[i] != "" {
+			key := traceIDs[i] + "/" + parentIDs[i]
+			externalParents[key] = append(externalParents[key], occurrenceKeys[i])
+		}
+	}
+	for _, children := range externalParents {
+		sort.Strings(children)
+	}
+	for i := range d.Spans {
+		if parents[i] >= 0 {
+			d.Spans[i].Parent = path(parents[i]) + " occurrence " + occurrenceKeys[parents[i]]
+		} else if parentIDs[i] != "" {
+			d.Spans[i].Parent = "external parent (partial trace), children occurrences " + digest([]byte(canonical(externalParents[traceIDs[i]+"/"+parentIDs[i]])))
+		} else {
+			d.Spans[i].Parent = "root"
 		}
 	}
 	var groups func([]int) []SpanGroup
