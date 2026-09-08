@@ -638,8 +638,9 @@ function syncControlsFromHash() {
   const section = aliases[state.section] || (VIEWS.includes(state.section) ? state.section : parent ? parent.id : 'features');
   const destination = section === 'features' ? 'health' : section === 'compare' ? 'parity' : section;
   if (Object.hasOwn(destinationState,destination)) destinationState[destination] = params.toString();
-  if (manifestByProfile.has(params.get('profile'))) selectedProfile = params.get('profile');
-  else if (section === 'overview' || section === 'coverage') selectedProfile = defaultProfile;
+  if (section === 'features' || section === 'compare') {
+    selectedProfile = manifestByProfile.has(params.get('profile')) ? params.get('profile') : defaultProfile;
+  }
   $('profile').value = selectedProfile;
   $('coverage-profile').value = selectedProfile;
   if (section === 'compare') {
@@ -825,10 +826,17 @@ function parityLink(extra={}) {
   for (const [k,v] of Object.entries(extra)) params.set(k,v);
   return '#parity?'+params;
 }
+function parityPeer(profile) {
+  for (const candidate of [$('left').value, $('right').value, ...data.manifests.map(m => m.profile)]) {
+    if (candidate !== profile && manifestByProfile.has(candidate)) return candidate;
+  }
+  return profile;
+}
 function renderParityOverview() {
   $('parity-overview').innerHTML='<thead><tr><th>Scenario · Captured telemetry availability</th>'+data.manifests.map(m=>'<th>'+esc(m.shortLabel || m.displayName)+'</th>').join('')+'</tr></thead><tbody>'+data.scenarios.map(s=>'<tr><th>'+esc(s)+'</th>'+data.manifests.map(m=>{
     const d=captureByKey.get(m.profile+'/'+s),r=receiptFor(m.profile,s);
-    return '<td><a href="'+esc(parityLink({left:m.profile,scenario:s,source:'captured'}))+'">'+(d ? d.diagnostics ? 'Comparison diagnostic' : d.shape.traceCount+' traces / '+d.spans.length+' spans' : 'Capture unavailable')+'</a><br>'+badge('receipt',r ? r.outcome : 'missing')+'</td>';
+    const result=coverageState(m.profile,s)==='excluded' ? badge('coverage','excluded') : badge('receipt',r ? r.outcome : 'missing');
+    return '<td><a href="'+esc(parityLink({left:m.profile,right:parityPeer(m.profile),scenario:s,source:'captured'}))+'">'+(d ? d.diagnostics ? 'Comparison diagnostic' : d.shape.traceCount+' traces / '+d.spans.length+' spans' : 'Capture unavailable')+'</a><br>'+result+'</td>';
   }).join('')+'</tr>').join('')+'</tbody>';
 }
 function capturePair(left,right,scenario) {
@@ -864,7 +872,8 @@ function renderCaptureComparison() {
     const rows=differencesOnly?differenceRows(t.spans,false):t.spans;
     const traceDiff=!t.left || !t.right || t.left.card!==t.right.card || t.left.coverage!==t.right.coverage;
     if (!rows.length && !traceDiff) return '';
-    return '<details class="capture-trace" data-trace="'+ti+'"><summary>Trace group '+(ti+1)+' · '+esc((t.left?.card || '—')+' / '+(t.right?.card || '—'))+' · '+esc((t.left?.coverage || 'absent')+' / '+(t.right?.coverage || 'absent'))+'</summary><div class="capture-tree"></div></details>';
+    const card=ref=>ref ? ref.card || '×1' : '—';
+    return '<details class="capture-trace" data-trace="'+ti+'"><summary>Trace group '+(ti+1)+' · '+esc(card(t.left)+' / '+card(t.right))+' · '+esc((t.left?.coverage || 'absent')+' / '+(t.right?.coverage || 'absent'))+'</summary><div class="capture-tree"></div></details>';
   }).join('')+(!traces.length?'<p>No trace topology available for comparison.</p>':'');
   for (const detail of $('compare-body').querySelectorAll('[data-diagnostic]')) detail.addEventListener('toggle',()=>{
     if (!detail.open || detail.dataset.loaded) return;detail.dataset.loaded='1';
