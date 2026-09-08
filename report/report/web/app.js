@@ -631,7 +631,7 @@ function applyHash(focus = true) {
     }
     target.scrollIntoView();
   } else if (focus) {
-    $(section).querySelector('h2').focus({ preventScroll: true });
+    $(section).querySelector('h2').focus();
   }
 }
 function compareChanged() {
