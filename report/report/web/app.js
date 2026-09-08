@@ -926,16 +926,21 @@ function renderCaptureComparison() {
   }
 }
 function renderParityScenarios() {
-  const l=$('left').value,r=$('right').value,raw=$('field-view').value==='raw',hide=$('hide-scope').checked;
-  $('parity-scenarios').innerHTML='<details><summary>Scenario-level differences for selected implementations</summary><ul>'+data.scenarios.map(s=>{
-    let label='Saved expectations';
-    if ($('comparison-source').value==='captured') {
-      const ld=captureByKey.get(l+'/'+s),rd=captureByKey.get(r+'/'+s);
-      if (!ld || !rd || ld.diagnostics || rd.diagnostics) label='comparison unavailable';
-      else {let n=0;for(const t of capturePair(l,r,s)) {if(!t.left || !t.right || t.left.card!==t.right.card || t.left.coverage!==t.right.coverage)n++;for(const row of t.spans) if(!row.left || !row.right || captureRowDiff(ld,rd,row,raw,hide).diffs.length)n++;}label=n+' differing groups';}
-    }
-    return '<li><a href="'+esc(parityLink({scenario:s}))+'">'+esc(s)+'</a> · '+label+'</li>';
-  }).join('')+'</ul></details>';
+  $('parity-scenarios').innerHTML='<details><summary>Scenario-level differences for selected implementations</summary><div></div></details>';
+  const detail=$('parity-scenarios').querySelector('details');
+  detail.addEventListener('toggle',()=>{
+    if (!detail.open || detail.dataset.loaded) return;detail.dataset.loaded='1';
+    const l=$('left').value,r=$('right').value,raw=$('field-view').value==='raw',hide=$('hide-scope').checked;
+    detail.querySelector('div').innerHTML='<ul>'+data.scenarios.map(s=>{
+      let label='Saved expectations';
+      if ($('comparison-source').value==='captured') {
+        const ld=captureByKey.get(l+'/'+s),rd=captureByKey.get(r+'/'+s);
+        if (!ld || !rd || ld.diagnostics || rd.diagnostics) label='comparison unavailable';
+        else {let n=0;for(const t of capturePair(l,r,s)) {if(!t.left || !t.right || t.left.card!==t.right.card || t.left.coverage!==t.right.coverage)n++;for(const row of t.spans) if(!row.left || !row.right || captureRowDiff(ld,rd,row,raw,hide).diffs.length)n++;}label=n+' differing groups';}
+      }
+      return '<li><a href="'+esc(parityLink({scenario:s}))+'">'+esc(s)+'</a> · '+label+'</li>';
+    }).join('')+'</ul>';
+  });
 }
 
 setup();

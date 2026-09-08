@@ -47,6 +47,14 @@ func TestCaptureWireFormatsAndPrecision(t *testing.T) {
 		t.Fatal("lost integer precision/type")
 	}
 }
+func TestCaptureNormalizesNullAnyValueVariants(t *testing.T) {
+	direct := `[{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","attributes":[{"key":"unset","value":{"stringValue":null}}]}]}]}]}}]`
+	wrapped := `[{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","attributes":[{"key":"unset","value":{"value":null}}]}]}]}]}}]`
+	a, b := DecodeCapture(ValidationReceipt{}, []byte(direct)), DecodeCapture(ValidationReceipt{}, []byte(wrapped))
+	if len(a.Diagnostics) > 0 || len(b.Diagnostics) > 0 || !reflect.DeepEqual(a, b) {
+		t.Fatalf("null AnyValue variants differ:\n%s\n%s", canonical(a), canonical(b))
+	}
+}
 func TestCaptureGroupingOccurrencesAndReorderedExports(t *testing.T) {
 	a, b, c, d := captureSpan(1, 1, 0, "GET /tags"), captureSpan(1, 2, 1, "db"), captureSpan(2, 3, 0, "GET /tags"), captureSpan(2, 4, 3, "db")
 	b["attributes"] = []any{map[string]any{"key": "query", "value": map[string]any{"stringValue": "first"}}}
@@ -97,6 +105,12 @@ func TestCaptureRejectsCollidingWireFieldSpellings(t *testing.T) {
 		if len(d.Diagnostics) != 1 || !strings.Contains(d.Diagnostics[0], "duplicate OTLP JSON field spellings") {
 			t.Fatalf("wire-field collision was not deterministic: %+v", d)
 		}
+	}
+}
+func TestCaptureMarksMultipleRootsPartial(t *testing.T) {
+	multipleRoots := decodedFixture(t, "multiple-roots", captureSpan(1, 1, 0, "first"), captureSpan(1, 2, 0, "second"))
+	if multipleRoots.Shape.Traces[0].Coverage != "partial" {
+		t.Fatalf("multi-root trace reported as complete: %+v", multipleRoots.Shape.Traces)
 	}
 }
 func TestCaptureLinksAndEventOrder(t *testing.T) {

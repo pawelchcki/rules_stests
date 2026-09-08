@@ -120,6 +120,14 @@ func normalizeWire(v any) (any, error) {
 			if value, exists := out["value"]; exists && value == nil {
 				return map[string]any{}, nil
 			}
+			for key, value := range out {
+				switch key {
+				case "stringValue", "boolValue", "intValue", "doubleValue", "arrayValue", "kvlistValue", "bytesValue":
+					if value == nil {
+						return map[string]any{}, nil
+					}
+				}
+			}
 			if inner := object(out["value"]); inner != nil {
 				for k := range inner {
 					if strings.HasSuffix(k, "Value") {
@@ -560,6 +568,9 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 					coverage = "partial"
 				}
 			}
+		}
+		if len(roots) != 1 {
+			coverage = "partial"
 		}
 		sort.Strings(keys)
 		key := coverage + canonical(keys)

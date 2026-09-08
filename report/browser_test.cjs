@@ -11,6 +11,8 @@ const path = require('node:path');
   const url=pathToFileURL(path.resolve(process.argv[2])).href;
   const route=async hash=>{await page.goto(url+hash);await page.waitForTimeout(100);};
   await route('#parity?left=go&right=python&scenario=case');
+  assert.equal(await page.locator('#parity-scenarios li').count(),0,'collapsed scenarios must stay lazy');
+  await page.click('#parity-scenarios summary');await page.waitForSelector('#parity-scenarios li');
   const pythonOverviewLink=await page.locator('#parity-overview tbody tr td').nth(1).locator('a').getAttribute('href');
   assert.match(pythonOverviewLink,/left=python/);assert.match(pythonOverviewLink,/right=go/);
   await page.evaluate(()=>{const trace=data.captureComparisons[0].traces[0];trace.left.card='';trace.right.card='';renderCompare();});
