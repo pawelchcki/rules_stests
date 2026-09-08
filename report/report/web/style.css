@@ -141,6 +141,27 @@ a.tile:hover { border-color: var(--info); text-decoration: none; }
 .tile .value { display: block; font-size: 32px; font-weight: 600; letter-spacing: -.02em; }
 .tile .label { display: block; color: var(--ink); font-size: 17px; font-weight: 600; margin-top: 2px; }
 
+/* All-language overview. Fluid minimums collapse cleanly as zoom increases. */
+.language-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+.language-card { min-width: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface-2); padding: 16px; }
+.language-card h3 { font-size: 18px; margin: 0; }
+.language-maturity { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 14px; }
+.maturity-label { flex-basis: 100%; color: var(--muted); font-size: 13px; }
+.language-implementations { list-style: none; margin: 0; padding: 0; }
+.language-implementation { min-width: 0; border-top: 1px solid var(--line); padding: 14px 0; }
+.language-implementation:first-child { border-top: 0; }
+.language-implementation h4 { margin: 0; font-size: 16px; }
+.language-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr)); gap: 6px; margin: 10px 0; }
+.language-metrics div { min-width: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 8px; }
+.language-metrics dt { color: var(--muted); font-size: 13px; }
+.language-metrics dd { margin: 0; font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.language-links { display: flex; flex-wrap: wrap; gap: 10px; font-size: 14px; }
+
 /* Tables */
 .scroll { max-width: 100%; overflow: auto; max-height: 74vh; border: 1px solid var(--line); border-radius: var(--radius); }
 table { border-collapse: collapse; width: 100%; }
@@ -226,6 +247,7 @@ code, .evidence, td, .span-name { overflow-wrap: anywhere; }
   .filters select, .filters input[type="search"] { width: 100%; }
   th, td { padding: 10px; }
   .glossary-grid { grid-template-columns: 1fr; }
+  .language-grid { grid-template-columns: 1fr; }
   .row-flag { white-space: normal; }
   .diff-side::before { display: block; font-weight: 600; content: 'Left expectation'; }
   .diff-side + .diff-side::before { content: 'Right expectation'; }

@@ -152,6 +152,12 @@ function categoryNames() {
     return rank(a) - rank(b) || a.localeCompare(b);
   });
 }
+function languageNames() {
+  return [...new Set(data.manifests.map((manifest) => manifest.language).filter(Boolean))].sort();
+}
+function languageLabel(language) {
+  return language.charAt(0).toUpperCase() + language.slice(1);
+}
 function statusLink(state, category) {
   const params = new URLSearchParams({ profile: selectedProfile, verification: state });
   if (category) params.set('category', category);
@@ -207,6 +213,35 @@ function renderOverview() {
   $('implementation-details').innerHTML = '<p>' + esc(manifest.shortLabel || manifest.displayName) + ' · ' +
     esc(manifest.version || manifest.instrumentationVersion) + '</p>' + (manifest.profileEvidence || []).map((item) =>
       '<a class="evidence" href="' + esc(item.href) + '">' + esc(item.label) + '</a>').join('');
+}
+
+// --------------------------------------------------------- language overview
+function renderLanguages() {
+  $('language-grid').innerHTML = languageNames().map((language) => {
+    const maturity = (data.metadata.maturity || {})[language] || {};
+    const maturityPills = ['Traces', 'Metrics', 'Logs'].map((signal) =>
+      '<span class="pill">' + signal + ': ' + esc(maturity[signal.toLowerCase()] || 'unknown') + '</span>').join('');
+    const implementations = data.manifests.filter((manifest) => manifest.language === language).map((manifest) => {
+      const counts = verificationCounts(manifest.profile);
+      const declared = data.coverage.filter((cell) => cell.profile === manifest.profile && cell.declared);
+      const receipts = (data.receipts || []).filter((receipt) => receipt.profile === manifest.profile);
+      const passed = receipts.filter((receipt) => receipt.outcome === 'verified').length;
+      const overview = new URLSearchParams({ profile: manifest.profile });
+      const coverage = new URLSearchParams({ profile: manifest.profile });
+      return '<li class="language-implementation"><h4><a href="#overview?' + overview + '">' +
+        esc(manifest.displayName) + '</a></h4><p class="muted">' +
+        esc([manifest.framework, manifest.version || manifest.instrumentationVersion].filter(Boolean).join(' · ')) + '</p>' +
+        '<dl class="language-metrics"><div><dt>Verified features</dt><dd>' + counts.verified + '</dd></div>' +
+        '<div><dt>Documented gaps</dt><dd>' + counts.known_gap + '</dd></div>' +
+        '<div><dt>Unknown features</dt><dd>' + counts.not_exercised + '</dd></div>' +
+        '<div><dt>Passing scenarios</dt><dd>' + passed + ' / ' + declared.length + '</dd></div></dl>' +
+        '<div class="language-links"><a href="#overview?' + overview + '">Instrumentation details</a>' +
+        '<a href="#coverage?' + coverage + '">Scenario coverage</a></div></li>';
+    }).join('');
+    return '<article class="language-card"><h3>' + esc(languageLabel(language)) + '</h3>' +
+      '<div class="language-maturity"><span class="maturity-label">Upstream maturity</span>' + maturityPills + '</div>' +
+      '<ul class="language-implementations">' + implementations + '</ul></article>';
+  }).join('');
 }
 
 // ------------------------------------------------------------- test coverage
@@ -587,7 +622,7 @@ function renderGlossary() {
 }
 
 // ---------------------------------------------------------------- routing
-const VIEWS = ['overview', 'coverage', 'compare', 'features', 'receipts', 'glossary'];
+const VIEWS = ['overview', 'languages', 'coverage', 'compare', 'features', 'receipts', 'glossary'];
 function syncControlsFromHash() {
   const state = readHash();
   const params = state.params;
@@ -621,6 +656,7 @@ function applyHash(focus = true) {
   const section = syncControlsFromHash();
   for (const id of VIEWS) $(id).hidden = id !== section;
   if (section === 'overview') renderOverview();
+  else if (section === 'languages') renderLanguages();
   else if (section === 'coverage') renderCoverageGrid();
   else if (section === 'compare') renderCompare();
   else if (section === 'features') renderFeatures();
@@ -657,6 +693,7 @@ function setup() {
     esc(m.displayName) + (m.shortLabel ? ' — ' + esc(m.shortLabel) : '') + '</option>').join('');
   for (const id of ['profile', 'coverage-profile', 'left', 'right']) $(id).innerHTML = options;
   $('feature-profile').insertAdjacentHTML('beforeend', options);
+  $('language').insertAdjacentHTML('beforeend', languageNames().map((name) => '<option>' + esc(name) + '</option>').join(''));
   $('scenario').innerHTML = data.scenarios.map((scenario) => '<option>' + esc(scenario) + '</option>').join('');
   $('category').insertAdjacentHTML('beforeend', categoryNames().map((name) => '<option>' + esc(name) + '</option>').join(''));
   for (const id of ['profile', 'coverage-profile']) $(id).addEventListener('change', () => {

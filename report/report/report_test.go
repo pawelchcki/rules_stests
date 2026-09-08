@@ -189,7 +189,7 @@ func TestRenderHTMLIsSelfContainedAndEscapesData(t *testing.T) {
 	if strings.Contains(text, "<link rel=") || strings.Contains(text, "<script src=") {
 		t.Fatal("report depends on external assets")
 	}
-	for _, id := range []string{`id="overview"`, `id="coverage"`, `id="compare"`, `id="feature-matrix"`, `id="receipts"`, `id="glossary"`} {
+	for _, id := range []string{`id="overview"`, `id="languages"`, `id="language-grid"`, `id="coverage"`, `id="compare"`, `id="feature-matrix"`, `id="receipts"`, `id="glossary"`} {
 		if !strings.Contains(text, id) {
 			t.Fatalf("report is missing the stable anchor %s", id)
 		}

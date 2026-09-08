@@ -12,6 +12,7 @@ __STYLE__
 <nav class="top">
   <ul>
     <li><a href="#overview">Instrumentation status</a></li>
+    <li><a href="#languages">Languages</a></li>
     <li><a href="#coverage">Test coverage</a></li>
     <li><a href="#compare">Compare traces</a></li>
     <li><a href="#features">Upstream &amp; feature details</a></li>
@@ -36,6 +37,12 @@ __STYLE__
     <p class="section-note">Unknown means this report has no accepted proof for a feature. Upstream support is a separate claim.</p>
     <div id="capabilities"></div>
     <details><summary>Implementation details</summary><div id="implementation-details"></div></details>
+  </section>
+
+  <section class="panel" id="languages" hidden>
+    <h2 tabindex="-1">Languages at a glance</h2>
+    <p class="section-note">A single-page view of every language and implementation. Counts stay per implementation so profiles with different frameworks or settings are not conflated.</p>
+    <div class="language-grid" id="language-grid"></div>
   </section>
 
   <section class="panel" id="coverage" hidden>
@@ -76,7 +83,7 @@ __STYLE__
     <div class="filters">
       <label>Implementation<select id="feature-profile"><option value="">All implementations</option></select></label>
       <label>Category<select id="category"><option value="">All categories</option></select></label>
-      <label>Language<select id="language"><option value="">All languages</option><option>go</option><option>python</option><option>ruby</option></select></label>
+      <label>Language<select id="language"><option value="">All languages</option></select></label>
       <label>Upstream support<select id="support"><option value="">Any support</option><option>supported</option><option>unsupported</option><option>n/a</option><option>unknown</option></select></label>
       <label>Verification<select id="verification"><option value="">Any verification</option><option value="verified">Verified here</option><option value="known_gap">Documented gap</option><option value="not_exercised">Unknown</option><option value="not_applicable">Not applicable</option></select></label>
       <label>Evidence basis<select id="basis"><option value="">Any basis</option><option>observed</option><option>corroborated</option></select></label>
