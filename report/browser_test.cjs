@@ -89,6 +89,12 @@ const path = require('node:path');
     return result;
   });
   assert.equal(checks.semantic.length,0);assert.ok(checks.raw.includes('span.traceId'));assert.ok(checks.scope.includes('scope.metadata.name'));assert.equal(checks.hiddenScope.length,0);assert.ok(checks.parent.includes('span.parentRelationship'));assert.ok(checks.attributes.includes('span.attributes'));
+  const occurrenceCorrelation=await page.evaluate(()=>{
+    const dataset=(pairs)=>({resources:[{}],scopes:[{}],spans:pairs.map(([start,end])=>({resource:0,scope:0,parent:'root',linkTargets:[],fields:{name:'repeated',startTimeUnixNano:start,endTimeUnixNano:end}}))});
+    const left=dataset([['1','2'],['3','4']]),right=dataset([['1','4'],['3','2']]);
+    return captureRowDiff(left,right,{left:[0,1],right:[0,1]},true,false).diffs;
+  });
+  assert.deepEqual(occurrenceCorrelation,['complete occurrence projection']);
   // Remove a capture to exercise one-sided inspection, without saved shapes.
   await route('#parity');
   await page.evaluate(()=>{captureByKey.delete('python/case');data.captureComparisons=[];renderCompare();});

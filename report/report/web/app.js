@@ -812,13 +812,27 @@ function fieldVariants(dataset, refs, raw, hideScope) {
   }
   return result;
 }
+function occurrenceVariants(dataset, refs, raw, hideScope) {
+  const result=new Map();
+  for (const index of refs || []) {
+    const value=captureFields(dataset,index,raw,hideScope),token=stable(value);
+    const entry=result.get(token) || {value,refs:[]};entry.refs.push(index);result.set(token,entry);
+  }
+  return result;
+}
 function variantSignature(variants) {
   return [...(variants || new Map()).entries()].map(([key,v])=>[key,v.refs.length]).sort((a,b)=>a[0].localeCompare(b[0]));
 }
 function captureRowDiff(l,r,row,raw,hideScope) {
   const lv=l ? fieldVariants(l,row.left,raw,hideScope) : {}, rv=r ? fieldVariants(r,row.right,raw,hideScope) : {};
   const keys=[...new Set([...Object.keys(lv),...Object.keys(rv)])].sort();
-  return {lv,rv,keys,diffs:keys.filter(k=>stable(variantSignature(lv[k]))!==stable(variantSignature(rv[k])))};
+  const diffs=keys.filter(k=>stable(variantSignature(lv[k]))!==stable(variantSignature(rv[k])));
+  const occurrenceKey='complete occurrence projection';
+  const lo=l ? occurrenceVariants(l,row.left,raw,hideScope) : new Map(),ro=r ? occurrenceVariants(r,row.right,raw,hideScope) : new Map();
+  if (!diffs.length && stable(variantSignature(lo))!==stable(variantSignature(ro))) {
+    keys.unshift(occurrenceKey);diffs.push(occurrenceKey);lv[occurrenceKey]=lo;rv[occurrenceKey]=ro;
+  }
+  return {lv,rv,keys,diffs};
 }
 function parityLink(extra={}) {
   const params=new URLSearchParams({profile:$('coverage-profile').value,left:$('left').value,right:$('right').value,scenario:$('scenario').value,source:$('comparison-source').value,view:$('field-view').value});
