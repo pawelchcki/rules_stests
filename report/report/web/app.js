@@ -687,7 +687,7 @@ function applyHash(focus = true) {
   }
 }
 function compareChanged() {
-  const params = new URLSearchParams({ left: $('left').value, right: $('right').value, scenario: $('scenario').value });
+  const params = new URLSearchParams({ profile: $('coverage-profile').value, left: $('left').value, right: $('right').value, scenario: $('scenario').value });
   params.set('source',$('comparison-source').value);
   params.set('view',$('field-view').value);
   if ($('differences-only').checked) params.set('differencesOnly', '1');
@@ -821,7 +821,7 @@ function captureRowDiff(l,r,row,raw,hideScope) {
   return {lv,rv,keys,diffs:keys.filter(k=>stable(variantSignature(lv[k]))!==stable(variantSignature(rv[k])))};
 }
 function parityLink(extra={}) {
-  const params=new URLSearchParams({left:$('left').value,right:$('right').value,scenario:$('scenario').value,source:$('comparison-source').value,view:$('field-view').value});
+  const params=new URLSearchParams({profile:$('coverage-profile').value,left:$('left').value,right:$('right').value,scenario:$('scenario').value,source:$('comparison-source').value,view:$('field-view').value});
   if ($('hide-scope').checked) params.set('hideScope','1');
   if ($('differences-only').checked) params.set('differencesOnly','1');
   for (const [k,v] of Object.entries(extra)) params.set(k,v);

@@ -26,6 +26,12 @@ const path = require('node:path');
   await route('#parity?profile=python');
   await page.click('nav a[href*="#health"]');await page.waitForTimeout(100);
   assert.equal(await page.inputValue('#profile'),'go');
+  await route('#parity?profile=python&left=go&right=python&scenario=case');
+  await page.selectOption('#field-view','raw');
+  assert.match(page.url(),/profile=python/);
+  assert.match(await page.locator('#parity-overview a').first().getAttribute('href'),/profile=python/);
+  await page.reload();await page.waitForTimeout(100);
+  assert.equal(await page.inputValue('#coverage-profile'),'python');
   const crossProfileMatch=await page.evaluate(()=>{
     const feature=data.features[0];
     data.verification[feature.id].go={state:'not_exercised',evidence:[]};
