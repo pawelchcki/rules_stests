@@ -2,6 +2,7 @@
 // The report is a single static page: all state lives in the URL hash so any
 // view can be linked to from another view or shared as-is.
 const data = JSON.parse(document.getElementById('report-data').textContent);
+for (const key of ['manifests', 'shapes', 'coverage', 'comparisons', 'features', 'scenarios']) data[key] = data[key] || [];
 const $ = (id) => document.getElementById(id);
 
 function esc(value) {
@@ -25,22 +26,23 @@ const VOCAB = {
     },
   },
   verification: {
-    title: 'Corpus verification',
+    title: 'Instrumentation status',
     question: 'What did this repository’s end-to-end suite actually assert?',
     states: {
-      verified: ['ok', '✓', 'An executable proof plan asserted this feature and a current-revision receipt accepted it.'],
-      known_gap: ['bad', '✕', 'The corpus deliberately records this feature as missing in the implementation.'],
-      not_exercised: ['warn', '○', 'No scenario in this corpus exercises the feature; nothing is claimed either way.'],
-      not_applicable: ['neutral', '–', 'The feature does not apply to this profile.'],
+      verified: ['ok', '✓', 'The listed assertion passed with accepted evidence from this build.'],
+      known_gap: ['bad', '✕', 'The report explicitly records an implementation gap.'],
+      not_exercised: ['neutral', '?', 'This report has no accepted proof for the feature.'],
+      not_applicable: ['neutral', '–', 'The profile explicitly marks the feature as inapplicable.'],
     },
   },
   coverage: {
     title: 'Scenario coverage',
-    question: 'How tightly does the corpus pin this scenario for this implementation?',
+    question: 'Which telemetry checks are defined for this scenario?',
     states: {
-      exact_shape: ['ok', '■', 'A checked-in scenario shape pins the exact trace and span structure.'],
-      contract_only: ['warn', '▣', 'Only the shared capture contract is asserted; the exact shape is not pinned.'],
-      unavailable: ['bad', '✕', 'The scenario is not exercised for this implementation.'],
+      exact_shape: ['neutral', '■', 'A saved expectation specifies the trace and span structure; it does not establish a passing run.'],
+      contract_only: ['neutral', '▣', 'Shared capture checks are defined; a scenario trace structure is not specified.'],
+      unavailable: ['neutral', '○', 'No telemetry checks are defined for this declared scenario.'],
+      excluded: ['neutral', '–', 'The profile does not declare this scenario; it does not count as missing tests.'],
     },
   },
   basis: {
@@ -56,15 +58,24 @@ const VOCAB = {
     question: 'How did the end-to-end run that produced this evidence end?',
     states: {
       verified: ['ok', '✓', 'The run passed and its digests matched the assembled plan, capture and shape.'],
-      xfail: ['warn', '○', 'The run failed as expected; it is recorded but proves nothing.'],
+      xfail: ['neutral', '○', 'The run failed as expected; it is recorded but proves nothing.'],
+      missing: ['neutral', '?', 'No accepted receipt records a result for this build.'],
     },
   },
 };
 
+const LABELS = {
+  verification: { verified: 'Verified here', known_gap: 'Documented gap', not_exercised: 'Unknown', not_applicable: 'Not applicable' },
+  coverage: { exact_shape: 'Trace structure specified', contract_only: 'Shared telemetry checks only', unavailable: 'No telemetry checks defined', excluded: 'Not in this test suite' },
+  receipt: { verified: 'Passed', xfail: 'Expected failure', missing: 'No result for this build' },
+};
+function stateLabel(vocabulary, state) {
+  return (LABELS[vocabulary] || {})[state] || String(state || '-').replace(/_/g, ' ');
+}
 function badge(vocabulary, state) {
   const group = VOCAB[vocabulary];
   const entry = (group && group.states[state]) || ['neutral', '–', ''];
-  const label = String(state || '-').replace(/_/g, ' ');
+  const label = stateLabel(vocabulary, state);
   return '<span class="badge state-' + entry[0] + '" title="' + esc(group.title + ': ' + entry[2]) +
     '"><span class="icon" aria-hidden="true">' + entry[1] + '</span>' + esc(label) + '</span>';
 }
@@ -72,7 +83,7 @@ function badge(vocabulary, state) {
 // ------------------------------------------------------------------ indexing
 const manifestByProfile = new Map(data.manifests.map((m) => [m.profile, m]));
 const shapeByKey = new Map(data.shapes.map((s) => [s.profile + ' ' + s.scenario, s]));
-const coverageByKey = new Map(data.coverage.map((c) => [c.profile + ' ' + c.scenario, c.state]));
+const coverageByKey = new Map(data.coverage.map((c) => [c.profile + ' ' + c.scenario, c]));
 const comparisonByKey = new Map(data.comparisons.map((c) => [c.leftProfile + ' ' + c.rightProfile + ' ' + c.scenario, c]));
 
 function profileName(profile) {
@@ -98,122 +109,142 @@ function readHash() {
   const parts = raw.split('?');
   return { section: parts[0] || 'overview', params: new URLSearchParams(parts[1] || '') };
 }
-function writeHash(section, params) {
+function writeHash(section, params, replace = false) {
   const query = params && params.toString();
   const next = '#' + section + (query ? '?' + query : '');
-  if (location.hash !== next) history.replaceState(null, '', next);
+  if (location.hash !== next) {
+    history[replace ? 'replaceState' : 'pushState'](null, '', next);
+    updateNavigation(section);
+  }
 }
-function markNav(section) {
+const defaultProfile = (data.manifests.find((m) => (data.receipts || []).some((r) =>
+  r.profile === m.profile && r.outcome === 'verified')) || data.manifests[0] || {}).profile || '';
+let selectedProfile = defaultProfile;
+function updateNavigation(section) {
   for (const link of document.querySelectorAll('nav.top a')) {
-    link.setAttribute('aria-current', String(link.getAttribute('href') === '#' + section));
+    const destination = link.hash.split('?')[0].slice(1);
+    if (destination === section) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+    if (destination === 'overview' || destination === 'coverage') {
+      link.hash = destination + '?' + new URLSearchParams({ profile: selectedProfile });
+    }
   }
 }
-
-// ------------------------------------------------------------------ overview
-function coverageCounts(profile) {
-  const counts = { exact_shape: 0, contract_only: 0, unavailable: 0 };
-  for (const scenario of data.scenarios) {
-    const state = coverageByKey.get(profile + ' ' + scenario) || 'unavailable';
-    counts[state] = (counts[state] || 0) + 1;
-  }
-  return counts;
+function verificationFor(feature, profile) {
+  return (data.verification[feature.id] || {})[profile] || { state: 'not_exercised', evidence: [] };
 }
-
-function verificationCounts(profile) {
+function verificationCounts(profile, features = data.features) {
   const counts = { verified: 0, known_gap: 0, not_exercised: 0, not_applicable: 0 };
-  for (const feature of data.features) {
-    const state = (data.verification[feature.id] || {})[profile];
-    if (state) counts[state.state] = (counts[state.state] || 0) + 1;
-  }
+  for (const feature of features) counts[verificationFor(feature, profile).state] += 1;
   return counts;
 }
-
+function coverageState(profile, scenario) {
+  const cell = coverageByKey.get(profile + ' ' + scenario);
+  return cell && cell.declared ? cell.state : 'excluded';
+}
+function receiptFor(profile, scenario) {
+  return (data.receipts || []).find((r) => r.profile === profile && r.scenario === scenario);
+}
+function categoryNames() {
+  const priority = ['Traces', 'Metrics', 'Logs'];
+  return [...new Set(data.features.map((f) => f.category))].sort((a, b) => {
+    const rank = (name) => priority.includes(name) ? priority.indexOf(name) : priority.length;
+    return rank(a) - rank(b) || a.localeCompare(b);
+  });
+}
+function languageNames() {
+  return [...new Set(data.manifests.map((manifest) => manifest.language).filter(Boolean))].sort();
+}
+function languageLabel(language) {
+  return language.charAt(0).toUpperCase() + language.slice(1);
+}
+function statusLink(state, category) {
+  const params = new URLSearchParams({ profile: selectedProfile, verification: state });
+  if (category) params.set('category', category);
+  return '#overview?' + params;
+}
+function featureDetails(feature, state) {
+  const evidence = (state.evidence || []).map((item) =>
+    '<a class="evidence" href="' + esc(item.href) + '">' + esc(item.label) + '</a>').join('');
+  return '<details><summary>Assertion and evidence</summary>' +
+    '<p>' + esc(VOCAB.verification.states[state.state][2]) + '</p>' +
+    (state.assertion ? '<code>' + esc(state.assertion) + '</code>' : '') +
+    (state.basis ? '<p>' + badge('basis', state.basis) + '</p>' : '') +
+    (state.scenarios && state.scenarios.length ? '<p>Scenarios: ' + esc(state.scenarios.join(', ')) + '</p>' : '') +
+    evidence + '<a class="evidence" href="' + esc(feature.source) + '">Catalog: ' + esc(feature.id) + '</a></details>';
+}
 function renderOverview() {
-  const source = data.metadata.source;
-  $('meta').innerHTML =
-    '<span class="pill">' + data.features.length + ' upstream features</span>' +
-    '<span class="pill">' + data.manifests.length + ' implementations</span>' +
-    '<span class="pill">' + data.shapes.length + ' checked-in shapes</span>' +
-    '<span class="pill">' + (data.receipts || []).length + ' accepted receipts</span>' +
-    '<a class="pill" href="' + esc(source.url) + '">spec ' + esc(String(source.revision).slice(0, 12)) + '</a>' +
-    '<a class="pill" href="' + esc(data.metadata.maturitySource) + '">maturity source</a>';
-
-  $('how-to-read').innerHTML =
-    'Read this report in three layers. An <a href="#glossary">upstream claim</a> is what the ' +
-    'OpenTelemetry compliance matrix says a language supports. A <a href="#glossary">corpus ' +
-    'verification</a> is what this repository’s end-to-end suite actually asserted about a ' +
-    'running implementation. An <a href="#glossary">evidence basis</a> says how that assertion was ' +
-    'proved: observed in a capture, or corroborated by an immutable upstream source. The three ' +
-    'never substitute for one another, and this report makes no parity judgement of its own.';
-
-  const totals = { verified: 0, known_gap: 0, not_exercised: 0, exact_shape: 0, contract_only: 0, unavailable: 0 };
-  for (const manifest of data.manifests) {
-    const verification = verificationCounts(manifest.profile);
-    totals.verified += verification.verified;
-    totals.known_gap += verification.known_gap;
-    totals.not_exercised += verification.not_exercised;
-    const coverage = coverageCounts(manifest.profile);
-    totals.exact_shape += coverage.exact_shape;
-    totals.contract_only += coverage.contract_only;
-    totals.unavailable += coverage.unavailable;
-  }
-  const receipts = data.receipts || [];
-  const verifiedReceipts = receipts.filter((r) => r.outcome === 'verified').length;
-  const tiles = [
-    ['#features?verification=verified', totals.verified, 'verified feature claims'],
-    ['#features?verification=known_gap', totals.known_gap, 'known gaps'],
-    ['#features?verification=not_exercised', totals.not_exercised, 'not exercised'],
-    ['#coverage', totals.exact_shape, 'exact-shape cells'],
-    ['#coverage', totals.contract_only, 'contract-only cells'],
-    ['#receipts', verifiedReceipts + ' / ' + receipts.length, 'receipts verified'],
-  ];
-  $('kpis').innerHTML = tiles.map((tile) =>
-    '<a class="tile" href="' + tile[0] + '"><span class="value">' + esc(tile[1]) + '</span>' +
-    '<span class="label">' + esc(tile[2]) + '</span></a>').join('');
-
-  $('implementations').innerHTML = data.manifests.map((manifest) => {
-    const coverage = coverageCounts(manifest.profile);
-    const verification = verificationCounts(manifest.profile);
-    const total = data.scenarios.length || 1;
-    const width = (count) => (100 * count / total).toFixed(1) + '%';
-    const evidence = (manifest.profileEvidence || []).map((item) =>
-      '<a class="evidence" href="' + esc(item.href) + '">' + esc(item.label) + '</a>').join('');
-    const unexercised = manifest.unexercised
-      ? '<div class="signals"><span class="badge state-warn" title="This profile is declared in the corpus, but its ' +
-        'container images are unpublished, so no end-to-end run produced receipts in this build. Its checked-in ' +
-        'shapes are still comparable; none of its features can reach verified.">' +
-        '<span class="icon" aria-hidden="true">○</span>not exercised in this build</span></div>'
-      : '';
-    return '<article class="card"><h3>' + esc(manifest.displayName) + '</h3>' +
-      '<div class="version">' + esc(manifest.shortLabel || (manifest.language + ' / ' + manifest.framework)) + '</div>' +
-      '<div class="version">' + esc(manifest.version || manifest.instrumentationVersion) + '</div>' +
-      '<div class="bar" role="img" aria-label="' + coverage.exact_shape + ' exact, ' + coverage.contract_only +
-        ' contract-only, ' + coverage.unavailable + ' unavailable">' +
-        '<span class="seg-exact" style="width:' + width(coverage.exact_shape) + '"></span>' +
-        '<span class="seg-contract" style="width:' + width(coverage.contract_only) + '"></span>' +
-        '<span class="seg-unavailable" style="width:' + width(coverage.unavailable) + '"></span></div>' +
-      '<div class="bar-key"><span>' + coverage.exact_shape + ' exact shape</span>' +
-        '<span>' + coverage.contract_only + ' contract only</span>' +
-        '<span>' + coverage.unavailable + ' unavailable</span></div>' +
-      unexercised +
-      '<div class="signals">' + badge('verification', 'verified') +
-        '<span class="pill">' + verification.verified + ' verified claims</span></div>' +
-      evidence + '</article>';
+  const manifest = manifestByProfile.get(selectedProfile);
+  if (!manifest) return;
+  const counts = verificationCounts(selectedProfile);
+  const receipts = (data.receipts || []).filter((r) => r.profile === selectedProfile);
+  $('profile-status').textContent = receipts.some((r) => r.outcome === 'verified')
+    ? 'Accepted passing receipts are available for this implementation.'
+    : receipts.length ? 'Only expected failures were recorded. This implementation remains unverified.'
+      : 'No results for this build. This implementation remains unverified; saved expectations do not prove a run passed.';
+  $('status-counts').innerHTML = ['verified', 'known_gap', 'not_exercised'].map((state) =>
+    '<a class="tile" href="' + esc(statusLink(state)) + '"><span class="value">' + counts[state] +
+    '</span><span class="label">' + (state === 'known_gap' ? 'Documented gaps' : stateLabel('verification', state)) +
+    '</span><span class="definition">' + esc(VOCAB.verification.states[state][2]) + '</span></a>').join('');
+  $('gap-summary').textContent = (counts.known_gap === 0 ? 'No implementation gaps recorded. ' : counts.known_gap + ' documented gaps. ') +
+    counts.not_exercised + ' unknown features. The current assembler does not populate documented gaps.';
+  $('not-applicable').innerHTML = '<a href="' + esc(statusLink('not_applicable')) + '">' + counts.not_applicable +
+    ' Not applicable</a> — The profile explicitly marks these features as inapplicable.';
+  const params = readHash().params;
+  const filter = params.get('verification');
+  const category = params.get('category');
+  $('capabilities').innerHTML = categoryNames().map((name) => {
+    const features = data.features.filter((f) => f.category === name);
+    const totals = verificationCounts(selectedProfile, features);
+    const reveal = filter && (!category || category === name);
+    const shown = features.filter((f) => !filter || verificationFor(f, selectedProfile).state === filter);
+    const summary = ['verified', 'known_gap', 'not_exercised'].map((state) => totals[state] + ' ' +
+      (state === 'known_gap' ? 'documented gaps' : stateLabel('verification', state).toLowerCase())).join(' · ');
+    return '<details class="capability-category"' + (reveal && shown.length ? ' open' : '') + '><summary><strong>' +
+      esc(name) + '</strong><span class="category-counts">' + summary + ' · ' + totals.not_applicable + ' not applicable</span></summary>' +
+      (filter ? '<p>' + esc(stateLabel('verification', filter)) + ' features · <a href="#overview?' +
+        new URLSearchParams({ profile: selectedProfile }) + '">Show all statuses</a></p>' : '') +
+      (shown.length ? '<ul class="feature-list">' + shown.map((feature) => {
+        const state = verificationFor(feature, selectedProfile);
+        return '<li><div><strong>' + esc(feature.name) + '</strong> ' + badge('verification', state.state) + '</div>' +
+          (feature.group ? '<div class="muted">' + esc(feature.group) + '</div>' : '') + featureDetails(feature, state) + '</li>';
+      }).join('') + '</ul>' : '<p>No features with this status in this category.</p>') + '</details>';
   }).join('');
-
-  const languages = Object.keys(data.metadata.maturity).sort();
-  $('maturity').innerHTML =
-    '<thead><tr><th>Language</th><th>Traces</th><th>Metrics</th><th>Logs</th></tr></thead><tbody>' +
-    languages.map((language) => {
-      const maturity = data.metadata.maturity[language];
-      return '<tr><td>' + esc(language) + '</td><td>' + esc(maturity.traces) + '</td><td>' +
-        esc(maturity.metrics) + '</td><td>' + esc(maturity.logs) + '</td></tr>';
-    }).join('') + '</tbody>';
+  $('implementation-details').innerHTML = '<p>' + esc(manifest.shortLabel || manifest.displayName) + ' · ' +
+    esc(manifest.version || manifest.instrumentationVersion) + '</p>' + (manifest.profileEvidence || []).map((item) =>
+      '<a class="evidence" href="' + esc(item.href) + '">' + esc(item.label) + '</a>').join('');
 }
 
-// ------------------------------------------------------------- coverage grid
-const COVERAGE_CLASS = { exact_shape: 'cell-exact', contract_only: 'cell-contract', unavailable: 'cell-unavailable' };
+// --------------------------------------------------------- language overview
+function renderLanguages() {
+  $('language-grid').innerHTML = languageNames().map((language) => {
+    const maturity = (data.metadata.maturity || {})[language] || {};
+    const maturityPills = ['Traces', 'Metrics', 'Logs'].map((signal) =>
+      '<span class="pill">' + signal + ': ' + esc(maturity[signal.toLowerCase()] || 'unknown') + '</span>').join('');
+    const implementations = data.manifests.filter((manifest) => manifest.language === language).map((manifest) => {
+      const counts = verificationCounts(manifest.profile);
+      const declared = data.coverage.filter((cell) => cell.profile === manifest.profile && cell.declared);
+      const receipts = (data.receipts || []).filter((receipt) => receipt.profile === manifest.profile);
+      const passed = receipts.filter((receipt) => receipt.outcome === 'verified').length;
+      const overview = new URLSearchParams({ profile: manifest.profile });
+      const coverage = new URLSearchParams({ profile: manifest.profile });
+      return '<li class="language-implementation"><h4><a href="#overview?' + overview + '">' +
+        esc(manifest.displayName) + '</a></h4><p class="muted">' +
+        esc([manifest.framework, manifest.version || manifest.instrumentationVersion].filter(Boolean).join(' · ')) + '</p>' +
+        '<dl class="language-metrics"><div><dt>Verified features</dt><dd>' + counts.verified + '</dd></div>' +
+        '<div><dt>Documented gaps</dt><dd>' + counts.known_gap + '</dd></div>' +
+        '<div><dt>Unknown features</dt><dd>' + counts.not_exercised + '</dd></div>' +
+        '<div><dt>Passing scenarios</dt><dd>' + passed + ' / ' + declared.length + '</dd></div></dl>' +
+        '<div class="language-links"><a href="#overview?' + overview + '">Instrumentation details</a>' +
+        '<a href="#coverage?' + coverage + '">Scenario coverage</a></div></li>';
+    }).join('');
+    return '<article class="language-card"><h3>' + esc(languageLabel(language)) + '</h3>' +
+      '<div class="language-maturity"><span class="maturity-label">Upstream maturity</span>' + maturityPills + '</div>' +
+      '<ul class="language-implementations">' + implementations + '</ul></article>';
+  }).join('');
+}
 
+// ------------------------------------------------------------- test coverage
 function otherProfileWithShape(profile, scenario) {
   for (const manifest of data.manifests) {
     if (manifest.profile !== profile && shapeByKey.has(manifest.profile + ' ' + scenario)) return manifest.profile;
@@ -223,26 +254,20 @@ function otherProfileWithShape(profile, scenario) {
 }
 
 function renderCoverageGrid() {
-  const header = '<thead><tr><th>Scenario</th>' + data.manifests.map((m) =>
-    '<th>' + esc(m.displayName) + '<br><small>' + esc(m.shortLabel || '') +
-    (m.unexercised ? ' · not exercised' : '') + '</small></th>').join('') +
-    '<th class="numeric">Exact</th></tr></thead>';
-  const rows = data.scenarios.map((scenario) => {
-    let exact = 0;
-    const cells = data.manifests.map((manifest) => {
-      const state = coverageByKey.get(manifest.profile + ' ' + scenario) || 'unavailable';
-      if (state === 'exact_shape') exact += 1;
-      const entry = VOCAB.coverage.states[state];
-      const params = new URLSearchParams({ left: manifest.profile, right: otherProfileWithShape(manifest.profile, scenario), scenario: scenario });
-      return '<td class="grid-cell"><a class="' + COVERAGE_CLASS[state] + '" href="#compare?' + params.toString() +
-        '" title="' + esc(entry[2]) + '"><span aria-hidden="true">' + entry[1] + '</span> ' +
-        esc(state.replace(/_/g, ' ')) + '</a></td>';
-    }).join('');
-    return '<tr><th scope="row">' + esc(scenario) + '</th>' + cells + '<td class="numeric">' + exact + '</td></tr>';
-  }).join('');
-  const footer = '<tr><th scope="row">Exact shapes</th>' + data.manifests.map((m) =>
-    '<td class="numeric">' + coverageCounts(m.profile).exact_shape + '</td>').join('') + '<td></td></tr>';
-  $('coverage-grid').innerHTML = header + '<tbody>' + rows + footer + '</tbody>';
+  const declared = data.coverage.filter((c) => c.profile === selectedProfile && c.declared);
+  $('coverage-summary').textContent = declared.length + ' scenarios in this test suite; ' +
+    declared.filter((c) => c.state === 'unavailable').length + ' have no telemetry checks defined. ' +
+    (data.scenarios.length - declared.length) + ' scenarios are outside this suite.';
+  $('coverage-grid').innerHTML = '<thead><tr><th>Scenario</th><th>Checks defined</th><th>Result in this build</th></tr></thead><tbody>' +
+    data.scenarios.map((scenario) => {
+      const state = coverageState(selectedProfile, scenario);
+      const receipt = receiptFor(selectedProfile, scenario);
+      const params = new URLSearchParams({ left: selectedProfile, right: otherProfileWithShape(selectedProfile, scenario), scenario });
+      return '<tr><th scope="row">' + esc(scenario) + '</th><td>' + badge('coverage', state) +
+        (state === 'exact_shape' ? '<a class="evidence" href="#compare?' + params + '">Compare saved trace expectations</a>' : '') +
+        '</td><td>' + (state === 'excluded' ? 'Not in this test suite' : badge('receipt', receipt ? receipt.outcome : 'missing')) +
+        (receipt && receipt.xfailReason ? '<div class="muted">' + esc(receipt.xfailReason) + '</div>' : '') + '</td></tr>';
+    }).join('') + '</tbody>';
 }
 
 // -------------------------------------------------------------------- compare
@@ -327,15 +352,15 @@ function renderAlignment(alignment, flipped, options) {
     if (options.differencesOnly && kind === 'matched' && !rows && !traceCardDiffers && !traceCoverageDiffers) return '';
     const label = (left && left.label) || (right && right.label) || 'trace';
     const kindBadge = kind === 'matched'
-      ? '<span class="badge state-ok"><span class="icon">✓</span>matched</span>'
+      ? '<span class="badge state-neutral"><span class="icon">↔</span>matched</span>'
       : (kind === 'left_only'
-        ? '<span class="badge state-bad"><span class="icon">◀</span>left only</span>'
-        : '<span class="badge state-ok"><span class="icon">▶</span>right only</span>');
+        ? '<span class="badge state-neutral"><span class="icon">◀</span>left only</span>'
+        : '<span class="badge state-neutral"><span class="icon">▶</span>right only</span>');
     const cards = traceCardDiffers
       ? (left.card || '×1') + ' / ' + (right.card || '×1')
       : [left && left.card, right && right.card].filter(Boolean).join(' / ');
     const coverage = [left && left.coverage, right && right.coverage].filter(Boolean).join(' / ');
-    return '<details class="trace-group" open><summary>' + kindBadge +
+    return '<details class="trace-group"><summary>' + kindBadge +
       '<strong>' + esc(label) + '</strong>' +
       (cards ? '<span class="badge state-neutral">' + esc(cards) + '</span>' : '') +
       (coverage ? '<span class="badge ' + (traceCoverageDiffers ? 'state-warn' : 'state-neutral') + '">coverage: ' + esc(coverage) + '</span>' : '') +
@@ -347,11 +372,11 @@ function renderAlignment(alignment, flipped, options) {
 }
 
 function renderScenarioOverview(scenario) {
-  const header = '<thead><tr><th>Implementation</th><th>Coverage</th><th class="numeric">Trace groups</th>' +
+  const header = '<thead><tr><th>Implementation</th><th>Checks defined</th><th class="numeric">Trace groups</th>' +
     '<th class="numeric">Traces</th><th class="numeric">Spans</th><th>Source</th></tr></thead>';
   const rows = data.manifests.map((manifest) => {
     const shape = shapeByKey.get(manifest.profile + ' ' + scenario);
-    const state = coverageByKey.get(manifest.profile + ' ' + scenario) || 'unavailable';
+    const state = coverageState(manifest.profile, scenario);
     const dash = '–';
     const counts = shape
       ? [shape.traces.length, shape.exactCounts ? shape.traceCount : dash, shape.exactCounts ? shape.spanCount : dash]
@@ -369,12 +394,6 @@ function renderCompare() {
   const right = $('right').value;
   const scenario = $('scenario').value;
   const options = { differencesOnly: $('differences-only').checked, hideScope: $('hide-scope').checked };
-  if (readHash().section === 'compare') {
-    const params = new URLSearchParams({ left: left, right: right, scenario: scenario });
-    if (options.differencesOnly) params.set('differencesOnly', '1');
-    if (options.hideScope) params.set('hideScope', '1');
-    writeHash('compare', params);
-  }
   renderScenarioOverview(scenario);
 
   const leftShape = shapeByKey.get(left + ' ' + scenario);
@@ -389,8 +408,8 @@ function renderCompare() {
     const parts = [];
     for (const profile of [left, right]) {
       if (shapeByKey.has(profile + ' ' + scenario)) continue;
-      const state = coverageByKey.get(profile + ' ' + scenario) || 'unavailable';
-      parts.push(esc(profileName(profile)) + ' is ' + esc(state.replace(/_/g, ' ')) + ' for this scenario');
+      const state = coverageState(profile, scenario);
+      parts.push(esc(profileName(profile)) + ' is ' + esc(stateLabel('coverage', state)) + ' for this scenario');
     }
     const available = [leftShape, rightShape].filter(Boolean)
       .map((shape) => '<a href="' + esc(shape.source) + '">' + esc(profileName(shape.profile)) + ' shape source</a>').join(' / ');
@@ -447,7 +466,7 @@ function renderCompare() {
 }
 
 // ------------------------------------------------------------ feature matrix
-const collapsedCategories = new Set();
+const collapsedCategories = new Set(categoryNames());
 
 function renderFeatures() {
   const category = $('category').value;
@@ -456,23 +475,14 @@ function renderFeatures() {
   const verification = $('verification').value;
   const basis = $('basis').value;
   const search = $('search').value.trim().toLowerCase();
-  if (readHash().section === 'features') {
-    const params = new URLSearchParams();
-    const pairs = [['category', category], ['language', language], ['support', support],
-      ['verification', verification], ['basis', basis], ['q', search]];
-    for (const pair of pairs) {
-      if (pair[1]) params.set(pair[0], pair[1]);
-    }
-    writeHash('features', params);
-  }
-
-  const manifests = language ? data.manifests.filter((m) => m.language === language) : data.manifests;
+  const profile = $('feature-profile').value;
+  const manifests = data.manifests.filter((m) => (!language || m.language === language) && (!profile || m.profile === profile));
   const upstreamLanguages = language ? [language] : [...new Set(manifests.map((m) => m.language))];
 
   const matches = data.features.filter((feature) => {
     if (category && feature.category !== category) return false;
     if (search && !(feature.name.toLowerCase().includes(search) || feature.id.toLowerCase().includes(search))) return false;
-    if (support && !upstreamLanguages.some((lang) => (feature.support[lang] || 'unknown') === support)) return false;
+    if (support && !upstreamLanguages.some((lang) => ((feature.support || {})[lang] || 'unknown') === support)) return false;
     const states = manifests.map((m) => (data.verification[feature.id] || {})[m.profile] || { state: 'not_exercised' });
     if ((verification || basis) && !states.some((v) =>
       (!verification || v.state === verification) && (!basis || v.basis === basis))) return false;
@@ -503,7 +513,7 @@ function renderFeatures() {
     }
     const collapsed = collapsedCategories.has(name);
     body += '<tr class="category-row"><td colspan="' + (manifests.length + 2) + '">' +
-      '<button type="button" data-category="' + esc(name) + '">' + (collapsed ? '▸' : '▾') + ' ' +
+      '<button type="button" aria-expanded="' + !collapsed + '" data-category="' + esc(name) + '">' + (collapsed ? '▸' : '▾') + ' ' +
       esc(name) + '</button> <span class="muted">' + features.length + ' features, ' + verified +
       ' verified cells</span></td></tr>';
     if (collapsed) continue;
@@ -521,7 +531,7 @@ function renderFeatures() {
         return '<td>' + badge('verification', state.state) + basisBadge + assertion + evidence + '</td>';
       }).join('');
       const upstream = upstreamLanguages.map((lang) =>
-        '<div>' + esc(lang) + ' ' + badge('support', feature.support[lang] || 'unknown') + '</div>').join('');
+        '<div>' + esc(lang) + ' ' + badge('support', (feature.support || {})[lang] || 'unknown') + '</div>').join('');
       const optionality = feature.optional === 'X'
         ? '<span class="badge state-neutral" title="Optional in the upstream specification">optional</span>'
         : (feature.optional === '*'
@@ -545,6 +555,7 @@ function renderFeatures() {
       const name = button.getAttribute('data-category');
       if (collapsedCategories.has(name)) collapsedCategories.delete(name); else collapsedCategories.add(name);
       renderFeatures();
+      [...$('feature-matrix').querySelectorAll('button[data-category]')].find((b) => b.dataset.category === name).focus();
     });
   }
 }
@@ -610,107 +621,116 @@ function renderGlossary() {
   $('glossary-body').innerHTML = sections + trust;
 }
 
-// ---------------------------------------------------------------- bootstrap
-function resetCompareControls() {
-  $('left').value = data.manifests[0].profile;
-  $('right').value = (data.manifests[1] || data.manifests[0]).profile;
-  $('scenario').value = data.scenarios[0];
-  $('differences-only').checked = false;
-  $('hide-scope').checked = false;
-}
-
-// syncControlsFromHash copies deep-link parameters into the form controls
-// without rendering, so bootstrap can seed the controls before the first paint
-// and never overwrite an incoming link with the defaults.
+// ---------------------------------------------------------------- routing
+const VIEWS = ['overview', 'languages', 'coverage', 'compare', 'features', 'receipts', 'glossary'];
 function syncControlsFromHash() {
   const state = readHash();
-  markNav(state.section);
   const params = state.params;
-  if (state.section === 'compare') {
-    resetCompareControls();
-    if (params.get('left') && manifestByProfile.has(params.get('left'))) $('left').value = params.get('left');
-    if (params.get('right') && manifestByProfile.has(params.get('right'))) $('right').value = params.get('right');
-    if (params.get('scenario') && data.scenarios.includes(params.get('scenario'))) $('scenario').value = params.get('scenario');
+  // Retain direct table anchors as well as the six view routes.
+  const target = $(state.section);
+  const parent = target && target.closest('section.panel');
+  const section = VIEWS.includes(state.section) ? state.section : parent ? parent.id : 'overview';
+  if (manifestByProfile.has(params.get('profile'))) selectedProfile = params.get('profile');
+  else if (section === 'overview' || section === 'coverage') selectedProfile = defaultProfile;
+  $('profile').value = selectedProfile;
+  $('coverage-profile').value = selectedProfile;
+  if (section === 'compare') {
+    $('left').value = manifestByProfile.has(params.get('left')) ? params.get('left') : (data.manifests[0] || {}).profile || '';
+    $('right').value = manifestByProfile.has(params.get('right')) ? params.get('right') : (data.manifests[1] || data.manifests[0] || {}).profile || '';
+    $('scenario').value = data.scenarios.includes(params.get('scenario')) ? params.get('scenario') : data.scenarios[0] || '';
     $('differences-only').checked = params.get('differencesOnly') === '1';
     $('hide-scope').checked = params.get('hideScope') === '1';
-  } else if (state.section === 'features') {
-    const pairs = [['category', 'category'], ['language', 'language'], ['support', 'support'],
-      ['verification', 'verification'], ['basis', 'basis']];
-    for (const pair of pairs) {
-      $(pair[1]).value = params.get(pair[0]) || '';
-    }
+  } else if (section === 'features') {
+    for (const id of ['category', 'language', 'support', 'verification', 'basis']) $(id).value = params.get(id) || '';
+    $('feature-profile').value = manifestByProfile.has(params.get('profile')) ? params.get('profile') : '';
     $('search').value = params.get('q') || '';
-    // Keep accepting the old checkbox-only hash while emitting one canonical
-    // verification filter from now on.
     if (params.get('verifiedOnly') === '1') $('verification').value = 'verified';
     $('verified-only').checked = $('verification').value === 'verified';
+    // A filtered legacy link must reveal its matches even after manual collapse.
+    if (params.toString()) collapsedCategories.clear();
   }
-  return state.section;
+  updateNavigation(section);
+  return section;
 }
-
-function scrollToSection(section) {
-  const target = document.getElementById(section);
-  if (target) target.scrollIntoView();
-}
-
-function applyHash() {
+function applyHash(focus = true) {
   const section = syncControlsFromHash();
-  if (section === 'compare') renderCompare();
+  for (const id of VIEWS) $(id).hidden = id !== section;
+  if (section === 'overview') renderOverview();
+  else if (section === 'languages') renderLanguages();
+  else if (section === 'coverage') renderCoverageGrid();
+  else if (section === 'compare') renderCompare();
   else if (section === 'features') renderFeatures();
-  scrollToSection(section);
+  const target = $(readHash().section);
+  if (target && target.id !== section) {
+    for (let parent = target.parentElement; parent; parent = parent.parentElement) {
+      if (parent.tagName === 'DETAILS') parent.open = true;
+    }
+    target.scrollIntoView();
+  } else if (focus) {
+    $(section).querySelector('h2').focus();
+  }
 }
-
+function compareChanged() {
+  const params = new URLSearchParams({ left: $('left').value, right: $('right').value, scenario: $('scenario').value });
+  if ($('differences-only').checked) params.set('differencesOnly', '1');
+  if ($('hide-scope').checked) params.set('hideScope', '1');
+  writeHash('compare', params);
+  renderCompare();
+}
+function featuresChanged(replace = false) {
+  const params = new URLSearchParams();
+  for (const [key, id] of [['profile', 'feature-profile'], ['category', 'category'], ['language', 'language'],
+    ['support', 'support'], ['verification', 'verification'], ['basis', 'basis'], ['q', 'search']]) {
+    if ($(id).value) params.set(key, $(id).value);
+  }
+  if ($('feature-profile').value) selectedProfile = $('feature-profile').value;
+  writeHash('features', params, replace);
+  if (params.toString()) collapsedCategories.clear();
+  renderFeatures();
+}
 function setup() {
-  const options = data.manifests.map((m) =>
-    '<option value="' + esc(m.profile) + '">' + esc(m.displayName) + (m.shortLabel ? ' — ' + esc(m.shortLabel) : '') +
-    (m.unexercised ? ' (not exercised)' : '') + '</option>').join('');
-  $('left').innerHTML = options;
-  $('right').innerHTML = options;
-  $('scenario').innerHTML = data.scenarios.map((scenario) => {
-    const states = data.manifests.map((m) => coverageByKey.get(m.profile + ' ' + scenario) || 'unavailable');
-    const exact = states.filter((s) => s === 'exact_shape').length;
-    return '<option value="' + esc(scenario) + '">' + esc(scenario) + ' — ' + exact + ' exact of ' +
-      data.manifests.length + '</option>';
-  }).join('');
-  resetCompareControls();
-
-  const categories = [];
-  for (const feature of data.features) {
-    if (!categories.includes(feature.category)) categories.push(feature.category);
-  }
-  $('category').insertAdjacentHTML('beforeend', categories.map((v) => '<option>' + esc(v) + '</option>').join(''));
-
-  for (const id of ['left', 'right', 'scenario', 'differences-only', 'hide-scope']) {
-    $(id).addEventListener('change', renderCompare);
-  }
+  const options = data.manifests.map((m) => '<option value="' + esc(m.profile) + '">' +
+    esc(m.displayName) + (m.shortLabel ? ' — ' + esc(m.shortLabel) : '') + '</option>').join('');
+  for (const id of ['profile', 'coverage-profile', 'left', 'right']) $(id).innerHTML = options;
+  $('feature-profile').insertAdjacentHTML('beforeend', options);
+  $('language').insertAdjacentHTML('beforeend', languageNames().map((name) => '<option>' + esc(name) + '</option>').join(''));
+  $('scenario').innerHTML = data.scenarios.map((scenario) => '<option>' + esc(scenario) + '</option>').join('');
+  $('category').insertAdjacentHTML('beforeend', categoryNames().map((name) => '<option>' + esc(name) + '</option>').join(''));
+  for (const id of ['profile', 'coverage-profile']) $(id).addEventListener('change', () => {
+    selectedProfile = $(id).value;
+    const params = readHash().params;
+    params.set('profile', selectedProfile);
+    writeHash(id === 'profile' ? 'overview' : 'coverage', params);
+    applyHash(false);
+  });
+  for (const id of ['left', 'right', 'scenario', 'differences-only', 'hide-scope']) $(id).addEventListener('change', compareChanged);
   $('swap').addEventListener('click', () => {
     const left = $('left').value;
     $('left').value = $('right').value;
     $('right').value = left;
-    renderCompare();
+    compareChanged();
   });
-  for (const id of ['category', 'language', 'support', 'basis']) {
-    $(id).addEventListener('change', renderFeatures);
-  }
+  for (const id of ['feature-profile', 'category', 'language', 'support', 'basis']) $(id).addEventListener('change', () => featuresChanged());
   $('verification').addEventListener('change', () => {
     $('verified-only').checked = $('verification').value === 'verified';
-    renderFeatures();
+    featuresChanged();
   });
   $('verified-only').addEventListener('change', () => {
     $('verification').value = $('verified-only').checked ? 'verified' : '';
-    renderFeatures();
+    featuresChanged();
   });
-  $('search').addEventListener('input', renderFeatures);
-  window.addEventListener('hashchange', applyHash);
-
-  renderOverview();
-  renderCoverageGrid();
+  $('search').addEventListener('input', () => featuresChanged(true));
+  window.addEventListener('hashchange', () => applyHash());
+  const source = data.metadata.source;
+  $('meta').innerHTML = '<a href="' + esc(source.url) + '">Catalog revision ' + esc(source.revision) + '</a>' +
+    '<a href="' + esc(data.metadata.maturitySource) + '">Language maturity source</a>';
+  $('maturity').innerHTML = '<thead><tr><th>Language</th><th>Traces</th><th>Metrics</th><th>Logs</th></tr></thead><tbody>' +
+    Object.keys(data.metadata.maturity).sort().map((language) => {
+      const m = data.metadata.maturity[language];
+      return '<tr><th scope="row">' + esc(language) + '</th><td>' + esc(m.traces) + '</td><td>' + esc(m.metrics) + '</td><td>' + esc(m.logs) + '</td></tr>';
+    }).join('') + '</tbody>';
   renderGlossary();
   renderReceipts();
-  const initialSection = syncControlsFromHash();
-  renderFeatures();
-  renderCompare();
-  scrollToSection(initialSection);
+  applyHash(false);
 }
-
 setup();

@@ -148,6 +148,8 @@ type CoverageCell struct {
 	Profile  string `json:"profile"`
 	Scenario string `json:"scenario"`
 	State    string `json:"state"`
+	// Declared distinguishes excluded scenarios from declared scenarios with no checks.
+	Declared bool `json:"declared"`
 }
 
 type Comparison struct {

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -129,5 +131,102 @@ func TestLegacyCoverageWithholdsClaimsWithoutReceipts(t *testing.T) {
 	coverages := coveragesForInvocation(plans, receipts, []string{"exercised", "unexercised"}, []string{"articles"}, nil)
 	if len(coverages) != 2 || len(coverages[0].Claims) != 1 || len(coverages[1].Claims) != 0 {
 		t.Fatalf("legacy coverage trusted a plan without receipts: %#v", coverages)
+	}
+}
+
+// Exercise the actual assembly boundary, including digest validation and the
+// embedded JSON, for both manifest membership and the legacy Cartesian suite.
+func TestRunRendersDeclaredMembershipAndReceiptOutcomes(t *testing.T) {
+	for _, limited := range []bool{false, true} {
+		t.Run(fmt.Sprintf("limited=%t", limited), func(t *testing.T) {
+			root := t.TempDir()
+			write := func(name string, data []byte) string {
+				path := filepath.Join(root, name)
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, data, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			}
+			marshal := func(v any) []byte {
+				b, err := json.Marshal(v)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return b
+			}
+			digest := func(b []byte) string { return fmt.Sprintf("%x", sha256.Sum256(b)) }
+			revision := strings.Repeat("a", 40)
+			matrix := []byte("## Traces\n| Feature | Go | Python | Ruby |\n| --- | --- | --- | --- |\n| End | + | + | + |\n")
+			metadata := report.CatalogMetadata{SchemaVersion: 1, Source: report.CatalogSource{Revision: revision, URL: "https://example.test/matrix", RawURL: "https://example.test/raw", SHA256: digest(matrix)}, MaturitySource: "https://example.test/maturity", Maturity: map[string]report.SignalMaturity{}}
+			for _, language := range []string{"go", "python", "ruby"} {
+				metadata.Maturity[language] = report.SignalMaturity{Traces: "stable", Metrics: "stable", Logs: "stable"}
+			}
+			var specs []string
+			var uris []map[string]string
+			for _, profile := range []string{"go", "python"} {
+				plan := report.NormalizedProfilePlan{SchemaVersion: 1, Profile: profile, DisplayName: profile, Language: profile, Framework: "fixture", Implementations: []string{"fixture@1"}, Proofs: []report.ProofPlanProof{{FeatureID: "traces.end", Basis: "observed", Assertion: "span/all-completed"}}}
+				planBytes := marshal(plan)
+				planPath := write(profile+".plan.json", planBytes)
+				specs = append(specs, profile+","+planPath+",https://example.test/plan")
+				// Go is explicitly unavailable, with a plan but no receipts.
+				if profile == "go" {
+					continue
+				}
+				for _, scenario := range []string{"case", "failure"} {
+					capture := []byte("capture " + scenario)
+					r := report.ValidationReceipt{SchemaVersion: 1, Revision: revision, Profile: profile, Scenario: scenario, ProofPlanSHA256: digest(planBytes), CaptureSHA256: digest(capture), ValidationMode: "contract", Outcome: "verified", Proofs: []report.ReceiptProof{{FeatureID: "traces.end", Assertion: "span/all-completed", Basis: "observed", Result: "pass"}}}
+					if scenario == "failure" {
+						r.Outcome, r.XFailReason, r.Proofs = "xfail", "fixture", nil
+					}
+					for name, contents := range map[string][]byte{scenario + ".json": marshal(r), scenario + ".capture.json": capture} {
+						uris = append(uris, map[string]string{"uri": "file://" + write("receipts/"+profile+"/"+name, contents)})
+					}
+				}
+			}
+			bep := marshal(map[string]any{"optionsParsed": map[string]any{"cmdLine": []string{"--nocache_test_results"}}, "outputs": uris})
+			var membership map[string][]string
+			if limited {
+				membership = map[string][]string{"go": {"case"}, "python": {"case", "failure"}}
+			}
+			out := filepath.Join(root, "report.html")
+			if err := run(write("matrix.md", matrix), write("metadata.json", marshal(metadata)), out, "go,python", "case,failure", revision, write("bep.json", bep), "", membership, map[string]bool{"go": true}, specs, nil); err != nil {
+				t.Fatal(err)
+			}
+			html, err := os.ReadFile(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			const marker = `<script type="application/json" id="report-data">`
+			_, embedded, ok := strings.Cut(string(html), marker)
+			if !ok {
+				t.Fatal("missing embedded report")
+			}
+			embedded, _, _ = strings.Cut(embedded, "</script>")
+			var model report.ReportModel
+			if err := json.Unmarshal([]byte(embedded), &model); err != nil {
+				t.Fatal(err)
+			}
+			for _, cell := range model.Coverage {
+				want := !(limited && cell.Profile == "go" && cell.Scenario == "failure")
+				if cell.Declared != want {
+					t.Fatalf("coverage membership = %#v", cell)
+				}
+			}
+			if got := model.Verification["traces.end"]["python"]; got.State != "verified" || strings.Join(got.Scenarios, ",") != "case" {
+				t.Fatalf("xfail counted as proof: %#v", got)
+			}
+			if model.Verification["traces.end"]["go"].State != "not_exercised" {
+				t.Fatal("plan without receipts verified")
+			}
+			if len(model.Receipts) != 2 || model.Receipts[1].Outcome != "xfail" {
+				t.Fatalf("missing run results: %#v", model.Receipts)
+			}
+			if strings.Contains(string(html), "<script src=") || strings.Contains(string(html), "<link rel=") {
+				t.Fatal("report has external assets")
+			}
+		})
 	}
 }
