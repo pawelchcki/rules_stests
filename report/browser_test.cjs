@@ -84,11 +84,11 @@ const path = require('node:path');
     r.spans[0].fields.traceId='f'.repeat(32);r.spans[0].fields.startTimeUnixNano='1';
     result.semantic=diff();result.raw=diff(true);
     r.scopes[0].metadata.name='other';result.scope=diff();result.hiddenScope=diff(false,true);
-    r.spans[0].parent='external parent';result.parent=diff();
+    r.spans[0].parent='external parent';l.spans[0].parentWithoutScope='root';r.spans[0].parentWithoutScope='root';result.parent=diff();result.hiddenParent=diff(false,true);
     r.spans[0].fields.attributes=[{key:'literal.name',value:{arrayValue:{values:[{intValue:'9223372036854775807'},{stringValue:'1'}]}}}];result.attributes=diff();
     return result;
   });
-  assert.equal(checks.semantic.length,0);assert.ok(checks.raw.includes('span.traceId'));assert.ok(checks.scope.includes('scope.metadata.name'));assert.equal(checks.hiddenScope.length,0);assert.ok(checks.parent.includes('span.parentRelationship'));assert.ok(checks.attributes.includes('span.attributes'));
+  assert.equal(checks.semantic.length,0);assert.ok(checks.raw.includes('span.traceId'));assert.ok(checks.scope.includes('scope.metadata.name'));assert.equal(checks.hiddenScope.length,0);assert.ok(checks.parent.includes('span.parentRelationship'));assert.ok(!checks.hiddenParent.includes('span.parentRelationship'));assert.ok(checks.attributes.includes('span.attributes'));
   const occurrenceCorrelation=await page.evaluate(()=>{
     const dataset=(pairs)=>({resources:[{}],scopes:[{}],spans:pairs.map(([start,end])=>({resource:0,scope:0,parent:'root',linkTargets:[],fields:{name:'repeated',startTimeUnixNano:start,endTimeUnixNano:end}}))});
     const left=dataset([['1','2'],['3','4']]),right=dataset([['1','4'],['3','2']]);

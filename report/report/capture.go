@@ -25,11 +25,12 @@ type CaptureDataset struct {
 	Shape       ScenarioShape    `json:"shape"`
 }
 type CapturedSpan struct {
-	Resource    int            `json:"resource"`
-	Scope       int            `json:"scope"`
-	Fields      map[string]any `json:"fields"`
-	Parent      string         `json:"parent"`
-	LinkTargets []string       `json:"linkTargets"`
+	Resource           int            `json:"resource"`
+	Scope              int            `json:"scope"`
+	Fields             map[string]any `json:"fields"`
+	Parent             string         `json:"parent"`
+	ParentWithoutScope string         `json:"parentWithoutScope"`
+	LinkTargets        []string       `json:"linkTargets"`
 }
 type CaptureComparison struct {
 	Left     string              `json:"left"`
@@ -204,7 +205,7 @@ func metadataFields(v any, schema any, scope bool) map[string]any {
 	return map[string]any{"metadata": m, "schemaUrl": str(schema)}
 }
 
-func semanticSpanProjection(d *CaptureDataset, index int) map[string]any {
+func semanticSpanProjection(d *CaptureDataset, index int, includeScope bool) map[string]any {
 	span := d.Spans[index]
 	fields := map[string]any{}
 	for key, value := range span.Fields {
@@ -240,7 +241,11 @@ func semanticSpanProjection(d *CaptureDataset, index int) map[string]any {
 		links = append(links, link)
 	}
 	fields["links"] = links
-	return map[string]any{"span": fields, "resource": d.Resources[span.Resource], "scope": d.Scopes[span.Scope]}
+	projection := map[string]any{"span": fields, "resource": d.Resources[span.Resource]}
+	if includeScope {
+		projection["scope"] = d.Scopes[span.Scope]
+	}
+	return projection
 }
 
 // DecodeCapture handles trace readability errors as diagnostics. The assembler
@@ -457,41 +462,55 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 			d.Spans[i].LinkTargets = append(d.Spans[i].LinkTargets, target)
 		}
 	}
-	occurrenceKeys := make([]string, len(d.Spans))
-	var occurrenceKey func(int) string
-	occurrenceKey = func(i int) string {
-		if occurrenceKeys[i] != "" {
-			return occurrenceKeys[i]
+	buildOccurrenceKeys := func(includeScope bool) []string {
+		keys := make([]string, len(d.Spans))
+		var key func(int) string
+		key = func(i int) string {
+			if keys[i] != "" {
+				return keys[i]
+			}
+			parent := "root"
+			if parents[i] >= 0 {
+				parent = key(parents[i])
+			} else if parentIDs[i] != "" {
+				parent = "external parent"
+			}
+			keys[i] = digest([]byte(canonical([]any{parent, semanticSpanProjection(&d, i, includeScope)})))[:12]
+			return keys[i]
 		}
-		parent := "root"
-		if parents[i] >= 0 {
-			parent = occurrenceKey(parents[i])
-		} else if parentIDs[i] != "" {
-			parent = "external parent"
+		for i := range d.Spans {
+			key(i)
 		}
-		occurrenceKeys[i] = digest([]byte(canonical([]any{parent, semanticSpanProjection(&d, i)})))[:12]
-		return occurrenceKeys[i]
+		return keys
 	}
-	for i := range d.Spans {
-		occurrenceKey(i)
-	}
-	externalParents := map[string][]string{}
-	for i := range d.Spans {
-		if parents[i] < 0 && parentIDs[i] != "" {
-			key := traceIDs[i] + "/" + parentIDs[i]
-			externalParents[key] = append(externalParents[key], occurrenceKeys[i])
+	occurrenceKeys := buildOccurrenceKeys(true)
+	occurrenceKeysWithoutScope := buildOccurrenceKeys(false)
+	buildExternalParents := func(keys []string) map[string][]string {
+		result := map[string][]string{}
+		for i := range d.Spans {
+			if parents[i] < 0 && parentIDs[i] != "" {
+				key := traceIDs[i] + "/" + parentIDs[i]
+				result[key] = append(result[key], keys[i])
+			}
 		}
+		for _, children := range result {
+			sort.Strings(children)
+		}
+		return result
 	}
-	for _, children := range externalParents {
-		sort.Strings(children)
-	}
+	externalParents := buildExternalParents(occurrenceKeys)
+	externalParentsWithoutScope := buildExternalParents(occurrenceKeysWithoutScope)
 	for i := range d.Spans {
 		if parents[i] >= 0 {
 			d.Spans[i].Parent = path(parents[i]) + " occurrence " + occurrenceKeys[parents[i]]
+			d.Spans[i].ParentWithoutScope = path(parents[i]) + " occurrence " + occurrenceKeysWithoutScope[parents[i]]
 		} else if parentIDs[i] != "" {
-			d.Spans[i].Parent = "external parent (partial trace), children occurrences " + digest([]byte(canonical(externalParents[traceIDs[i]+"/"+parentIDs[i]])))
+			key := traceIDs[i] + "/" + parentIDs[i]
+			d.Spans[i].Parent = "external parent (partial trace), children occurrences " + digest([]byte(canonical(externalParents[key])))
+			d.Spans[i].ParentWithoutScope = "external parent (partial trace), children occurrences " + digest([]byte(canonical(externalParentsWithoutScope[key])))
 		} else {
 			d.Spans[i].Parent = "root"
+			d.Spans[i].ParentWithoutScope = "root"
 		}
 	}
 	var groups func([]int) []SpanGroup

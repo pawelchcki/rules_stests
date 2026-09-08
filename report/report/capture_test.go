@@ -159,6 +159,24 @@ func TestCapturePreservesCapturedParentOccurrenceIdentity(t *testing.T) {
 		t.Fatalf("child X was reassigned without changing its parent relationship: %q", left.Spans[1].Parent)
 	}
 }
+func TestCaptureParentOccurrenceIdentityWithoutScope(t *testing.T) {
+	fixture := func(scope string) []byte {
+		spans := []any{captureSpan(1, 1, 0, "parent"), captureSpan(1, 2, 1, "child")}
+		raw, _ := json.Marshal([]any{map[string]any{"signal": "traces", "payload": map[string]any{"resourceSpans": []any{map[string]any{"scopeSpans": []any{map[string]any{"scope": map[string]any{"name": scope}, "spans": spans}}}}}}})
+		return raw
+	}
+	left := DecodeCapture(ValidationReceipt{}, fixture("scope-a"))
+	right := DecodeCapture(ValidationReceipt{}, fixture("scope-b"))
+	if len(left.Diagnostics) > 0 || len(right.Diagnostics) > 0 {
+		t.Fatalf("scope fixtures failed: %v %v", left.Diagnostics, right.Diagnostics)
+	}
+	if left.Spans[1].Parent == right.Spans[1].Parent {
+		t.Fatal("scope-sensitive parent relationships were conflated")
+	}
+	if left.Spans[1].ParentWithoutScope != right.Spans[1].ParentWithoutScope {
+		t.Fatalf("hidden scope leaked into parent relationships: %q != %q", left.Spans[1].ParentWithoutScope, right.Spans[1].ParentWithoutScope)
+	}
+}
 func TestPlannedChecksDoNotInflateVerification(t *testing.T) {
 	proof := ProofPlanProof{FeatureID: "f", Assertion: "assert", Basis: "observed"}
 	model := ReportModel{Manifests: []Manifest{{Profile: "p"}, {Profile: "unavailable"}}, Coverage: []CoverageCell{{Profile: "p", Scenario: "pass", Declared: true}, {Profile: "p", Scenario: "xfail", Declared: true}, {Profile: "p", Scenario: "unrun", Declared: true}, {Profile: "p", Scenario: "excluded"}, {Profile: "unavailable", Scenario: "unrun", Declared: true}}, Verification: map[string]map[string]Verification{"f": {"p": {State: "verified"}, "unavailable": {State: "not_exercised"}}}, Receipts: []ValidationReceipt{{Profile: "p", Scenario: "pass", Outcome: "verified", Proofs: []ReceiptProof{{FeatureID: "f", Assertion: "assert", Basis: "observed", Result: "pass"}}}, {Profile: "p", Scenario: "xfail", Outcome: "xfail", XFailReason: "reason"}}}
