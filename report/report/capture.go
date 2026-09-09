@@ -1116,64 +1116,92 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 				memberDescriptions[member] = canonical([]any{base[member], outgoing})
 				descriptions = append(descriptions, memberDescriptions[member])
 			}
-			root := components[component][0]
-			rootKey := canonical([]any{base[root], memberDescriptions[root]})
-			rootCandidates := []int{root}
-			for _, member := range components[component][1:] {
-				candidate := canonical([]any{base[member], memberDescriptions[member]})
-				if candidate < rootKey {
-					root, rootKey = member, candidate
-					rootCandidates = []int{member}
-				} else if candidate == rootKey {
-					rootCandidates = append(rootCandidates, member)
+			assignClasses := func(signatures map[int]string) ([]int, int) {
+				unique := map[string]bool{}
+				for _, signature := range signatures {
+					unique[signature] = true
+				}
+				ordered := make([]string, 0, len(unique))
+				for signature := range unique {
+					ordered = append(ordered, signature)
+				}
+				sort.Strings(ordered)
+				classBySignature := map[string]int{}
+				for class, signature := range ordered {
+					classBySignature[signature] = class
+				}
+				classes := make([]int, len(d.Spans))
+				for member, signature := range signatures {
+					classes[member] = classBySignature[signature]
+				}
+				return classes, len(ordered)
+			}
+			initial := map[int]string{}
+			for _, member := range components[component] {
+				initial[member] = memberDescriptions[member]
+			}
+			classes, classCount := assignClasses(initial)
+			incoming := make([][]struct {
+				source int
+				edge   graphEdge
+			}, len(d.Spans))
+			for _, source := range components[component] {
+				for _, edge := range edges[source] {
+					if edge.target >= 0 && componentOf[edge.target] == component {
+						incoming[edge.target] = append(incoming[edge.target], struct {
+							source int
+							edge   graphEdge
+						}{source: source, edge: edge})
+					}
 				}
 			}
-			// A uniform simple cycle is vertex-transitive, so every tied root
-			// has the same complete certificate. Other ties need the exact
-			// certificate to avoid falling back to capture/DFS order.
-			uniformSimpleCycle := len(rootCandidates) == len(components[component])
-			if uniformSimpleCycle {
+			// A bounded color refinement captures canonical member positions
+			// with linear storage and O(E) work per round, including regular
+			// components where local outgoing descriptions are identical.
+			for range 16 {
+				refined := map[int]string{}
 				for _, member := range components[component] {
-					internal := 0
+					outgoing := []string{}
 					for _, edge := range edges[member] {
+						target := ""
 						if edge.target >= 0 && componentOf[edge.target] == component {
-							internal++
+							target = strconv.Itoa(classes[edge.target])
+						} else if edge.target >= 0 {
+							target = keys[edge.target]
+						} else {
+							target = externalLabels[edge.external]
 						}
+						outgoing = append(outgoing, canonical([]any{edge.relationship, target, edge.shared}))
 					}
-					if internal != 1 {
-						uniformSimpleCycle = false
-						break
+					sort.Strings(outgoing)
+					incomingKeys := make([]string, 0, len(incoming[member]))
+					for _, entry := range incoming[member] {
+						incomingKeys = append(incomingKeys, canonical([]any{entry.edge.relationship, classes[entry.source], entry.edge.shared}))
 					}
+					sort.Strings(incomingKeys)
+					refined[member] = canonical([]any{memberDescriptions[member], classes[member], outgoing, incomingKeys})
+				}
+				next, nextCount := assignClasses(refined)
+				classes = next
+				if nextCount == classCount {
+					break
+				}
+				classCount = nextCount
+			}
+			root := components[component][0]
+			rootKey := canonical([]any{memberDescriptions[root], classes[root]})
+			for _, member := range components[component][1:] {
+				candidate := canonical([]any{memberDescriptions[member], classes[member]})
+				if candidate < rootKey {
+					root, rootKey = member, candidate
 				}
 			}
 			rooted := canonical(rootedCertificate(root))
-			rootedCertificates := map[int]string{root: rooted}
-			if len(rootCandidates) > 1 && !uniformSimpleCycle {
-				for _, candidate := range rootCandidates[1:] {
-					certificate := canonical(rootedCertificate(candidate))
-					rootedCertificates[candidate] = certificate
-					if certificate < rooted {
-						root, rooted = candidate, certificate
-					}
-				}
-			}
 			adjacencyKey := digest([]byte(rooted))[:12]
 			sort.Strings(descriptions)
 			componentKeys[component] = digest([]byte(canonical([]any{descriptions, adjacencyKey})))[:12]
-			membersByDescription := map[string][]int{}
 			for _, member := range components[component] {
-				membersByDescription[memberDescriptions[member]] = append(membersByDescription[memberDescriptions[member]], member)
-			}
-			for _, member := range components[component] {
-				position := ""
-				if len(membersByDescription[memberDescriptions[member]]) > 1 && !uniformSimpleCycle {
-					certificate, exists := rootedCertificates[member]
-					if !exists {
-						certificate = canonical(rootedCertificate(member))
-						rootedCertificates[member] = certificate
-					}
-					position = digest([]byte(certificate))[:12]
-				}
+				position := strconv.Itoa(classes[member])
 				keys[member] = digest([]byte(canonical([]any{memberDescriptions[member], componentKeys[component], position})))[:12]
 			}
 			componentState[component] = 2

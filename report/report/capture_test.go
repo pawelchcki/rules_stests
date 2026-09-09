@@ -774,6 +774,22 @@ func TestCaptureLargeLinkGraphStaysBounded(t *testing.T) {
 		t.Fatalf("large link graph projection grew to %d bytes", size)
 	}
 }
+func TestCaptureLargeRegularLinkGraphStaysBounded(t *testing.T) {
+	const count = 1000
+	spans := make([]map[string]any, count)
+	for i := range spans {
+		span := captureSpan(i+1, 1, 0, "regular")
+		span["links"] = []any{
+			map[string]any{"traceId": fmt.Sprintf("%032x", (i+1)%count+1), "spanId": fmt.Sprintf("%016x", 1)},
+			map[string]any{"traceId": fmt.Sprintf("%032x", (i+2)%count+1), "spanId": fmt.Sprintf("%016x", 1)},
+		}
+		spans[i] = span
+	}
+	d := decodedFixtureWithEncoding(t, "large regular link graph", "protobuf", spans...)
+	if len(d.Spans) != count {
+		t.Fatalf("decoded %d spans, want %d", len(d.Spans), count)
+	}
+}
 func TestCaptureRejectsAllZeroParentID(t *testing.T) {
 	span := captureSpan(1, 1, 0, "invalid parent")
 	span["parentSpanId"] = "0000000000000000"
