@@ -141,6 +141,13 @@ const path = require('node:path');
     return captureRowDiff(left,right,{left:[0,1],right:[0,1]},true,false).diffs;
   });
   assert.deepEqual(occurrenceCorrelation,['complete occurrence projection']);
+  const mixedOccurrenceCorrelation=await page.evaluate(()=>{
+    const dataset=(values)=>({resources:[{}],scopes:[{}],spans:values.map(([b,c])=>({resource:0,scope:0,parent:'root',linkTargets:[],fields:{name:'repeated',b,c}}))});
+    const left=dataset([['one','same'],['two','same']]),right=dataset([['two','same'],['one','changed']]);
+    return captureRowDiff(left,right,{left:[0,1],right:[0,1]},true,false).diffs;
+  });
+  assert.ok(mixedOccurrenceCorrelation.includes('span.c'));
+  assert.ok(mixedOccurrenceCorrelation.includes('complete occurrence projection'),'correlation differences must remain visible beside field differences');
   // Remove a capture to exercise one-sided inspection, without saved shapes.
   await route('#parity');
   await page.evaluate(()=>{captureByKey.delete('python/case');data.captureComparisons=[];renderCompare();});

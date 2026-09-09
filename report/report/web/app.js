@@ -850,7 +850,7 @@ function captureRowDiff(l,r,row,raw,hideScope) {
   const diffs=keys.filter(k=>stable(variantSignature(lv[k]))!==stable(variantSignature(rv[k])));
   const occurrenceKey='complete occurrence projection';
   const lo=l ? occurrenceVariants(l,row.left,raw,hideScope) : new Map(),ro=r ? occurrenceVariants(r,row.right,raw,hideScope) : new Map();
-  if (!diffs.length && stable(variantSignature(lo))!==stable(variantSignature(ro))) {
+  if (stable(variantSignature(lo))!==stable(variantSignature(ro))) {
     keys.unshift(occurrenceKey);diffs.push(occurrenceKey);lv[occurrenceKey]=lo;rv[occurrenceKey]=ro;
   }
   return {lv,rv,keys,diffs};

@@ -388,6 +388,10 @@ func TestCaptureRepresentsZeroTelemetry(t *testing.T) {
 			if len(empty.Diagnostics) != 0 || len(empty.Shape.Traces) != 0 {
 				t.Fatalf("zero telemetry became a diagnostic: %+v", empty)
 			}
+			encoded, err := json.Marshal(empty)
+			if err != nil || !bytes.Contains(encoded, []byte(`"spans":[]`)) || !bytes.Contains(encoded, []byte(`"traces":[]`)) {
+				t.Fatalf("zero telemetry did not retain browser-safe empty arrays: %s (%v)", encoded, err)
+			}
 			nonempty := decodedFixture(t, "nonempty", captureSpan(1, 1, 0, "span"))
 			alignment := AlignShapes(&empty.Shape, &nonempty.Shape)
 			if alignment.Summary.TraceRightOnly != 1 {
@@ -894,6 +898,53 @@ func TestCaptureLargeLocallyIdenticalComponentIgnoresRecordOrder(t *testing.T) {
 		traceID := str(span.Fields["traceId"])
 		if canonical(span.LinkTargets) != rightTargets[traceID] {
 			t.Fatalf("record order changed trace %s link targets: %s != %s", traceID, canonical(span.LinkTargets), rightTargets[traceID])
+		}
+	}
+}
+func TestCaptureLargeRegularIrregularMatchingIgnoresRecordOrder(t *testing.T) {
+	const count = 66
+	const half = count / 2
+	permutation := make([]int, half)
+	for i := range permutation {
+		permutation[i] = i
+	}
+	for i := range permutation {
+		j := (i*i + 7*i + 11) % half
+		permutation[i], permutation[j] = permutation[j], permutation[i]
+	}
+	if permutation[0] == half-1 {
+		permutation[0], permutation[1] = permutation[1], permutation[0]
+	}
+	if permutation[half-1] == 0 {
+		permutation[half-1], permutation[1] = permutation[1], permutation[half-1]
+	}
+	matching := make([]int, count)
+	for left, rightOffset := range permutation {
+		right := half + rightOffset
+		matching[left], matching[right] = right, left
+	}
+	spans := make([]map[string]any, count)
+	reversed := make([]map[string]any, count)
+	for i := range spans {
+		span := captureSpan(i+1, 1, 0, "regular")
+		span["links"] = []any{
+			map[string]any{"traceId": fmt.Sprintf("%032x", (i+count-1)%count+1), "spanId": fmt.Sprintf("%016x", 1)},
+			map[string]any{"traceId": fmt.Sprintf("%032x", (i+1)%count+1), "spanId": fmt.Sprintf("%016x", 1)},
+			map[string]any{"traceId": fmt.Sprintf("%032x", matching[i]+1), "spanId": fmt.Sprintf("%016x", 1)},
+		}
+		spans[i] = span
+		reversed[count-1-i] = span
+	}
+	left := decodedFixture(t, "regular matching forward", spans...)
+	right := decodedFixture(t, "regular matching reversed", reversed...)
+	rightTargets := map[string]string{}
+	for _, span := range right.Spans {
+		rightTargets[str(span.Fields["traceId"])] = canonical(span.LinkTargets)
+	}
+	for _, span := range left.Spans {
+		traceID := str(span.Fields["traceId"])
+		if canonical(span.LinkTargets) != rightTargets[traceID] {
+			t.Fatalf("record order changed regular graph trace %s link targets: %s != %s", traceID, canonical(span.LinkTargets), rightTargets[traceID])
 		}
 	}
 }

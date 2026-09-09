@@ -745,8 +745,8 @@ func withinJSONNodeLimit(value any) bool {
 // DecodeCapture handles trace readability errors as diagnostics. The assembler
 // has already checked these bytes against the accepted receipt digest.
 func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
-	d = CaptureDataset{Key: receipt.Profile + "/" + receipt.Scenario, Profile: receipt.Profile, Scenario: receipt.Scenario, Revision: receipt.Revision, Outcome: receipt.Outcome}
-	d.Shape = ScenarioShape{Profile: d.Profile, Scenario: d.Scenario, ExactCounts: true, Scopes: map[string]int{}, Statuses: map[string]int{}}
+	d = CaptureDataset{Key: receipt.Profile + "/" + receipt.Scenario, Profile: receipt.Profile, Scenario: receipt.Scenario, Revision: receipt.Revision, Outcome: receipt.Outcome, Spans: []CapturedSpan{}}
+	d.Shape = ScenarioShape{Profile: d.Profile, Scenario: d.Scenario, Traces: []TraceGroup{}, ExactCounts: true, Scopes: map[string]int{}, Statuses: map[string]int{}}
 	resourceIndexes := map[string]int{}
 	scopeIndexes := map[string]int{}
 	fail := func(err error) CaptureDataset {
@@ -1189,16 +1189,19 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 		keys := make([]string, len(d.Spans))
 		componentKeys := make([]string, len(components))
 		componentState := make([]int, len(components))
-		var labelComponent func(int)
-		labelComponent = func(component int) {
+		canonicalRootWorkRemaining := int64(8 * 1024 * 1024)
+		var labelComponent func(int) error
+		labelComponent = func(component int) error {
 			if componentState[component] == 2 {
-				return
+				return nil
 			}
 			componentState[component] = 1
 			for _, member := range components[component] {
 				for _, edge := range edges[member] {
 					if edge.target >= 0 && componentOf[edge.target] != component {
-						labelComponent(componentOf[edge.target])
+						if err := labelComponent(componentOf[edge.target]); err != nil {
+							return err
+						}
 					}
 				}
 			}
@@ -1237,7 +1240,7 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 					keys[root] = digest([]byte(canonical(rootedCertificate(root))))[:12]
 				}
 				componentState[component] = 2
-				return
+				return nil
 			}
 			descriptions := make([]string, 0, len(components[component]))
 			memberDescriptions := map[int]string{}
@@ -1370,18 +1373,64 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 					root, rootKey = member, candidate
 				}
 			}
-			rooted := canonical(rootedCertificate(root))
+			// A stable refinement class is not necessarily an automorphism class:
+			// regular, non-vertex-transitive graphs can leave every member tied.
+			// Canonical rooted certificates distinguish such positions and make the
+			// shared component label independent of Tarjan's traversal order. Keep
+			// the exact work bounded; a capture that exceeds the limit becomes a
+			// diagnostic instead of silently receiving record-order-dependent keys.
+			rootedDigestByMember := map[int]string{}
+			if !simpleDirectedCycle {
+				classSizes := map[int]int{}
+				for _, member := range components[component] {
+					classSizes[classes[member]]++
+				}
+				ambiguous := 0
+				componentWork := int64(len(components[component]))
+				for _, member := range components[component] {
+					componentWork += int64(len(edges[member]))
+					if classSizes[classes[member]] > 1 {
+						ambiguous++
+					}
+				}
+				if ambiguous > 0 && componentWork > canonicalRootWorkRemaining/int64(ambiguous) {
+					return fmt.Errorf("link graph canonicalization exceeds work limit")
+				}
+				canonicalRootWorkRemaining -= int64(ambiguous) * componentWork
+				for _, member := range components[component] {
+					if classSizes[classes[member]] > 1 {
+						rootedDigestByMember[member] = digest([]byte(canonical(rootedCertificate(member))))
+					}
+				}
+			}
+			rooted := rootedDigestByMember[root]
+			if rooted == "" {
+				rooted = digest([]byte(canonical(rootedCertificate(root))))
+			} else {
+				for _, member := range components[component] {
+					candidateKey := canonical([]any{memberDescriptions[member], classes[member]})
+					if candidateKey == rootKey && rootedDigestByMember[member] < rooted {
+						rooted = rootedDigestByMember[member]
+					}
+				}
+			}
 			adjacencyKey := digest([]byte(rooted))[:12]
 			sort.Strings(descriptions)
 			componentKeys[component] = digest([]byte(canonical([]any{descriptions, adjacencyKey})))[:12]
 			for _, member := range components[component] {
 				position := strconv.Itoa(classes[member])
+				if rooted := rootedDigestByMember[member]; rooted != "" {
+					position += ":" + rooted[:12]
+				}
 				keys[member] = digest([]byte(canonical([]any{memberDescriptions[member], componentKeys[component], position})))[:12]
 			}
 			componentState[component] = 2
+			return nil
 		}
 		for component := range components {
-			labelComponent(component)
+			if err := labelComponent(component); err != nil {
+				return nil, err
+			}
 		}
 		graphKeyCache[cacheKey] = append([]string(nil), keys...)
 		return keys, nil
