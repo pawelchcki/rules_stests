@@ -552,6 +552,97 @@ func linearMemoryMaximumCardinalityPairs(leftCount, rightCount int, score func(i
 	return linearMemoryMaximumCardinalityPairsWithSeed(leftCount, rightCount, score, nil)
 }
 
+// improveMatchingScores runs an integer auction over the already matched
+// left/right subsets. Scaling integral detail scores by k+1 makes an epsilon
+// of one exact for k assignments, while prices, owners, and the work stack all
+// remain linear in the number of matched vertices. Starting from a square
+// subset with a known perfect matching preserves the cardinality established
+// by Hopcroft-Karp.
+func improveMatchingScores(leftToRight []int, rightCount int, score func(int, int) (int, bool)) []int {
+	matchedLefts := make([]int, 0, len(leftToRight))
+	usedRights := make([]bool, rightCount)
+	for left, right := range leftToRight {
+		if right >= 0 {
+			matchedLefts = append(matchedLefts, left)
+			usedRights[right] = true
+		}
+	}
+	rights := make([]int, 0, len(matchedLefts))
+	for right, used := range usedRights {
+		if used {
+			rights = append(rights, right)
+		}
+	}
+	count := len(matchedLefts)
+	if count < 2 || len(rights) != count {
+		return leftToRight
+	}
+	prices := make([]int64, count)
+	owners := make([]int, count)
+	assignment := make([]int, count)
+	unassigned := make([]int, 0, count)
+	for position := count - 1; position >= 0; position-- {
+		owners[position], assignment[position] = -1, -1
+		unassigned = append(unassigned, position)
+	}
+	scale := int64(count + 1)
+	for len(unassigned) > 0 {
+		last := len(unassigned) - 1
+		leftPosition := unassigned[last]
+		unassigned = unassigned[:last]
+		left := matchedLefts[leftPosition]
+		bestPosition := -1
+		var bestValue, secondValue int64
+		secondFound := false
+		for rightPosition, right := range rights {
+			detail, compatible := score(left, right)
+			if !compatible {
+				continue
+			}
+			value := int64(detail)*scale - prices[rightPosition]
+			if bestPosition < 0 || value > bestValue {
+				if bestPosition >= 0 {
+					secondValue, secondFound = bestValue, true
+				}
+				bestPosition, bestValue = rightPosition, value
+			} else if !secondFound || value > secondValue {
+				secondValue, secondFound = value, true
+			}
+		}
+		if bestPosition < 0 {
+			return leftToRight
+		}
+		bid := int64(1)
+		if secondFound {
+			bid = bestValue - secondValue + 1
+		}
+		prices[bestPosition] += bid
+		previousOwner := owners[bestPosition]
+		owners[bestPosition], assignment[leftPosition] = leftPosition, bestPosition
+		if previousOwner >= 0 {
+			assignment[previousOwner] = -1
+			unassigned = append(unassigned, previousOwner)
+		}
+	}
+	candidate := append([]int(nil), leftToRight...)
+	originalScore, candidateScore := int64(0), int64(0)
+	for position, left := range matchedLefts {
+		original, originalOK := score(left, leftToRight[left])
+		right := rights[assignment[position]]
+		improved, improvedOK := score(left, right)
+		if !originalOK || !improvedOK {
+			return leftToRight
+		}
+		originalScore += int64(original)
+		candidateScore += int64(improved)
+		candidate[left] = right
+	}
+	if candidateScore > originalScore {
+		return candidate
+	}
+	return leftToRight
+}
+
 // linearMemoryMaximumCardinalityPairsWithSeed starts from a cheap known-good
 // matching, but keeps every seeded edge on the augmenting paths. The seed can
 // improve the common exact-match case without locking a wildcard pairing that
@@ -626,24 +717,7 @@ func linearMemoryMaximumCardinalityPairsWithSeed(leftCount, rightCount int, scor
 			}
 		}
 	}
-	// Prefer higher total detail scores through cardinality-preserving pair
-	// swaps. The maximum-cardinality matching above remains intact.
-	for left := 0; left < leftCount; left++ {
-		for other := left + 1; other < leftCount; other++ {
-			right, otherRight := leftToRight[left], leftToRight[other]
-			if right < 0 || otherRight < 0 {
-				continue
-			}
-			current, currentOK := score(left, right)
-			otherCurrent, otherCurrentOK := score(other, otherRight)
-			cross, crossOK := score(left, otherRight)
-			otherCross, otherCrossOK := score(other, right)
-			if currentOK && otherCurrentOK && crossOK && otherCrossOK && cross+otherCross > current+otherCurrent {
-				leftToRight[left], leftToRight[other] = otherRight, right
-				rightToLeft[right], rightToLeft[otherRight] = other, left
-			}
-		}
-	}
+	leftToRight = improveMatchingScores(leftToRight, rightCount, score)
 	usedRight := make([]bool, rightCount)
 	for _, right := range leftToRight {
 		if right >= 0 {

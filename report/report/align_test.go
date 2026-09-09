@@ -106,6 +106,38 @@ func TestLargeExactSeedsRemainAugmentable(t *testing.T) {
 	}
 }
 
+func TestLargeAssignmentAllowsThreeWayScoreImprovement(t *testing.T) {
+	parent := func(children ...int) SpanGroup {
+		groups := make([]SpanGroup, 0, len(children))
+		for _, child := range children {
+			groups = append(groups, exactSpan("", "client", "", fmt.Sprintf("child-%d", child), ""))
+		}
+		return exactSpan("", "internal", "", "parent", "", groups...)
+	}
+	leftRoots := []SpanGroup{
+		parent(0, 1, 4, 5),
+		parent(2, 4, 5),
+		parent(0, 2, 4, 5),
+	}
+	rightRoots := []SpanGroup{
+		parent(0, 1, 2, 3),
+		parent(1, 5),
+		parent(5),
+	}
+	for i := 0; i < optimalAssignmentVertexLimit/2-2; i++ {
+		common := exactSpan("", "server", "", fmt.Sprintf("common-%03d", i), "")
+		leftRoots = append(leftRoots, common)
+		rightRoots = append(rightRoots, common)
+	}
+	shape := func(profile string, children []SpanGroup) *ScenarioShape {
+		return shapeOf(profile, exactSpan("", "server", "", "root", "", children...))
+	}
+	alignment := AlignShapes(shape("left", leftRoots), shape("right", rightRoots))
+	if alignment.Summary.Matched != 71 {
+		t.Fatalf("three-way score improvement was missed: %#v", alignment.Summary)
+	}
+}
+
 func TestLargeSiblingAlignmentUsesChildStructure(t *testing.T) {
 	const count = optimalAssignmentVertexLimit/2 + 1
 	leftParents := make([]SpanGroup, 0, count)

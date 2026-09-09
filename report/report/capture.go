@@ -258,7 +258,13 @@ func normalizeWireContext(v any, context, encoding string) (any, error) {
 		return out, nil
 	case map[string]any:
 		out := map[string]any{}
-		for k, c := range v {
+		fieldNames := make([]string, 0, len(v))
+		for k := range v {
+			fieldNames = append(fieldNames, k)
+		}
+		sort.Strings(fieldNames)
+		for _, k := range fieldNames {
+			c := v[k]
 			key, validSpelling := canonicalWireField(context, k)
 			if !validSpelling {
 				return nil, fmt.Errorf("invalid OTLP %s field %q", context, k)

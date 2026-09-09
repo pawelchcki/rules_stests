@@ -275,6 +275,17 @@ func TestCaptureRejectsSinkInvalidSpanFields(t *testing.T) {
 		})
 	}
 }
+func TestCaptureSelectsDiagnosticsDeterministically(t *testing.T) {
+	span := captureSpan(1, 1, 0, "invalid")
+	span["name"], span["traceState"] = 7, true
+	raw := captureFixture(span)
+	for i := 0; i < 50; i++ {
+		d := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, raw)
+		if len(d.Diagnostics) != 1 || !strings.Contains(d.Diagnostics[0], `field "name"`) {
+			t.Fatalf("map iteration changed the selected diagnostic: %+v", d.Diagnostics)
+		}
+	}
+}
 func TestCaptureAcceptsFiniteDoubleUnderflow(t *testing.T) {
 	span := captureSpan(1, 1, 0, "underflow")
 	span["attributes"] = []any{map[string]any{"key": "tiny", "value": map[string]any{"doubleValue": "1e-9999"}}}
