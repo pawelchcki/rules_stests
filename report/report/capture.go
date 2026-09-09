@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -332,6 +333,7 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 	if e := decoder.Decode(new(any)); e != io.EOF {
 		return fail(fmt.Errorf("trailing capture data"))
 	}
+	maxSpanTimestamp := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 127), big.NewInt(1))
 	for _, record := range records {
 		r := object(record)
 		if str(r["signal"]) != "traces" {
@@ -378,6 +380,24 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 						return fail(fmt.Errorf("unreadable span"))
 					}
 					fields = defaults(fields, map[string]any{"traceState": "", "parentSpanId": "", "name": "", "startTimeUnixNano": "0", "endTimeUnixNano": "0", "attributes": []any{}, "events": []any{}, "links": []any{}, "flags": "0", "droppedAttributesCount": "0", "droppedEventsCount": "0", "droppedLinksCount": "0"})
+					name, ok := fields["name"].(string)
+					if !ok {
+						return fail(fmt.Errorf("invalid span name"))
+					}
+					if name == "" {
+						return fail(fmt.Errorf("span has no name"))
+					}
+					start, validStart := new(big.Int).SetString(str(fields["startTimeUnixNano"]), 10)
+					end, validEnd := new(big.Int).SetString(str(fields["endTimeUnixNano"]), 10)
+					if !validStart || start.Cmp(maxSpanTimestamp) > 0 {
+						return fail(fmt.Errorf("invalid span start timestamp"))
+					}
+					if !validEnd || end.Cmp(maxSpanTimestamp) > 0 {
+						return fail(fmt.Errorf("invalid span end timestamp"))
+					}
+					if start.Sign() <= 0 || end.Cmp(start) < 0 {
+						return fail(fmt.Errorf("span timestamps are not ordered"))
+					}
 					fields["kind"] = enumValue(fields["kind"], "SPAN_KIND_", []string{"unspecified", "internal", "server", "client", "producer", "consumer"})
 					status := defaults(object(fields["status"]), map[string]any{"code": "0", "message": ""})
 					status["code"] = enumValue(status["code"], "STATUS_CODE_", []string{"unset", "ok", "error"})
@@ -541,6 +561,15 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 				edges[i] = append(edges[i], edge)
 			}
 		}
+		adjacent := make([]map[int]bool, len(d.Spans))
+		for source := range edges {
+			adjacent[source] = map[int]bool{}
+			for _, edge := range edges[source] {
+				if edge.target >= 0 {
+					adjacent[source][edge.target] = true
+				}
+			}
+		}
 		externalLabels := map[string]string{}
 		for target, incoming := range externalIncoming {
 			sort.Strings(incoming)
@@ -622,6 +651,40 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 					}
 				}
 			}
+			// Small components get the exact cycle-safe rooted certificate.
+			// Bounding this work keeps total capture cost linear even when an
+			// exporter submits one enormous strongly connected link graph.
+			if len(components[component]) <= 64 {
+				for _, root := range components[component] {
+					visited := map[int]int{}
+					var visit func(int) any
+					visit = func(member int) any {
+						if reference, ok := visited[member]; ok {
+							return map[string]any{"reference": reference}
+						}
+						visited[member] = len(visited)
+						outgoing := make([]any, 0, len(edges[member]))
+						for _, edge := range edges[member] {
+							descriptor := map[string]any{"relationship": edge.relationship}
+							if edge.target < 0 {
+								descriptor["externalTarget"] = externalLabels[edge.external]
+							} else if componentOf[edge.target] == component {
+								descriptor["target"] = visit(edge.target)
+							} else {
+								descriptor["target"] = keys[edge.target]
+							}
+							if edge.shared != "" {
+								descriptor["sharedTarget"] = edge.shared
+							}
+							outgoing = append(outgoing, descriptor)
+						}
+						return map[string]any{"occurrence": base[member], "links": outgoing}
+					}
+					keys[root] = digest([]byte(canonical(visit(root))))[:12]
+				}
+				componentState[component] = 2
+				return
+			}
 			descriptions := make([]string, 0, len(components[component]))
 			memberDescriptions := map[int]string{}
 			for _, member := range components[component] {
@@ -631,7 +694,7 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 					if edge.target < 0 {
 						descriptor["externalTarget"] = externalLabels[edge.external]
 					} else if componentOf[edge.target] == component {
-						descriptor["componentTarget"] = base[edge.target]
+						descriptor["componentTarget"] = map[string]any{"occurrence": base[edge.target], "reciprocal": adjacent[edge.target][member]}
 					} else {
 						descriptor["target"] = keys[edge.target]
 					}

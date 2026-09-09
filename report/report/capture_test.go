@@ -34,8 +34,8 @@ func decodedFixture(t *testing.T, profile string, spans ...map[string]any) Captu
 	return d
 }
 func TestCaptureWireFormatsAndPrecision(t *testing.T) {
-	otlp := `[{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"GET /tags","kind":"SPAN_KIND_SERVER","status":{"code":"STATUS_CODE_OK"},"attributes":[{"key":"large","value":{"intValue":"9223372036854775807"}},{"key":"bytes","value":{"bytesValue":"AQI="}},{"key":"array","value":{"arrayValue":{"values":[{"boolValue":true},{"stringValue":"9223372036854775807"}]}}}]}]}]}]}}]`
-	proto := `[{"signal":"traces","payload":{"resource_spans":[{"resource":null,"schema_url":"","scope_spans":[{"scope":null,"schema_url":"","spans":[{"trace_id":"00000000000000000000000000000001","span_id":"0000000000000001","parent_span_id":"","name":"GET /tags","kind":2,"status":{"code":1,"message":""},"attributes":[{"key":"array","value":{"value":{"array_value":{"values":[{"value":{"bool_value":true}},{"value":{"string_value":"9223372036854775807"}}]}}}},{"key":"bytes","value":{"value":{"bytes_value":[1,2]}}},{"key":"large","value":{"value":{"int_value":9223372036854775807}}}],"events":[],"links":[],"flags":0,"dropped_attributes_count":0,"dropped_events_count":0,"dropped_links_count":0,"start_time_unix_nano":0,"end_time_unix_nano":0,"trace_state":""}]}]}]}}]`
+	otlp := `[{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"GET /tags","kind":"SPAN_KIND_SERVER","status":{"code":"STATUS_CODE_OK"},"attributes":[{"key":"large","value":{"intValue":"9223372036854775807"}},{"key":"bytes","value":{"bytesValue":"AQI="}},{"key":"array","value":{"arrayValue":{"values":[{"boolValue":true},{"stringValue":"9223372036854775807"}]}}}],"startTimeUnixNano":"1","endTimeUnixNano":"2"}]}]}]}}]`
+	proto := `[{"signal":"traces","payload":{"resource_spans":[{"resource":null,"schema_url":"","scope_spans":[{"scope":null,"schema_url":"","spans":[{"trace_id":"00000000000000000000000000000001","span_id":"0000000000000001","parent_span_id":"","name":"GET /tags","kind":2,"status":{"code":1,"message":""},"attributes":[{"key":"array","value":{"value":{"array_value":{"values":[{"value":{"bool_value":true}},{"value":{"string_value":"9223372036854775807"}}]}}}},{"key":"bytes","value":{"value":{"bytes_value":[1,2]}}},{"key":"large","value":{"value":{"int_value":9223372036854775807}}}],"events":[],"links":[],"flags":0,"dropped_attributes_count":0,"dropped_events_count":0,"dropped_links_count":0,"start_time_unix_nano":1,"end_time_unix_nano":2,"trace_state":""}]}]}]}}]`
 	a, b := DecodeCapture(ValidationReceipt{}, []byte(otlp)), DecodeCapture(ValidationReceipt{}, []byte(proto))
 	if len(a.Diagnostics) > 0 || len(b.Diagnostics) > 0 {
 		t.Fatalf("diagnostics %v %v", a.Diagnostics, b.Diagnostics)
@@ -48,16 +48,16 @@ func TestCaptureWireFormatsAndPrecision(t *testing.T) {
 	}
 }
 func TestCaptureNormalizesNullAnyValueVariants(t *testing.T) {
-	direct := `[{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","attributes":[{"key":"unset","value":{"stringValue":null}}]}]}]}]}}]`
-	wrapped := `[{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","attributes":[{"key":"unset","value":{"value":null}}]}]}]}]}}]`
+	direct := `[{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"span","startTimeUnixNano":"1","endTimeUnixNano":"2","attributes":[{"key":"unset","value":{"stringValue":null}}]}]}]}]}}]`
+	wrapped := `[{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"span","startTimeUnixNano":"1","endTimeUnixNano":"2","attributes":[{"key":"unset","value":{"value":null}}]}]}]}]}}]`
 	a, b := DecodeCapture(ValidationReceipt{}, []byte(direct)), DecodeCapture(ValidationReceipt{}, []byte(wrapped))
 	if len(a.Diagnostics) > 0 || len(b.Diagnostics) > 0 || !reflect.DeepEqual(a, b) {
 		t.Fatalf("null AnyValue variants differ:\n%s\n%s", canonical(a), canonical(b))
 	}
 }
 func TestCapturePreservesKeyValueAroundWrappedAnyValue(t *testing.T) {
-	direct := `[{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","attributes":[{"value":{"stringValue":"x"}}]}]}]}]}}]`
-	wrapped := `[{"signal":"traces","payload":{"resource_spans":[{"scope_spans":[{"spans":[{"trace_id":"00000000000000000000000000000001","span_id":"0000000000000001","attributes":[{"key":"","value":{"value":{"string_value":"x"}}}]}]}]}]}}]`
+	direct := `[{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"span","startTimeUnixNano":"1","endTimeUnixNano":"2","attributes":[{"value":{"stringValue":"x"}}]}]}]}]}}]`
+	wrapped := `[{"signal":"traces","payload":{"resource_spans":[{"scope_spans":[{"spans":[{"trace_id":"00000000000000000000000000000001","span_id":"0000000000000001","name":"span","start_time_unix_nano":"1","end_time_unix_nano":"2","attributes":[{"key":"","value":{"value":{"string_value":"x"}}}]}]}]}]}}]`
 	a, b := DecodeCapture(ValidationReceipt{}, []byte(direct)), DecodeCapture(ValidationReceipt{}, []byte(wrapped))
 	if len(a.Diagnostics) > 0 || len(b.Diagnostics) > 0 || !reflect.DeepEqual(a, b) {
 		t.Fatalf("KeyValue AnyValue wrappers differ:\n%s\n%s", canonical(a), canonical(b))
@@ -126,12 +126,32 @@ func TestCapturePartialAndDiagnostics(t *testing.T) {
 		})
 	}
 }
+func TestCaptureRejectsSinkInvalidSpanFields(t *testing.T) {
+	fixture := func(change func(map[string]any)) []byte {
+		span := captureSpan(1, 1, 0, "valid")
+		change(span)
+		return captureFixture(span)
+	}
+	for name, raw := range map[string][]byte{
+		"missing name": fixture(func(span map[string]any) { delete(span, "name") }),
+		"empty name":   fixture(func(span map[string]any) { span["name"] = "" }),
+		"zero start":   fixture(func(span map[string]any) { span["startTimeUnixNano"] = "0" }),
+		"reversed":     fixture(func(span map[string]any) { span["endTimeUnixNano"] = "1" }),
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, raw)
+			if len(d.Diagnostics) != 1 || len(d.Spans) != 0 || len(d.Shape.Traces) != 0 {
+				t.Fatalf("sink-invalid span entered topology: %+v", d)
+			}
+		})
+	}
+}
 func TestCaptureTreatsOmittedRepeatedTraceFieldsAsEmpty(t *testing.T) {
 	raw := []byte(`[
 		{"signal":"traces","payload":{}},
 		{"signal":"traces","payload":{"resourceSpans":null}},
 		{"signal":"traces","payload":{"resourceSpans":[{}, {"scopeSpans":null}, {"scopeSpans":[{}, {"spans":null}]}]}},
-		{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"kept"}]}]}]}}
+		{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"kept","startTimeUnixNano":"1","endTimeUnixNano":"2"}]}]}]}}
 	]`)
 	d := DecodeCapture(ValidationReceipt{}, raw)
 	if len(d.Diagnostics) > 0 || len(d.Spans) != 1 || str(d.Spans[0].Fields["name"]) != "kept" {
@@ -371,14 +391,34 @@ func TestCaptureLinkTargetOccurrenceTraversesLongGraph(t *testing.T) {
 		t.Fatalf("long graph endpoint was truncated: %q", left.Spans[0].LinkTargets[0])
 	}
 }
+func TestCaptureLinkCyclePreservesInternalAdjacency(t *testing.T) {
+	fixture := func(secondOffset int) CaptureDataset {
+		spans := make([]map[string]any, 6)
+		for i := range spans {
+			spans[i] = captureSpan(i+1, 1, 0, "identical")
+			spans[i]["links"] = []any{
+				map[string]any{"traceId": fmt.Sprintf("%032x", (i+1)%6+1), "spanId": fmt.Sprintf("%016x", 1)},
+				map[string]any{"traceId": fmt.Sprintf("%032x", (i+secondOffset)%6+1), "spanId": fmt.Sprintf("%016x", 1)},
+			}
+		}
+		return decodedFixture(t, "cycle", spans...)
+	}
+	forwardOnly := fixture(2)
+	withReciprocalEdges := fixture(3)
+	if forwardOnly.Spans[0].LinkTargets[0] == withReciprocalEdges.Spans[0].LinkTargets[0] {
+		t.Fatalf("distinct internal cycle adjacency was lost: %q", forwardOnly.Spans[0].LinkTargets[0])
+	}
+}
 func TestCaptureLargeLinkGraphStaysBounded(t *testing.T) {
 	const count = 4096
 	spans := make([]map[string]any, 0, count)
 	for trace := 1; trace <= count; trace++ {
 		s := captureSpan(trace, 1, 0, "chain")
-		if trace < count {
-			s["links"] = []any{map[string]any{"traceId": fmt.Sprintf("%032x", trace+1), "spanId": fmt.Sprintf("%016x", 1)}}
+		target := trace + 1
+		if target > count {
+			target = 1
 		}
+		s["links"] = []any{map[string]any{"traceId": fmt.Sprintf("%032x", target), "spanId": fmt.Sprintf("%016x", 1)}}
 		spans = append(spans, s)
 	}
 	d := decodedFixture(t, "large link graph", spans...)
