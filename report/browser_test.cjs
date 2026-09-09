@@ -15,6 +15,9 @@ const path = require('node:path');
   await page.click('#parity-scenarios summary');await page.waitForSelector('#parity-scenarios li');
   const pythonOverviewLink=await page.locator('#parity-overview tbody tr td').nth(1).locator('a').getAttribute('href');
   assert.match(pythonOverviewLink,/left=python/);assert.match(pythonOverviewLink,/right=go/);
+  await route('#parity?left=go&right=go&scenario=case');await page.click('#parity-scenarios summary');await page.waitForSelector('#parity-scenarios li');
+  assert.match(await page.locator('#parity-scenarios').innerText(),/choose two different implementations/);
+  await route('#parity?left=go&right=python&scenario=case');await page.click('#parity-scenarios summary');await page.waitForSelector('#parity-scenarios li');
   const capturedPeer=await page.evaluate(()=>{
     const unavailable={...data.manifests[0],profile:'unavailable'};
     const option=document.createElement('option');option.value='unavailable';option.textContent='Unavailable';

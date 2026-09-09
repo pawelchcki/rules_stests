@@ -166,24 +166,31 @@ func normalizeWireContext(v any, context string) (any, error) {
 		// prost's AnyValue wraps the oneof in an additional `value` object.
 		// Restrict this unwrapping to known AnyValue positions: an omitted
 		// KeyValue.key otherwise has the same single-field wire shape.
-		if context == "anyValue" && len(out) == 1 {
-			if value, exists := out["value"]; exists && value == nil {
-				return map[string]any{}, nil
+		if context == "anyValue" {
+			if len(out) == 1 {
+				if value, exists := out["value"]; exists && value == nil {
+					return map[string]any{}, nil
+				}
+				if inner := object(out["value"]); inner != nil {
+					for k := range inner {
+						if strings.HasSuffix(k, "Value") {
+							return inner, nil
+						}
+					}
+				}
 			}
-			for key, value := range out {
-				switch key {
-				case "stringValue", "boolValue", "intValue", "doubleValue", "arrayValue", "kvlistValue", "bytesValue":
+			populated := 0
+			for _, key := range []string{"stringValue", "boolValue", "intValue", "doubleValue", "arrayValue", "kvlistValue", "bytesValue"} {
+				if value, exists := out[key]; exists {
 					if value == nil {
-						return map[string]any{}, nil
+						delete(out, key)
+					} else {
+						populated++
 					}
 				}
 			}
-			if inner := object(out["value"]); inner != nil {
-				for k := range inner {
-					if strings.HasSuffix(k, "Value") {
-						return inner, nil
-					}
-				}
+			if populated > 1 {
+				return nil, fmt.Errorf("invalid OTLP AnyValue: expected at most one variant, got %d", populated)
 			}
 		}
 		if context == "keyValue" {
@@ -210,6 +217,13 @@ func normalizeWireContext(v any, context string) (any, error) {
 			if number, err := strconv.ParseFloat(str(value), 64); err == nil {
 				out["doubleValue"] = strconv.FormatFloat(number, 'g', -1, 64)
 			}
+		}
+		if value, ok := out["intValue"]; ok {
+			number, err := strconv.ParseInt(str(value), 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid OTLP integer AnyValue")
+			}
+			out["intValue"] = strconv.FormatInt(number, 10)
 		}
 		if b := array(out["bytesValue"]); b != nil {
 			raw := make([]byte, len(b))

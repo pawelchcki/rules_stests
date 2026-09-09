@@ -34,7 +34,7 @@ func decodedFixture(t *testing.T, profile string, spans ...map[string]any) Captu
 	return d
 }
 func TestCaptureWireFormatsAndPrecision(t *testing.T) {
-	otlp := `[{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"GET /tags","kind":"SPAN_KIND_SERVER","status":{"code":"STATUS_CODE_OK"},"attributes":[{"key":"large","value":{"intValue":"9223372036854775807"}},{"key":"bytes","value":{"bytesValue":"AQI="}},{"key":"array","value":{"arrayValue":{"values":[{"boolValue":true},{"stringValue":"9223372036854775807"}]}}}],"startTimeUnixNano":"1","endTimeUnixNano":"2"}]}]}]}}]`
+	otlp := `[{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"GET /tags","kind":"SPAN_KIND_SERVER","status":{"code":"STATUS_CODE_OK"},"attributes":[{"key":"large","value":{"intValue":"09223372036854775807"}},{"key":"bytes","value":{"bytesValue":"AQI="}},{"key":"array","value":{"arrayValue":{"values":[{"boolValue":true},{"stringValue":"9223372036854775807"}]}}}],"startTimeUnixNano":"1","endTimeUnixNano":"2"}]}]}]}}]`
 	proto := `[{"signal":"traces","payload":{"resource_spans":[{"resource":null,"schema_url":"","scope_spans":[{"scope":null,"schema_url":"","spans":[{"trace_id":"00000000000000000000000000000001","span_id":"0000000000000001","parent_span_id":"","name":"GET /tags","kind":2,"status":{"code":1,"message":""},"attributes":[{"key":"array","value":{"value":{"array_value":{"values":[{"value":{"bool_value":true}},{"value":{"string_value":"9223372036854775807"}}]}}}},{"key":"bytes","value":{"value":{"bytes_value":[1,2]}}},{"key":"large","value":{"value":{"int_value":9223372036854775807}}}],"events":[],"links":[],"flags":0,"dropped_attributes_count":0,"dropped_events_count":0,"dropped_links_count":0,"start_time_unix_nano":1,"end_time_unix_nano":2,"trace_state":""}]}]}]}}]`
 	a, b := DecodeCapture(ValidationReceipt{}, []byte(otlp)), DecodeCapture(ValidationReceipt{}, []byte(proto))
 	if len(a.Diagnostics) > 0 || len(b.Diagnostics) > 0 {
@@ -162,6 +162,9 @@ func TestCaptureRejectsSinkInvalidSpanFields(t *testing.T) {
 		}),
 		"link scalar attributes": fixture(func(span map[string]any) {
 			span["links"] = []any{map[string]any{"traceId": fmt.Sprintf("%032x", 2), "spanId": fmt.Sprintf("%016x", 1), "attributes": false}}
+		}),
+		"multi-variant AnyValue": fixture(func(span map[string]any) {
+			span["attributes"] = []any{map[string]any{"key": "invalid", "value": map[string]any{"intValue": "1", "stringValue": "x"}}}
 		}),
 	} {
 		t.Run(name, func(t *testing.T) {

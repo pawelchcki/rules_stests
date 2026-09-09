@@ -956,7 +956,8 @@ function renderParityScenarios() {
     const l=$('left').value,r=$('right').value,raw=$('field-view').value==='raw',hide=$('hide-scope').checked;
     detail.querySelector('div').innerHTML='<ul>'+data.scenarios.map(s=>{
       let label;
-      if ($('comparison-source').value==='captured') {
+      if (l===r) label='choose two different implementations';
+      else if ($('comparison-source').value==='captured') {
         const ld=captureByKey.get(l+'/'+s),rd=captureByKey.get(r+'/'+s);
         if (!ld || !rd || ld.diagnostics || rd.diagnostics) label='comparison unavailable';
         else {let n=0;for(const t of capturePair(l,r,s)) {if(!t.left || !t.right || t.left.card!==t.right.card || t.left.coverage!==t.right.coverage)n++;for(const row of t.spans) if(!row.left || !row.right || captureRowDiff(ld,rd,row,raw,hide).diffs.length)n++;}label=n+' differing groups';}
