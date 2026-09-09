@@ -192,6 +192,24 @@ func TestCapturePreservesSharedExternalLinkTargets(t *testing.T) {
 		t.Fatalf("distinct external targets were conflated: %+v", distinct.Spans)
 	}
 }
+func TestCaptureSharedTargetsPreserveSemanticSourcePairing(t *testing.T) {
+	linked := func(trace, targetTrace int, value string) map[string]any {
+		s := captureSpan(trace, 1, 0, "source")
+		s["attributes"] = []any{map[string]any{"key": "variant", "value": map[string]any{"stringValue": value}}}
+		s["links"] = []any{map[string]any{"traceId": fmt.Sprintf("%032x", targetTrace), "spanId": fmt.Sprintf("%016x", 1)}}
+		return s
+	}
+	fixture := func(targets ...int) CaptureDataset {
+		return decodedFixture(t, "sources",
+			linked(1, targets[0], "A"), linked(2, targets[1], "B"),
+			linked(3, targets[2], "C"), linked(4, targets[3], "D"))
+	}
+	left := fixture(98, 98, 99, 99)
+	right := fixture(98, 99, 98, 99)
+	if left.Spans[1].LinkTargets[0] == right.Spans[1].LinkTargets[0] {
+		t.Fatalf("shared-target source pairing was lost: %q", left.Spans[1].LinkTargets[0])
+	}
+}
 func TestCapturePreservesSharedCapturedLinkTargets(t *testing.T) {
 	linked := func(trace, span, targetTrace int) map[string]any {
 		s := captureSpan(trace, span, 0, "source")
