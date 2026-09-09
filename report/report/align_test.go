@@ -138,6 +138,37 @@ func TestLargeAssignmentAllowsThreeWayScoreImprovement(t *testing.T) {
 	}
 }
 
+func TestLargeAssignmentOptimizesUnmatchedCandidates(t *testing.T) {
+	wildcard := exactSpan("", "server", "", "", "")
+	concrete := exactSpan("", "server", "", "A", "")
+	common := make([]SpanGroup, optimalAssignmentVertexLimit/2)
+	for i := range common {
+		common[i] = exactSpan("", "server", "", fmt.Sprintf("common-%03d", i), "")
+	}
+	shape := func(profile string, children []SpanGroup) *ScenarioShape {
+		return shapeOf(profile, exactSpan("", "server", "", "root", "", children...))
+	}
+	assertConcretePair := func(t *testing.T, alignment *ShapeAlignment, leftOnly, rightOnly int) {
+		t.Helper()
+		row := findRow(t, alignment, "A")
+		if row.Kind != "matched" || row.Left == nil || row.Right == nil || row.Left.Name != "A" || row.Right.Name != "A" || alignment.Summary.LeftOnly != leftOnly || alignment.Summary.RightOnly != rightOnly {
+			t.Fatalf("unmatched candidate was excluded from score optimization: row=%#v summary=%#v", row, alignment.Summary)
+		}
+	}
+	t.Run("unmatched right", func(t *testing.T) {
+		left := append([]SpanGroup{concrete}, common...)
+		right := append([]SpanGroup{wildcard}, common...)
+		right = append(right, concrete)
+		assertConcretePair(t, AlignShapes(shape("left", left), shape("right", right)), 0, 1)
+	})
+	t.Run("unmatched left", func(t *testing.T) {
+		left := append([]SpanGroup{wildcard}, common...)
+		left = append(left, concrete)
+		right := append([]SpanGroup{concrete}, common...)
+		assertConcretePair(t, AlignShapes(shape("left", left), shape("right", right)), 1, 0)
+	})
+}
+
 func TestLargeSiblingAlignmentUsesChildStructure(t *testing.T) {
 	const count = optimalAssignmentVertexLimit/2 + 1
 	leftParents := make([]SpanGroup, 0, count)

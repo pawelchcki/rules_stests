@@ -552,92 +552,119 @@ func linearMemoryMaximumCardinalityPairs(leftCount, rightCount int, score func(i
 	return linearMemoryMaximumCardinalityPairsWithSeed(leftCount, rightCount, score, nil)
 }
 
-// improveMatchingScores runs an integer auction over the already matched
-// left/right subsets. Scaling integral detail scores by k+1 makes an epsilon
-// of one exact for k assignments, while prices, owners, and the work stack all
-// remain linear in the number of matched vertices. Starting from a square
-// subset with a known perfect matching preserves the cardinality established
-// by Hopcroft-Karp.
+// improveMatchingScores runs an integer auction over every real candidate plus
+// one unmatched slot per left vertex. A cardinality bonus larger than every
+// possible aggregate detail difference preserves the maximum matching size,
+// while scaling integral weights by leftCount+1 makes an epsilon of one exact.
+// Prices, owners, assignments, and the work stack remain linear in the input.
 func improveMatchingScores(leftToRight []int, rightCount int, score func(int, int) (int, bool)) []int {
-	matchedLefts := make([]int, 0, len(leftToRight))
-	usedRights := make([]bool, rightCount)
-	for left, right := range leftToRight {
-		if right >= 0 {
-			matchedLefts = append(matchedLefts, left)
-			usedRights[right] = true
-		}
-	}
-	rights := make([]int, 0, len(matchedLefts))
-	for right, used := range usedRights {
-		if used {
-			rights = append(rights, right)
-		}
-	}
-	count := len(matchedLefts)
-	if count < 2 || len(rights) != count {
+	leftCount := len(leftToRight)
+	if leftCount == 0 || rightCount == 0 {
 		return leftToRight
 	}
-	prices := make([]int64, count)
-	owners := make([]int, count)
-	assignment := make([]int, count)
-	unassigned := make([]int, 0, count)
-	for position := count - 1; position >= 0; position-- {
-		owners[position], assignment[position] = -1, -1
-		unassigned = append(unassigned, position)
-	}
-	scale := int64(count + 1)
-	for len(unassigned) > 0 {
-		last := len(unassigned) - 1
-		leftPosition := unassigned[last]
-		unassigned = unassigned[:last]
-		left := matchedLefts[leftPosition]
-		bestPosition := -1
-		var bestValue, secondValue int64
-		secondFound := false
-		for rightPosition, right := range rights {
+	lowest, highest, found := int64(0), int64(0), false
+	for left := range leftCount {
+		for right := range rightCount {
 			detail, compatible := score(left, right)
 			if !compatible {
 				continue
 			}
-			value := int64(detail)*scale - prices[rightPosition]
-			if bestPosition < 0 || value > bestValue {
-				if bestPosition >= 0 {
+			value := int64(detail)
+			if !found || value < lowest {
+				lowest = value
+			}
+			if !found || value > highest {
+				highest = value
+			}
+			found = true
+		}
+	}
+	if !found {
+		return leftToRight
+	}
+	maxCardinality := min(leftCount, rightCount)
+	cardinalityBonus := (highest - lowest + 1) * int64(maxCardinality+1)
+	itemCount := rightCount + leftCount
+	prices := make([]int64, itemCount)
+	owners := make([]int, itemCount)
+	assignment := make([]int, leftCount)
+	unassigned := make([]int, 0, leftCount)
+	for item := range owners {
+		owners[item] = -1
+	}
+	for left := leftCount - 1; left >= 0; left-- {
+		assignment[left] = -1
+		unassigned = append(unassigned, left)
+	}
+	scale := int64(leftCount + 1)
+	for len(unassigned) > 0 {
+		last := len(unassigned) - 1
+		left := unassigned[last]
+		unassigned = unassigned[:last]
+		bestItem := -1
+		var bestValue, secondValue int64
+		secondFound := false
+		for item := range itemCount {
+			weight := int64(0)
+			if item < rightCount {
+				detail, compatible := score(left, item)
+				if !compatible {
+					continue
+				}
+				weight = cardinalityBonus + int64(detail) - lowest
+			}
+			value := weight*scale - prices[item]
+			if bestItem < 0 || value > bestValue {
+				if bestItem >= 0 {
 					secondValue, secondFound = bestValue, true
 				}
-				bestPosition, bestValue = rightPosition, value
+				bestItem, bestValue = item, value
 			} else if !secondFound || value > secondValue {
 				secondValue, secondFound = value, true
 			}
 		}
-		if bestPosition < 0 {
+		if bestItem < 0 {
 			return leftToRight
 		}
 		bid := int64(1)
 		if secondFound {
 			bid = bestValue - secondValue + 1
 		}
-		prices[bestPosition] += bid
-		previousOwner := owners[bestPosition]
-		owners[bestPosition], assignment[leftPosition] = leftPosition, bestPosition
+		prices[bestItem] += bid
+		previousOwner := owners[bestItem]
+		owners[bestItem], assignment[left] = left, bestItem
 		if previousOwner >= 0 {
 			assignment[previousOwner] = -1
 			unassigned = append(unassigned, previousOwner)
 		}
 	}
-	candidate := append([]int(nil), leftToRight...)
-	originalScore, candidateScore := int64(0), int64(0)
-	for position, left := range matchedLefts {
-		original, originalOK := score(left, leftToRight[left])
-		right := rights[assignment[position]]
-		improved, improvedOK := score(left, right)
-		if !originalOK || !improvedOK {
-			return leftToRight
-		}
-		originalScore += int64(original)
-		candidateScore += int64(improved)
-		candidate[left] = right
+	candidate := make([]int, leftCount)
+	for left := range candidate {
+		candidate[left] = -1
 	}
-	if candidateScore > originalScore {
+	originalCardinality, candidateCardinality := 0, 0
+	originalScore, candidateScore := int64(0), int64(0)
+	for left, right := range leftToRight {
+		if right >= 0 {
+			detail, compatible := score(left, right)
+			if !compatible {
+				return leftToRight
+			}
+			originalCardinality++
+			originalScore += int64(detail)
+		}
+		item := assignment[left]
+		if item < rightCount {
+			detail, compatible := score(left, item)
+			if !compatible {
+				return leftToRight
+			}
+			candidate[left] = item
+			candidateCardinality++
+			candidateScore += int64(detail)
+		}
+	}
+	if candidateCardinality == originalCardinality && candidateScore > originalScore {
 		return candidate
 	}
 	return leftToRight
