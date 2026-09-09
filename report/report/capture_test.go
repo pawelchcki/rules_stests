@@ -712,6 +712,22 @@ func TestCaptureLinksRecognizeOtherTraceExternalParents(t *testing.T) {
 		t.Fatalf("external parent anchor was lost: %q / %q", parentLink.Spans[1].LinkTargets[0], unrelatedLink.Spans[1].LinkTargets[0])
 	}
 }
+func TestCaptureLinkTargetsDistinguishExternalParentPartitions(t *testing.T) {
+	partialRoot := func(span, parent int, variant string) map[string]any {
+		s := captureSpan(1, span, parent, "partial root")
+		s["attributes"] = []any{map[string]any{"key": "variant", "value": map[string]any{"stringValue": variant}}}
+		return s
+	}
+	fixture := func(targetParent int) CaptureDataset {
+		source := captureSpan(2, 1, 0, "source")
+		source["links"] = []any{map[string]any{"traceId": fmt.Sprintf("%032x", 1), "spanId": fmt.Sprintf("%016x", targetParent)}}
+		return decodedFixture(t, "external parent target", partialRoot(1, 99, "A"), partialRoot(2, 98, "B"), source)
+	}
+	left, right := fixture(99), fixture(98)
+	if left.Spans[2].LinkTargets[0] == right.Spans[2].LinkTargets[0] {
+		t.Fatalf("different external-parent partitions shared a link target: %q", left.Spans[2].LinkTargets[0])
+	}
+}
 func TestCaptureLinkTargetOccurrenceIncludesOutgoingRelationships(t *testing.T) {
 	linked := func(span map[string]any, targetTrace int) map[string]any {
 		span["links"] = []any{map[string]any{"traceId": fmt.Sprintf("%032x", targetTrace), "spanId": fmt.Sprintf("%016x", 1)}}

@@ -995,7 +995,7 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 		}
 		return path(parents[i]) + " / " + label
 	}
-	buildTargetOccurrenceKeys := func(includeScope bool) []string {
+	buildTargetOccurrenceKeys := func(includeScope bool) ([]string, map[string]string) {
 		keys := make([]string, len(d.Spans))
 		subtrees := make([]string, len(d.Spans))
 		var subtree func(int) string
@@ -1040,7 +1040,7 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 		for i := range d.Spans {
 			key(i)
 		}
-		return keys
+		return keys, externalParentLabels
 	}
 	withTraceOccurrenceSet := func(keys []string) []string {
 		traceSets := map[string]string{}
@@ -1061,10 +1061,12 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 	// A target occurrence belongs to its ID-free trace occurrence set. This
 	// distinguishes otherwise-identical roots when their partial-trace co-roots
 	// differ, before link-graph refinement adds incoming and outgoing identity.
-	sourceOccurrenceKeys := withTraceOccurrenceSet(buildTargetOccurrenceKeys(true))
-	sourceOccurrenceKeysWithoutScope := withTraceOccurrenceSet(buildTargetOccurrenceKeys(false))
+	targetOccurrenceBase, externalParentLabels := buildTargetOccurrenceKeys(true)
+	targetOccurrenceBaseWithoutScope, externalParentLabelsWithoutScope := buildTargetOccurrenceKeys(false)
+	sourceOccurrenceKeys := withTraceOccurrenceSet(targetOccurrenceBase)
+	sourceOccurrenceKeysWithoutScope := withTraceOccurrenceSet(targetOccurrenceBaseWithoutScope)
 	graphKeyCache := map[string][]string{}
-	buildGraphAwareTargetKeys := func(base []string, targetDigests map[string]string) ([]string, error) {
+	buildGraphAwareTargetKeys := func(base []string, targetDigests, parentLabels map[string]string) ([]string, error) {
 		sharedTargets := make([]string, 0, len(targetDigests))
 		for target, targetDigest := range targetDigests {
 			if targetDigest != "" {
@@ -1101,7 +1103,7 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 					edge.relationship = "external span in same trace"
 				}
 				if validTarget && externalParentAnchors[targetKey] {
-					edge.relationship = "external parent"
+					edge.relationship = "external parent " + parentLabels[targetKey]
 				}
 				if j, ok := ids[targetKey]; validTarget && ok {
 					edge.target = j
@@ -1442,11 +1444,11 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 		graphKeyCache[cacheKey] = append([]string(nil), keys...)
 		return keys, nil
 	}
-	sourceOccurrenceKeys, err := buildGraphAwareTargetKeys(sourceOccurrenceKeys, nil)
+	sourceOccurrenceKeys, err := buildGraphAwareTargetKeys(sourceOccurrenceKeys, nil, externalParentLabels)
 	if err != nil {
 		return fail(err)
 	}
-	sourceOccurrenceKeysWithoutScope, err = buildGraphAwareTargetKeys(sourceOccurrenceKeysWithoutScope, nil)
+	sourceOccurrenceKeysWithoutScope, err = buildGraphAwareTargetKeys(sourceOccurrenceKeysWithoutScope, nil, externalParentLabelsWithoutScope)
 	if err != nil {
 		return fail(err)
 	}
@@ -1482,11 +1484,11 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 	}
 	linkTargetDigests := sharedTargetDigests(linkTargetSources)
 	linkTargetDigestsWithoutScope := sharedTargetDigests(linkTargetSourcesWithoutScope)
-	targetOccurrenceKeys, err := buildGraphAwareTargetKeys(sourceOccurrenceKeys, linkTargetDigests)
+	targetOccurrenceKeys, err := buildGraphAwareTargetKeys(sourceOccurrenceKeys, linkTargetDigests, externalParentLabels)
 	if err != nil {
 		return fail(err)
 	}
-	targetOccurrenceKeysWithoutScope, err := buildGraphAwareTargetKeys(sourceOccurrenceKeysWithoutScope, linkTargetDigestsWithoutScope)
+	targetOccurrenceKeysWithoutScope, err := buildGraphAwareTargetKeys(sourceOccurrenceKeysWithoutScope, linkTargetDigestsWithoutScope, externalParentLabelsWithoutScope)
 	if err != nil {
 		return fail(err)
 	}
@@ -1509,8 +1511,9 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 				targetWithoutScope = target
 			}
 			if validTarget && externalParentAnchors[tid+"/"+sid] {
-				target = "external parent"
-				targetWithoutScope = target
+				anchor := tid + "/" + sid
+				target = "external parent " + externalParentLabels[anchor]
+				targetWithoutScope = "external parent " + externalParentLabelsWithoutScope[anchor]
 			}
 			if j, ok := ids[tid+"/"+sid]; validTarget && ok {
 				relation := "in another trace "
