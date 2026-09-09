@@ -292,6 +292,43 @@ func TestCaptureUsesEncodingSpecificTimestampBounds(t *testing.T) {
 		t.Fatalf("JSON i128 timestamp overflow entered topology: %+v", overflowCapture)
 	}
 }
+func TestCaptureCanonicalizesSpanAndEventTimestamps(t *testing.T) {
+	span := captureSpan(1, 1, 0, "timestamps")
+	span["startTimeUnixNano"] = "+01"
+	span["endTimeUnixNano"] = "002"
+	span["events"] = []any{map[string]any{"name": "event", "timeUnixNano": "+003"}}
+	d := decodedFixture(t, "timestamps", span)
+	event := object(array(d.Spans[0].Fields["events"])[0])
+	if d.Spans[0].Fields["startTimeUnixNano"] != "1" || d.Spans[0].Fields["endTimeUnixNano"] != "2" || event["timeUnixNano"] != "3" {
+		t.Fatalf("timestamps were not canonicalized: %+v", d.Spans[0].Fields)
+	}
+}
+func TestCaptureRetainsMissingAndInvalidLinkIdentities(t *testing.T) {
+	span := captureSpan(1, 1, 0, "links")
+	span["links"] = []any{map[string]any{}, map[string]any{"traceId": "not-hex", "spanId": "bad"}}
+	d := decodedFixture(t, "invalid links", span)
+	if len(d.Spans[0].LinkTargets) != 2 || !strings.Contains(d.Spans[0].LinkTargets[0], "missing trace/span") || !strings.Contains(d.Spans[0].LinkTargets[1], "invalid trace/span") {
+		t.Fatalf("sink-accepted invalid links were discarded: %+v", d.Spans[0].LinkTargets)
+	}
+}
+func TestCaptureRepresentsZeroTelemetry(t *testing.T) {
+	for name, raw := range map[string][]byte{
+		"empty traces":   []byte(`[{"signal":"traces","encoding":"json","payload":{"resourceSpans":[]}}]`),
+		"non-trace only": []byte(`[{"signal":"metrics","encoding":"json","payload":{}}]`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			empty := DecodeCapture(ValidationReceipt{Profile: "empty"}, raw)
+			if len(empty.Diagnostics) != 0 || len(empty.Shape.Traces) != 0 {
+				t.Fatalf("zero telemetry became a diagnostic: %+v", empty)
+			}
+			nonempty := decodedFixture(t, "nonempty", captureSpan(1, 1, 0, "span"))
+			alignment := AlignShapes(&empty.Shape, &nonempty.Shape)
+			if alignment.Summary.TraceRightOnly != 1 {
+				t.Fatalf("zero telemetry hid one-sided traces: %#v", alignment.Summary)
+			}
+		})
+	}
+}
 func TestCaptureRejectsMistypedScopeName(t *testing.T) {
 	valid := captureFixture(captureSpan(1, 1, 0, "span"))
 	for name, raw := range map[string][]byte{

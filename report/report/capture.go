@@ -490,6 +490,16 @@ func identity(v any, width int, optional bool) (string, error) {
 	}
 	return s, nil
 }
+
+func linkIdentity(v any, width int) (string, bool) {
+	s, ok := v.(string)
+	if !ok {
+		return str(v), false
+	}
+	s = strings.ToLower(s)
+	b, err := hex.DecodeString(s)
+	return s, err == nil && len(b) == width && strings.Trim(s, "0") != ""
+}
 func intern(items *[]map[string]any, indexes map[string]int, v map[string]any) int {
 	key := canonical(v)
 	if i, ok := indexes[key]; ok {
@@ -735,6 +745,7 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 					if start.Sign() <= 0 || end.Cmp(start) < 0 {
 						return fail(fmt.Errorf("span timestamps are not ordered"))
 					}
+					fields["startTimeUnixNano"], fields["endTimeUnixNano"] = start.String(), end.String()
 					attributes, err := repeatedField(fields["attributes"], "span attributes")
 					if err != nil {
 						return fail(err)
@@ -766,6 +777,9 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 							return fail(fmt.Errorf("unreadable span event"))
 						}
 						defaults(eventFields, map[string]any{"timeUnixNano": "0", "name": "", "attributes": []any{}, "droppedAttributesCount": "0"})
+						if timestamp, valid := new(big.Int).SetString(str(eventFields["timeUnixNano"]), 10); valid {
+							eventFields["timeUnixNano"] = timestamp.String()
+						}
 						if _, err := repeatedField(eventFields["attributes"], "span event attributes"); err != nil {
 							return fail(err)
 						}
@@ -775,7 +789,7 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 						if linkFields == nil {
 							return fail(fmt.Errorf("unreadable span link"))
 						}
-						defaults(linkFields, map[string]any{"traceState": "", "attributes": []any{}, "droppedAttributesCount": "0", "flags": "0"})
+						defaults(linkFields, map[string]any{"traceId": "", "spanId": "", "traceState": "", "attributes": []any{}, "droppedAttributesCount": "0", "flags": "0"})
 						if _, err := repeatedField(linkFields["attributes"], "span link attributes"); err != nil {
 							return fail(err)
 						}
@@ -784,9 +798,6 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 				}
 			}
 		}
-	}
-	if len(d.Spans) == 0 {
-		return fail(fmt.Errorf("no captured trace spans available"))
 	}
 	ids := map[string]int{}
 	traces := map[string][]int{}
@@ -925,23 +936,23 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 		for i := range d.Spans {
 			for linkIndex, value := range array(d.Spans[i].Fields["links"]) {
 				link := object(value)
-				tid, err := identity(link["traceId"], 16, false)
-				if err != nil {
-					return nil, err
-				}
-				sid, err := identity(link["spanId"], 8, false)
-				if err != nil {
-					return nil, err
-				}
+				tid, validTraceID := linkIdentity(link["traceId"], 16)
+				sid, validSpanID := linkIdentity(link["spanId"], 8)
 				targetKey := tid + "/" + sid
 				edge := graphEdge{relationship: "external trace/span", target: -1, external: targetKey, shared: targetDigests[targetKey]}
-				if tid == traceIDs[i] {
+				validTarget := validTraceID && validSpanID
+				if !validTarget {
+					edge.relationship = "invalid trace/span"
+					if tid == "" && sid == "" {
+						edge.relationship = "missing trace/span"
+					}
+				} else if tid == traceIDs[i] {
 					edge.relationship = "external span in same trace"
 				}
-				if externalParentAnchors[targetKey] {
+				if validTarget && externalParentAnchors[targetKey] {
 					edge.relationship = "external parent"
 				}
-				if j, ok := ids[targetKey]; ok {
+				if j, ok := ids[targetKey]; validTarget && ok {
 					edge.target = j
 					edge.external = ""
 					if j == i {
@@ -1185,14 +1196,8 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 	for i := range d.Spans {
 		for linkIndex, l := range array(d.Spans[i].Fields["links"]) {
 			link := object(l)
-			tid, e := identity(link["traceId"], 16, false)
-			if e != nil {
-				return fail(e)
-			}
-			sid, e := identity(link["spanId"], 8, false)
-			if e != nil {
-				return fail(e)
-			}
+			tid, _ := linkIdentity(link["traceId"], 16)
+			sid, _ := linkIdentity(link["spanId"], 8)
 			key := tid + "/" + sid
 			linkTargetSources[key] = append(linkTargetSources[key], fmt.Sprintf("%s occurrence %s link %d", path(i), sourceOccurrenceKeys[i], linkIndex))
 			linkTargetSourcesWithoutScope[key] = append(linkTargetSourcesWithoutScope[key], fmt.Sprintf("%s occurrence %s link %d", path(i), sourceOccurrenceKeysWithoutScope[i], linkIndex))
@@ -1226,25 +1231,26 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 	for i := range d.Spans {
 		for _, l := range array(d.Spans[i].Fields["links"]) {
 			link := object(l)
-			tid, e := identity(link["traceId"], 16, false)
-			if e != nil {
-				return fail(e)
-			}
-			sid, e := identity(link["spanId"], 8, false)
-			if e != nil {
-				return fail(e)
-			}
+			tid, validTraceID := linkIdentity(link["traceId"], 16)
+			sid, validSpanID := linkIdentity(link["spanId"], 8)
+			validTarget := validTraceID && validSpanID
 			target := "external trace/span"
+			if !validTarget {
+				target = "invalid trace/span"
+				if tid == "" && sid == "" {
+					target = "missing trace/span"
+				}
+			}
 			targetWithoutScope := target
-			if tid == traceIDs[i] {
+			if validTarget && tid == traceIDs[i] {
 				target = "external span in same trace"
 				targetWithoutScope = target
 			}
-			if externalParentAnchors[tid+"/"+sid] {
+			if validTarget && externalParentAnchors[tid+"/"+sid] {
 				target = "external parent"
 				targetWithoutScope = target
 			}
-			if j, ok := ids[tid+"/"+sid]; ok {
+			if j, ok := ids[tid+"/"+sid]; validTarget && ok {
 				relation := "in another trace "
 				if tid == traceIDs[i] {
 					relation = "in same trace "
