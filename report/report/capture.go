@@ -182,6 +182,9 @@ func normalizeWireContext(v any, context string) (any, error) {
 			}
 		}
 		if context == "keyValue" {
+			if value, exists := out["value"]; exists && value == nil {
+				delete(out, "value")
+			}
 			defaults(out, map[string]any{"key": ""})
 		}
 		for _, k := range []string{"attributes"} {
@@ -220,16 +223,24 @@ func normalizeWireContext(v any, context string) (any, error) {
 		return v, nil
 	}
 }
-func enumValue(v any, prefix string, names []string) string {
+func enumValue(v any, prefix string, names []string) (string, bool) {
 	s := str(v)
-	if n, e := strconv.Atoi(s); e == nil && n >= 0 && n < len(names) {
-		return names[n]
+	if n, e := strconv.Atoi(s); e == nil {
+		if n >= 0 && n < len(names) {
+			return names[n], true
+		}
+		return "", false
 	}
 	s = strings.ToLower(strings.TrimPrefix(s, prefix))
 	if s == "" {
-		return names[0]
+		return names[0], true
 	}
-	return s
+	for _, name := range names {
+		if s == name {
+			return name, true
+		}
+	}
+	return "", false
 }
 func identity(v any, width int, optional bool) (string, error) {
 	s := strings.ToLower(str(v))
@@ -398,9 +409,17 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 					if start.Sign() <= 0 || end.Cmp(start) < 0 {
 						return fail(fmt.Errorf("span timestamps are not ordered"))
 					}
-					fields["kind"] = enumValue(fields["kind"], "SPAN_KIND_", []string{"unspecified", "internal", "server", "client", "producer", "consumer"})
+					kind, validKind := enumValue(fields["kind"], "SPAN_KIND_", []string{"unspecified", "internal", "server", "client", "producer", "consumer"})
+					if !validKind {
+						return fail(fmt.Errorf("invalid span kind %v", fields["kind"]))
+					}
+					fields["kind"] = kind
 					status := defaults(object(fields["status"]), map[string]any{"code": "0", "message": ""})
-					status["code"] = enumValue(status["code"], "STATUS_CODE_", []string{"unset", "ok", "error"})
+					statusCode, validStatus := enumValue(status["code"], "STATUS_CODE_", []string{"unset", "ok", "error"})
+					if !validStatus {
+						return fail(fmt.Errorf("invalid span status %v", status["code"]))
+					}
+					status["code"] = statusCode
 					fields["status"] = status
 					for _, event := range array(fields["events"]) {
 						defaults(object(event), map[string]any{"timeUnixNano": "0", "name": "", "attributes": []any{}, "droppedAttributesCount": "0"})

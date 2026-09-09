@@ -50,9 +50,12 @@ func TestCaptureWireFormatsAndPrecision(t *testing.T) {
 func TestCaptureNormalizesNullAnyValueVariants(t *testing.T) {
 	direct := `[{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"span","startTimeUnixNano":"1","endTimeUnixNano":"2","attributes":[{"key":"unset","value":{"stringValue":null}}]}]}]}]}}]`
 	wrapped := `[{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"span","startTimeUnixNano":"1","endTimeUnixNano":"2","attributes":[{"key":"unset","value":{"value":null}}]}]}]}]}}]`
+	nullMessage := `[{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"span","startTimeUnixNano":"1","endTimeUnixNano":"2","attributes":[{"key":"unset","value":null}]}]}]}]}}]`
+	omitted := `[{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"span","startTimeUnixNano":"1","endTimeUnixNano":"2","attributes":[{"key":"unset"}]}]}]}]}}]`
 	a, b := DecodeCapture(ValidationReceipt{}, []byte(direct)), DecodeCapture(ValidationReceipt{}, []byte(wrapped))
-	if len(a.Diagnostics) > 0 || len(b.Diagnostics) > 0 || !reflect.DeepEqual(a, b) {
-		t.Fatalf("null AnyValue variants differ:\n%s\n%s", canonical(a), canonical(b))
+	c, d := DecodeCapture(ValidationReceipt{}, []byte(nullMessage)), DecodeCapture(ValidationReceipt{}, []byte(omitted))
+	if len(a.Diagnostics) > 0 || len(b.Diagnostics) > 0 || len(c.Diagnostics) > 0 || len(d.Diagnostics) > 0 || !reflect.DeepEqual(a, b) || !reflect.DeepEqual(c, d) {
+		t.Fatalf("null AnyValue variants differ:\n%s\n%s\n%s\n%s", canonical(a), canonical(b), canonical(c), canonical(d))
 	}
 }
 func TestCapturePreservesKeyValueAroundWrappedAnyValue(t *testing.T) {
@@ -137,6 +140,10 @@ func TestCaptureRejectsSinkInvalidSpanFields(t *testing.T) {
 		"empty name":   fixture(func(span map[string]any) { span["name"] = "" }),
 		"zero start":   fixture(func(span map[string]any) { span["startTimeUnixNano"] = "0" }),
 		"reversed":     fixture(func(span map[string]any) { span["endTimeUnixNano"] = "1" }),
+		"invalid kind": fixture(func(span map[string]any) { span["kind"] = 99 }),
+		"invalid status": fixture(func(span map[string]any) {
+			span["status"] = map[string]any{"code": 99}
+		}),
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, raw)
