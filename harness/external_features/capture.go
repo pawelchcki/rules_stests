@@ -224,6 +224,20 @@ func evaluate(e experiment, baseline, changed capture) observation {
 			preserved = len(probeSpans(changed)) == 4
 		}
 		check(prior > 1, actual == 1 && preserved, fmt.Sprintf("maximum %s batch %d -> %d; records %d -> %d", signal, prior, actual, len(before), len(after)))
+		if o.Status == "gap" {
+			switch {
+			case actual == 0:
+				o.Violations = append(o.Violations, "no-batches")
+			case actual == prior:
+				o.Violations = append(o.Violations, "batch-size-unchanged")
+			case actual > 1:
+				o.Violations = append(o.Violations, "batch-limit-exceeded")
+			}
+			if !preserved {
+				o.Violations = append(o.Violations, "records-not-preserved")
+			}
+			sort.Strings(o.Violations)
+		}
 	case "exemplars-always-on":
 		eligible, after := unsampledExemplars(baseline, changed)
 		check(eligible > 0 && len(baseline.Spans) == 0, len(changed.Spans) == 0 && after > 0, fmt.Sprintf("%d control metric names without exemplars; AlwaysOn exemplars for those names %d; exported spans %d", eligible, after, len(changed.Spans)))
@@ -236,10 +250,19 @@ func evaluate(e experiment, baseline, changed capture) observation {
 			}
 		}
 		check(len(before) == 4, len(after) == 4 && captured == 4, fmt.Sprintf("probe server spans %d -> %d; exact header arrays %d/4", len(before), len(after), captured))
+		if o.Status == "gap" {
+			if captured != 4 {
+				o.Violations = append(o.Violations, fmt.Sprintf("header-arrays=%d", captured))
+			}
+			if len(after) != 4 {
+				o.Violations = append(o.Violations, fmt.Sprintf("probe-spans=%d", len(after)))
+			}
+			sort.Strings(o.Violations)
+		}
 	case "propagation-none":
 		before, after := probeSpans(baseline), probeSpans(changed)
 		continued := map[string]bool{}
-		roots := 0
+		roots := map[string]bool{}
 		for _, s := range before {
 			if id, ok := field(s, "trace_id").(string); ok && incomingTrace(id) && field(s, "parent_span_id") == "00f067aa0ba902b7" {
 				continued[id] = true
@@ -247,10 +270,10 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		}
 		for _, s := range after {
 			if id, ok := field(s, "trace_id").(string); ok && validTrace(id) && !incomingTrace(id) && field(s, "parent_span_id") == "" {
-				roots++
+				roots[id] = true
 			}
 		}
-		check(len(before) == 4 && len(continued) == 4, len(after) == 4 && roots == 4, fmt.Sprintf("incoming traces continued %d/4; independent roots with propagation disabled %d/4", len(continued), roots))
+		check(len(before) == 4 && len(continued) == 4, len(after) == 4 && len(roots) == 4, fmt.Sprintf("incoming traces continued %d/4; independent roots with propagation disabled %d/4", len(continued), len(roots)))
 	case "resource":
 		ok := len(changed.Resources) > 0
 		for _, r := range changed.Resources {

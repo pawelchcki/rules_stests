@@ -256,6 +256,20 @@ func TestKnownGapCannotHideAdditionalViolations(t *testing.T) {
 	}
 }
 
+func TestGapSignaturesPreserveFailureModes(t *testing.T) {
+	spanBatch := experiment{Name: "span-batch"}
+	baseline := capture{Spans: syntheticProbeSpans()}
+	baseline.Records = []object{batchRecord("traces", "spans", baseline.Spans)}
+	if ignored, missing := evaluate(spanBatch, baseline, baseline).signature(), evaluate(spanBatch, baseline, capture{}).signature(); ignored == missing {
+		t.Fatalf("missing telemetry matched ignored batch limit: %q", ignored)
+	}
+
+	headers := experiment{Name: "request-headers"}
+	if absent, missing := evaluate(headers, capture{Spans: syntheticProbeSpans()}, capture{Spans: syntheticProbeSpans()}).signature(), evaluate(headers, capture{Spans: syntheticProbeSpans()}, capture{}).signature(); absent == missing {
+		t.Fatalf("missing spans matched absent headers: %q", absent)
+	}
+}
+
 func TestComparisonRecomputesAndRejectsTamperedEvidence(t *testing.T) {
 	dir := t.TempDir()
 	data := []byte(`[{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"name":"GET /api/tags"}]}]}]}}]`)
@@ -319,6 +333,13 @@ func TestPropagationCannotPassWithWrongOrMissingParents(t *testing.T) {
 	}
 	if got := evaluate(e, base, changed); got.Status != "gap" {
 		t.Fatal("retained incoming trace IDs credited")
+	}
+	for i, s := range changed.Spans {
+		s["trace_id"] = fmt.Sprintf("%032x", i+10)
+	}
+	changed.Spans[1]["trace_id"] = changed.Spans[0]["trace_id"]
+	if got := evaluate(e, base, changed); got.Status != "gap" {
+		t.Fatal("duplicate root trace ID credited as independent traces")
 	}
 	base.Spans[0]["trace_id"] = field(base.Spans[1], "trace_id")
 	if got := evaluate(e, base, changed); got.Status != "not_exercised" {

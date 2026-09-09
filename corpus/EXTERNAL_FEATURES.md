@@ -1,7 +1,7 @@
 # External configuration feature experiments
 
-The external suite adds **24 distinct specification feature IDs** to the 85
-already covered by Scheme proof rules: **109 total, a 28.2% increase**. Nineteen
+The external suite adds **22 distinct specification feature IDs** to the 85
+already covered by Scheme proof rules: **107 total, a 25.9% increase**. Nineteen
 configuration experiments cover these IDs and a negative propagation check;
 this counts feature IDs, not HTTP
 requests, assertions, or language/feature pairs. A unit test checks the IDs
@@ -20,11 +20,10 @@ HTTP requests and duplicate registrations through the public API. No fixture
 application or SDK code is changed. A separate `traceidratio=1` control makes
 the comparison with `traceidratio=0` test the sampler argument itself.
 
-The second expansion adds five feature IDs: default service naming, batch span
-processor configuration, batch log processor configuration, AlwaysOn exemplar
-filtering, and homogeneous primitive arrays observed through captured request
-headers. The propagation-disabled experiment strengthens an already-covered
-feature and contributes no additional feature ID.
+The second expansion adds three feature IDs: default service naming, AlwaysOn
+exemplar filtering, and homogeneous primitive arrays observed through captured
+request headers. The batch processor experiments and propagation-disabled
+experiment strengthen coverage without contributing additional feature IDs.
 
 The fixture versions and image digests are pinned in
 [`oci_images.lock.bzl`](../bazel/oci_images.lock.bzl). Findings below were
@@ -65,9 +64,9 @@ remote parent in the control are excluded from both sides. Rails exports no
 metrics in this fixture. A separate log batching control and a bounded burst
 of duplicate registrations create an opportunity to batch error logs before
 the batch cap is lowered to one.
-For the `OTEL_BSP_*` and `OTEL_BLRP_*` matrix rows, this proves the maximum
-export batch-size setting only; queue saturation and timeout behavior are not
-covered by these experiments.
+The batch processor experiments prove the maximum export batch-size setting
+only. They do not claim the matrix's `OTEL_BSP_*` and `OTEL_BLRP_*` wildcard
+feature rows because queue saturation and timeout behavior are not covered.
 
 The first expansion also established:
 

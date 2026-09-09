@@ -19,8 +19,10 @@ var experimentControls = map[string]experiment{
 
 var experiments = []experiment{
 	{"default-service", map[string]string{"OTEL_SERVICE_NAME": ""}, []string{"resource.default-value-for-service-name"}},
-	{"span-batch", map[string]string{"OTEL_BSP_MAX_EXPORT_BATCH_SIZE": "1"}, []string{"environment-variables.otel-bsp"}},
-	{"log-batch", map[string]string{"OTEL_BLRP_SCHEDULE_DELAY": "1000", "OTEL_BLRP_MAX_EXPORT_BATCH_SIZE": "1"}, []string{"environment-variables.otel-blrp"}},
+	// These experiments cover maximum export batch size only, not every setting
+	// represented by the matrix's OTEL_BSP_* and OTEL_BLRP_* family rows.
+	{"span-batch", map[string]string{"OTEL_BSP_MAX_EXPORT_BATCH_SIZE": "1"}, nil},
+	{"log-batch", map[string]string{"OTEL_BLRP_SCHEDULE_DELAY": "1000", "OTEL_BLRP_MAX_EXPORT_BATCH_SIZE": "1"}, nil},
 	{"exemplars-always-on", map[string]string{"OTEL_TRACES_SAMPLER": "always_off", "OTEL_METRICS_EXEMPLAR_FILTER": "always_on"}, []string{"metrics.the-metrics-sdk-supports-alwayson-exemplar-filter"}},
 	{"request-headers", map[string]string{"OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST": "x-probe-feature"}, []string{"traces.span-attributes.array-of-primitives-homogeneous"}},
 	// This exercises an already-covered feature with a negative propagation

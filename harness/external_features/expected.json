@@ -16,8 +16,8 @@
     "log-length": "gap:request=32", "exemplars": "pass", "histogram": "pass"
   },
   "gin": {
-	"default-service":"gap:service.name=missing", "span-batch":"gap", "log-batch":"not_exercised",
-	"exemplars-always-on":"pass", "request-headers":"gap", "propagation-none":"pass",
+	"default-service":"gap:service.name=missing", "span-batch":"gap:batch-size-unchanged", "log-batch":"not_exercised",
+	"exemplars-always-on":"pass", "request-headers":"gap:header-arrays=0", "propagation-none":"pass",
     "resource": "pass", "disabled": "pass", "sampler": "pass", "sampler-arg": "pass",
     "span-length": "pass", "attribute-length": "pass", "attribute-count": "pass",
     "events": "not_exercised", "event-attributes": "not_exercised", "log-count": "not_exercised",
@@ -25,7 +25,7 @@
   },
   "rails": {
 	"default-service":"gap:service.name=empty", "span-batch":"pass", "log-batch":"pass",
-	"exemplars-always-on":"not_exercised", "request-headers":"gap", "propagation-none":"pass",
+	"exemplars-always-on":"not_exercised", "request-headers":"gap:header-arrays=0", "propagation-none":"pass",
     "resource": "pass", "disabled": "pass", "sampler": "pass", "sampler-arg": "pass",
     "span-length": "startup_rejected", "attribute-length": "startup_rejected", "attribute-count": "pass",
     "events": "startup_rejected", "event-attributes": "not_exercised", "log-count": "not_exercised",
