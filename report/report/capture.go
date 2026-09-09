@@ -1131,9 +1131,11 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 				}
 			}
 			rooted := canonical(rootedCertificate(root))
+			rootedCertificates := map[int]string{root: rooted}
 			if len(rootCandidates) > 1 && !uniformSimpleCycle {
 				for _, candidate := range rootCandidates[1:] {
 					certificate := canonical(rootedCertificate(candidate))
+					rootedCertificates[candidate] = certificate
 					if certificate < rooted {
 						root, rooted = candidate, certificate
 					}
@@ -1142,8 +1144,21 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 			adjacencyKey := digest([]byte(rooted))[:12]
 			sort.Strings(descriptions)
 			componentKeys[component] = digest([]byte(canonical([]any{descriptions, adjacencyKey})))[:12]
+			membersByDescription := map[string][]int{}
 			for _, member := range components[component] {
-				keys[member] = digest([]byte(canonical([]any{memberDescriptions[member], componentKeys[component]})))[:12]
+				membersByDescription[memberDescriptions[member]] = append(membersByDescription[memberDescriptions[member]], member)
+			}
+			for _, member := range components[component] {
+				position := ""
+				if len(membersByDescription[memberDescriptions[member]]) > 1 && !uniformSimpleCycle {
+					certificate, exists := rootedCertificates[member]
+					if !exists {
+						certificate = canonical(rootedCertificate(member))
+						rootedCertificates[member] = certificate
+					}
+					position = digest([]byte(certificate))[:12]
+				}
+				keys[member] = digest([]byte(canonical([]any{memberDescriptions[member], componentKeys[component], position})))[:12]
 			}
 			componentState[component] = 2
 		}

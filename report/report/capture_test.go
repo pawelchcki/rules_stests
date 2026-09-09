@@ -686,8 +686,15 @@ func TestCaptureLargeLocallyIdenticalComponentIgnoresRecordOrder(t *testing.T) {
 	left := decodedFixture(t, "forward identical", spans...)
 	right := decodedFixture(t, "reversed identical", reversed...)
 	rightTargets := map[string]string{}
+	distinctTargets := map[string]bool{}
 	for _, span := range right.Spans {
 		rightTargets[str(span.Fields["traceId"])] = canonical(span.LinkTargets)
+		for _, target := range span.LinkTargets {
+			distinctTargets[target] = true
+		}
+	}
+	if len(distinctTargets) == 1 {
+		t.Fatal("non-automorphic large-component members collapsed to one target key")
 	}
 	for _, span := range left.Spans {
 		traceID := str(span.Fields["traceId"])
