@@ -157,6 +157,24 @@ func normalizeWireContext(v any, context string) (any, error) {
 			case key == "body":
 				childContext = "anyValue"
 			}
+			if context == "anyValue" && c != nil {
+				valid := true
+				switch key {
+				case "stringValue":
+					_, valid = c.(string)
+				case "boolValue":
+					_, valid = c.(bool)
+				case "arrayValue", "kvlistValue":
+					_, valid = c.(map[string]any)
+				case "bytesValue":
+					_, stringValue := c.(string)
+					_, arrayValue := c.([]any)
+					valid = stringValue || arrayValue
+				}
+				if !valid {
+					return nil, fmt.Errorf("invalid OTLP AnyValue variant %q: unexpected JSON type", key)
+				}
+			}
 			value, err := normalizeWireContext(c, childContext)
 			if err != nil {
 				return nil, err
@@ -214,9 +232,11 @@ func normalizeWireContext(v any, context string) (any, error) {
 			sort.SliceStable(a, func(i, j int) bool { return canonical(a[i]) < canonical(a[j]) })
 		}
 		if value, ok := out["doubleValue"]; ok {
-			if number, err := strconv.ParseFloat(str(value), 64); err == nil {
-				out["doubleValue"] = strconv.FormatFloat(number, 'g', -1, 64)
+			number, err := strconv.ParseFloat(str(value), 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid OTLP double AnyValue")
 			}
+			out["doubleValue"] = strconv.FormatFloat(number, 'g', -1, 64)
 		}
 		if value, ok := out["intValue"]; ok {
 			number, err := strconv.ParseInt(str(value), 10, 64)
@@ -520,12 +540,15 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 		ids[key] = i
 		traces[traceIDs[i]] = append(traces[traceIDs[i]], i)
 	}
+	externalParentAnchors := map[string]bool{}
 	for i := range d.Spans {
 		parents[i] = -1
 		if parentIDs[i] != "" {
 			if p, ok := ids[traceIDs[i]+"/"+parentIDs[i]]; ok {
 				parents[i] = p
 				children[p] = append(children[p], i)
+			} else {
+				externalParentAnchors[traceIDs[i]+"/"+parentIDs[i]] = true
 			}
 		}
 	}
@@ -572,6 +595,20 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 	}
 	buildTargetOccurrenceKeys := func(includeScope bool) []string {
 		keys := make([]string, len(d.Spans))
+		subtrees := make([]string, len(d.Spans))
+		var subtree func(int) string
+		subtree = func(i int) string {
+			if subtrees[i] != "" {
+				return subtrees[i]
+			}
+			descendants := make([]string, 0, len(children[i]))
+			for _, child := range children[i] {
+				descendants = append(descendants, subtree(child))
+			}
+			sort.Strings(descendants)
+			subtrees[i] = digest([]byte(canonical([]any{semanticSpanProjection(&d, i, includeScope), descendants})))[:12]
+			return subtrees[i]
+		}
 		var key func(int) string
 		key = func(i int) string {
 			if keys[i] != "" {
@@ -583,7 +620,7 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 			} else if parentIDs[i] != "" {
 				parent = "external parent"
 			}
-			keys[i] = digest([]byte(canonical([]any{parent, semanticSpanProjection(&d, i, includeScope)})))[:12]
+			keys[i] = digest([]byte(canonical([]any{parent, subtree(i)})))[:12]
 			return keys[i]
 		}
 		for i := range d.Spans {
@@ -618,7 +655,7 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 				if tid == traceIDs[i] {
 					edge.relationship = "external span in same trace"
 				}
-				if sid == parentIDs[i] && tid == traceIDs[i] {
+				if externalParentAnchors[targetKey] {
 					edge.relationship = "external parent"
 				}
 				if j, ok := ids[targetKey]; ok {
@@ -862,7 +899,7 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 				target = "external span in same trace"
 				targetWithoutScope = target
 			}
-			if sid == parentIDs[i] && tid == traceIDs[i] {
+			if externalParentAnchors[tid+"/"+sid] {
 				target = "external parent"
 				targetWithoutScope = target
 			}

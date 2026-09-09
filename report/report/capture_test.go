@@ -166,6 +166,9 @@ func TestCaptureRejectsSinkInvalidSpanFields(t *testing.T) {
 		"multi-variant AnyValue": fixture(func(span map[string]any) {
 			span["attributes"] = []any{map[string]any{"key": "invalid", "value": map[string]any{"intValue": "1", "stringValue": "x"}}}
 		}),
+		"numeric string AnyValue": fixture(func(span map[string]any) {
+			span["attributes"] = []any{map[string]any{"key": "invalid", "value": map[string]any{"stringValue": 7}}}
+		}),
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, raw)
@@ -334,6 +337,41 @@ func TestCaptureLinksPreserveSemanticTargetOccurrence(t *testing.T) {
 	right := decodedFixture(t, "right", span(1, 1, "target", "A"), span(2, 1, "target", "B"), linked(3, 2, "X"), linked(4, 1, "Y"))
 	if left.Spans[2].LinkTargets[0] == right.Spans[2].LinkTargets[0] || !strings.Contains(left.Spans[2].LinkTargets[0], "occurrence") {
 		t.Fatalf("semantic target reassignment was lost: %q == %q", left.Spans[2].LinkTargets[0], right.Spans[2].LinkTargets[0])
+	}
+}
+func TestCaptureLinkTargetsIncludeDescendantSemantics(t *testing.T) {
+	target := func(trace int, value string) []map[string]any {
+		child := captureSpan(trace, 2, 1, "child")
+		child["attributes"] = []any{map[string]any{"key": "variant", "value": map[string]any{"stringValue": value}}}
+		return []map[string]any{captureSpan(trace, 1, 0, "target"), child}
+	}
+	source := func(trace, targetTrace int, value string) map[string]any {
+		s := captureSpan(trace, 1, 0, "source")
+		s["attributes"] = []any{map[string]any{"key": "variant", "value": map[string]any{"stringValue": value}}}
+		s["links"] = []any{map[string]any{"traceId": fmt.Sprintf("%032x", targetTrace), "spanId": fmt.Sprintf("%016x", 1)}}
+		return s
+	}
+	fixture := func(xTarget, yTarget int) CaptureDataset {
+		spans := append(target(1, "A"), target(2, "B")...)
+		spans = append(spans, source(3, xTarget, "X"), source(4, yTarget, "Y"))
+		return decodedFixture(t, "descendants", spans...)
+	}
+	left, right := fixture(1, 2), fixture(2, 1)
+	if left.Spans[4].LinkTargets[0] == right.Spans[4].LinkTargets[0] {
+		t.Fatalf("linked target descendant semantics were lost: %q", left.Spans[4].LinkTargets[0])
+	}
+}
+func TestCaptureLinksRecognizeOtherTraceExternalParents(t *testing.T) {
+	partial := captureSpan(1, 1, 99, "partial root")
+	source := func(targetTrace int) map[string]any {
+		s := captureSpan(2, 1, 0, "source")
+		s["links"] = []any{map[string]any{"traceId": fmt.Sprintf("%032x", targetTrace), "spanId": fmt.Sprintf("%016x", 99)}}
+		return s
+	}
+	parentLink := decodedFixture(t, "parent", partial, source(1))
+	unrelatedLink := decodedFixture(t, "unrelated", partial, source(3))
+	if !strings.Contains(parentLink.Spans[1].LinkTargets[0], "external parent") || parentLink.Spans[1].LinkTargets[0] == unrelatedLink.Spans[1].LinkTargets[0] {
+		t.Fatalf("external parent anchor was lost: %q / %q", parentLink.Spans[1].LinkTargets[0], unrelatedLink.Spans[1].LinkTargets[0])
 	}
 }
 func TestCaptureLinkTargetOccurrenceIncludesOutgoingRelationships(t *testing.T) {
