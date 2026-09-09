@@ -1065,6 +1065,33 @@ func TestCaptureLargeRegularLinkGraphPastCanonicalBudgetRemainsComparable(t *tes
 		t.Fatal("bounded canonicalization erased large-component adjacency")
 	}
 }
+func TestCaptureLargeRegularLinkGraphRetainsTriangleIncidence(t *testing.T) {
+	const count = 1100
+	fixture := func(generators []int) CaptureDataset {
+		spans := make([]map[string]any, count)
+		for i := range spans {
+			span := captureSpan(i+1, 1, 0, "regular")
+			links := make([]any, 0, len(generators)*2)
+			for _, generator := range generators {
+				for _, direction := range []int{-1, 1} {
+					target := (i + direction*generator) % count
+					if target < 0 {
+						target += count
+					}
+					links = append(links, map[string]any{"traceId": fmt.Sprintf("%032x", target+1), "spanId": fmt.Sprintf("%016x", 1)})
+				}
+			}
+			span["links"] = links
+			spans[i] = span
+		}
+		return decodedFixtureWithEncoding(t, fmt.Sprint(generators), "protobuf", spans...)
+	}
+	withTriangles := fixture([]int{181, 352, 374})
+	withoutTriangles := fixture([]int{176, 247, 318})
+	if withTriangles.Spans[0].LinkTargets[0] == withoutTriangles.Spans[0].LinkTargets[0] {
+		t.Fatal("large regular graph certificate erased triangle incidence")
+	}
+}
 func TestCaptureRejectsAllZeroParentID(t *testing.T) {
 	span := captureSpan(1, 1, 0, "invalid parent")
 	span["parentSpanId"] = "0000000000000000"

@@ -2,7 +2,9 @@ package report
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -1198,8 +1200,6 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 		keys := make([]string, len(d.Spans))
 		componentKeys := make([]string, len(components))
 		componentState := make([]int, len(components))
-		canonicalRootWorkRemaining := int64(8 * 1024 * 1024)
-		boundedDistanceWorkRemaining := int64(64 * 1024 * 1024)
 		var labelComponent func(int) error
 		labelComponent = func(component int) error {
 			if componentState[component] == 2 {
@@ -1241,6 +1241,58 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 					return map[string]any{"occurrence": base[member], "links": outgoing}
 				}
 				return visit(root)
+			}
+			rootedGeneration := 0
+			rootedSeen := make([]int, len(d.Spans))
+			rootedReferences := make([]int, len(d.Spans))
+			rootedDigest := func(root int) string {
+				rootedGeneration++
+				hasher := sha256.New()
+				var buffer [binary.MaxVarintLen64]byte
+				writeTag := func(tag byte) {
+					buffer[0] = tag
+					_, _ = hasher.Write(buffer[:1])
+				}
+				writeInt := func(value int) {
+					length := binary.PutUvarint(buffer[:], uint64(value))
+					_, _ = hasher.Write(buffer[:length])
+				}
+				writeString := func(value string) {
+					writeInt(len(value))
+					_, _ = hasher.Write([]byte(value))
+				}
+				nextReference := 0
+				var visit func(int)
+				visit = func(member int) {
+					if rootedSeen[member] == rootedGeneration {
+						writeTag('r')
+						writeInt(rootedReferences[member])
+						return
+					}
+					rootedSeen[member] = rootedGeneration
+					rootedReferences[member] = nextReference
+					nextReference++
+					writeTag('n')
+					writeString(base[member])
+					writeInt(len(edges[member]))
+					for _, edge := range edges[member] {
+						writeString(edge.relationship)
+						writeString(edge.shared)
+						switch {
+						case edge.target < 0:
+							writeTag('e')
+							writeString(externalLabels[edge.external])
+						case componentOf[edge.target] != component:
+							writeTag('x')
+							writeString(keys[edge.target])
+						default:
+							writeTag('i')
+							visit(edge.target)
+						}
+					}
+				}
+				visit(root)
+				return hex.EncodeToString(hasher.Sum(nil))
 			}
 			// Small components retain a rooted certificate for every member.
 			// Large components retain one complete adjacency certificate in
@@ -1385,109 +1437,24 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 			}
 			// A stable refinement class is not necessarily an automorphism class:
 			// regular, non-vertex-transitive graphs can leave every member tied.
-			// Canonical rooted certificates distinguish such positions and make the
-			// shared component label independent of Tarjan's traversal order. Keep
-			// the exact work bounded; larger tied components use a stable class-level
-			// adjacency certificate instead of dropping sink-accepted telemetry.
+			// Complete rooted certificates distinguish such positions and make the
+			// shared component label independent of Tarjan's traversal order. The
+			// streaming representation retains incidence with linear per-root memory.
 			rootedDigestByMember := map[int]string{}
-			boundedCanonicalization := false
 			if !simpleDirectedCycle {
 				classSizes := map[int]int{}
 				for _, member := range components[component] {
 					classSizes[classes[member]]++
 				}
-				ambiguous := 0
-				componentWork := int64(len(components[component]))
 				for _, member := range components[component] {
-					componentWork += int64(len(edges[member]))
 					if classSizes[classes[member]] > 1 {
-						ambiguous++
-					}
-				}
-				if ambiguous > 0 && componentWork > canonicalRootWorkRemaining/int64(ambiguous) {
-					boundedCanonicalization = true
-				} else {
-					canonicalRootWorkRemaining -= int64(ambiguous) * componentWork
-					for _, member := range components[component] {
-						if classSizes[classes[member]] > 1 {
-							rootedDigestByMember[member] = digest([]byte(canonical(rootedCertificate(member))))
-						}
+						rootedDigestByMember[member] = rootedDigest(member)
 					}
 				}
 			}
-			rooted := ""
-			if boundedCanonicalization {
-				// Exact rooted certificates can require quadratic work for a large
-				// refinement-tied component. Retain an order-independent bounded
-				// certificate of its stable classes, adjacency, and all-root distance
-				// profiles so sink-accepted telemetry remains comparable without
-				// erasing incidence between refinement-tied members.
-				classAdjacency := make([]string, 0, len(components[component]))
-				for _, member := range components[component] {
-					outgoing := make([]string, 0, len(edges[member]))
-					for _, edge := range edges[member] {
-						target := ""
-						if edge.target >= 0 && componentOf[edge.target] == component {
-							target = strconv.Itoa(classes[edge.target])
-						} else if edge.target >= 0 {
-							target = keys[edge.target]
-						} else {
-							target = externalLabels[edge.external]
-						}
-						outgoing = append(outgoing, canonical([]any{edge.relationship, target, edge.shared}))
-					}
-					sort.Strings(outgoing)
-					incomingKeys := make([]string, 0, len(incoming[member]))
-					for _, entry := range incoming[member] {
-						incomingKeys = append(incomingKeys, canonical([]any{entry.edge.relationship, classes[entry.source], entry.edge.shared}))
-					}
-					sort.Strings(incomingKeys)
-					classAdjacency = append(classAdjacency, canonical([]any{memberDescriptions[member], classes[member], outgoing, incomingKeys}))
-				}
-				sort.Strings(classAdjacency)
-				distanceProfiles := make([]string, 0, len(components[component]))
-				seen := make([]int, len(d.Spans))
-				distances := make([]int, len(d.Spans))
-				completeProfiles := true
-				for generation, root := range components[component] {
-					queue := []int{root}
-					seen[root] = generation + 1
-					distances[root] = 0
-					profile := map[string]int{strconv.Itoa(classes[root]) + ":0": 1}
-					for len(queue) > 0 && completeProfiles {
-						member := queue[0]
-						queue = queue[1:]
-						for _, edge := range edges[member] {
-							if edge.target < 0 || componentOf[edge.target] != component {
-								continue
-							}
-							if boundedDistanceWorkRemaining == 0 {
-								completeProfiles = false
-								break
-							}
-							boundedDistanceWorkRemaining--
-							if seen[edge.target] == generation+1 {
-								continue
-							}
-							seen[edge.target] = generation + 1
-							distances[edge.target] = distances[member] + 1
-							key := strconv.Itoa(classes[edge.target]) + ":" + strconv.Itoa(distances[edge.target])
-							profile[key]++
-							queue = append(queue, edge.target)
-						}
-					}
-					if !completeProfiles {
-						break
-					}
-					distanceProfiles = append(distanceProfiles, canonical(profile))
-				}
-				if !completeProfiles {
-					distanceProfiles = nil
-				}
-				sort.Strings(distanceProfiles)
-				rooted = digest([]byte(canonical([]any{classAdjacency, distanceProfiles})))
-			} else if rooted = rootedDigestByMember[root]; rooted == "" {
-				rooted = digest([]byte(canonical(rootedCertificate(root))))
+			rooted := rootedDigestByMember[root]
+			if rooted == "" {
+				rooted = rootedDigest(root)
 			} else {
 				for _, member := range components[component] {
 					candidateKey := canonical([]any{memberDescriptions[member], classes[member]})
