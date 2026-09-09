@@ -99,15 +99,10 @@ func spanMatchScore(left, right SpanNode) int {
 	return score
 }
 
-// alignedSpanMatchScore keeps name and kind as the compatibility boundary,
-// then uses rendered details to pair otherwise-identical sibling spans.
-func alignedSpanMatchScore(left, right alignedSpan) int {
+func shallowAlignedSpanMatchScore(left, right alignedSpan) int {
 	score := spanMatchScore(left.node, right.node)
 	if score < 0 {
 		return score
-	}
-	if left.childGroups != nil || right.childGroups != nil {
-		left.children, right.children = choosePairedCandidates(left.childGroups, right.childGroups)
 	}
 	if left.node.Status != "" && left.node.Status == right.node.Status {
 		score += 8
@@ -122,11 +117,6 @@ func alignedSpanMatchScore(left, right alignedSpan) int {
 	if left.card == right.card {
 		score += 2
 	}
-	// Sibling order is not meaningful. Reward the best child assignment so
-	// partially overlapping subtrees stay together too, rather than only
-	// recognizing byte-for-byte equivalent child lists.
-	childMatches, childDetail := pairedSpanListScore(left.children, right.children)
-	score += childMatches*1000 + childDetail
 	// When structural detail ties across a whole assignment, prefer the
 	// orientation-independent pairing that produces the least noisy report.
 	// An exact rendered row gets an extra bonus so one exact plus one differing
@@ -143,6 +133,23 @@ func alignedSpanMatchScore(left, right alignedSpan) int {
 		score += renderedFieldCount + 1
 	}
 	return score
+}
+
+// alignedSpanMatchScore keeps name and kind as the compatibility boundary,
+// then uses rendered details to pair otherwise-identical sibling spans.
+func alignedSpanMatchScore(left, right alignedSpan) int {
+	score := shallowAlignedSpanMatchScore(left, right)
+	if score < 0 {
+		return score
+	}
+	if left.childGroups != nil || right.childGroups != nil {
+		left.children, right.children = choosePairedCandidates(left.childGroups, right.childGroups)
+	}
+	// Sibling order is not meaningful. Reward the best child assignment so
+	// partially overlapping subtrees stay together too, rather than only
+	// recognizing byte-for-byte equivalent child lists.
+	childMatches, childDetail := pairedSpanListScore(left.children, right.children)
+	return score + childMatches*1000 + childDetail
 }
 
 func formatCard(minCount, maxCount int, exact bool, altCount int) string {
@@ -273,6 +280,23 @@ func bestSpanPair(leftGroup, rightGroup SpanGroup) (spanPairChoice, bool) {
 	return best, found
 }
 
+func bestShallowSpanPair(leftGroup, rightGroup SpanGroup) (spanPairChoice, bool) {
+	best, found, bestKey := spanPairChoice{}, false, ""
+	for _, left := range resolveSpanGroup(leftGroup) {
+		for _, right := range resolveSpanGroup(rightGroup) {
+			score := shallowAlignedSpanMatchScore(left, right)
+			if score < 0 {
+				continue
+			}
+			key := canonicalSpanKey(left) + "\x1c" + canonicalSpanKey(right)
+			if !found || score > best.score || (score == best.score && key < bestKey) {
+				best, found, bestKey = spanPairChoice{left: left, right: right, score: score}, true, key
+			}
+		}
+	}
+	return best, found
+}
+
 // choosePairedCandidates makes each authored sibling group one assignment
 // vertex. Each edge selects the best pair of alternatives for just those two
 // groups, so independent one-of groups are coordinated without constructing
@@ -282,7 +306,7 @@ func choosePairedCandidates(leftGroups, rightGroups []SpanGroup) ([]alignedSpan,
 	right := canonicalSpanCandidates(rightGroups)
 	if len(leftGroups)+len(rightGroups) > optimalAssignmentVertexLimit {
 		matchedRight, _ := maximumWeightMaximumCardinalityPairs(len(leftGroups), len(rightGroups), func(leftIndex, rightIndex int) (int, bool) {
-			choice, compatible := bestSpanPair(leftGroups[leftIndex], rightGroups[rightIndex])
+			choice, compatible := bestShallowSpanPair(leftGroups[leftIndex], rightGroups[rightIndex])
 			return choice.score, compatible
 		})
 		for leftIndex, rightIndex := range matchedRight {
@@ -568,6 +592,9 @@ func linearMemoryMaximumCardinalityPairs(leftCount, rightCount int, score func(i
 }
 
 func maximumCardinalityPairs(left, right []alignedSpan, score func(alignedSpan, alignedSpan) int) ([]int, []bool) {
+	if len(left)+len(right) > optimalAssignmentVertexLimit {
+		score = shallowAlignedSpanMatchScore
+	}
 	return maximumWeightMaximumCardinalityPairs(len(left), len(right), func(leftIndex, rightIndex int) (int, bool) {
 		value := score(left[leftIndex], right[rightIndex])
 		return value, value >= 0
@@ -732,12 +759,51 @@ func bestTracePair(leftIndex int, leftGroup TraceGroup, rightIndex int, rightGro
 	return best, found
 }
 
+func shallowTraceMatchScore(left, right resolvedTrace) (int, bool) {
+	best, found := 0, false
+	for _, leftRoot := range left.roots {
+		for _, rightRoot := range right.roots {
+			score := shallowAlignedSpanMatchScore(leftRoot, rightRoot)
+			if score >= 0 && (!found || score > best) {
+				best, found = score, true
+			}
+		}
+	}
+	if !found {
+		return 0, false
+	}
+	if left.card == right.card {
+		best += 100
+	}
+	if left.coverage == right.coverage {
+		best += 10
+	}
+	return best, true
+}
+
+func bestShallowTracePair(leftIndex int, leftGroup TraceGroup, rightIndex int, rightGroup TraceGroup) (tracePairChoice, bool) {
+	best, found, bestKey := tracePairChoice{}, false, ""
+	for _, left := range traceGroupCandidates(leftIndex, leftGroup) {
+		for _, right := range traceGroupCandidates(rightIndex, rightGroup) {
+			score, compatible := shallowTraceMatchScore(left, right)
+			if !compatible {
+				continue
+			}
+			key := canonicalTraceKey(left) + "\x1c" + canonicalTraceKey(right)
+			if !found || score > best.score || (score == best.score && key < bestKey) {
+				best, found, bestKey = tracePairChoice{left: left, right: right, score: score}, true, key
+			}
+		}
+	}
+	return best, found
+}
+
 func choosePairedTraceCandidates(leftGroups, rightGroups []TraceGroup) ([]resolvedTrace, []resolvedTrace) {
 	left := canonicalTraceCandidates(leftGroups)
 	right := canonicalTraceCandidates(rightGroups)
 	if len(leftGroups)+len(rightGroups) > optimalAssignmentVertexLimit {
 		matchedRight, _ := maximumWeightMaximumCardinalityPairs(len(leftGroups), len(rightGroups), func(leftIndex, rightIndex int) (int, bool) {
-			choice, compatible := bestTracePair(leftIndex, leftGroups[leftIndex], rightIndex, rightGroups[rightIndex])
+			choice, compatible := bestShallowTracePair(leftIndex, leftGroups[leftIndex], rightIndex, rightGroups[rightIndex])
 			return choice.score, compatible
 		})
 		for leftIndex, rightIndex := range matchedRight {
@@ -821,6 +887,9 @@ func traceMatchScore(left, right resolvedTrace) (int, bool) {
 
 func maximumCardinalityTracePairs(left, right []resolvedTrace) ([]int, []bool) {
 	return maximumWeightMaximumCardinalityPairs(len(left), len(right), func(leftIndex, rightIndex int) (int, bool) {
+		if len(left)+len(right) > optimalAssignmentVertexLimit {
+			return shallowTraceMatchScore(left[leftIndex], right[rightIndex])
+		}
 		return traceMatchScore(left[leftIndex], right[rightIndex])
 	})
 }

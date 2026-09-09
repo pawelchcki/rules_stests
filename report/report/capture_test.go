@@ -165,6 +165,23 @@ func TestCapturePreservesPartialTraceRootCooccurrence(t *testing.T) {
 		t.Fatalf("partial trace root co-occurrence was lost: %q == %q", left.Spans[0].TraceRoots, right.Spans[0].TraceRoots)
 	}
 }
+func TestCapturePreservesCompleteTraceDescendantCooccurrence(t *testing.T) {
+	child := func(trace, span int, value string) map[string]any {
+		s := captureSpan(trace, span, 1, "child")
+		s["attributes"] = []any{map[string]any{"key": "variant", "value": map[string]any{"stringValue": value}}}
+		return s
+	}
+	fixture := func(first, second, third, fourth string) CaptureDataset {
+		return decodedFixture(t, "complete",
+			captureSpan(1, 1, 0, "root"), child(1, 2, first), child(1, 3, second),
+			captureSpan(2, 1, 0, "root"), child(2, 2, third), child(2, 3, fourth))
+	}
+	left := fixture("A", "X", "B", "Y")
+	right := fixture("A", "Y", "B", "X")
+	if left.Spans[0].TraceRoots == "" || left.Spans[0].TraceRoots == right.Spans[0].TraceRoots {
+		t.Fatalf("complete trace descendant co-occurrence was lost: %q == %q", left.Spans[0].TraceRoots, right.Spans[0].TraceRoots)
+	}
+}
 func TestCaptureLinksAndEventOrder(t *testing.T) {
 	s := captureSpan(1, 1, 0, "root")
 	s["events"] = []any{map[string]any{"name": "second"}, map[string]any{"name": "first"}}

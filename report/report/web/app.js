@@ -506,6 +506,7 @@ function renderFeatures() {
   const matches = data.features.filter((feature) => {
     if (readHash().params.get('feature') && readHash().params.get('feature') !== feature.id) return false;
     const coverage = $('check-coverage').value;
+    if ((language || profile) && !manifests.length) return false;
     if (category && feature.category !== category) return false;
     if (search && !(feature.name.toLowerCase().includes(search) || feature.id.toLowerCase().includes(search))) return false;
     if ((support || coverage || verification || basis) && !manifests.some(m => {
@@ -804,7 +805,7 @@ function captureFields(dataset, index, raw, hideScope) {
     fields.events = (fields.events || []).map(e => { const x={...e}; delete x.timeUnixNano; return x; });
     fields.links = (fields.links || []).map((l,i) => { const x={...l},withoutScope=span.linkTargetsWithoutScope || []; delete x.traceId; delete x.spanId; x.relationship=hideScope && withoutScope.length===span.linkTargets.length ? withoutScope[i] : span.linkTargets[i]; return x; });
     fields.parentRelationship = hideScope ? span.parentWithoutScope || span.parent : span.parent;
-    if (span.traceRoots) fields.traceRootSet = hideScope ? span.traceRootsWithoutScope || span.traceRoots : span.traceRoots;
+    if (span.traceRoots) fields.traceOccurrenceSet = hideScope ? span.traceRootsWithoutScope || span.traceRoots : span.traceRoots;
   }
   const result = {span:fields, resource:dataset.resources[span.resource]};
   if (!hideScope) result.scope = dataset.scopes[span.scope];
@@ -954,11 +955,20 @@ function renderParityScenarios() {
     if (!detail.open || detail.dataset.loaded) return;detail.dataset.loaded='1';
     const l=$('left').value,r=$('right').value,raw=$('field-view').value==='raw',hide=$('hide-scope').checked;
     detail.querySelector('div').innerHTML='<ul>'+data.scenarios.map(s=>{
-      let label='Saved expectations';
+      let label;
       if ($('comparison-source').value==='captured') {
         const ld=captureByKey.get(l+'/'+s),rd=captureByKey.get(r+'/'+s);
         if (!ld || !rd || ld.diagnostics || rd.diagnostics) label='comparison unavailable';
         else {let n=0;for(const t of capturePair(l,r,s)) {if(!t.left || !t.right || t.left.card!==t.right.card || t.left.coverage!==t.right.coverage)n++;for(const row of t.spans) if(!row.left || !row.right || captureRowDiff(ld,rd,row,raw,hide).diffs.length)n++;}label=n+' differing groups';}
+      } else {
+        const found=comparisonFor(l,r,s),comparison=found && found.comparison,alignment=comparison && comparison.alignment;
+        if (!comparison || !comparison.available || !alignment) label='comparison unavailable';
+        else {
+          const summary=alignment.summary;
+          let n=summary.traceLeftOnly+summary.traceRightOnly+summary.leftOnly+summary.rightOnly+visibleDifferingGroups(alignment,hide);
+          for (const trace of alignment.traces) if (trace.kind==='matched' && trace.left && trace.right && (trace.left.card!==trace.right.card || trace.left.coverage!==trace.right.coverage)) n++;
+          label=n+' differing groups';
+        }
       }
       return '<li><a href="'+esc(parityLink({scenario:s}))+'">'+esc(s)+'</a> · '+label+'</li>';
     }).join('')+'</ul>';

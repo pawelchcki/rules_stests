@@ -521,7 +521,18 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 	for _, sources := range linkTargetSourcesWithoutScope {
 		sort.Strings(sources)
 	}
-	buildGraphAwareTargetKeys := func(base []string, targetSources map[string][]string) ([]string, error) {
+	sharedTargetDigests := func(targetSources map[string][]string) map[string]string {
+		result := map[string]string{}
+		for key, sources := range targetSources {
+			if len(sources) > 1 {
+				result[key] = digest([]byte(canonical(sources)))[:12]
+			}
+		}
+		return result
+	}
+	linkTargetDigests := sharedTargetDigests(linkTargetSources)
+	linkTargetDigestsWithoutScope := sharedTargetDigests(linkTargetSourcesWithoutScope)
+	buildGraphAwareTargetKeys := func(base []string, targetDigests map[string]string) ([]string, error) {
 		keys := append([]string(nil), base...)
 		// Parent topology is limited to 128 levels above. Propagate link colors
 		// to the same bound so multi-hop relationships participate without
@@ -560,8 +571,8 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 							descriptor["targetOccurrence"] = keys[j]
 						}
 					}
-					if sources := targetSources[tid+"/"+sid]; len(sources) > 1 {
-						descriptor["sharedTarget"] = digest([]byte(canonical(sources)))[:12]
+					if shared := targetDigests[tid+"/"+sid]; shared != "" {
+						descriptor["sharedTarget"] = shared
 					}
 					outgoing = append(outgoing, descriptor)
 				}
@@ -575,11 +586,11 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 		}
 		return keys, nil
 	}
-	targetOccurrenceKeys, err := buildGraphAwareTargetKeys(sourceOccurrenceKeys, linkTargetSources)
+	targetOccurrenceKeys, err := buildGraphAwareTargetKeys(sourceOccurrenceKeys, linkTargetDigests)
 	if err != nil {
 		return fail(err)
 	}
-	targetOccurrenceKeysWithoutScope, err := buildGraphAwareTargetKeys(sourceOccurrenceKeysWithoutScope, linkTargetSourcesWithoutScope)
+	targetOccurrenceKeysWithoutScope, err := buildGraphAwareTargetKeys(sourceOccurrenceKeysWithoutScope, linkTargetDigestsWithoutScope)
 	if err != nil {
 		return fail(err)
 	}
@@ -616,12 +627,11 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 					targetWithoutScope = target
 				}
 			}
-			if sources := linkTargetSources[tid+"/"+sid]; len(sources) > 1 {
-				suffix := " (shared target " + digest([]byte(canonical(sources)))[:12] + ")"
-				target += suffix
+			if shared := linkTargetDigests[tid+"/"+sid]; shared != "" {
+				target += " (shared target " + shared + ")"
 			}
-			if sources := linkTargetSourcesWithoutScope[tid+"/"+sid]; len(sources) > 1 {
-				targetWithoutScope += " (shared target " + digest([]byte(canonical(sources)))[:12] + ")"
+			if shared := linkTargetDigestsWithoutScope[tid+"/"+sid]; shared != "" {
+				targetWithoutScope += " (shared target " + shared + ")"
 			}
 			d.Spans[i].LinkTargets = append(d.Spans[i].LinkTargets, target)
 			d.Spans[i].LinkTargetsWithoutScope = append(d.Spans[i].LinkTargetsWithoutScope, targetWithoutScope)
@@ -683,13 +693,13 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 		withScope := []string{}
 		withoutScope := []string{}
 		for _, i := range indices {
+			withScope = append(withScope, occurrenceKeys[i])
+			withoutScope = append(withoutScope, occurrenceKeysWithoutScope[i])
 			if parents[i] < 0 {
 				roots = append(roots, i)
-				withScope = append(withScope, occurrenceKeys[i])
-				withoutScope = append(withoutScope, occurrenceKeysWithoutScope[i])
 			}
 		}
-		if len(roots) < 2 {
+		if len(roots) == 0 {
 			continue
 		}
 		sort.Strings(withScope)
