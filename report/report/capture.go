@@ -56,6 +56,15 @@ type CaptureSpanMatch struct {
 	Right []int `json:"right,omitempty"`
 }
 
+// reportNumber keeps sink-accepted, intentionally untyped entity-reference
+// numbers distinct from strings without asking a browser to parse them as an
+// imprecise JavaScript Number.
+type reportNumber string
+
+func (n reportNumber) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]string{"$number": string(n)})
+}
+
 func object(v any) map[string]any { m, _ := v.(map[string]any); return m }
 func array(v any) []any           { a, _ := v.([]any); return a }
 func repeatedField(v any, name string) ([]any, error) {
@@ -215,7 +224,10 @@ var decimalFloat = regexp.MustCompile(`^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:
 func normalizeWireContext(v any, context, encoding string) (any, error) {
 	switch v := v.(type) {
 	case json.Number:
-		if context == "identity" || context == "entityRefValue" {
+		if context == "entityRefValue" {
+			return reportNumber(v.String()), nil
+		}
+		if context == "identity" {
 			return v, nil
 		}
 		return v.String(), nil
@@ -325,6 +337,11 @@ func normalizeWireContext(v any, context, encoding string) (any, error) {
 				}
 			}
 			if c != nil && protocolStringField(context, key) {
+				if _, ok := c.(string); !ok {
+					return nil, fmt.Errorf("invalid OTLP %s field %q: expected string", context, key)
+				}
+			}
+			if encoding == "json" && c != nil && context == "spanLink" && (key == "traceId" || key == "spanId") {
 				if _, ok := c.(string); !ok {
 					return nil, fmt.Errorf("invalid OTLP %s field %q: expected string", context, key)
 				}

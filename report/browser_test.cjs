@@ -115,6 +115,19 @@ const path = require('node:path');
     return result;
   });
   assert.equal(checks.semantic.length,0);assert.ok(checks.raw.includes('span.traceId'));assert.ok(checks.scope.includes('scope.metadata.name'));assert.equal(checks.hiddenScope.length,0);assert.ok(checks.parent.includes('span.parentRelationship'));assert.ok(!checks.hiddenParent.includes('span.parentRelationship'));assert.ok(checks.attributes.includes('span.attributes'));
+  const losslessEntityNumber=await page.evaluate(()=>{
+    const source=captureByKey.get('go/case'),l=JSON.parse(JSON.stringify(source)),r=JSON.parse(JSON.stringify(source));
+    l.resources[0].metadata.entityRefs=[{type:{$number:'9007199254740992'}}];
+    r.resources[0].metadata.entityRefs=[{type:{$number:'9007199254740993'}}];
+    return captureRowDiff(l,r,{left:[0],right:[0]},false,false).diffs;
+  });
+  assert.ok(losslessEntityNumber.includes('resource.metadata.entityRefs'),'adjacent unsafe entity-reference numbers must remain distinct');
+  const originalCardSummary=await page.locator('#compare-summary').innerText();
+  const originalRightCard=await page.evaluate(()=>data.captureComparisons[0].traces[0].right.card);
+  await page.evaluate(()=>{data.captureComparisons[0].traces[0].right.card='x201';renderCompare();});
+  assert.match(await page.locator('#compare-summary').innerText(),/1 differing trace groups/);
+  await page.evaluate(card=>{data.captureComparisons[0].traces[0].right.card=card;renderCompare();},originalRightCard);
+  assert.equal(await page.locator('#compare-summary').innerText(),originalCardSummary);
   const occurrenceCorrelation=await page.evaluate(()=>{
     const dataset=(pairs)=>({resources:[{}],scopes:[{}],spans:pairs.map(([start,end])=>({resource:0,scope:0,parent:'root',linkTargets:[],fields:{name:'repeated',startTimeUnixNano:start,endTimeUnixNano:end}}))});
     const left=dataset([['1','2'],['3','4']]),right=dataset([['1','4'],['3','2']]);

@@ -197,6 +197,12 @@ func TestCaptureRejectsSinkInvalidSpanFields(t *testing.T) {
 		"numeric parent ID": fixture(func(span map[string]any) {
 			span["parentSpanId"] = json.Number("1111111111111111")
 		}),
+		"numeric link trace ID": fixture(func(span map[string]any) {
+			span["links"] = []any{map[string]any{"traceId": json.Number("7"), "spanId": fmt.Sprintf("%016x", 1)}}
+		}),
+		"numeric link span ID": fixture(func(span map[string]any) {
+			span["links"] = []any{map[string]any{"traceId": fmt.Sprintf("%032x", 2), "spanId": json.Number("7")}}
+		}),
 		"invalid kind": fixture(func(span map[string]any) { span["kind"] = 99 }),
 		"invalid status": fixture(func(span map[string]any) {
 			span["status"] = map[string]any{"code": 99}
@@ -421,14 +427,14 @@ func TestCaptureRetainsSinkAcceptedEntityReferenceKeys(t *testing.T) {
 	numericRaw := bytes.Replace(
 		captureFixture(captureSpan(1, 1, 0, "span")),
 		[]byte(`"resource":{"attributes"`),
-		[]byte(`"resource":{"entityRefs":[{"type":7,"idKeys":[7],"descriptionKeys":9}],"attributes"`),
+		[]byte(`"resource":{"entityRefs":[{"type":9007199254740993,"idKeys":[9007199254740995],"descriptionKeys":9}],"attributes"`),
 		1,
 	)
-	stringRaw := bytes.Replace(numericRaw, []byte(`{"type":7,"idKeys":[7],"descriptionKeys":9}`), []byte(`{"type":"7","idKeys":["7"],"descriptionKeys":"9"}`), 1)
+	stringRaw := bytes.Replace(numericRaw, []byte(`{"type":9007199254740993,"idKeys":[9007199254740995],"descriptionKeys":9}`), []byte(`{"type":"9007199254740993","idKeys":["9007199254740995"],"descriptionKeys":"9"}`), 1)
 	numeric := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, numericRaw)
 	stringValue := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, stringRaw)
 	numericResources, stringResources := canonical(numeric.Resources), canonical(stringValue.Resources)
-	if len(numeric.Diagnostics) != 0 || len(numeric.Shape.Traces) != 1 || !strings.Contains(numericResources, `"type":7`) || !strings.Contains(numericResources, `"idKeys":[7]`) || !strings.Contains(numericResources, `"descriptionKeys":9`) {
+	if len(numeric.Diagnostics) != 0 || len(numeric.Shape.Traces) != 1 || !strings.Contains(numericResources, `"type":{"$number":"9007199254740993"}`) || !strings.Contains(numericResources, `"idKeys":[{"$number":"9007199254740995"}]`) || !strings.Contains(numericResources, `"descriptionKeys":{"$number":"9"}`) {
 		t.Fatalf("sink-accepted entity reference keys were discarded: %+v", numeric)
 	}
 	if len(stringValue.Diagnostics) != 0 || numericResources == stringResources {

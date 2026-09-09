@@ -792,7 +792,11 @@ function healthCell(feature, manifest, state) {
         (e.reason ? ' · ' + esc(e.reason) + ' · Individual feature outcome unknown.' : '') + '</li>').join('') + '</ul>').join('') +
     (!checks.length ? '<p>No authored checks recorded for this feature.</p>' : '') + featureDetails(feature,state) + '</details>';
 }
+function isReportNumber(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 1 && typeof value.$number === 'string';
+}
 function stable(value) {
+  if (isReportNumber(value)) return 'number:' + JSON.stringify(value.$number);
   if (Array.isArray(value)) return '[' + value.map(stable).join(',') + ']';
   if (value && typeof value === 'object') return '{' + Object.keys(value).sort().map(k => JSON.stringify(k)+':'+stable(value[k])).join(',') + '}';
   return JSON.stringify(value);
@@ -812,7 +816,7 @@ function captureFields(dataset, index, raw, hideScope) {
   return result;
 }
 function flattenFields(value, path='', out={}) {
-  if (value && typeof value==='object' && !Array.isArray(value) && Object.keys(value).length) {
+  if (value && typeof value==='object' && !Array.isArray(value) && Object.keys(value).length && !isReportNumber(value)) {
     for (const key of Object.keys(value).sort()) flattenFields(value[key],path ? path+'.'+key : key,out);
   } else out[path]=value;
   return out;
@@ -903,9 +907,10 @@ function renderCaptureComparison() {
   const context=(d,p)=>'<p><strong>'+esc(profileLabel(p))+'</strong>: '+(d ? 'revision <code>'+esc(d.revision)+'</code> · '+badge('receipt',d.outcome)+(receiptFor(p,scenario)?.xfailReason ? ' · '+esc(receiptFor(p,scenario).xfailReason) : '')+(d.diagnostics ? '<p>'+esc(d.diagnostics.join('; '))+'</p>' : '') : 'Capture unavailable: '+(coverageState(p,scenario)==='excluded' ? 'scenario is not declared for this configuration.' : 'no accepted capture from this build.'))+'</p>';
   if (left===right) { $('compare-summary').innerHTML='';$('compare-body').innerHTML='<p>Choose two different implementations to compare.</p>';return; }
   const traces=capturePair(left,right,scenario);
-  let differing=0,matched=0,only=0;
+  let differing=0,matched=0,only=0,traceDiffering=0;
+  for (const t of traces) if (!t.left || !t.right || t.left.card!==t.right.card || t.left.coverage!==t.right.coverage) traceDiffering++;
   const prepared=traces.map(t=>({...t,spans:t.spans.map(row=>{const result=captureRowDiff(l,r,row,raw,hideScope);if (row.left && row.right) {matched++;if(result.diffs.length) differing++;} else only++;return {...row,...result,kind:row.left&&row.right?'matched':row.left?'left_only':'right_only'};})}));
-  $('compare-summary').textContent=matched+' corresponding span groups · '+differing+' differing · '+only+' one-sided';
+  $('compare-summary').textContent=matched+' corresponding span groups · '+differing+' differing · '+only+' one-sided · '+traceDiffering+' differing trace groups';
   $('compare-body').innerHTML=context(l,left)+context(r,right)+[l,r].filter(d=>d?.diagnostics && d.spans?.length).map(d=>'<details data-diagnostic="'+esc(d.key)+'"><summary>Inspect decoded spans without topology · '+esc(profileLabel(d.profile))+'</summary><div></div></details>').join('')+prepared.map((t,ti)=>{
     const rows=differencesOnly?differenceRows(t.spans,false):t.spans;
     const traceDiff=!t.left || !t.right || t.left.card!==t.right.card || t.left.coverage!==t.right.coverage;
