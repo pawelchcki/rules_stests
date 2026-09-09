@@ -55,6 +55,14 @@ func TestCaptureNormalizesNullAnyValueVariants(t *testing.T) {
 		t.Fatalf("null AnyValue variants differ:\n%s\n%s", canonical(a), canonical(b))
 	}
 }
+func TestCapturePreservesKeyValueAroundWrappedAnyValue(t *testing.T) {
+	direct := `[{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","attributes":[{"value":{"stringValue":"x"}}]}]}]}]}}]`
+	wrapped := `[{"signal":"traces","payload":{"resource_spans":[{"scope_spans":[{"spans":[{"trace_id":"00000000000000000000000000000001","span_id":"0000000000000001","attributes":[{"key":"","value":{"value":{"string_value":"x"}}}]}]}]}]}}]`
+	a, b := DecodeCapture(ValidationReceipt{}, []byte(direct)), DecodeCapture(ValidationReceipt{}, []byte(wrapped))
+	if len(a.Diagnostics) > 0 || len(b.Diagnostics) > 0 || !reflect.DeepEqual(a, b) {
+		t.Fatalf("KeyValue AnyValue wrappers differ:\n%s\n%s", canonical(a), canonical(b))
+	}
+}
 func TestInternIndexesCanonicalMetadata(t *testing.T) {
 	items := []map[string]any{}
 	indexes := map[string]int{}
@@ -191,6 +199,30 @@ func TestCaptureLinksPreserveSemanticTargetOccurrence(t *testing.T) {
 	right := decodedFixture(t, "right", span(1, 1, "target", "A"), span(2, 1, "target", "B"), linked(3, 2, "X"), linked(4, 1, "Y"))
 	if left.Spans[2].LinkTargets[0] == right.Spans[2].LinkTargets[0] || !strings.Contains(left.Spans[2].LinkTargets[0], "occurrence") {
 		t.Fatalf("semantic target reassignment was lost: %q == %q", left.Spans[2].LinkTargets[0], right.Spans[2].LinkTargets[0])
+	}
+}
+func TestCaptureLinkTargetOccurrenceIncludesOutgoingRelationships(t *testing.T) {
+	linked := func(span map[string]any, targetTrace int) map[string]any {
+		span["links"] = []any{map[string]any{"traceId": fmt.Sprintf("%032x", targetTrace), "spanId": fmt.Sprintf("%016x", 1)}}
+		return span
+	}
+	source := func(trace, targetTrace int, value string) map[string]any {
+		s := captureSpan(trace, 1, 0, "source")
+		s["attributes"] = []any{map[string]any{"key": "variant", "value": map[string]any{"stringValue": value}}}
+		return linked(s, targetTrace)
+	}
+	spans := func(xTarget, yTarget int) []map[string]any {
+		return []map[string]any{
+			linked(captureSpan(1, 1, 0, "target"), 99),
+			linked(captureSpan(2, 1, 0, "target"), 5),
+			source(3, xTarget, "X"), source(4, yTarget, "Y"),
+			captureSpan(5, 1, 0, "destination"),
+		}
+	}
+	left := decodedFixture(t, "left", spans(1, 2)...)
+	right := decodedFixture(t, "right", spans(2, 1)...)
+	if left.Spans[2].LinkTargets[0] == right.Spans[2].LinkTargets[0] {
+		t.Fatalf("target outgoing relationship was lost: %q", left.Spans[2].LinkTargets[0])
 	}
 }
 func TestCaptureRejectsAllZeroParentID(t *testing.T) {

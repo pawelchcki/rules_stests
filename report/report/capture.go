@@ -84,14 +84,24 @@ func defaults(m map[string]any, values map[string]any) map[string]any {
 // Only protocol field spellings are normalized. Attribute names live in `key`
 // values and are never rewritten. Decimal strings preserve 64-bit precision in JS.
 func normalizeWire(v any) (any, error) {
+	return normalizeWireContext(v, "")
+}
+
+func normalizeWireContext(v any, context string) (any, error) {
 	switch v := v.(type) {
 	case json.Number:
 		return v.String(), nil
 	case []any:
 		out := make([]any, len(v))
+		childContext := ""
+		if context == "anyValues" {
+			childContext = "anyValue"
+		} else if context == "keyValues" {
+			childContext = "keyValue"
+		}
 		for i, c := range v {
 			var err error
-			out[i], err = normalizeWire(c)
+			out[i], err = normalizeWireContext(c, childContext)
 			if err != nil {
 				return nil, err
 			}
@@ -110,14 +120,35 @@ func normalizeWire(v any) (any, error) {
 			if _, exists := out[key]; exists {
 				return nil, fmt.Errorf("duplicate OTLP JSON field spellings for %q", key)
 			}
-			value, err := normalizeWire(c)
+			childContext := ""
+			switch {
+			case context == "keyValue" && key == "value":
+				childContext = "anyValue"
+			case context == "anyValue" && key == "value":
+				childContext = "anyValue"
+			case context == "anyValue" && key == "arrayValue":
+				childContext = "arrayValue"
+			case context == "anyValue" && key == "kvlistValue":
+				childContext = "keyValueList"
+			case context == "arrayValue" && key == "values":
+				childContext = "anyValues"
+			case context == "keyValueList" && key == "values":
+				childContext = "keyValues"
+			case key == "attributes" || key == "filteredAttributes":
+				childContext = "keyValues"
+			case key == "body":
+				childContext = "anyValue"
+			}
+			value, err := normalizeWireContext(c, childContext)
 			if err != nil {
 				return nil, err
 			}
 			out[key] = value
 		}
 		// prost's AnyValue wraps the oneof in an additional `value` object.
-		if len(out) == 1 {
+		// Restrict this unwrapping to known AnyValue positions: an omitted
+		// KeyValue.key otherwise has the same single-field wire shape.
+		if context == "anyValue" && len(out) == 1 {
 			if value, exists := out["value"]; exists && value == nil {
 				return map[string]any{}, nil
 			}
@@ -136,6 +167,9 @@ func normalizeWire(v any) (any, error) {
 					}
 				}
 			}
+		}
+		if context == "keyValue" {
+			defaults(out, map[string]any{"key": ""})
 		}
 		for _, k := range []string{"attributes"} {
 			if a := array(out[k]); a != nil {
@@ -445,8 +479,6 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 		}
 		return keys
 	}
-	targetOccurrenceKeys := buildTargetOccurrenceKeys(true)
-	targetOccurrenceKeysWithoutScope := buildTargetOccurrenceKeys(false)
 	linkTargetSources := map[string][]string{}
 	for i := range d.Spans {
 		for linkIndex, l := range array(d.Spans[i].Fields["links"]) {
@@ -465,6 +497,56 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 	}
 	for _, sources := range linkTargetSources {
 		sort.Strings(sources)
+	}
+	buildGraphAwareTargetKeys := func(base []string) ([]string, error) {
+		keys := make([]string, len(d.Spans))
+		for i := range d.Spans {
+			outgoing := []any{}
+			for _, value := range array(d.Spans[i].Fields["links"]) {
+				link := object(value)
+				tid, err := identity(link["traceId"], 16, false)
+				if err != nil {
+					return nil, err
+				}
+				sid, err := identity(link["spanId"], 8, false)
+				if err != nil {
+					return nil, err
+				}
+				relation := "external trace/span"
+				if tid == traceIDs[i] {
+					relation = "external span in same trace"
+				}
+				if sid == parentIDs[i] && tid == traceIDs[i] {
+					relation = "external parent"
+				}
+				descriptor := map[string]any{"relationship": relation}
+				if j, ok := ids[tid+"/"+sid]; ok {
+					if j == i {
+						descriptor["relationship"] = "self"
+					} else {
+						descriptor["relationship"] = "captured in another trace"
+						if tid == traceIDs[i] {
+							descriptor["relationship"] = "captured in same trace"
+						}
+						descriptor["targetOccurrence"] = base[j]
+					}
+				}
+				if sources := linkTargetSources[tid+"/"+sid]; len(sources) > 1 {
+					descriptor["sharedTarget"] = digest([]byte(canonical(sources)))[:12]
+				}
+				outgoing = append(outgoing, descriptor)
+			}
+			keys[i] = digest([]byte(canonical([]any{base[i], outgoing})))[:12]
+		}
+		return keys, nil
+	}
+	targetOccurrenceKeys, err := buildGraphAwareTargetKeys(buildTargetOccurrenceKeys(true))
+	if err != nil {
+		return fail(err)
+	}
+	targetOccurrenceKeysWithoutScope, err := buildGraphAwareTargetKeys(buildTargetOccurrenceKeys(false))
+	if err != nil {
+		return fail(err)
 	}
 	for i := range d.Spans {
 		for _, l := range array(d.Spans[i].Fields["links"]) {
