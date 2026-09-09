@@ -5,8 +5,11 @@ load("//rules:corpus_service.bzl", "corpus_service")
 load("//rules:realworld_app.bzl", "otlp_env", "python_auto_injection", "ruby_auto_injection")
 load("//rules:realworld_service_tests.bzl", "realworld_service_tests")
 load("//rules:otel_profile.bzl", "otel_report_manifest")
+load(":external_features.bzl", "external_feature_tests")
 
 package(default_visibility = ["//visibility:public"])
+
+external_feature_tests()
 
 _PYTHON_ARGS = ["--host", "127.0.0.1", "--port", "$${PORT}"]
 _PYTHON_ENV = otlp_env(extra = {
