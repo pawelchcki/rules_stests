@@ -136,18 +136,34 @@ func TestCaptureRejectsSinkInvalidSpanFields(t *testing.T) {
 		return captureFixture(span)
 	}
 	for name, raw := range map[string][]byte{
-		"missing name": fixture(func(span map[string]any) { delete(span, "name") }),
-		"empty name":   fixture(func(span map[string]any) { span["name"] = "" }),
-		"zero start":   fixture(func(span map[string]any) { span["startTimeUnixNano"] = "0" }),
-		"reversed":     fixture(func(span map[string]any) { span["endTimeUnixNano"] = "1" }),
+		"missing name":     fixture(func(span map[string]any) { delete(span, "name") }),
+		"empty name":       fixture(func(span map[string]any) { span["name"] = "" }),
+		"zero start":       fixture(func(span map[string]any) { span["startTimeUnixNano"] = "0" }),
+		"reversed":         fixture(func(span map[string]any) { span["endTimeUnixNano"] = "1" }),
+		"numeric trace ID": fixture(func(span map[string]any) { span["traceId"] = json.Number("11111111111111111111111111111111") }),
+		"numeric span ID":  fixture(func(span map[string]any) { span["spanId"] = json.Number("1111111111111111") }),
+		"numeric parent ID": fixture(func(span map[string]any) {
+			span["parentSpanId"] = json.Number("1111111111111111")
+		}),
 		"invalid kind": fixture(func(span map[string]any) { span["kind"] = 99 }),
 		"invalid status": fixture(func(span map[string]any) {
 			span["status"] = map[string]any{"code": 99}
 		}),
+		"object events": fixture(func(span map[string]any) { span["events"] = map[string]any{} }),
+		"scalar links":  fixture(func(span map[string]any) { span["links"] = true }),
+		"object attributes": fixture(func(span map[string]any) {
+			span["attributes"] = map[string]any{}
+		}),
+		"event object attributes": fixture(func(span map[string]any) {
+			span["events"] = []any{map[string]any{"attributes": map[string]any{}}}
+		}),
+		"link scalar attributes": fixture(func(span map[string]any) {
+			span["links"] = []any{map[string]any{"traceId": fmt.Sprintf("%032x", 2), "spanId": fmt.Sprintf("%016x", 1), "attributes": false}}
+		}),
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, raw)
-			if len(d.Diagnostics) != 1 || len(d.Spans) != 0 || len(d.Shape.Traces) != 0 {
+			if len(d.Diagnostics) != 1 || len(d.Shape.Traces) != 0 {
 				t.Fatalf("sink-invalid span entered topology: %+v", d)
 			}
 		})

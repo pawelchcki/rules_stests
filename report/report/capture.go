@@ -103,6 +103,9 @@ func canonicalBytes(value string) (string, bool) {
 func normalizeWireContext(v any, context string) (any, error) {
 	switch v := v.(type) {
 	case json.Number:
+		if context == "identity" {
+			return v, nil
+		}
 		return v.String(), nil
 	case []any:
 		out := make([]any, len(v))
@@ -135,6 +138,8 @@ func normalizeWireContext(v any, context string) (any, error) {
 			}
 			childContext := ""
 			switch {
+			case key == "traceId" || key == "spanId" || key == "parentSpanId":
+				childContext = "identity"
 			case context == "keyValue" && key == "value":
 				childContext = "anyValue"
 			case context == "anyValue" && key == "value":
@@ -243,7 +248,11 @@ func enumValue(v any, prefix string, names []string) (string, bool) {
 	return "", false
 }
 func identity(v any, width int, optional bool) (string, error) {
-	s := strings.ToLower(str(v))
+	s, ok := v.(string)
+	if !ok {
+		return "", fmt.Errorf("invalid trace/span identity %q", str(v))
+	}
+	s = strings.ToLower(s)
 	if optional && s == "" {
 		return "", nil
 	}
@@ -409,6 +418,19 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 					if start.Sign() <= 0 || end.Cmp(start) < 0 {
 						return fail(fmt.Errorf("span timestamps are not ordered"))
 					}
+					attributes, err := repeatedField(fields["attributes"], "span attributes")
+					if err != nil {
+						return fail(err)
+					}
+					events, err := repeatedField(fields["events"], "span events")
+					if err != nil {
+						return fail(err)
+					}
+					links, err := repeatedField(fields["links"], "span links")
+					if err != nil {
+						return fail(err)
+					}
+					fields["attributes"], fields["events"], fields["links"] = attributes, events, links
 					kind, validKind := enumValue(fields["kind"], "SPAN_KIND_", []string{"unspecified", "internal", "server", "client", "producer", "consumer"})
 					if !validKind {
 						return fail(fmt.Errorf("invalid span kind %v", fields["kind"]))
@@ -421,11 +443,25 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 					}
 					status["code"] = statusCode
 					fields["status"] = status
-					for _, event := range array(fields["events"]) {
-						defaults(object(event), map[string]any{"timeUnixNano": "0", "name": "", "attributes": []any{}, "droppedAttributesCount": "0"})
+					for _, event := range events {
+						eventFields := object(event)
+						if eventFields == nil {
+							return fail(fmt.Errorf("unreadable span event"))
+						}
+						defaults(eventFields, map[string]any{"timeUnixNano": "0", "name": "", "attributes": []any{}, "droppedAttributesCount": "0"})
+						if _, err := repeatedField(eventFields["attributes"], "span event attributes"); err != nil {
+							return fail(err)
+						}
 					}
-					for _, link := range array(fields["links"]) {
-						defaults(object(link), map[string]any{"traceState": "", "attributes": []any{}, "droppedAttributesCount": "0", "flags": "0"})
+					for _, link := range links {
+						linkFields := object(link)
+						if linkFields == nil {
+							return fail(fmt.Errorf("unreadable span link"))
+						}
+						defaults(linkFields, map[string]any{"traceState": "", "attributes": []any{}, "droppedAttributesCount": "0", "flags": "0"})
+						if _, err := repeatedField(linkFields["attributes"], "span link attributes"); err != nil {
+							return fail(err)
+						}
 					}
 					d.Spans = append(d.Spans, CapturedSpan{Resource: ri, Scope: si, Fields: fields})
 				}
