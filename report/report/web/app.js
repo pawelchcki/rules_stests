@@ -503,11 +503,11 @@ function renderFeatures() {
     const coverage = $('check-coverage').value;
     if (category && feature.category !== category) return false;
     if (search && !(feature.name.toLowerCase().includes(search) || feature.id.toLowerCase().includes(search))) return false;
-    if (support && !upstreamLanguages.some((lang) => ((feature.support || {})[lang] || 'unknown') === support)) return false;
-    if ((coverage || verification || basis) && !manifests.some(m => {
+    if ((support || coverage || verification || basis) && !manifests.some(m => {
       const v=verificationFor(feature,m.profile);
       const checks=checksFor(m.profile,feature.id);
-      return (!coverage || (checks.length > 0) === (coverage === 'defined')) &&
+      return (!support || ((feature.support || {})[m.language] || 'unknown') === support) &&
+        (!coverage || (checks.length > 0) === (coverage === 'defined')) &&
         (!verification || v.state===verification) && (!basis || v.basis===basis || checks.some(c=>c.basis===basis));
     })) return false;
     return true;
@@ -797,7 +797,7 @@ function captureFields(dataset, index, raw, hideScope) {
   if (!raw) {
     for (const key of ['traceId','spanId','parentSpanId','startTimeUnixNano','endTimeUnixNano']) delete fields[key];
     fields.events = (fields.events || []).map(e => { const x={...e}; delete x.timeUnixNano; return x; });
-    fields.links = (fields.links || []).map((l,i) => { const x={...l}; delete x.traceId; delete x.spanId; x.relationship=span.linkTargets[i]; return x; });
+    fields.links = (fields.links || []).map((l,i) => { const x={...l},withoutScope=span.linkTargetsWithoutScope || []; delete x.traceId; delete x.spanId; x.relationship=hideScope && withoutScope.length===span.linkTargets.length ? withoutScope[i] : span.linkTargets[i]; return x; });
     fields.parentRelationship = hideScope ? span.parentWithoutScope || span.parent : span.parent;
   }
   const result = {span:fields, resource:dataset.resources[span.resource]};
@@ -851,7 +851,10 @@ function parityLink(extra={}) {
   for (const [k,v] of Object.entries(extra)) params.set(k,v);
   return '#parity?'+params;
 }
-function parityPeer(profile) {
+function parityPeer(profile, scenario) {
+  for (const candidate of [$('left').value, $('right').value, ...data.manifests.map(m => m.profile)]) {
+    if (candidate !== profile && captureByKey.has(candidate + '/' + scenario)) return candidate;
+  }
   for (const candidate of [$('left').value, $('right').value, ...data.manifests.map(m => m.profile)]) {
     if (candidate !== profile && manifestByProfile.has(candidate)) return candidate;
   }
@@ -861,7 +864,7 @@ function renderParityOverview() {
   $('parity-overview').innerHTML='<thead><tr><th>Scenario · Captured telemetry availability</th>'+data.manifests.map(m=>'<th>'+esc(m.shortLabel || m.displayName)+'</th>').join('')+'</tr></thead><tbody>'+data.scenarios.map(s=>'<tr><th>'+esc(s)+'</th>'+data.manifests.map(m=>{
     const d=captureByKey.get(m.profile+'/'+s),r=receiptFor(m.profile,s);
     const result=coverageState(m.profile,s)==='excluded' ? badge('coverage','excluded') : badge('receipt',r ? r.outcome : 'missing');
-    return '<td><a href="'+esc(parityLink({left:m.profile,right:parityPeer(m.profile),scenario:s,source:'captured'}))+'">'+(d ? d.diagnostics ? 'Comparison diagnostic' : d.shape.traceCount+' traces / '+d.spans.length+' spans' : 'Capture unavailable')+'</a><br>'+result+'</td>';
+    return '<td><a href="'+esc(parityLink({left:m.profile,right:parityPeer(m.profile,s),scenario:s,source:'captured'}))+'">'+(d ? d.diagnostics ? 'Comparison diagnostic' : d.shape.traceCount+' traces / '+d.spans.length+' spans' : 'Capture unavailable')+'</a><br>'+result+'</td>';
   }).join('')+'</tr>').join('')+'</tbody>';
 }
 function capturePair(left,right,scenario) {

@@ -25,12 +25,13 @@ type CaptureDataset struct {
 	Shape       ScenarioShape    `json:"shape"`
 }
 type CapturedSpan struct {
-	Resource           int            `json:"resource"`
-	Scope              int            `json:"scope"`
-	Fields             map[string]any `json:"fields"`
-	Parent             string         `json:"parent"`
-	ParentWithoutScope string         `json:"parentWithoutScope"`
-	LinkTargets        []string       `json:"linkTargets"`
+	Resource                int            `json:"resource"`
+	Scope                   int            `json:"scope"`
+	Fields                  map[string]any `json:"fields"`
+	Parent                  string         `json:"parent"`
+	ParentWithoutScope      string         `json:"parentWithoutScope"`
+	LinkTargets             []string       `json:"linkTargets"`
+	LinkTargetsWithoutScope []string       `json:"linkTargetsWithoutScope"`
 }
 type CaptureComparison struct {
 	Left     string              `json:"left"`
@@ -181,7 +182,7 @@ func enumValue(v any, prefix string, names []string) string {
 }
 func identity(v any, width int, optional bool) (string, error) {
 	s := strings.ToLower(str(v))
-	if optional && (s == "" || strings.Trim(s, "0") == "") {
+	if optional && s == "" {
 		return "", nil
 	}
 	b, e := hex.DecodeString(s)
@@ -243,8 +244,12 @@ func semanticSpanProjection(d *CaptureDataset, index int, includeScope bool) map
 				link[key] = field
 			}
 		}
-		if i < len(span.LinkTargets) {
-			link["relationship"] = span.LinkTargets[i]
+		targets := span.LinkTargets
+		if !includeScope && len(span.LinkTargetsWithoutScope) == len(span.LinkTargets) {
+			targets = span.LinkTargetsWithoutScope
+		}
+		if i < len(targets) {
+			link["relationship"] = targets[i]
 		}
 		links = append(links, link)
 	}
@@ -419,6 +424,29 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 		}
 		return path(parents[i]) + " / " + label
 	}
+	buildTargetOccurrenceKeys := func(includeScope bool) []string {
+		keys := make([]string, len(d.Spans))
+		var key func(int) string
+		key = func(i int) string {
+			if keys[i] != "" {
+				return keys[i]
+			}
+			parent := "root"
+			if parents[i] >= 0 {
+				parent = key(parents[i])
+			} else if parentIDs[i] != "" {
+				parent = "external parent"
+			}
+			keys[i] = digest([]byte(canonical([]any{parent, semanticSpanProjection(&d, i, includeScope)})))[:12]
+			return keys[i]
+		}
+		for i := range d.Spans {
+			key(i)
+		}
+		return keys
+	}
+	targetOccurrenceKeys := buildTargetOccurrenceKeys(true)
+	targetOccurrenceKeysWithoutScope := buildTargetOccurrenceKeys(false)
 	linkTargetSources := map[string][]string{}
 	for i := range d.Spans {
 		for linkIndex, l := range array(d.Spans[i].Fields["links"]) {
@@ -450,26 +478,34 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 				return fail(e)
 			}
 			target := "external trace/span"
+			targetWithoutScope := target
 			if tid == traceIDs[i] {
 				target = "external span in same trace"
+				targetWithoutScope = target
 			}
 			if sid == parentIDs[i] && tid == traceIDs[i] {
 				target = "external parent"
+				targetWithoutScope = target
 			}
 			if j, ok := ids[tid+"/"+sid]; ok {
 				relation := "in another trace "
 				if tid == traceIDs[i] {
 					relation = "in same trace "
 				}
-				target = "captured " + relation + path(j)
+				target = "captured " + relation + path(j) + " occurrence " + targetOccurrenceKeys[j]
+				targetWithoutScope = "captured " + relation + path(j) + " occurrence " + targetOccurrenceKeysWithoutScope[j]
 				if j == i {
 					target = "self"
+					targetWithoutScope = target
 				}
 			}
 			if sources := linkTargetSources[tid+"/"+sid]; len(sources) > 1 {
-				target += " (shared target " + digest([]byte(canonical(sources)))[:12] + ")"
+				suffix := " (shared target " + digest([]byte(canonical(sources)))[:12] + ")"
+				target += suffix
+				targetWithoutScope += suffix
 			}
 			d.Spans[i].LinkTargets = append(d.Spans[i].LinkTargets, target)
+			d.Spans[i].LinkTargetsWithoutScope = append(d.Spans[i].LinkTargetsWithoutScope, targetWithoutScope)
 		}
 	}
 	buildOccurrenceKeys := func(includeScope bool) []string {

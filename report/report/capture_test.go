@@ -176,6 +176,31 @@ func TestCapturePreservesSharedCapturedLinkTargets(t *testing.T) {
 		t.Fatalf("distinct captured targets were conflated: %+v", distinct.Spans)
 	}
 }
+func TestCaptureLinksPreserveSemanticTargetOccurrence(t *testing.T) {
+	span := func(trace, id int, name, value string) map[string]any {
+		s := captureSpan(trace, id, 0, name)
+		s["attributes"] = []any{map[string]any{"key": "variant", "value": map[string]any{"stringValue": value}}}
+		return s
+	}
+	linked := func(trace, targetTrace int, value string) map[string]any {
+		s := span(trace, 1, "source", value)
+		s["links"] = []any{map[string]any{"traceId": fmt.Sprintf("%032x", targetTrace), "spanId": fmt.Sprintf("%016x", 1)}}
+		return s
+	}
+	left := decodedFixture(t, "left", span(1, 1, "target", "A"), span(2, 1, "target", "B"), linked(3, 1, "X"), linked(4, 2, "Y"))
+	right := decodedFixture(t, "right", span(1, 1, "target", "A"), span(2, 1, "target", "B"), linked(3, 2, "X"), linked(4, 1, "Y"))
+	if left.Spans[2].LinkTargets[0] == right.Spans[2].LinkTargets[0] || !strings.Contains(left.Spans[2].LinkTargets[0], "occurrence") {
+		t.Fatalf("semantic target reassignment was lost: %q == %q", left.Spans[2].LinkTargets[0], right.Spans[2].LinkTargets[0])
+	}
+}
+func TestCaptureRejectsAllZeroParentID(t *testing.T) {
+	span := captureSpan(1, 1, 0, "invalid parent")
+	span["parentSpanId"] = "0000000000000000"
+	d := DecodeCapture(ValidationReceipt{}, captureFixture(span))
+	if len(d.Diagnostics) != 1 || !strings.Contains(d.Diagnostics[0], "invalid trace/span identity") {
+		t.Fatalf("all-zero parent ID was accepted: %+v", d)
+	}
+}
 func TestCapturePreservesCapturedParentOccurrenceIdentity(t *testing.T) {
 	span := func(trace, id, parent int, name, value string) map[string]any {
 		s := captureSpan(trace, id, parent, name)
