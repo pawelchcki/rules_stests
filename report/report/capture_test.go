@@ -310,6 +310,10 @@ func TestCaptureUsesEncodingSpecificTimestampBounds(t *testing.T) {
 	jsonOverflow["startTimeUnixNano"] = "170141183460469231731687303715884105727"
 	jsonOverflow["endTimeUnixNano"] = "170141183460469231731687303715884105728"
 	overflowCapture := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, captureFixtureWithEncoding("json", jsonOverflow))
+	numericOverflow := captureSpan(1, 1, 0, "JSON numeric overflow")
+	numericOverflow["startTimeUnixNano"] = json.Number("18446744073709551616")
+	numericOverflow["endTimeUnixNano"] = json.Number("18446744073709551617")
+	numericOverflowCapture := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, captureFixtureWithEncoding("json", numericOverflow))
 	if len(jsonCapture.Diagnostics) != 0 || len(jsonCapture.Shape.Traces) != 1 {
 		t.Fatalf("sink-accepted JSON timestamps were discarded: %+v", jsonCapture)
 	}
@@ -318,6 +322,9 @@ func TestCaptureUsesEncodingSpecificTimestampBounds(t *testing.T) {
 	}
 	if len(overflowCapture.Diagnostics) != 1 || len(overflowCapture.Shape.Traces) != 0 {
 		t.Fatalf("JSON i128 timestamp overflow entered topology: %+v", overflowCapture)
+	}
+	if len(numericOverflowCapture.Diagnostics) != 1 || len(numericOverflowCapture.Shape.Traces) != 0 {
+		t.Fatalf("JSON numeric timestamp overflow entered topology: %+v", numericOverflowCapture)
 	}
 }
 func TestCaptureCanonicalizesSpanAndEventTimestamps(t *testing.T) {

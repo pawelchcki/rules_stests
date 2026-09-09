@@ -268,6 +268,11 @@ func normalizeWireContext(v any, context, encoding string) (any, error) {
 		if context == "entityRefValue" {
 			return reportNumber(v.String()), nil
 		}
+		if context == "spanTimestamp" {
+			if _, err := strconv.ParseUint(v.String(), 10, 64); err != nil {
+				return nil, fmt.Errorf("invalid OTLP numeric span timestamp")
+			}
+		}
 		if context == "eventTimestamp" {
 			if _, integer := new(big.Int).SetString(v.String(), 10); !integer {
 				return reportNumber(v.String()), nil
@@ -374,6 +379,8 @@ func normalizeWireContext(v any, context, encoding string) (any, error) {
 					childContext = "links"
 				case context == "span" && key == "status":
 					childContext = "status"
+				case context == "span" && (key == "startTimeUnixNano" || key == "endTimeUnixNano"):
+					childContext = "spanTimestamp"
 				case context == "spanEvent" && key == "timeUnixNano":
 					childContext = "eventTimestamp"
 				case key == "traceId" || key == "spanId" || key == "parentSpanId":
