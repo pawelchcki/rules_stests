@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	"sort"
 	"strconv"
@@ -164,6 +165,16 @@ func protocolArrayField(context, key string) bool {
 	return false
 }
 
+func protocolUint32Field(context, key string) bool {
+	if key == "droppedAttributesCount" {
+		return context == "resource" || context == "scope" || context == "span" || context == "spanEvent" || context == "spanLink"
+	}
+	if context == "span" {
+		return key == "flags" || key == "droppedEventsCount" || key == "droppedLinksCount"
+	}
+	return context == "spanLink" && key == "flags"
+}
+
 func canonicalBytes(value string) (string, bool) {
 	normalized := strings.NewReplacer("-", "+", "_", "/").Replace(value)
 	for _, encoding := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding} {
@@ -206,6 +217,11 @@ func normalizeWireContext(v any, context string) (any, error) {
 			if (context == "idKeys" || context == "descriptionKeys") && c != nil {
 				if _, ok := c.(string); !ok {
 					return nil, fmt.Errorf("invalid OTLP entity reference key: expected string")
+				}
+			}
+			if childContext != "" {
+				if _, ok := c.(map[string]any); !ok {
+					return nil, fmt.Errorf("invalid OTLP %s element: expected object", context)
 				}
 			}
 			var err error
@@ -280,6 +296,15 @@ func normalizeWireContext(v any, context string) (any, error) {
 			if c != nil && protocolArrayField(context, key) {
 				if _, ok := c.([]any); !ok {
 					return nil, fmt.Errorf("invalid OTLP %s field %q: expected array", context, key)
+				}
+			}
+			if c != nil && protocolUint32Field(context, key) {
+				number, ok := c.(json.Number)
+				if !ok {
+					return nil, fmt.Errorf("invalid OTLP %s field %q: expected uint32", context, key)
+				}
+				if _, err := strconv.ParseUint(number.String(), 10, 32); err != nil {
+					return nil, fmt.Errorf("invalid OTLP %s field %q: expected uint32", context, key)
 				}
 			}
 			if c != nil {
@@ -365,11 +390,16 @@ func normalizeWireContext(v any, context string) (any, error) {
 			sort.SliceStable(a, func(i, j int) bool { return canonical(a[i]) < canonical(a[j]) })
 		}
 		if value, ok := out["doubleValue"]; ok {
-			number, err := strconv.ParseFloat(str(value), 64)
-			if err != nil {
-				return nil, fmt.Errorf("invalid OTLP double AnyValue")
+			scalar := str(value)
+			if scalar == "NaN" || scalar == "Infinity" || scalar == "-Infinity" {
+				out["doubleValue"] = scalar
+			} else {
+				number, err := strconv.ParseFloat(scalar, 64)
+				if err != nil || math.IsNaN(number) || math.IsInf(number, 0) {
+					return nil, fmt.Errorf("invalid OTLP double AnyValue")
+				}
+				out["doubleValue"] = strconv.FormatFloat(number, 'g', -1, 64)
 			}
-			out["doubleValue"] = strconv.FormatFloat(number, 'g', -1, 64)
 		}
 		if value, ok := out["intValue"]; ok {
 			number, err := strconv.ParseInt(str(value), 10, 64)
@@ -1086,6 +1116,23 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 	}
 	occurrenceKeys := buildOccurrenceKeys(true)
 	occurrenceKeysWithoutScope := buildOccurrenceKeys(false)
+	descendantPartitions := make([]string, len(d.Spans))
+	var descendantPartition func(int) string
+	descendantPartition = func(i int) string {
+		if descendantPartitions[i] != "" {
+			return descendantPartitions[i]
+		}
+		descendants := make([]string, 0, len(children[i]))
+		for _, child := range children[i] {
+			descendants = append(descendants, canonical([]any{semanticSpanProjection(&d, child, false), descendantPartition(child)}))
+		}
+		sort.Strings(descendants)
+		descendantPartitions[i] = digest([]byte(canonical(descendants)))[:12]
+		return descendantPartitions[i]
+	}
+	for i := range d.Spans {
+		descendantPartition(i)
+	}
 	buildExternalParents := func(keys []string) map[string][]string {
 		result := map[string][]string{}
 		for i := range d.Spans {
@@ -1139,9 +1186,20 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 	}
 	var groups func([]int) []SpanGroup
 	groups = func(indices []int) []SpanGroup {
+		perTrace := map[string]map[string]int{}
+		for _, i := range indices {
+			if perTrace[fingerprints[i]] == nil {
+				perTrace[fingerprints[i]] = map[string]int{}
+			}
+			perTrace[fingerprints[i]][traceIDs[i]]++
+		}
 		byKey := map[string][]int{}
 		for _, i := range indices {
-			byKey[fingerprints[i]] = append(byKey[fingerprints[i]], i)
+			key := fingerprints[i]
+			if perTrace[fingerprints[i]][traceIDs[i]] > 1 {
+				key += "\x00" + descendantPartitions[i]
+			}
+			byKey[key] = append(byKey[key], i)
 		}
 		keys := make([]string, 0, len(byKey))
 		for k := range byKey {

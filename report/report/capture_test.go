@@ -179,6 +179,28 @@ func TestCaptureRejectsSinkInvalidSpanFields(t *testing.T) {
 		"numeric status message": fixture(func(span map[string]any) {
 			span["status"] = map[string]any{"message": 7}
 		}),
+		"string flags": fixture(func(span map[string]any) { span["flags"] = "1" }),
+		"negative event dropped count": fixture(func(span map[string]any) {
+			span["events"] = []any{map[string]any{"droppedAttributesCount": -1}}
+		}),
+		"overflow link flags": fixture(func(span map[string]any) {
+			span["links"] = []any{map[string]any{"traceId": fmt.Sprintf("%032x", 2), "spanId": fmt.Sprintf("%016x", 1), "flags": 4294967296}}
+		}),
+		"scalar attribute": fixture(func(span map[string]any) {
+			span["attributes"] = []any{7}
+		}),
+		"scalar array AnyValue": fixture(func(span map[string]any) {
+			span["attributes"] = []any{map[string]any{"key": "invalid", "value": map[string]any{"arrayValue": map[string]any{"values": []any{7}}}}}
+		}),
+		"lowercase NaN": fixture(func(span map[string]any) {
+			span["attributes"] = []any{map[string]any{"key": "invalid", "value": map[string]any{"doubleValue": "nan"}}}
+		}),
+		"short infinity": fixture(func(span map[string]any) {
+			span["attributes"] = []any{map[string]any{"key": "invalid", "value": map[string]any{"doubleValue": "Inf"}}}
+		}),
+		"signed infinity": fixture(func(span map[string]any) {
+			span["attributes"] = []any{map[string]any{"key": "invalid", "value": map[string]any{"doubleValue": "+Inf"}}}
+		}),
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, raw)
@@ -189,10 +211,18 @@ func TestCaptureRejectsSinkInvalidSpanFields(t *testing.T) {
 	}
 }
 func TestCaptureRejectsMistypedScopeName(t *testing.T) {
-	raw := bytes.Replace(captureFixture(captureSpan(1, 1, 0, "span")), []byte(`"name":"fixture"`), []byte(`"name":7`), 1)
-	d := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, raw)
-	if len(d.Diagnostics) != 1 || len(d.Shape.Traces) != 0 {
-		t.Fatalf("mistyped scope name entered topology: %+v", d)
+	valid := captureFixture(captureSpan(1, 1, 0, "span"))
+	for name, raw := range map[string][]byte{
+		"scope name":             bytes.Replace(valid, []byte(`"name":"fixture"`), []byte(`"name":7`), 1),
+		"resource dropped count": bytes.Replace(valid, []byte(`"resource":{"attributes"`), []byte(`"resource":{"droppedAttributesCount":-1,"attributes"`), 1),
+		"scope dropped count":    bytes.Replace(valid, []byte(`"scope":{"name"`), []byte(`"scope":{"droppedAttributesCount":"1","name"`), 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, raw)
+			if len(d.Diagnostics) != 1 || len(d.Shape.Traces) != 0 {
+				t.Fatalf("mistyped metadata entered topology: %+v", d)
+			}
+		})
 	}
 }
 func TestCaptureTreatsOmittedRepeatedTraceFieldsAsEmpty(t *testing.T) {
@@ -249,6 +279,24 @@ func TestCapturePreservesCompleteTraceDescendantCooccurrence(t *testing.T) {
 	right := fixture("A", "Y", "B", "X")
 	if left.Spans[0].TraceRoots == "" || left.Spans[0].TraceRoots == right.Spans[0].TraceRoots {
 		t.Fatalf("complete trace descendant co-occurrence was lost: %q == %q", left.Spans[0].TraceRoots, right.Spans[0].TraceRoots)
+	}
+}
+func TestCapturePreservesRepeatedParentChildPartitions(t *testing.T) {
+	child := func(trace, span, parent int, value string) map[string]any {
+		s := captureSpan(trace, span, parent, "child")
+		s["attributes"] = []any{map[string]any{"key": "variant", "value": map[string]any{"stringValue": value}}}
+		return s
+	}
+	fixture := func(first, second, third, fourth string) CaptureDataset {
+		return decodedFixture(t, "partitions",
+			captureSpan(1, 1, 0, "root"), captureSpan(1, 2, 1, "parent"), captureSpan(1, 3, 1, "parent"),
+			child(1, 4, 2, first), child(1, 5, 2, second), child(1, 6, 3, third), child(1, 7, 3, fourth))
+	}
+	left, right := fixture("A", "X", "B", "Y"), fixture("A", "Y", "B", "X")
+	leftParents := left.Shape.Traces[0].Roots[0].Span.Children
+	rightParents := right.Shape.Traces[0].Roots[0].Span.Children
+	if len(leftParents) != 2 || len(rightParents) != 2 {
+		t.Fatalf("repeated parent child partitions were lost:\n%s\n%s", canonical(leftParents), canonical(rightParents))
 	}
 }
 func TestCaptureLinksAndEventOrder(t *testing.T) {
