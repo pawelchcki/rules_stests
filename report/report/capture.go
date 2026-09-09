@@ -1199,6 +1199,7 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 		componentKeys := make([]string, len(components))
 		componentState := make([]int, len(components))
 		canonicalRootWorkRemaining := int64(8 * 1024 * 1024)
+		boundedDistanceWorkRemaining := int64(64 * 1024 * 1024)
 		var labelComponent func(int) error
 		labelComponent = func(component int) error {
 			if componentState[component] == 2 {
@@ -1418,8 +1419,9 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 			if boundedCanonicalization {
 				// Exact rooted certificates can require quadratic work for a large
 				// refinement-tied component. Retain an order-independent bounded
-				// certificate of its stable classes and complete class adjacency so
-				// sink-accepted telemetry remains available for comparison.
+				// certificate of its stable classes, adjacency, and all-root distance
+				// profiles so sink-accepted telemetry remains comparable without
+				// erasing incidence between refinement-tied members.
 				classAdjacency := make([]string, 0, len(components[component]))
 				for _, member := range components[component] {
 					outgoing := make([]string, 0, len(edges[member]))
@@ -1443,7 +1445,47 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 					classAdjacency = append(classAdjacency, canonical([]any{memberDescriptions[member], classes[member], outgoing, incomingKeys}))
 				}
 				sort.Strings(classAdjacency)
-				rooted = digest([]byte(canonical(classAdjacency)))
+				distanceProfiles := make([]string, 0, len(components[component]))
+				seen := make([]int, len(d.Spans))
+				distances := make([]int, len(d.Spans))
+				completeProfiles := true
+				for generation, root := range components[component] {
+					queue := []int{root}
+					seen[root] = generation + 1
+					distances[root] = 0
+					profile := map[string]int{strconv.Itoa(classes[root]) + ":0": 1}
+					for len(queue) > 0 && completeProfiles {
+						member := queue[0]
+						queue = queue[1:]
+						for _, edge := range edges[member] {
+							if edge.target < 0 || componentOf[edge.target] != component {
+								continue
+							}
+							if boundedDistanceWorkRemaining == 0 {
+								completeProfiles = false
+								break
+							}
+							boundedDistanceWorkRemaining--
+							if seen[edge.target] == generation+1 {
+								continue
+							}
+							seen[edge.target] = generation + 1
+							distances[edge.target] = distances[member] + 1
+							key := strconv.Itoa(classes[edge.target]) + ":" + strconv.Itoa(distances[edge.target])
+							profile[key]++
+							queue = append(queue, edge.target)
+						}
+					}
+					if !completeProfiles {
+						break
+					}
+					distanceProfiles = append(distanceProfiles, canonical(profile))
+				}
+				if !completeProfiles {
+					distanceProfiles = nil
+				}
+				sort.Strings(distanceProfiles)
+				rooted = digest([]byte(canonical([]any{classAdjacency, distanceProfiles})))
 			} else if rooted = rootedDigestByMember[root]; rooted == "" {
 				rooted = digest([]byte(canonical(rootedCertificate(root))))
 			} else {

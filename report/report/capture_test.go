@@ -1031,19 +1031,23 @@ func TestCaptureLargeRegularLinkGraphStaysBounded(t *testing.T) {
 }
 func TestCaptureLargeRegularLinkGraphPastCanonicalBudgetRemainsComparable(t *testing.T) {
 	const count = 1700
-	spans := make([]map[string]any, count)
-	reversed := make([]map[string]any, count)
-	for i := range spans {
-		span := captureSpan(i+1, 1, 0, "regular")
-		span["links"] = []any{
-			map[string]any{"traceId": fmt.Sprintf("%032x", (i+1)%count+1), "spanId": fmt.Sprintf("%016x", 1)},
-			map[string]any{"traceId": fmt.Sprintf("%032x", (i+2)%count+1), "spanId": fmt.Sprintf("%016x", 1)},
+	fixture := func(secondOffset int, reverse bool) CaptureDataset {
+		spans := make([]map[string]any, count)
+		for i := range spans {
+			span := captureSpan(i+1, 1, 0, "regular")
+			span["links"] = []any{
+				map[string]any{"traceId": fmt.Sprintf("%032x", (i+1)%count+1), "spanId": fmt.Sprintf("%016x", 1)},
+				map[string]any{"traceId": fmt.Sprintf("%032x", (i+secondOffset)%count+1), "spanId": fmt.Sprintf("%016x", 1)},
+			}
+			index := i
+			if reverse {
+				index = count - 1 - i
+			}
+			spans[index] = span
 		}
-		spans[i] = span
-		reversed[count-1-i] = span
+		return decodedFixtureWithEncoding(t, fmt.Sprintf("large regular %d %t", secondOffset, reverse), "protobuf", spans...)
 	}
-	left := decodedFixtureWithEncoding(t, "large regular forward", "protobuf", spans...)
-	right := decodedFixtureWithEncoding(t, "large regular reversed", "protobuf", reversed...)
+	left, right, different := fixture(2, false), fixture(2, true), fixture(3, false)
 	if len(left.Spans) != count || len(right.Spans) != count {
 		t.Fatalf("decoded %d/%d spans, want %d", len(left.Spans), len(right.Spans), count)
 	}
@@ -1056,6 +1060,9 @@ func TestCaptureLargeRegularLinkGraphPastCanonicalBudgetRemainsComparable(t *tes
 		if canonical(span.LinkTargets) != rightTargets[traceID] {
 			t.Fatalf("bounded canonicalization changed trace %s link targets", traceID)
 		}
+	}
+	if left.Spans[0].LinkTargets[0] == different.Spans[0].LinkTargets[0] {
+		t.Fatal("bounded canonicalization erased large-component adjacency")
 	}
 }
 func TestCaptureRejectsAllZeroParentID(t *testing.T) {
