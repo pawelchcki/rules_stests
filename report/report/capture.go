@@ -152,7 +152,7 @@ func protocolStringField(context, key string) bool {
 	case "resourceSpan", "scopeSpan":
 		return key == "schemaUrl"
 	case "entityRef":
-		return key == "schemaUrl" || key == "type"
+		return key == "schemaUrl"
 	case "scope":
 		return key == "name" || key == "version"
 	case "span":

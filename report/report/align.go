@@ -52,16 +52,17 @@ func NormalizeSpanName(name string) string {
 }
 
 type alignedSpan struct {
-	node        SpanNode
-	card        string
-	minCount    int
-	maxCount    int
-	exact       bool
-	altCount    int
-	children    []alignedSpan
-	childGroups []SpanGroup
-	keyString   string
-	childKey    string
+	node           SpanNode
+	card           string
+	minCount       int
+	maxCount       int
+	exact          bool
+	altCount       int
+	children       []alignedSpan
+	childGroups    []SpanGroup
+	keyString      string
+	childKey       string
+	childMatchKeys []string
 }
 
 func spanKey(node SpanNode) string {
@@ -212,11 +213,53 @@ func resolveSpanGroup(group SpanGroup) []alignedSpan {
 	span.childGroups = group.Span.Children
 	span.children = canonicalSpanCandidates(group.Span.Children)
 	span.childKey = canonicalChildrenKey(span)
+	span.childMatchKeys = canonicalChildMatchKeys(span)
 	return []alignedSpan{span}
 }
 
 func canonicalSpanKey(span alignedSpan) string {
 	return strings.Join([]string{span.keyString, span.node.Status, span.node.HTTPStatus, span.card, canonicalChildrenKey(span)}, "\x1f")
+}
+
+func shallowCanonicalSpanKey(span alignedSpan) string {
+	return strings.Join([]string{span.keyString, span.node.Status, span.node.HTTPStatus, span.card}, "\x1f")
+}
+
+func canonicalChildMatchKeys(span alignedSpan) []string {
+	keys := make([]string, 0, len(span.children))
+	for _, child := range span.children {
+		keys = append(keys, shallowCanonicalSpanKey(child))
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func childOverlapScore(left, right alignedSpan) int {
+	leftKeys, rightKeys := left.childMatchKeys, right.childMatchKeys
+	if leftKeys == nil {
+		leftKeys = canonicalChildMatchKeys(left)
+	}
+	if rightKeys == nil {
+		rightKeys = canonicalChildMatchKeys(right)
+	}
+	matched := 0
+	for leftIndex, rightIndex := 0, 0; leftIndex < len(leftKeys) && rightIndex < len(rightKeys); {
+		switch {
+		case leftKeys[leftIndex] < rightKeys[rightIndex]:
+			leftIndex++
+		case leftKeys[leftIndex] > rightKeys[rightIndex]:
+			rightIndex++
+		default:
+			matched++
+			leftIndex++
+			rightIndex++
+		}
+	}
+	score := matched * 1000
+	if left.childKey == right.childKey {
+		score += 1000
+	}
+	return score
 }
 
 func canonicalChildrenKey(span alignedSpan) string {
@@ -290,9 +333,7 @@ func bestShallowSpanPair(leftGroup, rightGroup SpanGroup) (spanPairChoice, bool)
 			if score < 0 {
 				continue
 			}
-			if left.childKey == right.childKey {
-				score += 1000
-			}
+			score += childOverlapScore(left, right)
 			key := canonicalSpanKey(left) + "\x1c" + canonicalSpanKey(right)
 			if !found || score > best.score || (score == best.score && key < bestKey) {
 				best, found, bestKey = spanPairChoice{left: left, right: right, score: score}, true, key
@@ -638,8 +679,8 @@ func maximumCardinalityPairs(left, right []alignedSpan, score func(alignedSpan, 
 		leftCandidate := left[remainingLeft[leftIndex]]
 		rightCandidate := right[remainingRight[rightIndex]]
 		value := shallowAlignedSpanMatchScore(leftCandidate, rightCandidate)
-		if value >= 0 && leftCandidate.childKey == rightCandidate.childKey {
-			value += 1000
+		if value >= 0 {
+			value += childOverlapScore(leftCandidate, rightCandidate)
 		}
 		return value, value >= 0
 	})
@@ -815,6 +856,9 @@ func shallowTraceMatchScore(left, right resolvedTrace) (int, bool) {
 	for _, leftRoot := range left.roots {
 		for _, rightRoot := range right.roots {
 			score := shallowAlignedSpanMatchScore(leftRoot, rightRoot)
+			if score >= 0 {
+				score += childOverlapScore(leftRoot, rightRoot)
+			}
 			if score >= 0 && (!found || score > best) {
 				best, found = score, true
 			}

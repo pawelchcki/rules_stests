@@ -322,11 +322,11 @@ func TestCaptureRetainsSinkAcceptedEntityReferenceKeys(t *testing.T) {
 	raw := bytes.Replace(
 		captureFixture(captureSpan(1, 1, 0, "span")),
 		[]byte(`"resource":{"attributes"`),
-		[]byte(`"resource":{"entityRefs":[{"idKeys":[7],"descriptionKeys":9}],"attributes"`),
+		[]byte(`"resource":{"entityRefs":[{"type":7,"idKeys":[7],"descriptionKeys":9}],"attributes"`),
 		1,
 	)
 	d := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, raw)
-	if len(d.Diagnostics) != 0 || len(d.Shape.Traces) != 1 || !strings.Contains(canonical(d.Resources), `"idKeys":["7"]`) || !strings.Contains(canonical(d.Resources), `"descriptionKeys":"9"`) {
+	if len(d.Diagnostics) != 0 || len(d.Shape.Traces) != 1 || !strings.Contains(canonical(d.Resources), `"type":"7"`) || !strings.Contains(canonical(d.Resources), `"idKeys":["7"]`) || !strings.Contains(canonical(d.Resources), `"descriptionKeys":"9"`) {
 		t.Fatalf("sink-accepted entity reference keys were discarded: %+v", d)
 	}
 }

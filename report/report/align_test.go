@@ -109,6 +109,44 @@ func TestLargeSiblingAlignmentUsesChildStructure(t *testing.T) {
 	}
 }
 
+func TestLargeSiblingAlignmentUsesPartialChildOverlap(t *testing.T) {
+	const count = optimalAssignmentVertexLimit/2 + 1
+	leftParents := make([]SpanGroup, 0, count)
+	rightParents := make([]SpanGroup, 0, count)
+	for i := 0; i < count; i++ {
+		marker := exactSpan("", "client", "", fmt.Sprintf("marker-%03d", i), "")
+		left := exactSpan("", "internal", "", "parent", "", marker, exactSpan("", "client", "", "left-only", ""))
+		right := exactSpan("", "internal", "", "parent", "", marker, exactSpan("", "client", "", "right-only", ""))
+		leftParents = append(leftParents, left)
+		rightParents = append([]SpanGroup{right}, rightParents...)
+	}
+	root := func(children []SpanGroup) *ScenarioShape {
+		return shapeOf("profile", exactSpan("", "server", "", "root", "", children...))
+	}
+	alignment := AlignShapes(root(leftParents), root(rightParents))
+	if alignment.Summary.Matched != 1+count*2 || alignment.Summary.LeftOnly != count || alignment.Summary.RightOnly != count {
+		t.Fatalf("large parents ignored partial child overlap: %#v", alignment.Summary)
+	}
+}
+
+func TestLargeTraceAlignmentUsesPartialDescendantOverlap(t *testing.T) {
+	const count = optimalAssignmentVertexLimit/2 + 1
+	left := &ScenarioShape{ExactCounts: true}
+	right := &ScenarioShape{ExactCounts: true}
+	for i := 0; i < count; i++ {
+		marker := exactSpan("", "client", "", fmt.Sprintf("marker-%03d", i), "")
+		trace := func(side string) TraceGroup {
+			return TraceGroup{Count: 1, ExactCount: true, Coverage: "complete", Roots: []SpanGroup{exactSpan("", "server", "", "root", "", marker, exactSpan("", "client", "", side, ""))}}
+		}
+		left.Traces = append(left.Traces, trace("left-only"))
+		right.Traces = append([]TraceGroup{trace("right-only")}, right.Traces...)
+	}
+	alignment := AlignShapes(left, right)
+	if alignment.Summary.TraceMatched != count || alignment.Summary.Matched != count*2 || alignment.Summary.LeftOnly != count || alignment.Summary.RightOnly != count {
+		t.Fatalf("large traces ignored partial descendant overlap: %#v", alignment.Summary)
+	}
+}
+
 func TestNormalizeSpanNameCollapsesRouteParameters(t *testing.T) {
 	tests := map[string]string{
 		"GET /api/articles/<slug>":    "get api/articles/*",
