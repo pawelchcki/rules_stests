@@ -371,6 +371,21 @@ func TestCaptureLinkTargetOccurrenceTraversesLongGraph(t *testing.T) {
 		t.Fatalf("long graph endpoint was truncated: %q", left.Spans[0].LinkTargets[0])
 	}
 }
+func TestCaptureLargeLinkGraphStaysBounded(t *testing.T) {
+	const count = 4096
+	spans := make([]map[string]any, 0, count)
+	for trace := 1; trace <= count; trace++ {
+		s := captureSpan(trace, 1, 0, "chain")
+		if trace < count {
+			s["links"] = []any{map[string]any{"traceId": fmt.Sprintf("%032x", trace+1), "spanId": fmt.Sprintf("%016x", 1)}}
+		}
+		spans = append(spans, s)
+	}
+	d := decodedFixture(t, "large link graph", spans...)
+	if size := len(canonical(d)); size > 8000000 {
+		t.Fatalf("large link graph projection grew to %d bytes", size)
+	}
+}
 func TestCaptureRejectsAllZeroParentID(t *testing.T) {
 	span := captureSpan(1, 1, 0, "invalid parent")
 	span["parentSpanId"] = "0000000000000000"

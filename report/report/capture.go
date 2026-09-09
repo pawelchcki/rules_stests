@@ -498,69 +498,160 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 	sourceOccurrenceKeys := buildTargetOccurrenceKeys(true)
 	sourceOccurrenceKeysWithoutScope := buildTargetOccurrenceKeys(false)
 	buildGraphAwareTargetKeys := func(base []string, targetDigests map[string]string) ([]string, error) {
-		keys := make([]string, len(d.Spans))
-		for root := range d.Spans {
-			visited := map[int]int{}
-			external := map[string]int{}
-			var visit func(int) (any, error)
-			visit = func(i int) (any, error) {
-				if reference, ok := visited[i]; ok {
-					return map[string]any{"reference": reference}, nil
+		type graphEdge struct {
+			relationship string
+			target       int
+			external     string
+			shared       string
+		}
+		edges := make([][]graphEdge, len(d.Spans))
+		externalIncoming := map[string][]string{}
+		for i := range d.Spans {
+			for linkIndex, value := range array(d.Spans[i].Fields["links"]) {
+				link := object(value)
+				tid, err := identity(link["traceId"], 16, false)
+				if err != nil {
+					return nil, err
 				}
-				visited[i] = len(visited)
-				outgoing := []any{}
-				for _, value := range array(d.Spans[i].Fields["links"]) {
-					link := object(value)
-					tid, err := identity(link["traceId"], 16, false)
-					if err != nil {
-						return nil, err
-					}
-					sid, err := identity(link["spanId"], 8, false)
-					if err != nil {
-						return nil, err
-					}
-					targetKey := tid + "/" + sid
-					relation := "external trace/span"
-					if tid == traceIDs[i] {
-						relation = "external span in same trace"
-					}
-					if sid == parentIDs[i] && tid == traceIDs[i] {
-						relation = "external parent"
-					}
-					descriptor := map[string]any{"relationship": relation}
-					if j, ok := ids[targetKey]; ok {
-						if j == i {
-							descriptor["relationship"] = "self"
-						} else if tid == traceIDs[i] {
-							descriptor["relationship"] = "captured in same trace"
-						} else {
-							descriptor["relationship"] = "captured in another trace"
-						}
-						target, err := visit(j)
-						if err != nil {
-							return nil, err
-						}
-						descriptor["target"] = target
+				sid, err := identity(link["spanId"], 8, false)
+				if err != nil {
+					return nil, err
+				}
+				targetKey := tid + "/" + sid
+				edge := graphEdge{relationship: "external trace/span", target: -1, external: targetKey, shared: targetDigests[targetKey]}
+				if tid == traceIDs[i] {
+					edge.relationship = "external span in same trace"
+				}
+				if sid == parentIDs[i] && tid == traceIDs[i] {
+					edge.relationship = "external parent"
+				}
+				if j, ok := ids[targetKey]; ok {
+					edge.target = j
+					edge.external = ""
+					if j == i {
+						edge.relationship = "self"
+					} else if tid == traceIDs[i] {
+						edge.relationship = "captured in same trace"
 					} else {
-						reference, ok := external[targetKey]
-						if !ok {
-							reference = len(external)
-							external[targetKey] = reference
-						}
-						descriptor["externalTarget"] = reference
+						edge.relationship = "captured in another trace"
 					}
-					if shared := targetDigests[targetKey]; shared != "" {
-						descriptor["sharedTarget"] = shared
+				} else {
+					externalIncoming[targetKey] = append(externalIncoming[targetKey], canonical([]any{base[i], linkIndex, edge.relationship}))
+				}
+				edges[i] = append(edges[i], edge)
+			}
+		}
+		externalLabels := map[string]string{}
+		for target, incoming := range externalIncoming {
+			sort.Strings(incoming)
+			externalLabels[target] = digest([]byte(canonical(incoming)))[:12]
+		}
+
+		// Collapse cycles once, then label the resulting component DAG from its
+		// leaves. This retains complete reachable-graph identity without
+		// serializing the same suffix independently for every span.
+		indexes := make([]int, len(d.Spans))
+		lowlinks := make([]int, len(d.Spans))
+		onStack := make([]bool, len(d.Spans))
+		for i := range indexes {
+			indexes[i] = -1
+		}
+		stack := []int{}
+		components := [][]int{}
+		nextIndex := 0
+		var connect func(int)
+		connect = func(i int) {
+			indexes[i], lowlinks[i] = nextIndex, nextIndex
+			nextIndex++
+			stack = append(stack, i)
+			onStack[i] = true
+			for _, edge := range edges[i] {
+				if edge.target < 0 {
+					continue
+				}
+				if indexes[edge.target] < 0 {
+					connect(edge.target)
+					if lowlinks[edge.target] < lowlinks[i] {
+						lowlinks[i] = lowlinks[edge.target]
+					}
+				} else if onStack[edge.target] && indexes[edge.target] < lowlinks[i] {
+					lowlinks[i] = indexes[edge.target]
+				}
+			}
+			if lowlinks[i] != indexes[i] {
+				return
+			}
+			component := []int{}
+			for {
+				last := len(stack) - 1
+				member := stack[last]
+				stack = stack[:last]
+				onStack[member] = false
+				component = append(component, member)
+				if member == i {
+					break
+				}
+			}
+			components = append(components, component)
+		}
+		for i := range d.Spans {
+			if indexes[i] < 0 {
+				connect(i)
+			}
+		}
+		componentOf := make([]int, len(d.Spans))
+		for component, members := range components {
+			for _, member := range members {
+				componentOf[member] = component
+			}
+		}
+
+		keys := make([]string, len(d.Spans))
+		componentKeys := make([]string, len(components))
+		componentState := make([]int, len(components))
+		var labelComponent func(int)
+		labelComponent = func(component int) {
+			if componentState[component] == 2 {
+				return
+			}
+			componentState[component] = 1
+			for _, member := range components[component] {
+				for _, edge := range edges[member] {
+					if edge.target >= 0 && componentOf[edge.target] != component {
+						labelComponent(componentOf[edge.target])
+					}
+				}
+			}
+			descriptions := make([]string, 0, len(components[component]))
+			memberDescriptions := map[int]string{}
+			for _, member := range components[component] {
+				outgoing := make([]any, 0, len(edges[member]))
+				for _, edge := range edges[member] {
+					descriptor := map[string]any{"relationship": edge.relationship}
+					if edge.target < 0 {
+						descriptor["externalTarget"] = externalLabels[edge.external]
+					} else if componentOf[edge.target] == component {
+						descriptor["componentTarget"] = base[edge.target]
+					} else {
+						descriptor["target"] = keys[edge.target]
+					}
+					if edge.shared != "" {
+						descriptor["sharedTarget"] = edge.shared
 					}
 					outgoing = append(outgoing, descriptor)
 				}
-				return map[string]any{"occurrence": base[i], "links": outgoing}, nil
+				memberDescriptions[member] = canonical([]any{base[member], outgoing})
+				descriptions = append(descriptions, memberDescriptions[member])
 			}
-			graph, err := visit(root)
-			if err != nil {
-				return nil, err
+			sort.Strings(descriptions)
+			componentKeys[component] = digest([]byte(canonical(descriptions)))[:12]
+			for _, member := range components[component] {
+				keys[member] = digest([]byte(canonical([]any{memberDescriptions[member], componentKeys[component]})))[:12]
 			}
-			keys[root] = digest([]byte(canonical(graph)))[:12]
+			componentState[component] = 2
+		}
+		for component := range components {
+			labelComponent(component)
 		}
 		return keys, nil
 	}
