@@ -32,6 +32,8 @@ type CapturedSpan struct {
 	ParentWithoutScope      string         `json:"parentWithoutScope"`
 	LinkTargets             []string       `json:"linkTargets"`
 	LinkTargetsWithoutScope []string       `json:"linkTargetsWithoutScope"`
+	TraceRoots              string         `json:"traceRoots,omitempty"`
+	TraceRootsWithoutScope  string         `json:"traceRootsWithoutScope,omitempty"`
 }
 type CaptureComparison struct {
 	Left     string              `json:"left"`
@@ -85,6 +87,16 @@ func defaults(m map[string]any, values map[string]any) map[string]any {
 // values and are never rewritten. Decimal strings preserve 64-bit precision in JS.
 func normalizeWire(v any) (any, error) {
 	return normalizeWireContext(v, "")
+}
+
+func canonicalBytes(value string) (string, bool) {
+	normalized := strings.NewReplacer("-", "+", "_", "/").Replace(value)
+	for _, encoding := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding} {
+		if raw, err := encoding.DecodeString(normalized); err == nil {
+			return base64.StdEncoding.EncodeToString(raw), true
+		}
+	}
+	return "", false
 }
 
 func normalizeWireContext(v any, context string) (any, error) {
@@ -197,6 +209,10 @@ func normalizeWireContext(v any, context string) (any, error) {
 				raw[i] = byte(n)
 			}
 			out["bytesValue"] = base64.StdEncoding.EncodeToString(raw)
+		} else if value, ok := out["bytesValue"].(string); ok {
+			if canonical, valid := canonicalBytes(value); valid {
+				out["bytesValue"] = canonical
+			}
 		}
 		return out, nil
 	default:
@@ -499,44 +515,56 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 		sort.Strings(sources)
 	}
 	buildGraphAwareTargetKeys := func(base []string) ([]string, error) {
-		keys := make([]string, len(d.Spans))
-		for i := range d.Spans {
-			outgoing := []any{}
-			for _, value := range array(d.Spans[i].Fields["links"]) {
-				link := object(value)
-				tid, err := identity(link["traceId"], 16, false)
-				if err != nil {
-					return nil, err
-				}
-				sid, err := identity(link["spanId"], 8, false)
-				if err != nil {
-					return nil, err
-				}
-				relation := "external trace/span"
-				if tid == traceIDs[i] {
-					relation = "external span in same trace"
-				}
-				if sid == parentIDs[i] && tid == traceIDs[i] {
-					relation = "external parent"
-				}
-				descriptor := map[string]any{"relationship": relation}
-				if j, ok := ids[tid+"/"+sid]; ok {
-					if j == i {
-						descriptor["relationship"] = "self"
-					} else {
-						descriptor["relationship"] = "captured in another trace"
-						if tid == traceIDs[i] {
-							descriptor["relationship"] = "captured in same trace"
-						}
-						descriptor["targetOccurrence"] = base[j]
+		keys := append([]string(nil), base...)
+		// Parent topology is limited to 128 levels above. Propagate link colors
+		// to the same bound so multi-hop relationships participate without
+		// recursive traversal getting stuck on cyclic links.
+		for round := 0; round < 128; round++ {
+			next := make([]string, len(d.Spans))
+			stable := true
+			for i := range d.Spans {
+				outgoing := []any{}
+				for _, value := range array(d.Spans[i].Fields["links"]) {
+					link := object(value)
+					tid, err := identity(link["traceId"], 16, false)
+					if err != nil {
+						return nil, err
 					}
+					sid, err := identity(link["spanId"], 8, false)
+					if err != nil {
+						return nil, err
+					}
+					relation := "external trace/span"
+					if tid == traceIDs[i] {
+						relation = "external span in same trace"
+					}
+					if sid == parentIDs[i] && tid == traceIDs[i] {
+						relation = "external parent"
+					}
+					descriptor := map[string]any{"relationship": relation}
+					if j, ok := ids[tid+"/"+sid]; ok {
+						if j == i {
+							descriptor["relationship"] = "self"
+						} else {
+							descriptor["relationship"] = "captured in another trace"
+							if tid == traceIDs[i] {
+								descriptor["relationship"] = "captured in same trace"
+							}
+							descriptor["targetOccurrence"] = keys[j]
+						}
+					}
+					if sources := linkTargetSources[tid+"/"+sid]; len(sources) > 1 {
+						descriptor["sharedTarget"] = digest([]byte(canonical(sources)))[:12]
+					}
+					outgoing = append(outgoing, descriptor)
 				}
-				if sources := linkTargetSources[tid+"/"+sid]; len(sources) > 1 {
-					descriptor["sharedTarget"] = digest([]byte(canonical(sources)))[:12]
-				}
-				outgoing = append(outgoing, descriptor)
+				next[i] = digest([]byte(canonical([]any{base[i], outgoing})))[:12]
+				stable = stable && next[i] == keys[i]
 			}
-			keys[i] = digest([]byte(canonical([]any{base[i], outgoing})))[:12]
+			keys = next
+			if stable {
+				break
+			}
 		}
 		return keys, nil
 	}
@@ -639,6 +667,29 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 		} else {
 			d.Spans[i].Parent = "root"
 			d.Spans[i].ParentWithoutScope = "root"
+		}
+	}
+	for _, indices := range traces {
+		roots := []int{}
+		withScope := []string{}
+		withoutScope := []string{}
+		for _, i := range indices {
+			if parents[i] < 0 {
+				roots = append(roots, i)
+				withScope = append(withScope, occurrenceKeys[i])
+				withoutScope = append(withoutScope, occurrenceKeysWithoutScope[i])
+			}
+		}
+		if len(roots) < 2 {
+			continue
+		}
+		sort.Strings(withScope)
+		sort.Strings(withoutScope)
+		rootSet := digest([]byte(canonical(withScope)))[:12]
+		rootSetWithoutScope := digest([]byte(canonical(withoutScope)))[:12]
+		for _, i := range roots {
+			d.Spans[i].TraceRoots = rootSet
+			d.Spans[i].TraceRootsWithoutScope = rootSetWithoutScope
 		}
 	}
 	var groups func([]int) []SpanGroup

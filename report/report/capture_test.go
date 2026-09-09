@@ -63,6 +63,20 @@ func TestCapturePreservesKeyValueAroundWrappedAnyValue(t *testing.T) {
 		t.Fatalf("KeyValue AnyValue wrappers differ:\n%s\n%s", canonical(a), canonical(b))
 	}
 }
+func TestCaptureCanonicalizesAcceptedBase64Variants(t *testing.T) {
+	fixture := func(value any) []byte {
+		span := captureSpan(1, 1, 0, "bytes")
+		span["attributes"] = []any{map[string]any{"key": "bytes", "value": map[string]any{"bytesValue": value}}}
+		return captureFixture(span)
+	}
+	standard := DecodeCapture(ValidationReceipt{}, fixture("+w=="))
+	urlSafe := DecodeCapture(ValidationReceipt{}, fixture("-w"))
+	protobuf := DecodeCapture(ValidationReceipt{}, fixture([]any{251}))
+	if len(standard.Diagnostics) > 0 || len(urlSafe.Diagnostics) > 0 || len(protobuf.Diagnostics) > 0 ||
+		!reflect.DeepEqual(standard, urlSafe) || !reflect.DeepEqual(standard, protobuf) {
+		t.Fatalf("base64 variants differ:\n%s\n%s\n%s", canonical(standard), canonical(urlSafe), canonical(protobuf))
+	}
+}
 func TestInternIndexesCanonicalMetadata(t *testing.T) {
 	items := []map[string]any{}
 	indexes := map[string]int{}
@@ -137,6 +151,18 @@ func TestCaptureMarksMultipleRootsPartial(t *testing.T) {
 	multipleRoots := decodedFixture(t, "multiple-roots", captureSpan(1, 1, 0, "first"), captureSpan(1, 2, 0, "second"))
 	if multipleRoots.Shape.Traces[0].Coverage != "partial" {
 		t.Fatalf("multi-root trace reported as complete: %+v", multipleRoots.Shape.Traces)
+	}
+}
+func TestCapturePreservesPartialTraceRootCooccurrence(t *testing.T) {
+	root := func(trace, span int, value string) map[string]any {
+		s := captureSpan(trace, span, 0, "root")
+		s["attributes"] = []any{map[string]any{"key": "variant", "value": map[string]any{"stringValue": value}}}
+		return s
+	}
+	left := decodedFixture(t, "left", root(1, 1, "A"), root(1, 2, "B"), root(2, 1, "C"), root(2, 2, "D"))
+	right := decodedFixture(t, "right", root(1, 1, "A"), root(1, 2, "C"), root(2, 1, "B"), root(2, 2, "D"))
+	if left.Spans[0].TraceRoots == "" || left.Spans[0].TraceRoots == right.Spans[0].TraceRoots {
+		t.Fatalf("partial trace root co-occurrence was lost: %q == %q", left.Spans[0].TraceRoots, right.Spans[0].TraceRoots)
 	}
 }
 func TestCaptureLinksAndEventOrder(t *testing.T) {
@@ -223,6 +249,36 @@ func TestCaptureLinkTargetOccurrenceIncludesOutgoingRelationships(t *testing.T) 
 	right := decodedFixture(t, "right", spans(2, 1)...)
 	if left.Spans[2].LinkTargets[0] == right.Spans[2].LinkTargets[0] {
 		t.Fatalf("target outgoing relationship was lost: %q", left.Spans[2].LinkTargets[0])
+	}
+}
+func TestCaptureLinkTargetOccurrencePropagatesAcrossGraph(t *testing.T) {
+	linked := func(trace, targetTrace int, name string) map[string]any {
+		s := captureSpan(trace, 1, 0, name)
+		s["links"] = []any{map[string]any{"traceId": fmt.Sprintf("%032x", targetTrace), "spanId": fmt.Sprintf("%016x", 1)}}
+		return s
+	}
+	destination := func(trace int, value string) map[string]any {
+		s := captureSpan(trace, 1, 0, "destination")
+		s["attributes"] = []any{map[string]any{"key": "variant", "value": map[string]any{"stringValue": value}}}
+		return s
+	}
+	source := func(trace, targetTrace int, value string) map[string]any {
+		s := linked(trace, targetTrace, "source")
+		s["attributes"] = []any{map[string]any{"key": "variant", "value": map[string]any{"stringValue": value}}}
+		return s
+	}
+	spans := func(xTarget, yTarget int) []map[string]any {
+		return []map[string]any{
+			linked(1, 5, "target"), linked(2, 6, "target"),
+			source(3, xTarget, "X"), source(4, yTarget, "Y"),
+			linked(5, 7, "intermediate"), linked(6, 8, "intermediate"),
+			destination(7, "A"), destination(8, "B"),
+		}
+	}
+	left := decodedFixture(t, "left", spans(1, 2)...)
+	right := decodedFixture(t, "right", spans(2, 1)...)
+	if left.Spans[2].LinkTargets[0] == right.Spans[2].LinkTargets[0] {
+		t.Fatalf("multi-hop target relationship was lost: %q", left.Spans[2].LinkTargets[0])
 	}
 }
 func TestCaptureRejectsAllZeroParentID(t *testing.T) {

@@ -799,6 +799,7 @@ function captureFields(dataset, index, raw, hideScope) {
     fields.events = (fields.events || []).map(e => { const x={...e}; delete x.timeUnixNano; return x; });
     fields.links = (fields.links || []).map((l,i) => { const x={...l},withoutScope=span.linkTargetsWithoutScope || []; delete x.traceId; delete x.spanId; x.relationship=hideScope && withoutScope.length===span.linkTargets.length ? withoutScope[i] : span.linkTargets[i]; return x; });
     fields.parentRelationship = hideScope ? span.parentWithoutScope || span.parent : span.parent;
+    if (span.traceRoots) fields.traceRootSet = hideScope ? span.traceRootsWithoutScope || span.traceRoots : span.traceRoots;
   }
   const result = {span:fields, resource:dataset.resources[span.resource]};
   if (!hideScope) result.scope = dataset.scopes[span.scope];

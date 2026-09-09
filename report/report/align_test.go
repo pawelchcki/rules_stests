@@ -35,6 +35,21 @@ func findRow(t *testing.T, alignment *ShapeAlignment, name string) SpanMatch {
 	return SpanMatch{}
 }
 
+func TestLargeTraceAlignmentUsesBoundedPairing(t *testing.T) {
+	left := &ScenarioShape{ExactCounts: true}
+	right := &ScenarioShape{ExactCounts: true}
+	for i := 0; i < optimalAssignmentVertexLimit/2+1; i++ {
+		name := fmt.Sprintf("root-%03d", i)
+		group := TraceGroup{Count: 1, ExactCount: true, Coverage: "complete", Roots: []SpanGroup{exactSpan("", "server", "", name, "")}}
+		left.Traces = append(left.Traces, group)
+		right.Traces = append(right.Traces, group)
+	}
+	alignment := AlignShapes(left, right)
+	if alignment.Summary.TraceMatched != len(left.Traces) || alignment.Summary.TraceLeftOnly != 0 || alignment.Summary.TraceRightOnly != 0 {
+		t.Fatalf("bounded trace pairing lost exact matches: %+v", alignment.Summary)
+	}
+}
+
 func TestNormalizeSpanNameCollapsesRouteParameters(t *testing.T) {
 	tests := map[string]string{
 		"GET /api/articles/<slug>":    "get api/articles/*",

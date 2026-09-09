@@ -15,6 +15,12 @@ var pathParameterPattern = regexp.MustCompile(`%?\{[^}]*\}|<[^>]*>`)
 var colonPathParameterPattern = regexp.MustCompile(`(^|/):[A-Za-z_][A-Za-z0-9_]*`)
 var whitespacePattern = regexp.MustCompile(`\s+`)
 
+// Exact global assignment is useful for authored shapes, which are small. Raw
+// captures can contain thousands of distinct groups, so larger lists use a
+// deterministic linear-memory pairing instead of allocating and solving a
+// cubic (left+right)-square assignment.
+const optimalAssignmentVertexLimit = 128
+
 func isHTTPMethod(value string) bool {
 	switch value {
 	case "connect", "delete", "get", "head", "options", "patch", "post", "put", "trace":
@@ -274,6 +280,19 @@ func bestSpanPair(leftGroup, rightGroup SpanGroup) (spanPairChoice, bool) {
 func choosePairedCandidates(leftGroups, rightGroups []SpanGroup) ([]alignedSpan, []alignedSpan) {
 	left := canonicalSpanCandidates(leftGroups)
 	right := canonicalSpanCandidates(rightGroups)
+	if len(leftGroups)+len(rightGroups) > optimalAssignmentVertexLimit {
+		matchedRight, _ := maximumWeightMaximumCardinalityPairs(len(leftGroups), len(rightGroups), func(leftIndex, rightIndex int) (int, bool) {
+			choice, compatible := bestSpanPair(leftGroups[leftIndex], rightGroups[rightIndex])
+			return choice.score, compatible
+		})
+		for leftIndex, rightIndex := range matchedRight {
+			if rightIndex >= 0 {
+				choice, _ := bestSpanPair(leftGroups[leftIndex], rightGroups[rightIndex])
+				left[leftIndex], right[rightIndex] = choice.left, choice.right
+			}
+		}
+		return left, right
+	}
 	choices := make([][]spanPairChoice, len(leftGroups))
 	compatible := make([][]bool, len(leftGroups))
 	for leftIndex := range leftGroups {
@@ -400,6 +419,24 @@ func maximumWeightMaximumCardinalityPairs(leftCount, rightCount int, score func(
 	}
 	usedRight := make([]bool, rightCount)
 	if leftCount == 0 || rightCount == 0 {
+		return matchedRight, usedRight
+	}
+	if leftCount+rightCount > optimalAssignmentVertexLimit {
+		for leftIndex := 0; leftIndex < leftCount; leftIndex++ {
+			bestRight, bestScore, found := -1, 0, false
+			for rightIndex := 0; rightIndex < rightCount; rightIndex++ {
+				if usedRight[rightIndex] {
+					continue
+				}
+				value, compatible := score(leftIndex, rightIndex)
+				if compatible && (!found || value > bestScore) {
+					bestRight, bestScore, found = rightIndex, value, true
+				}
+			}
+			if found {
+				matchedRight[leftIndex], usedRight[bestRight] = bestRight, true
+			}
+		}
 		return matchedRight, usedRight
 	}
 	scores := make([][]int, leftCount)
@@ -620,6 +657,19 @@ func bestTracePair(leftIndex int, leftGroup TraceGroup, rightIndex int, rightGro
 func choosePairedTraceCandidates(leftGroups, rightGroups []TraceGroup) ([]resolvedTrace, []resolvedTrace) {
 	left := canonicalTraceCandidates(leftGroups)
 	right := canonicalTraceCandidates(rightGroups)
+	if len(leftGroups)+len(rightGroups) > optimalAssignmentVertexLimit {
+		matchedRight, _ := maximumWeightMaximumCardinalityPairs(len(leftGroups), len(rightGroups), func(leftIndex, rightIndex int) (int, bool) {
+			choice, compatible := bestTracePair(leftIndex, leftGroups[leftIndex], rightIndex, rightGroups[rightIndex])
+			return choice.score, compatible
+		})
+		for leftIndex, rightIndex := range matchedRight {
+			if rightIndex >= 0 {
+				choice, _ := bestTracePair(leftIndex, leftGroups[leftIndex], rightIndex, rightGroups[rightIndex])
+				left[leftIndex], right[rightIndex] = choice.left, choice.right
+			}
+		}
+		return left, right
+	}
 	choices := make([][]tracePairChoice, len(leftGroups))
 	compatible := make([][]bool, len(leftGroups))
 	for leftIndex := range leftGroups {
