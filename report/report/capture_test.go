@@ -41,7 +41,7 @@ func decodedFixture(t *testing.T, profile string, spans ...map[string]any) Captu
 	return decodedFixtureWithEncoding(t, profile, "json", spans...)
 }
 func TestCaptureWireFormatsAndPrecision(t *testing.T) {
-	otlp := `[{"signal":"traces","encoding":"json","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"GET /tags","kind":"SPAN_KIND_SERVER","status":{"code":"STATUS_CODE_OK"},"attributes":[{"key":"large","value":{"intValue":"09223372036854775807"}},{"key":"bytes","value":{"bytesValue":"AQI="}},{"key":"array","value":{"arrayValue":{"values":[{"boolValue":true},{"stringValue":"9223372036854775807"}]}}}],"startTimeUnixNano":"1","endTimeUnixNano":"2"}]}]}]}}]`
+	otlp := `[{"signal":"traces","encoding":"json","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"GET /tags","kind":2,"status":{"code":1},"attributes":[{"key":"large","value":{"intValue":"09223372036854775807"}},{"key":"bytes","value":{"bytesValue":"AQI="}},{"key":"array","value":{"arrayValue":{"values":[{"boolValue":true},{"stringValue":"9223372036854775807"}]}}}],"startTimeUnixNano":"1","endTimeUnixNano":"2"}]}]}]}}]`
 	proto := `[{"signal":"traces","encoding":"protobuf","payload":{"resource_spans":[{"resource":null,"schema_url":"","scope_spans":[{"scope":null,"schema_url":"","spans":[{"trace_id":"00000000000000000000000000000001","span_id":"0000000000000001","parent_span_id":"","name":"GET /tags","kind":2,"status":{"code":1,"message":""},"attributes":[{"key":"array","value":{"value":{"array_value":{"values":[{"value":{"bool_value":true}},{"value":{"string_value":"9223372036854775807"}}]}}}},{"key":"bytes","value":{"value":{"bytes_value":[1,2]}}},{"key":"large","value":{"value":{"int_value":9223372036854775807}}}],"events":[],"links":[],"flags":0,"dropped_attributes_count":0,"dropped_events_count":0,"dropped_links_count":0,"start_time_unix_nano":1,"end_time_unix_nano":2,"trace_state":""}]}]}]}}]`
 	a, b := DecodeCapture(ValidationReceipt{}, []byte(otlp)), DecodeCapture(ValidationReceipt{}, []byte(proto))
 	if len(a.Diagnostics) > 0 || len(b.Diagnostics) > 0 {
@@ -55,10 +55,10 @@ func TestCaptureWireFormatsAndPrecision(t *testing.T) {
 	}
 }
 func TestCaptureNormalizesNullAnyValueVariants(t *testing.T) {
-	direct := `[{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"span","startTimeUnixNano":"1","endTimeUnixNano":"2","attributes":[{"key":"unset","value":{"stringValue":null}}]}]}]}]}}]`
-	wrapped := `[{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"span","startTimeUnixNano":"1","endTimeUnixNano":"2","attributes":[{"key":"unset","value":{"value":null}}]}]}]}]}}]`
-	nullMessage := `[{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"span","startTimeUnixNano":"1","endTimeUnixNano":"2","attributes":[{"key":"unset","value":null}]}]}]}]}}]`
-	omitted := `[{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"span","startTimeUnixNano":"1","endTimeUnixNano":"2","attributes":[{"key":"unset"}]}]}]}]}}]`
+	direct := `[{"signal":"traces","encoding":"json","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"span","startTimeUnixNano":"1","endTimeUnixNano":"2","attributes":[{"key":"unset","value":{"stringValue":null}}]}]}]}]}}]`
+	wrapped := `[{"signal":"traces","encoding":"protobuf","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"span","startTimeUnixNano":"1","endTimeUnixNano":"2","attributes":[{"key":"unset","value":{"value":null}}]}]}]}]}}]`
+	nullMessage := `[{"signal":"traces","encoding":"json","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"span","startTimeUnixNano":"1","endTimeUnixNano":"2","attributes":[{"key":"unset","value":null}]}]}]}]}}]`
+	omitted := `[{"signal":"traces","encoding":"json","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"span","startTimeUnixNano":"1","endTimeUnixNano":"2","attributes":[{"key":"unset"}]}]}]}]}}]`
 	a, b := DecodeCapture(ValidationReceipt{}, []byte(direct)), DecodeCapture(ValidationReceipt{}, []byte(wrapped))
 	c, d := DecodeCapture(ValidationReceipt{}, []byte(nullMessage)), DecodeCapture(ValidationReceipt{}, []byte(omitted))
 	if len(a.Diagnostics) > 0 || len(b.Diagnostics) > 0 || len(c.Diagnostics) > 0 || len(d.Diagnostics) > 0 || !reflect.DeepEqual(a, b) || !reflect.DeepEqual(c, d) {
@@ -66,8 +66,8 @@ func TestCaptureNormalizesNullAnyValueVariants(t *testing.T) {
 	}
 }
 func TestCapturePreservesKeyValueAroundWrappedAnyValue(t *testing.T) {
-	direct := `[{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"span","startTimeUnixNano":"1","endTimeUnixNano":"2","attributes":[{"value":{"stringValue":"x"}}]}]}]}]}}]`
-	wrapped := `[{"signal":"traces","payload":{"resource_spans":[{"scope_spans":[{"spans":[{"trace_id":"00000000000000000000000000000001","span_id":"0000000000000001","name":"span","start_time_unix_nano":"1","end_time_unix_nano":"2","attributes":[{"key":"","value":{"value":{"string_value":"x"}}}]}]}]}]}}]`
+	direct := `[{"signal":"traces","encoding":"json","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"span","startTimeUnixNano":"1","endTimeUnixNano":"2","attributes":[{"value":{"stringValue":"x"}}]}]}]}]}}]`
+	wrapped := `[{"signal":"traces","encoding":"protobuf","payload":{"resource_spans":[{"scope_spans":[{"spans":[{"trace_id":"00000000000000000000000000000001","span_id":"0000000000000001","name":"span","start_time_unix_nano":"1","end_time_unix_nano":"2","attributes":[{"key":"","value":{"value":{"string_value":"x"}}}]}]}]}]}}]`
 	a, b := DecodeCapture(ValidationReceipt{}, []byte(direct)), DecodeCapture(ValidationReceipt{}, []byte(wrapped))
 	if len(a.Diagnostics) > 0 || len(b.Diagnostics) > 0 || !reflect.DeepEqual(a, b) {
 		t.Fatalf("KeyValue AnyValue wrappers differ:\n%s\n%s", canonical(a), canonical(b))
@@ -92,6 +92,12 @@ func TestCaptureCanonicalizesAcceptedBase64Variants(t *testing.T) {
 func TestCaptureRejectsSinkInvalidJSONEncoding(t *testing.T) {
 	byteArray := captureSpan(1, 1, 0, "bytes")
 	byteArray["attributes"] = []any{map[string]any{"key": "bytes", "value": map[string]any{"bytesValue": []any{1, 2}}}}
+	wrapper := captureSpan(1, 1, 0, "wrapper")
+	wrapper["attributes"] = []any{map[string]any{"key": "wrapped", "value": map[string]any{"value": map[string]any{"stringValue": "x"}}}}
+	symbolicKind := captureSpan(1, 1, 0, "kind")
+	symbolicKind["kind"] = "SPAN_KIND_SERVER"
+	symbolicStatus := captureSpan(1, 1, 0, "status")
+	symbolicStatus["status"] = map[string]any{"code": "STATUS_CODE_OK"}
 
 	duplicate := bytes.Replace(
 		captureFixture(captureSpan(1, 1, 0, "valid")),
@@ -111,9 +117,12 @@ func TestCaptureRejectsSinkInvalidJSONEncoding(t *testing.T) {
 		raw  []byte
 		want string
 	}{
-		"protobuf byte array":   {captureFixture(byteArray), "unexpected JSON type"},
-		"duplicate object key":  {duplicate, "duplicate JSON key"},
-		"structural node limit": {captureFixture(oversized), "exceeds structural limit"},
+		"protobuf byte array":    {captureFixture(byteArray), "unexpected JSON type"},
+		"protobuf value wrapper": {captureFixture(wrapper), `invalid OTLP anyValue field "value"`},
+		"symbolic span kind":     {captureFixture(symbolicKind), "expected integer enum"},
+		"symbolic status code":   {captureFixture(symbolicStatus), "expected integer enum"},
+		"duplicate object key":   {duplicate, "duplicate JSON key"},
+		"structural node limit":  {captureFixture(oversized), "exceeds structural limit"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, test.raw)
@@ -599,6 +608,29 @@ func TestCaptureLargeLinkCyclePreservesInternalAdjacency(t *testing.T) {
 	plusTwo, plusThree := fixture(2), fixture(3)
 	if plusTwo.Spans[0].LinkTargets[0] == plusThree.Spans[0].LinkTargets[0] {
 		t.Fatalf("large component internal adjacency was lost: %q", plusTwo.Spans[0].LinkTargets[0])
+	}
+}
+func TestCaptureLargeLinkComponentIgnoresRecordOrder(t *testing.T) {
+	const count = 65
+	spans := make([]map[string]any, count)
+	reversed := make([]map[string]any, count)
+	for i := range spans {
+		span := captureSpan(i+1, 1, 0, fmt.Sprintf("span-%03d", i))
+		span["links"] = []any{map[string]any{"traceId": fmt.Sprintf("%032x", (i+1)%count+1), "spanId": fmt.Sprintf("%016x", 1)}}
+		spans[i] = span
+		reversed[count-1-i] = span
+	}
+	left := decodedFixture(t, "forward", spans...)
+	right := decodedFixture(t, "reversed", reversed...)
+	rightTargets := map[string]string{}
+	for _, span := range right.Spans {
+		rightTargets[str(span.Fields["name"])] = span.LinkTargets[0]
+	}
+	for _, span := range left.Spans {
+		name := str(span.Fields["name"])
+		if span.LinkTargets[0] != rightTargets[name] {
+			t.Fatalf("record order changed %s link target: %q != %q", name, span.LinkTargets[0], rightTargets[name])
+		}
 	}
 }
 func TestCaptureLargeLinkGraphStaysBounded(t *testing.T) {

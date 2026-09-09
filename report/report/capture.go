@@ -285,8 +285,13 @@ func normalizeWireContext(v any, context, encoding string) (any, error) {
 			case key == "body":
 				childContext = "anyValue"
 			}
-			if !allowedWireField(context, key) {
+			if !allowedWireField(context, key) || (context == "anyValue" && key == "value" && encoding != "protobuf") {
 				return nil, fmt.Errorf("invalid OTLP %s field %q", context, key)
+			}
+			if encoding == "json" && ((context == "span" && key == "kind") || (context == "status" && key == "code")) && c != nil {
+				if _, ok := c.(json.Number); !ok {
+					return nil, fmt.Errorf("invalid OTLP %s field %q: expected integer enum", context, key)
+				}
 			}
 			if c != nil && protocolStringField(context, key) {
 				if _, ok := c.(string); !ok {
@@ -1053,7 +1058,6 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 				componentState[component] = 2
 				return
 			}
-			adjacencyKey := digest([]byte(canonical(rootedCertificate(components[component][0]))))[:12]
 			descriptions := make([]string, 0, len(components[component]))
 			memberDescriptions := map[int]string{}
 			for _, member := range components[component] {
@@ -1075,6 +1079,15 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 				memberDescriptions[member] = canonical([]any{base[member], outgoing})
 				descriptions = append(descriptions, memberDescriptions[member])
 			}
+			root := components[component][0]
+			rootKey := canonical([]any{base[root], memberDescriptions[root]})
+			for _, member := range components[component][1:] {
+				candidate := canonical([]any{base[member], memberDescriptions[member]})
+				if candidate < rootKey {
+					root, rootKey = member, candidate
+				}
+			}
+			adjacencyKey := digest([]byte(canonical(rootedCertificate(root))))[:12]
 			sort.Strings(descriptions)
 			componentKeys[component] = digest([]byte(canonical([]any{descriptions, adjacencyKey})))[:12]
 			for _, member := range components[component] {
