@@ -422,22 +422,7 @@ func maximumWeightMaximumCardinalityPairs(leftCount, rightCount int, score func(
 		return matchedRight, usedRight
 	}
 	if leftCount+rightCount > optimalAssignmentVertexLimit {
-		for leftIndex := 0; leftIndex < leftCount; leftIndex++ {
-			bestRight, bestScore, found := -1, 0, false
-			for rightIndex := 0; rightIndex < rightCount; rightIndex++ {
-				if usedRight[rightIndex] {
-					continue
-				}
-				value, compatible := score(leftIndex, rightIndex)
-				if compatible && (!found || value > bestScore) {
-					bestRight, bestScore, found = rightIndex, value, true
-				}
-			}
-			if found {
-				matchedRight[leftIndex], usedRight[bestRight] = bestRight, true
-			}
-		}
-		return matchedRight, usedRight
+		return linearMemoryMaximumCardinalityPairs(leftCount, rightCount, score)
 	}
 	scores := make([][]int, leftCount)
 	compatible := make([][]bool, leftCount)
@@ -487,6 +472,99 @@ func maximumWeightMaximumCardinalityPairs(leftCount, rightCount int, score func(
 		}
 	}
 	return matchedRight, usedRight
+}
+
+// linearMemoryMaximumCardinalityPairs uses Hopcroft-Karp while discovering
+// edges through the scorer. It retains maximum cardinality without storing a
+// potentially quadratic compatibility graph, then applies score-improving
+// swaps that cannot reduce the number of matches.
+func linearMemoryMaximumCardinalityPairs(leftCount, rightCount int, score func(int, int) (int, bool)) ([]int, []bool) {
+	leftToRight := make([]int, leftCount)
+	rightToLeft := make([]int, rightCount)
+	for i := range leftToRight {
+		leftToRight[i] = -1
+	}
+	for i := range rightToLeft {
+		rightToLeft[i] = -1
+	}
+	distance := make([]int, leftCount)
+	for {
+		queue := []int{}
+		for left := range leftCount {
+			if leftToRight[left] < 0 {
+				distance[left] = 0
+				queue = append(queue, left)
+			} else {
+				distance[left] = -1
+			}
+		}
+		found := false
+		for head := 0; head < len(queue); head++ {
+			left := queue[head]
+			for right := range rightCount {
+				if _, compatible := score(left, right); !compatible {
+					continue
+				}
+				matchedLeft := rightToLeft[right]
+				if matchedLeft < 0 {
+					found = true
+				} else if distance[matchedLeft] < 0 {
+					distance[matchedLeft] = distance[left] + 1
+					queue = append(queue, matchedLeft)
+				}
+			}
+		}
+		if !found {
+			break
+		}
+		nextRight := make([]int, leftCount)
+		var augment func(int) bool
+		augment = func(left int) bool {
+			for right := nextRight[left]; right < rightCount; right = nextRight[left] {
+				nextRight[left] = right + 1
+				if _, compatible := score(left, right); !compatible {
+					continue
+				}
+				matchedLeft := rightToLeft[right]
+				if matchedLeft < 0 || (distance[matchedLeft] == distance[left]+1 && augment(matchedLeft)) {
+					leftToRight[left], rightToLeft[right] = right, left
+					return true
+				}
+			}
+			distance[left] = -1
+			return false
+		}
+		for left := range leftCount {
+			if leftToRight[left] < 0 {
+				augment(left)
+			}
+		}
+	}
+	// Prefer higher total detail scores through cardinality-preserving pair
+	// swaps. The maximum-cardinality matching above remains intact.
+	for left := 0; left < leftCount; left++ {
+		for other := left + 1; other < leftCount; other++ {
+			right, otherRight := leftToRight[left], leftToRight[other]
+			if right < 0 || otherRight < 0 {
+				continue
+			}
+			current, currentOK := score(left, right)
+			otherCurrent, otherCurrentOK := score(other, otherRight)
+			cross, crossOK := score(left, otherRight)
+			otherCross, otherCrossOK := score(other, right)
+			if currentOK && otherCurrentOK && crossOK && otherCrossOK && cross+otherCross > current+otherCurrent {
+				leftToRight[left], leftToRight[other] = otherRight, right
+				rightToLeft[right], rightToLeft[otherRight] = other, left
+			}
+		}
+	}
+	usedRight := make([]bool, rightCount)
+	for _, right := range leftToRight {
+		if right >= 0 {
+			usedRight[right] = true
+		}
+	}
+	return leftToRight, usedRight
 }
 
 func maximumCardinalityPairs(left, right []alignedSpan, score func(alignedSpan, alignedSpan) int) ([]int, []bool) {

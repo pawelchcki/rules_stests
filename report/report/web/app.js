@@ -254,9 +254,14 @@ function otherProfileWithShape(profile, scenario) {
   return fallback ? fallback.profile : profile;
 }
 
+function usableCapture(profile, scenario) {
+  const capture = captureByKey.get(profile + '/' + scenario);
+  return capture && !(capture.diagnostics || []).length;
+}
+
 function otherProfileForCapture(profile, scenario) {
   for (const manifest of data.manifests) {
-    if (manifest.profile !== profile && captureByKey.has(manifest.profile + '/' + scenario)) return manifest.profile;
+    if (manifest.profile !== profile && usableCapture(manifest.profile, scenario)) return manifest.profile;
   }
   for (const manifest of data.manifests) {
     if (manifest.profile !== profile && receiptFor(manifest.profile, scenario)) return manifest.profile;
@@ -273,7 +278,7 @@ function renderCoverageGrid() {
     data.scenarios.map((scenario) => {
       const state = coverageState(selectedProfile, scenario);
       const receipt = receiptFor(selectedProfile, scenario);
-      const params = new URLSearchParams({ left: selectedProfile, right: otherProfileWithShape(selectedProfile, scenario), scenario });
+      const params = new URLSearchParams({ profile: selectedProfile, left: selectedProfile, right: otherProfileWithShape(selectedProfile, scenario), scenario });
       return '<tr><th scope="row">' + esc(scenario) + '</th><td>' + badge('coverage', state) +
         (state === 'exact_shape' ? '<a class="evidence" href="#compare?' + params + '">Compare saved trace expectations</a>' : '') +
         '</td><td>' + (state === 'excluded' ? 'Not in this test suite' : badge('receipt', receipt ? receipt.outcome : 'missing')) +
@@ -853,6 +858,9 @@ function parityLink(extra={}) {
   return '#parity?'+params;
 }
 function parityPeer(profile, scenario) {
+  for (const candidate of [$('left').value, $('right').value, ...data.manifests.map(m => m.profile)]) {
+    if (candidate !== profile && usableCapture(candidate, scenario)) return candidate;
+  }
   for (const candidate of [$('left').value, $('right').value, ...data.manifests.map(m => m.profile)]) {
     if (candidate !== profile && captureByKey.has(candidate + '/' + scenario)) return candidate;
   }

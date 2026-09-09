@@ -18,10 +18,10 @@ const path = require('node:path');
   const capturedPeer=await page.evaluate(()=>{
     const unavailable={...data.manifests[0],profile:'unavailable'};
     const option=document.createElement('option');option.value='unavailable';option.textContent='Unavailable';
-    data.manifests.splice(1,0,unavailable);manifestByProfile.set('unavailable',unavailable);shapeByKey.set('unavailable case',{});
+    data.manifests.splice(1,0,unavailable);manifestByProfile.set('unavailable',unavailable);shapeByKey.set('unavailable case',{});captureByKey.set('unavailable/case',{diagnostics:['unreadable']});
     $('left').append(option);$('left').value='unavailable';$('right').value='python';
     const selected={receipt:otherProfileForCapture('go','case'),overview:parityPeer('go','case')};
-    data.manifests.splice(1,1);manifestByProfile.delete('unavailable');shapeByKey.delete('unavailable case');option.remove();$('left').value='go';
+    data.manifests.splice(1,1);manifestByProfile.delete('unavailable');shapeByKey.delete('unavailable case');captureByKey.delete('unavailable/case');option.remove();$('left').value='go';
     return selected;
   });
   assert.deepEqual(capturedPeer,{receipt:'python',overview:'python'},'parity links must prefer a captured peer');
@@ -92,6 +92,8 @@ const path = require('node:path');
   await route('#compare?left=go&right=python&scenario=case');assert.equal(await page.inputValue('#comparison-source'),'saved');
   await page.click('nav a[href*="#health"]');await page.waitForTimeout(100);await page.click('nav a[href*="#parity"]');await page.waitForTimeout(100);assert.equal(await page.inputValue('#comparison-source'),'saved');
   await route('#coverage?profile=python');assert.equal(await page.locator('#compare').isVisible(),true);assert.equal(await page.locator('#coverage').getAttribute('open'),'');
+  const savedProfileLink=await page.evaluate(()=>{const cell=coverageByKey.get('python case'),state=cell.state;cell.state='exact_shape';renderCoverageGrid();const href=document.querySelector('#coverage-grid a.evidence').getAttribute('href');cell.state=state;return href;});
+  assert.match(savedProfileLink,/profile=python/);
   await route('#overview?profile=python&verification=verified');assert.equal(await page.locator('#features').isVisible(),true);assert.equal(await page.inputValue('#verification'),'verified');
   await route('#health?profile=python&feature=traces.span.create-root-span');assert.equal(await page.locator('[data-feature][open]').count(),1);
   // Semantic comparison must ignore only protocol identities/timestamps, retain

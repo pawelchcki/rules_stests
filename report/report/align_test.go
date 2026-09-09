@@ -50,6 +50,27 @@ func TestLargeTraceAlignmentUsesBoundedPairing(t *testing.T) {
 	}
 }
 
+func TestLargePairingPreservesMaximumCardinality(t *testing.T) {
+	count := optimalAssignmentVertexLimit/2 + 1
+	matched, _ := maximumWeightMaximumCardinalityPairs(count, count, func(left, right int) (int, bool) {
+		switch {
+		case left == 0 && right == 0:
+			return 10, true
+		case left == 0 && right == 1:
+			return 9, true
+		case left == 1 && right == 0:
+			return 1, true
+		default:
+			return 1, left == right
+		}
+	})
+	for left, right := range matched {
+		if right < 0 {
+			t.Fatalf("large maximum-cardinality pairing left %d unmatched: %v", left, matched)
+		}
+	}
+}
+
 func TestNormalizeSpanNameCollapsesRouteParameters(t *testing.T) {
 	tests := map[string]string{
 		"GET /api/articles/<slug>":    "get api/articles/*",
