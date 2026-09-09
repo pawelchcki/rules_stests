@@ -975,7 +975,7 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 					} else {
 						edge.relationship = "captured in another trace"
 					}
-				} else {
+				} else if validTarget {
 					externalIncoming[targetKey] = append(externalIncoming[targetKey], canonical([]any{base[i], linkIndex, edge.relationship}))
 				}
 				edges[i] = append(edges[i], edge)

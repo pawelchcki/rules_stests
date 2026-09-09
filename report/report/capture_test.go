@@ -343,6 +343,19 @@ func TestCaptureDoesNotShareUnidentifiedLinkTargets(t *testing.T) {
 		}
 	}
 }
+func TestCaptureUnidentifiedLinksDoNotPerturbValidTargets(t *testing.T) {
+	target := captureSpan(1, 1, 0, "target")
+	target["links"] = []any{map[string]any{}}
+	source := captureSpan(2, 1, 0, "source")
+	source["links"] = []any{map[string]any{"traceId": fmt.Sprintf("%032x", 1), "spanId": fmt.Sprintf("%016x", 1)}}
+	unrelated := captureSpan(3, 1, 0, "unrelated")
+	unrelated["links"] = []any{map[string]any{}}
+	baseline := decodedFixture(t, "baseline unidentified link", target, source)
+	extended := decodedFixture(t, "unrelated unidentified link", target, source, unrelated)
+	if baseline.Spans[1].LinkTargets[0] != extended.Spans[1].LinkTargets[0] {
+		t.Fatalf("unrelated missing link changed a valid target: %q != %q", baseline.Spans[1].LinkTargets[0], extended.Spans[1].LinkTargets[0])
+	}
+}
 func TestCaptureRepresentsZeroTelemetry(t *testing.T) {
 	for name, raw := range map[string][]byte{
 		"empty traces":   []byte(`[{"signal":"traces","encoding":"json","payload":{"resourceSpans":[]}}]`),
