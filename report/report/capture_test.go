@@ -227,6 +227,14 @@ func TestCaptureRejectsSinkInvalidSpanFields(t *testing.T) {
 		"unknown span field": fixture(func(span map[string]any) {
 			span["nmae"] = "typo"
 		}),
+		"repeated underscore alias": fixture(func(span map[string]any) {
+			span["trace__id"] = span["traceId"]
+			delete(span, "traceId")
+		}),
+		"trailing underscore alias": fixture(func(span map[string]any) {
+			span["span_id_"] = span["spanId"]
+			delete(span, "spanId")
+		}),
 		"numeric status message": fixture(func(span map[string]any) {
 			span["status"] = map[string]any{"message": 7}
 		}),
@@ -251,6 +259,12 @@ func TestCaptureRejectsSinkInvalidSpanFields(t *testing.T) {
 		}),
 		"signed infinity": fixture(func(span map[string]any) {
 			span["attributes"] = []any{map[string]any{"key": "invalid", "value": map[string]any{"doubleValue": "+Inf"}}}
+		}),
+		"hexadecimal float": fixture(func(span map[string]any) {
+			span["attributes"] = []any{map[string]any{"key": "invalid", "value": map[string]any{"doubleValue": "0x1p2"}}}
+		}),
+		"underscored float": fixture(func(span map[string]any) {
+			span["attributes"] = []any{map[string]any{"key": "invalid", "value": map[string]any{"doubleValue": "1_0"}}}
 		}),
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -295,6 +309,25 @@ func TestCaptureRejectsCollidingWireFieldSpellings(t *testing.T) {
 		if len(d.Diagnostics) != 1 || !strings.Contains(d.Diagnostics[0], "duplicate OTLP JSON field spellings") {
 			t.Fatalf("wire-field collision was not deterministic: %+v", d)
 		}
+	}
+}
+func TestCaptureRejectsMalformedTopLevelWireAlias(t *testing.T) {
+	raw := bytes.Replace(captureFixture(captureSpan(1, 1, 0, "span")), []byte(`"resourceSpans"`), []byte(`"resource__spans"`), 1)
+	d := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, raw)
+	if len(d.Diagnostics) != 1 || len(d.Shape.Traces) != 0 {
+		t.Fatalf("malformed resourceSpans alias entered topology: %+v", d)
+	}
+}
+func TestCaptureRetainsSinkAcceptedEntityReferenceKeys(t *testing.T) {
+	raw := bytes.Replace(
+		captureFixture(captureSpan(1, 1, 0, "span")),
+		[]byte(`"resource":{"attributes"`),
+		[]byte(`"resource":{"entityRefs":[{"idKeys":[7],"descriptionKeys":9}],"attributes"`),
+		1,
+	)
+	d := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, raw)
+	if len(d.Diagnostics) != 0 || len(d.Shape.Traces) != 1 || !strings.Contains(canonical(d.Resources), `"idKeys":["7"]`) || !strings.Contains(canonical(d.Resources), `"descriptionKeys":"9"`) {
+		t.Fatalf("sink-accepted entity reference keys were discarded: %+v", d)
 	}
 }
 func TestCaptureRejectsMultipleExplicitRoots(t *testing.T) {

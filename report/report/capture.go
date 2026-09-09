@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"math/big"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -121,6 +122,31 @@ func allowedWireField(context, key string) bool {
 	return false
 }
 
+func snakeWireField(field string) string {
+	var out strings.Builder
+	for _, character := range field {
+		if character >= 'A' && character <= 'Z' {
+			out.WriteByte('_')
+			character += 'a' - 'A'
+		}
+		out.WriteRune(character)
+	}
+	return out.String()
+}
+
+func canonicalWireField(context, spelling string) (string, bool) {
+	fields, known := allowedWireFields[context]
+	if !known {
+		return spelling, true
+	}
+	for _, field := range fields {
+		if spelling == field || spelling == snakeWireField(field) {
+			return field, true
+		}
+	}
+	return "", false
+}
+
 func protocolStringField(context, key string) bool {
 	switch context {
 	case "resourceSpan", "scopeSpan":
@@ -151,8 +177,6 @@ func protocolArrayField(context, key string) bool {
 		return key == "scopeSpans"
 	case "resource":
 		return key == "attributes" || key == "entityRefs"
-	case "entityRef":
-		return key == "idKeys" || key == "descriptionKeys"
 	case "scopeSpan":
 		return key == "spans"
 	case "scope", "spanEvent", "spanLink":
@@ -185,6 +209,8 @@ func canonicalBytes(value string) (string, bool) {
 	return "", false
 }
 
+var decimalFloat = regexp.MustCompile(`^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$`)
+
 func normalizeWireContext(v any, context, encoding string) (any, error) {
 	switch v := v.(type) {
 	case json.Number:
@@ -214,11 +240,6 @@ func normalizeWireContext(v any, context, encoding string) (any, error) {
 			childContext = "keyValue"
 		}
 		for i, c := range v {
-			if (context == "idKeys" || context == "descriptionKeys") && c != nil {
-				if _, ok := c.(string); !ok {
-					return nil, fmt.Errorf("invalid OTLP entity reference key: expected string")
-				}
-			}
 			if childContext != "" {
 				if _, ok := c.(map[string]any); !ok {
 					return nil, fmt.Errorf("invalid OTLP %s element: expected object", context)
@@ -234,12 +255,9 @@ func normalizeWireContext(v any, context, encoding string) (any, error) {
 	case map[string]any:
 		out := map[string]any{}
 		for k, c := range v {
-			parts := strings.Split(k, "_")
-			key := parts[0]
-			for _, p := range parts[1:] {
-				if p != "" {
-					key += strings.ToUpper(p[:1]) + p[1:]
-				}
+			key, validSpelling := canonicalWireField(context, k)
+			if !validSpelling {
+				return nil, fmt.Errorf("invalid OTLP %s field %q", context, k)
 			}
 			if _, exists := out[key]; exists {
 				return nil, fmt.Errorf("duplicate OTLP JSON field spellings for %q", key)
@@ -399,6 +417,9 @@ func normalizeWireContext(v any, context, encoding string) (any, error) {
 			if scalar == "NaN" || scalar == "Infinity" || scalar == "-Infinity" {
 				out["doubleValue"] = scalar
 			} else {
+				if !decimalFloat.MatchString(scalar) {
+					return nil, fmt.Errorf("invalid OTLP double AnyValue")
+				}
 				number, err := strconv.ParseFloat(scalar, 64)
 				if err != nil || math.IsNaN(number) || math.IsInf(number, 0) {
 					return nil, fmt.Errorf("invalid OTLP double AnyValue")
