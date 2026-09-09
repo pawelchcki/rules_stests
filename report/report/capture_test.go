@@ -541,6 +541,24 @@ func TestCaptureLinkCyclePreservesInternalAdjacency(t *testing.T) {
 		t.Fatalf("distinct internal cycle adjacency was lost: %q", forwardOnly.Spans[0].LinkTargets[0])
 	}
 }
+func TestCaptureLargeLinkCyclePreservesInternalAdjacency(t *testing.T) {
+	const count = 65
+	fixture := func(secondOffset int) CaptureDataset {
+		spans := make([]map[string]any, count)
+		for i := range spans {
+			spans[i] = captureSpan(i+1, 1, 0, "identical")
+			spans[i]["links"] = []any{
+				map[string]any{"traceId": fmt.Sprintf("%032x", (i+1)%count+1), "spanId": fmt.Sprintf("%016x", 1)},
+				map[string]any{"traceId": fmt.Sprintf("%032x", (i+secondOffset)%count+1), "spanId": fmt.Sprintf("%016x", 1)},
+			}
+		}
+		return decodedFixture(t, "large cycle", spans...)
+	}
+	plusTwo, plusThree := fixture(2), fixture(3)
+	if plusTwo.Spans[0].LinkTargets[0] == plusThree.Spans[0].LinkTargets[0] {
+		t.Fatalf("large component internal adjacency was lost: %q", plusTwo.Spans[0].LinkTargets[0])
+	}
+}
 func TestCaptureLargeLinkGraphStaysBounded(t *testing.T) {
 	const count = 4096
 	spans := make([]map[string]any, 0, count)

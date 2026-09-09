@@ -853,10 +853,44 @@ func choosePairedTraceCandidates(leftGroups, rightGroups []TraceGroup) ([]resolv
 	left := canonicalTraceCandidates(leftGroups)
 	right := canonicalTraceCandidates(rightGroups)
 	if len(leftGroups)+len(rightGroups) > optimalAssignmentVertexLimit {
-		matchedRight, _ := maximumWeightMaximumCardinalityPairs(len(leftGroups), len(rightGroups), func(leftIndex, rightIndex int) (int, bool) {
-			choice, compatible := bestShallowTracePair(leftIndex, leftGroups[leftIndex], rightIndex, rightGroups[rightIndex])
+		matchedRight := make([]int, len(leftGroups))
+		usedRight := make([]bool, len(rightGroups))
+		for i := range matchedRight {
+			matchedRight[i] = -1
+		}
+		rightByKey := map[string][]int{}
+		for rightIndex, candidate := range right {
+			key := canonicalTraceKey(candidate)
+			rightByKey[key] = append(rightByKey[key], rightIndex)
+		}
+		remainingLeft := []int{}
+		for leftIndex, candidate := range left {
+			key := canonicalTraceKey(candidate)
+			matches := rightByKey[key]
+			if len(matches) == 0 {
+				remainingLeft = append(remainingLeft, leftIndex)
+				continue
+			}
+			rightIndex := matches[0]
+			rightByKey[key] = matches[1:]
+			matchedRight[leftIndex], usedRight[rightIndex] = rightIndex, true
+		}
+		remainingRight := []int{}
+		for rightIndex := range right {
+			if !usedRight[rightIndex] {
+				remainingRight = append(remainingRight, rightIndex)
+			}
+		}
+		remainingMatches, _ := maximumWeightMaximumCardinalityPairs(len(remainingLeft), len(remainingRight), func(leftIndex, rightIndex int) (int, bool) {
+			resolvedLeft, resolvedRight := remainingLeft[leftIndex], remainingRight[rightIndex]
+			choice, compatible := bestShallowTracePair(resolvedLeft, leftGroups[resolvedLeft], resolvedRight, rightGroups[resolvedRight])
 			return choice.score, compatible
 		})
+		for leftIndex, rightIndex := range remainingMatches {
+			if rightIndex >= 0 {
+				matchedRight[remainingLeft[leftIndex]] = remainingRight[rightIndex]
+			}
+		}
 		for leftIndex, rightIndex := range matchedRight {
 			if rightIndex >= 0 {
 				choice, _ := bestTracePair(leftIndex, leftGroups[leftIndex], rightIndex, rightGroups[rightIndex])
@@ -937,10 +971,47 @@ func traceMatchScore(left, right resolvedTrace) (int, bool) {
 }
 
 func maximumCardinalityTracePairs(left, right []resolvedTrace) ([]int, []bool) {
-	return maximumWeightMaximumCardinalityPairs(len(left), len(right), func(leftIndex, rightIndex int) (int, bool) {
-		if len(left)+len(right) > optimalAssignmentVertexLimit {
-			return shallowTraceMatchScore(left[leftIndex], right[rightIndex])
+	if len(left)+len(right) > optimalAssignmentVertexLimit {
+		matchedRight := make([]int, len(left))
+		usedRight := make([]bool, len(right))
+		for i := range matchedRight {
+			matchedRight[i] = -1
 		}
+		rightByKey := map[string][]int{}
+		for rightIndex, candidate := range right {
+			key := canonicalTraceKey(candidate)
+			rightByKey[key] = append(rightByKey[key], rightIndex)
+		}
+		remainingLeft := []int{}
+		for leftIndex, candidate := range left {
+			key := canonicalTraceKey(candidate)
+			matches := rightByKey[key]
+			if len(matches) == 0 {
+				remainingLeft = append(remainingLeft, leftIndex)
+				continue
+			}
+			rightIndex := matches[0]
+			rightByKey[key] = matches[1:]
+			matchedRight[leftIndex], usedRight[rightIndex] = rightIndex, true
+		}
+		remainingRight := []int{}
+		for rightIndex := range right {
+			if !usedRight[rightIndex] {
+				remainingRight = append(remainingRight, rightIndex)
+			}
+		}
+		remainingMatches, _ := linearMemoryMaximumCardinalityPairs(len(remainingLeft), len(remainingRight), func(leftIndex, rightIndex int) (int, bool) {
+			return shallowTraceMatchScore(left[remainingLeft[leftIndex]], right[remainingRight[rightIndex]])
+		})
+		for leftIndex, rightIndex := range remainingMatches {
+			if rightIndex >= 0 {
+				resolvedLeft, resolvedRight := remainingLeft[leftIndex], remainingRight[rightIndex]
+				matchedRight[resolvedLeft], usedRight[resolvedRight] = resolvedRight, true
+			}
+		}
+		return matchedRight, usedRight
+	}
+	return maximumWeightMaximumCardinalityPairs(len(left), len(right), func(leftIndex, rightIndex int) (int, bool) {
 		return traceMatchScore(left[leftIndex], right[rightIndex])
 	})
 }

@@ -932,40 +932,44 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 					}
 				}
 			}
-			// Small components get the exact cycle-safe rooted certificate.
-			// Bounding this work keeps total capture cost linear even when an
-			// exporter submits one enormous strongly connected link graph.
+			rootedCertificate := func(root int) any {
+				visited := map[int]int{}
+				var visit func(int) any
+				visit = func(member int) any {
+					if reference, ok := visited[member]; ok {
+						return map[string]any{"reference": reference}
+					}
+					visited[member] = len(visited)
+					outgoing := make([]any, 0, len(edges[member]))
+					for _, edge := range edges[member] {
+						descriptor := map[string]any{"relationship": edge.relationship}
+						if edge.target < 0 {
+							descriptor["externalTarget"] = externalLabels[edge.external]
+						} else if componentOf[edge.target] == component {
+							descriptor["target"] = visit(edge.target)
+						} else {
+							descriptor["target"] = keys[edge.target]
+						}
+						if edge.shared != "" {
+							descriptor["sharedTarget"] = edge.shared
+						}
+						outgoing = append(outgoing, descriptor)
+					}
+					return map[string]any{"occurrence": base[member], "links": outgoing}
+				}
+				return visit(root)
+			}
+			// Small components retain a rooted certificate for every member.
+			// Large components retain one complete adjacency certificate in
+			// their shared label, avoiding the former per-root quadratic work.
 			if len(components[component]) <= 64 {
 				for _, root := range components[component] {
-					visited := map[int]int{}
-					var visit func(int) any
-					visit = func(member int) any {
-						if reference, ok := visited[member]; ok {
-							return map[string]any{"reference": reference}
-						}
-						visited[member] = len(visited)
-						outgoing := make([]any, 0, len(edges[member]))
-						for _, edge := range edges[member] {
-							descriptor := map[string]any{"relationship": edge.relationship}
-							if edge.target < 0 {
-								descriptor["externalTarget"] = externalLabels[edge.external]
-							} else if componentOf[edge.target] == component {
-								descriptor["target"] = visit(edge.target)
-							} else {
-								descriptor["target"] = keys[edge.target]
-							}
-							if edge.shared != "" {
-								descriptor["sharedTarget"] = edge.shared
-							}
-							outgoing = append(outgoing, descriptor)
-						}
-						return map[string]any{"occurrence": base[member], "links": outgoing}
-					}
-					keys[root] = digest([]byte(canonical(visit(root))))[:12]
+					keys[root] = digest([]byte(canonical(rootedCertificate(root))))[:12]
 				}
 				componentState[component] = 2
 				return
 			}
+			adjacencyKey := digest([]byte(canonical(rootedCertificate(components[component][0]))))[:12]
 			descriptions := make([]string, 0, len(components[component]))
 			memberDescriptions := map[int]string{}
 			for _, member := range components[component] {
@@ -988,7 +992,7 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 				descriptions = append(descriptions, memberDescriptions[member])
 			}
 			sort.Strings(descriptions)
-			componentKeys[component] = digest([]byte(canonical(descriptions)))[:12]
+			componentKeys[component] = digest([]byte(canonical([]any{descriptions, adjacencyKey})))[:12]
 			for _, member := range components[component] {
 				keys[member] = digest([]byte(canonical([]any{memberDescriptions[member], componentKeys[component]})))[:12]
 			}

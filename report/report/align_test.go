@@ -50,6 +50,21 @@ func TestLargeTraceAlignmentUsesBoundedPairing(t *testing.T) {
 	}
 }
 
+func TestLargeTraceAlignmentUsesDescendantStructure(t *testing.T) {
+	const count = optimalAssignmentVertexLimit/2 + 1
+	left := &ScenarioShape{ExactCounts: true}
+	right := &ScenarioShape{ExactCounts: true}
+	for i := 0; i < count; i++ {
+		group := TraceGroup{Count: 1, ExactCount: true, Coverage: "complete", Roots: []SpanGroup{exactSpan("", "server", "", "root", "", exactSpan("", "client", "", fmt.Sprintf("child-%03d", i), ""))}}
+		left.Traces = append(left.Traces, group)
+		right.Traces = append([]TraceGroup{group}, right.Traces...)
+	}
+	alignment := AlignShapes(left, right)
+	if alignment.Summary.TraceMatched != count || alignment.Summary.TraceLeftOnly != 0 || alignment.Summary.TraceRightOnly != 0 || alignment.Summary.Differing != 0 || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 {
+		t.Fatalf("large reordered traces ignored descendant structure: %#v", alignment.Summary)
+	}
+}
+
 func TestLargePairingPreservesMaximumCardinality(t *testing.T) {
 	count := optimalAssignmentVertexLimit/2 + 1
 	matched, _ := maximumWeightMaximumCardinalityPairs(count, count, func(left, right int) (int, bool) {
