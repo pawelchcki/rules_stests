@@ -61,6 +61,7 @@ type alignedSpan struct {
 	children    []alignedSpan
 	childGroups []SpanGroup
 	keyString   string
+	childKey    string
 }
 
 func spanKey(node SpanNode) string {
@@ -210,6 +211,7 @@ func resolveSpanGroup(group SpanGroup) []alignedSpan {
 	span.card = formatCard(minCount, maxCount, group.ExactCount, 0)
 	span.childGroups = group.Span.Children
 	span.children = canonicalSpanCandidates(group.Span.Children)
+	span.childKey = canonicalChildrenKey(span)
 	return []alignedSpan{span}
 }
 
@@ -287,6 +289,9 @@ func bestShallowSpanPair(leftGroup, rightGroup SpanGroup) (spanPairChoice, bool)
 			score := shallowAlignedSpanMatchScore(left, right)
 			if score < 0 {
 				continue
+			}
+			if left.childKey == right.childKey {
+				score += 1000
 			}
 			key := canonicalSpanKey(left) + "\x1c" + canonicalSpanKey(right)
 			if !found || score > best.score || (score == best.score && key < bestKey) {
@@ -592,13 +597,59 @@ func linearMemoryMaximumCardinalityPairs(leftCount, rightCount int, score func(i
 }
 
 func maximumCardinalityPairs(left, right []alignedSpan, score func(alignedSpan, alignedSpan) int) ([]int, []bool) {
-	if len(left)+len(right) > optimalAssignmentVertexLimit {
-		score = shallowAlignedSpanMatchScore
+	if len(left)+len(right) <= optimalAssignmentVertexLimit {
+		return maximumWeightMaximumCardinalityPairs(len(left), len(right), func(leftIndex, rightIndex int) (int, bool) {
+			value := score(left[leftIndex], right[rightIndex])
+			return value, value >= 0
+		})
 	}
-	return maximumWeightMaximumCardinalityPairs(len(left), len(right), func(leftIndex, rightIndex int) (int, bool) {
-		value := score(left[leftIndex], right[rightIndex])
+	// Lock byte-for-byte equivalent subtrees through a canonical-key index
+	// before the linear-memory fallback. This keeps reordered large sibling
+	// lists child-aware without evaluating recursive pair scores quadratically.
+	matchedRight := make([]int, len(left))
+	usedRight := make([]bool, len(right))
+	for i := range matchedRight {
+		matchedRight[i] = -1
+	}
+	rightByKey := map[string][]int{}
+	for rightIndex, candidate := range right {
+		key := canonicalSpanKey(candidate)
+		rightByKey[key] = append(rightByKey[key], rightIndex)
+	}
+	remainingLeft := []int{}
+	for leftIndex, candidate := range left {
+		key := canonicalSpanKey(candidate)
+		matches := rightByKey[key]
+		if len(matches) == 0 {
+			remainingLeft = append(remainingLeft, leftIndex)
+			continue
+		}
+		rightIndex := matches[0]
+		rightByKey[key] = matches[1:]
+		matchedRight[leftIndex], usedRight[rightIndex] = rightIndex, true
+	}
+	remainingRight := []int{}
+	for rightIndex := range right {
+		if !usedRight[rightIndex] {
+			remainingRight = append(remainingRight, rightIndex)
+		}
+	}
+	remainingMatches, _ := linearMemoryMaximumCardinalityPairs(len(remainingLeft), len(remainingRight), func(leftIndex, rightIndex int) (int, bool) {
+		leftCandidate := left[remainingLeft[leftIndex]]
+		rightCandidate := right[remainingRight[rightIndex]]
+		value := shallowAlignedSpanMatchScore(leftCandidate, rightCandidate)
+		if value >= 0 && leftCandidate.childKey == rightCandidate.childKey {
+			value += 1000
+		}
 		return value, value >= 0
 	})
+	for leftIndex, rightIndex := range remainingMatches {
+		if rightIndex >= 0 {
+			resolvedLeft, resolvedRight := remainingLeft[leftIndex], remainingRight[rightIndex]
+			matchedRight[resolvedLeft], usedRight[resolvedRight] = resolvedRight, true
+		}
+	}
+	return matchedRight, usedRight
 }
 
 func resolvePairedChildren(left, right alignedSpan) ([]alignedSpan, []alignedSpan) {

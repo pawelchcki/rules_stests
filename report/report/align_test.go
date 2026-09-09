@@ -71,6 +71,29 @@ func TestLargePairingPreservesMaximumCardinality(t *testing.T) {
 	}
 }
 
+func TestLargeSiblingAlignmentUsesChildStructure(t *testing.T) {
+	const count = optimalAssignmentVertexLimit/2 + 1
+	leftParents := make([]SpanGroup, 0, count)
+	rightParents := make([]SpanGroup, 0, count)
+	for i := 0; i < count; i++ {
+		parent := exactSpan("", "internal", "", "parent", "", exactSpan("", "client", "", fmt.Sprintf("child-%03d", i), ""))
+		leftParents = append(leftParents, parent)
+		rightParents = append([]SpanGroup{parent}, rightParents...)
+	}
+	root := func(children []SpanGroup) *ScenarioShape {
+		return shapeOf("profile", exactSpan("", "server", "", "root", "", children...))
+	}
+	exact, _ := bestShallowSpanPair(leftParents[0], rightParents[count-1])
+	mismatch, _ := bestShallowSpanPair(leftParents[0], rightParents[0])
+	if exact.score <= mismatch.score {
+		t.Fatalf("child-aware shallow score did not prefer exact subtree: %d <= %d", exact.score, mismatch.score)
+	}
+	alignment := AlignShapes(root(leftParents), root(rightParents))
+	if alignment.Summary.Differing != 0 || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 || alignment.Summary.Matched != 1+count*2 {
+		t.Fatalf("large reordered parents ignored child structure: %#v", alignment.Summary)
+	}
+}
+
 func TestNormalizeSpanNameCollapsesRouteParameters(t *testing.T) {
 	tests := map[string]string{
 		"GET /api/articles/<slug>":    "get api/articles/*",
