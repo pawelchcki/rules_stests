@@ -10,9 +10,15 @@ import (
 )
 
 type object = map[string]any
+type metricStream struct {
+	Metric                 object
+	Resource, Scope        object
+	ResourceSchema, Schema string
+}
 type capture struct {
 	Records                         []object
 	Spans, Logs, Metrics, Resources []object
+	MetricStreams                   []metricStream
 }
 
 // The sink preserves both protobuf's snake_case and OTLP JSON's camelCase.
@@ -64,19 +70,53 @@ func decodeCapture(data []byte) (capture, error) {
 	c := capture{Records: records}
 	for _, r := range records {
 		p := field(r, "payload")
-		switch field(r, "signal") {
+		signal, _ := field(r, "signal").(string)
+		switch signal {
 		case "traces":
 			c.Spans = append(c.Spans, objects(p, "spans")...)
 		case "logs":
 			c.Logs = append(c.Logs, objects(p, "log_records")...)
 		case "metrics":
-			c.Metrics = append(c.Metrics, objects(p, "metrics")...)
+			streams := metricStreams(p)
+			c.MetricStreams = append(c.MetricStreams, streams...)
+			for _, stream := range streams {
+				c.Metrics = append(c.Metrics, stream.Metric)
+			}
 		default:
-			return capture{}, fmt.Errorf("unknown signal %v", field(r, "signal"))
+			return capture{}, fmt.Errorf("unknown signal %v", signal)
 		}
-		c.Resources = append(c.Resources, objects(p, "resource")...)
+		c.Resources = append(c.Resources, signalResources(p, signal)...)
 	}
 	return c, nil
+}
+
+func signalResources(payload any, signal string) []object {
+	container := map[string]string{"traces": "resource_spans", "logs": "resource_logs", "metrics": "resource_metrics"}[signal]
+	var resources []object
+	for _, envelope := range objects(payload, container) {
+		resource, _ := field(envelope, "resource").(map[string]any)
+		if resource == nil {
+			resource = object{}
+		}
+		resources = append(resources, resource)
+	}
+	return resources
+}
+
+func metricStreams(payload any) []metricStream {
+	var streams []metricStream
+	for _, resourceMetrics := range objects(payload, "resource_metrics") {
+		resource, _ := field(resourceMetrics, "resource").(map[string]any)
+		resourceSchema, _ := field(resourceMetrics, "schema_url").(string)
+		for _, scopeMetrics := range objects(resourceMetrics, "scope_metrics") {
+			scope, _ := field(scopeMetrics, "scope").(map[string]any)
+			schema, _ := field(scopeMetrics, "schema_url").(string)
+			for _, metric := range objects(scopeMetrics, "metrics") {
+				streams = append(streams, metricStream{Metric: metric, Resource: resource, Scope: scope, ResourceSchema: resourceSchema, Schema: schema})
+			}
+		}
+	}
+	return streams
 }
 func attributes(o object) []object {
 	var out []object
@@ -231,7 +271,8 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		prior, actual := maxBatch(baseline, signal, key), maxBatch(changed, signal, key)
 		preserved := len(after) >= 2
 		if e.Name == "span-batch" {
-			preserved = len(probeSpans(changed)) == 4
+			probes := probeSpans(changed)
+			preserved = len(probes) == 4 && len(incomingProbeTraces(probes)) == 4
 		}
 		check(prior > 1, actual == 1 && preserved, fmt.Sprintf("maximum %s batch %d -> %d; records %d -> %d", signal, prior, actual, len(before), len(after)))
 		if o.Status == "gap" {
@@ -302,10 +343,18 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		check(len(baseline.Spans) > 0, len(changed.Spans) == 0 && otherSignalsAlive, fmt.Sprintf("spans %d -> %d; other baseline signals still exported: %t", len(baseline.Spans), len(changed.Spans), otherSignalsAlive))
 	case "span-length", "attribute-length", "log-length":
 		before, after := baseline.Spans, changed.Spans
+		preserved, expected, present := true, 0, 0
 		if e.Name == "log-length" {
 			before, after = baseline.Logs, changed.Logs
+			expected, present = limitedLogRecords(before, after, 8)
+			preserved = expected == 0 || present == expected
+		} else {
+			expectedTraces := incomingProbeTraces(probeSpans(baseline))
+			presentTraces := incomingServerTraces(after)
+			expected, present = len(expectedTraces), len(presentTraces)
+			preserved = expected == 0 || present == expected
 		}
-		check(maxLength(before) > 8, len(after) > 0 && maxLength(after) == 8, fmt.Sprintf("maximum string attribute length %d -> %d; cap 8", maxLength(before), maxLength(after)))
+		check(maxLength(before) > 8, len(after) > 0 && maxLength(after) == 8 && preserved, fmt.Sprintf("maximum string attribute length %d -> %d; cap 8; baseline record identities preserved %d/%d", maxLength(before), maxLength(after), present, expected))
 		violations := map[string]bool{}
 		for _, item := range after {
 			for _, a := range attributes(item) {
@@ -379,6 +428,18 @@ func incomingProbeTraces(spans []object) map[string]bool {
 	}
 	return traces
 }
+func incomingServerTraces(spans []object) map[string]bool {
+	traces := map[string]bool{}
+	for _, s := range spans {
+		if number(field(s, "kind")) != 2 {
+			continue
+		}
+		if id, ok := field(s, "trace_id").(string); ok && incomingTrace(id) {
+			traces[id] = true
+		}
+	}
+	return traces
+}
 func validTrace(id string) bool {
 	decoded, err := hex.DecodeString(id)
 	return err == nil && len(decoded) == 16 && id != strings.Repeat("0", 32)
@@ -411,49 +472,90 @@ func headerArray(s object) bool {
 	return exact
 }
 
-func metricID(m object) string {
-	name, _ := field(m, "name").(string)
+func limitedLogRecords(before, after []object, limit int) (int, int) {
+	eligible := map[string]int{}
+	for _, record := range before {
+		if body, ok := stringValue(field(record, "body")); ok && body != "" && maxLength([]object{record}) > limit {
+			eligible[body]++
+		}
+	}
+	preserved := map[string]int{}
+	for _, record := range after {
+		if body, ok := stringValue(field(record, "body")); ok && preserved[body] < eligible[body] && maxLength([]object{record}) == limit {
+			preserved[body]++
+		}
+	}
+	expected, present := 0, 0
+	for _, count := range eligible {
+		expected += count
+	}
+	for _, count := range preserved {
+		present += count
+	}
+	return expected, present
+}
+
+func captureMetricStreams(c capture) []metricStream {
+	if len(c.MetricStreams) > 0 {
+		return c.MetricStreams
+	}
+	streams := make([]metricStream, 0, len(c.Metrics))
+	for _, metric := range c.Metrics {
+		streams = append(streams, metricStream{Metric: metric})
+	}
+	return streams
+}
+
+func metricID(stream metricStream) string {
+	name, _ := field(stream.Metric, "name").(string)
 	if name == "" {
 		return ""
 	}
-	unit, _ := field(m, "unit").(string)
-	description, _ := field(m, "description").(string)
-	return name + "\x00" + unit + "\x00" + description
+	unit, _ := field(stream.Metric, "unit").(string)
+	description, _ := field(stream.Metric, "description").(string)
+	scopeName, _ := field(stream.Scope, "name").(string)
+	scopeVersion, _ := field(stream.Scope, "version").(string)
+	resourceKeys := []string{"service.name", "service.namespace", "telemetry.sdk.language", "telemetry.sdk.name", "telemetry.sdk.version"}
+	parts := []string{name, unit, description, scopeName, scopeVersion, stream.Schema, stream.ResourceSchema}
+	for _, key := range resourceKeys {
+		parts = append(parts, attributeValue(stream.Resource, key))
+	}
+	return strings.Join(parts, "\x00")
 }
 
 func suppressedExemplars(before, after capture) (int, int, int) {
 	eligible := map[string]bool{}
-	for _, m := range before.Metrics {
-		if id := metricID(m); id != "" && len(objects(m, "data_points")) > 0 && len(objects(m, "exemplars")) > 0 {
+	for _, stream := range captureMetricStreams(before) {
+		if id := metricID(stream); id != "" && len(objects(stream.Metric, "data_points")) > 0 && len(objects(stream.Metric, "exemplars")) > 0 {
 			eligible[id] = true
 		}
 	}
 	preserved := map[string]bool{}
 	remaining := 0
-	for _, m := range after.Metrics {
-		id := metricID(m)
+	for _, stream := range captureMetricStreams(after) {
+		id := metricID(stream)
 		if !eligible[id] {
 			continue
 		}
-		if len(objects(m, "data_points")) > 0 {
+		if len(objects(stream.Metric, "data_points")) > 0 {
 			preserved[id] = true
 		}
-		remaining += len(objects(m, "exemplars"))
+		remaining += len(objects(stream.Metric, "exemplars"))
 	}
 	return len(eligible), len(preserved), remaining
 }
 
 func convertedHistograms(before, after capture) (int, int) {
 	eligible := map[string]bool{}
-	for _, m := range before.Metrics {
-		if id := metricID(m); id != "" && len(objects(m, "histogram")) > 0 && len(objects(m, "data_points")) > 0 {
+	for _, stream := range captureMetricStreams(before) {
+		if id := metricID(stream); id != "" && len(objects(stream.Metric, "histogram")) > 0 && len(objects(stream.Metric, "data_points")) > 0 {
 			eligible[id] = true
 		}
 	}
 	converted := map[string]bool{}
-	for _, m := range after.Metrics {
-		id := metricID(m)
-		if eligible[id] && len(objects(m, "exponential_histogram")) > 0 && len(objects(m, "data_points")) > 0 {
+	for _, stream := range captureMetricStreams(after) {
+		id := metricID(stream)
+		if eligible[id] && len(objects(stream.Metric, "exponential_histogram")) > 0 && len(objects(stream.Metric, "data_points")) > 0 {
 			converted[id] = true
 		}
 	}

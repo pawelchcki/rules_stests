@@ -165,7 +165,27 @@ func run(app, launcher, expected string, discover bool, args []string) error {
 	return nil
 }
 
+var errPortInUse = errors.New("application port already in use")
+
 func collect(app, launcher string, args []string, sink, out string, e experiment) ([]byte, error) {
+	return retryPortConflicts(func() ([]byte, error) {
+		return collectOnce(app, launcher, args, sink, out, e)
+	})
+}
+
+func retryPortConflicts(attempt func() ([]byte, error)) ([]byte, error) {
+	var err error
+	for tries := 0; tries < 3; tries++ {
+		var data []byte
+		data, err = attempt()
+		if !errors.Is(err, errPortInUse) {
+			return data, err
+		}
+	}
+	return nil, fmt.Errorf("application port unavailable after three attempts: %w", err)
+}
+
+func collectOnce(app, launcher string, args []string, sink, out string, e experiment) ([]byte, error) {
 	if _, err := request("POST", sink+"/reset", nil); err != nil {
 		return nil, err
 	}
@@ -245,7 +265,7 @@ func collect(app, launcher string, args []string, sink, out string, e experiment
 		select {
 		case err := <-done:
 			stopped = true
-			return nil, &startupExit{err}
+			return nil, classifyProcessExit(err, log)
 		default:
 		}
 		if response, err := client.Get(base + "/api/tags"); err == nil {
@@ -272,6 +292,14 @@ func collect(app, launcher string, args []string, sink, out string, e experiment
 	select {
 	case err := <-done:
 		stopped = true
+		exitErr := classifyProcessExit(err, log)
+		if errors.Is(exitErr, errPortInUse) {
+			return nil, exitErr
+		}
+		var startup *startupExit
+		if !errors.As(exitErr, &startup) {
+			return nil, exitErr
+		}
 		return nil, fmt.Errorf("application exited during workload: %v", err)
 	case <-time.After(2500 * time.Millisecond):
 	}
@@ -289,6 +317,21 @@ func collect(app, launcher string, args []string, sink, out string, e experiment
 		stopped = true
 	}
 	return request("GET", sink+"/dump", nil)
+}
+
+func classifyProcessExit(cause error, log *os.File) error {
+	if err := log.Sync(); err != nil {
+		return err
+	}
+	contents, err := os.ReadFile(log.Name())
+	if err != nil {
+		return err
+	}
+	message := strings.ToLower(string(contents))
+	if strings.Contains(message, "address already in use") || strings.Contains(message, "eaddrinuse") {
+		return fmt.Errorf("%w: %v", errPortInUse, cause)
+	}
+	return &startupExit{cause}
 }
 
 func killAfterGrace(done <-chan error, kill func() error) error {

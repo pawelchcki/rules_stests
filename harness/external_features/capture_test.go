@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -66,19 +67,30 @@ func TestAdditionalFeatureCoverage(t *testing.T) {
 
 func TestDecodeBothWireRepresentations(t *testing.T) {
 	for _, data := range []string{
-		`[{"signal":"traces","payload":{"resource_spans":[{"resource":{"attributes":[{"key":"service.name","value":{"value":{"string_value":"probe"}}}]},"scope_spans":[{"spans":[{"attributes":[{"key":"name","value":{"value":{"string_value":"span"}}}],"events":[{"attributes":[{"key":"event","value":{"value":{"string_value":"nested"}}}]}]}]}]}]}}]`,
-		`[{"signal":"traces","payload":{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"probe"}}]},"scopeSpans":[{"spans":[{"attributes":[{"key":"name","value":{"stringValue":"span"}}],"events":[{"attributes":[{"key":"event","value":{"stringValue":"nested"}}]}]}]}]}]}}]`,
+		`[{"signal":"traces","payload":{"resource_spans":[{"resource":{"attributes":[{"key":"service.name","value":{"value":{"string_value":"probe"}}}]},"scope_spans":[{"spans":[{"attributes":[{"key":"name","value":{"value":{"string_value":"span"}}}],"events":[{"attributes":[{"key":"event","value":{"value":{"string_value":"nested"}}}]}]}]}]},{}]}}]`,
+		`[{"signal":"traces","payload":{"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"probe"}}]},"scopeSpans":[{"spans":[{"attributes":[{"key":"name","value":{"stringValue":"span"}}],"events":[{"attributes":[{"key":"event","value":{"stringValue":"nested"}}]}]}]}]},{}]}}]`,
 	} {
 		c, err := decodeCapture([]byte(data))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(c.Spans) != 1 || len(c.Resources) != 1 || len(events(c)) != 1 {
+		if len(c.Spans) != 1 || len(c.Resources) != 2 || len(events(c)) != 1 {
 			t.Fatalf("bad decoding: %+v", c)
 		}
-		if attributeValue(c.Resources[0], "service.name") != "probe" || maxAttributes(c.Spans) != 1 || maxLength(c.Spans) != 4 {
+		if attributeValue(c.Resources[0], "service.name") != "probe" || attributeValue(c.Resources[1], "service.name") != "" || maxAttributes(c.Spans) != 1 || maxLength(c.Spans) != 4 {
 			t.Fatalf("nested attributes leaked or string lost: %+v", c)
 		}
+	}
+}
+
+func TestDecodePreservesMetricStreamContext(t *testing.T) {
+	data := []byte(`[{"signal":"metrics","payload":{"resourceMetrics":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"probe"}}]},"scopeMetrics":[{"scope":{"name":"scope.one"},"metrics":[{"name":"shared.metric","histogram":{"dataPoints":[{"count":"1"}]}}]},{"scope":{"name":"scope.two"},"metrics":[{"name":"shared.metric","histogram":{"dataPoints":[{"count":"1"}]}}]}]}]}}]`)
+	c, err := decodeCapture(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Metrics) != 2 || len(c.MetricStreams) != 2 || metricID(c.MetricStreams[0]) == metricID(c.MetricStreams[1]) {
+		t.Fatalf("metric stream context was flattened: %+v", c.MetricStreams)
 	}
 }
 
@@ -303,6 +315,37 @@ func TestMetricChangesPreserveInstrumentIdentity(t *testing.T) {
 	if got := evaluate(experiment{Name: "histogram"}, baseline, unrelated); got.Status == "pass" {
 		t.Fatal("unrelated exponential histogram stood in for the baseline instrument")
 	}
+
+	baseMetric := object{"name": "shared.metric", "histogram": object{"dataPoints": []any{object{"count": "1", "exemplars": []any{object{"timeUnixNano": "1"}}}}}}
+	baseline = capture{Metrics: []object{baseMetric, baseMetric}, MetricStreams: []metricStream{
+		{Metric: baseMetric, Scope: object{"name": "scope.one"}},
+		{Metric: baseMetric, Scope: object{"name": "scope.two"}},
+	}}
+	suppressed := object{"name": "shared.metric", "histogram": object{"dataPoints": []any{object{"count": "1"}}}}
+	changed := capture{Metrics: []object{suppressed}, MetricStreams: []metricStream{{Metric: suppressed, Scope: object{"name": "scope.one"}}}}
+	if got := evaluate(experiment{Name: "exemplars"}, baseline, changed); got.Status == "pass" {
+		t.Fatal("one scope stood in for a missing exemplar-bearing metric stream")
+	}
+	converted := object{"name": "shared.metric", "exponentialHistogram": object{"dataPoints": []any{object{"count": "1"}}}}
+	changed = capture{Metrics: []object{converted}, MetricStreams: []metricStream{{Metric: converted, Scope: object{"name": "scope.one"}}}}
+	if got := evaluate(experiment{Name: "histogram"}, baseline, changed); got.Status == "pass" {
+		t.Fatal("one scope stood in for a missing histogram stream")
+	}
+}
+
+func TestLengthLimitsPreserveBaselineRecords(t *testing.T) {
+	spanBaseline := baselineCapture()
+	spanBaseline.Spans = syntheticProbeSpans()
+	unrelatedSpan := capture{Spans: []object{{"kind": float64(2), "attributes": []any{attr("unrelated", "12345678")}}}}
+	if got := evaluate(experiment{Name: "span-length"}, spanBaseline, unrelatedSpan); got.Status == "pass" {
+		t.Fatal("unrelated span stood in for missing workload requests")
+	}
+
+	logBaseline := capture{Logs: []object{{"body": object{"stringValue": "workload log"}, "attributes": []any{attr("request", "long workload attribute")}}}}
+	unrelatedLog := capture{Logs: []object{{"body": object{"stringValue": "unrelated log"}, "attributes": []any{attr("request", "12345678")}}}}
+	if got := evaluate(experiment{Name: "log-length"}, logBaseline, unrelatedLog); got.Status == "pass" {
+		t.Fatal("unrelated log stood in for the baseline log record")
+	}
 }
 
 func TestComparisonRecomputesAndRejectsTamperedEvidence(t *testing.T) {
@@ -421,11 +464,49 @@ func TestCapturedHeadersRequireDistinctRequests(t *testing.T) {
 	}
 }
 
+func TestSpanBatchRequiresDistinctRequests(t *testing.T) {
+	baseline := capture{Spans: syntheticProbeSpans()}
+	baseline.Records = []object{batchRecord("traces", "spans", baseline.Spans)}
+	changed := capture{Spans: syntheticProbeSpans()}
+	changed.Spans[3]["trace_id"] = field(changed.Spans[2], "trace_id")
+	for _, span := range changed.Spans {
+		changed.Records = append(changed.Records, batchRecord("traces", "spans", []object{span}))
+	}
+	if got := evaluate(experiment{Name: "span-batch"}, baseline, changed); got.Status == "pass" {
+		t.Fatal("duplicate request stood in for a missing single-span batch")
+	}
+}
+
 func TestKillAfterGraceToleratesExitedProcess(t *testing.T) {
 	done := make(chan error, 1)
 	done <- nil
 	if err := killAfterGrace(done, func() error { return syscall.ESRCH }); err != nil {
 		t.Fatalf("already-exited process failed shutdown: %v", err)
+	}
+}
+
+func TestPortConflictsAreRetried(t *testing.T) {
+	attempts := 0
+	data, err := retryPortConflicts(func() ([]byte, error) {
+		attempts++
+		if attempts < 3 {
+			return nil, errPortInUse
+		}
+		return []byte("capture"), nil
+	})
+	if err != nil || string(data) != "capture" || attempts != 3 {
+		t.Fatalf("port conflict was not retried: attempts=%d data=%q err=%v", attempts, data, err)
+	}
+	log, err := os.CreateTemp(t.TempDir(), "bind-log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	if _, err := log.WriteString("listen tcp: bind: address already in use"); err != nil {
+		t.Fatal(err)
+	}
+	if err := classifyProcessExit(errors.New("exit status 1"), log); !errors.Is(err, errPortInUse) {
+		t.Fatalf("bind conflict was not classified for retry: %v", err)
 	}
 }
 
