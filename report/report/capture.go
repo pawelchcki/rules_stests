@@ -146,6 +146,25 @@ func snakeWireField(field string) string {
 	return out.String()
 }
 
+func lowerCamelWireField(field string) string {
+	var out strings.Builder
+	uppercase := false
+	for _, character := range field {
+		if character == '_' {
+			uppercase = true
+		} else if uppercase {
+			if character >= 'a' && character <= 'z' {
+				character -= 'a' - 'A'
+			}
+			out.WriteRune(character)
+			uppercase = false
+		} else {
+			out.WriteRune(character)
+		}
+	}
+	return out.String()
+}
+
 func canonicalWireField(context, spelling string) (string, bool) {
 	fields, known := allowedWireFields[context]
 	if !known {
@@ -199,6 +218,26 @@ func protocolArrayField(context, key string) bool {
 		return key == "values"
 	}
 	return false
+}
+
+var captureWideStringFields = map[string]bool{
+	"description": true, "event_name": true, "eventName": true, "key": true,
+	"message": true, "name": true, "parent_span_id": true, "parentSpanId": true,
+	"schema_url": true, "schemaUrl": true, "severity_text": true, "severityText": true,
+	"span_id": true, "spanId": true, "string_value": true, "stringValue": true,
+	"trace_id": true, "traceId": true, "trace_state": true, "traceState": true,
+	"unit": true, "version": true,
+}
+
+var captureWideCollectionFields = map[string]bool{
+	"attributes": true, "bucket_counts": true, "bucketCounts": true, "data_points": true, "dataPoints": true,
+	"entity_refs": true, "entityRefs": true, "events": true, "exemplars": true,
+	"explicit_bounds": true, "explicitBounds": true, "filtered_attributes": true, "filteredAttributes": true,
+	"links": true, "log_records": true, "logRecords": true, "metrics": true,
+	"quantile_values": true, "quantileValues": true, "resource_logs": true, "resourceLogs": true,
+	"resource_metrics": true, "resourceMetrics": true, "resource_spans": true, "resourceSpans": true,
+	"scope_logs": true, "scopeLogs": true, "scope_metrics": true, "scopeMetrics": true,
+	"scope_spans": true, "scopeSpans": true, "spans": true, "values": true,
 }
 
 func protocolUint32Field(context, key string) bool {
@@ -286,6 +325,23 @@ func normalizeWireContext(v any, context, encoding string) (any, error) {
 		sort.Strings(fieldNames)
 		for _, k := range fieldNames {
 			c := v[k]
+			if strings.ContainsRune(k, '_') {
+				if camel := lowerCamelWireField(k); camel != k {
+					if _, duplicate := v[camel]; duplicate {
+						return nil, fmt.Errorf("duplicate OTLP JSON field spellings for %q", camel)
+					}
+				}
+			}
+			if c != nil && captureWideStringFields[k] {
+				if _, ok := c.(string); !ok {
+					return nil, fmt.Errorf("invalid OTLP field %q: expected string", k)
+				}
+			}
+			if c != nil && captureWideCollectionFields[k] {
+				if _, ok := c.([]any); !ok {
+					return nil, fmt.Errorf("invalid OTLP field %q: expected array", k)
+				}
+			}
 			key, validSpelling := canonicalWireField(context, k)
 			if !validSpelling {
 				return nil, fmt.Errorf("invalid OTLP %s field %q", context, k)
@@ -949,6 +1005,18 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 			return subtrees[i]
 		}
 		var key func(int) string
+		externalParentPartitions := map[string][]string{}
+		for i := range d.Spans {
+			if parents[i] < 0 && parentIDs[i] != "" {
+				anchor := traceIDs[i] + "/" + parentIDs[i]
+				externalParentPartitions[anchor] = append(externalParentPartitions[anchor], subtree(i))
+			}
+		}
+		externalParentLabels := map[string]string{}
+		for anchor, partition := range externalParentPartitions {
+			sort.Strings(partition)
+			externalParentLabels[anchor] = digest([]byte(canonical(partition)))[:12]
+		}
 		key = func(i int) string {
 			if keys[i] != "" {
 				return keys[i]
@@ -957,7 +1025,7 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 			if parents[i] >= 0 {
 				parent = key(parents[i])
 			} else if parentIDs[i] != "" {
-				parent = "external parent"
+				parent = "external parent " + externalParentLabels[traceIDs[i]+"/"+parentIDs[i]]
 			}
 			keys[i] = digest([]byte(canonical([]any{parent, subtree(i)})))[:12]
 			return keys[i]
@@ -988,7 +1056,19 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 	// differ, before link-graph refinement adds incoming and outgoing identity.
 	sourceOccurrenceKeys := withTraceOccurrenceSet(buildTargetOccurrenceKeys(true))
 	sourceOccurrenceKeysWithoutScope := withTraceOccurrenceSet(buildTargetOccurrenceKeys(false))
+	graphKeyCache := map[string][]string{}
 	buildGraphAwareTargetKeys := func(base []string, targetDigests map[string]string) ([]string, error) {
+		sharedTargets := make([]string, 0, len(targetDigests))
+		for target, targetDigest := range targetDigests {
+			if targetDigest != "" {
+				sharedTargets = append(sharedTargets, target+"\x00"+targetDigest)
+			}
+		}
+		sort.Strings(sharedTargets)
+		cacheKey := digest([]byte(canonical([]any{base, sharedTargets})))
+		if cached := graphKeyCache[cacheKey]; cached != nil {
+			return append([]string(nil), cached...), nil
+		}
 		type graphEdge struct {
 			relationship string
 			target       int
@@ -1219,38 +1299,68 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 					}
 				}
 			}
-			// Color refinement captures canonical member positions with linear
-			// storage and O(E) work per round. Each non-terminal round splits at
-			// least one class, so a component-sized bound reaches convergence.
-			for range len(components[component]) {
-				refined := map[int]string{}
-				for _, member := range components[component] {
-					outgoing := []string{}
-					for _, edge := range edges[member] {
-						target := ""
-						if edge.target >= 0 && componentOf[edge.target] == component {
-							target = strconv.Itoa(classes[edge.target])
-						} else if edge.target >= 0 {
-							target = keys[edge.target]
-						} else {
-							target = externalLabels[edge.external]
-						}
-						outgoing = append(outgoing, canonical([]any{edge.relationship, target, edge.shared}))
+			cycleSuccessors := make([]int, len(d.Spans))
+			simpleDirectedCycle := true
+			for _, member := range components[component] {
+				internalTargets := []int{}
+				for _, edge := range edges[member] {
+					if edge.target >= 0 && componentOf[edge.target] == component {
+						internalTargets = append(internalTargets, edge.target)
 					}
-					sort.Strings(outgoing)
-					incomingKeys := make([]string, 0, len(incoming[member]))
-					for _, entry := range incoming[member] {
-						incomingKeys = append(incomingKeys, canonical([]any{entry.edge.relationship, classes[entry.source], entry.edge.shared}))
-					}
-					sort.Strings(incomingKeys)
-					refined[member] = canonical([]any{memberDescriptions[member], classes[member], outgoing, incomingKeys})
 				}
-				next, nextCount := assignClasses(refined)
-				classes = next
-				if nextCount == classCount {
+				if len(internalTargets) != 1 || len(incoming[member]) != 1 {
+					simpleDirectedCycle = false
 					break
 				}
-				classCount = nextCount
+				cycleSuccessors[member] = internalTargets[0]
+			}
+			if simpleDirectedCycle {
+				// Pointer doubling propagates an asymmetric marker around a long
+				// directed cycle in O((V+E) log V), instead of one edge per round.
+				for distance := 1; distance < len(components[component]); distance *= 2 {
+					refined := map[int]string{}
+					nextSuccessors := append([]int(nil), cycleSuccessors...)
+					for _, member := range components[component] {
+						refined[member] = canonical([]any{classes[member], classes[cycleSuccessors[member]]})
+						nextSuccessors[member] = cycleSuccessors[cycleSuccessors[member]]
+					}
+					classes, classCount = assignClasses(refined)
+					cycleSuccessors = nextSuccessors
+				}
+			} else {
+				// General color refinement captures canonical member positions
+				// with linear storage. Components that are not simple cycles keep
+				// refining until their equitable partition is stable.
+				for range len(components[component]) {
+					refined := map[int]string{}
+					for _, member := range components[component] {
+						outgoing := []string{}
+						for _, edge := range edges[member] {
+							target := ""
+							if edge.target >= 0 && componentOf[edge.target] == component {
+								target = strconv.Itoa(classes[edge.target])
+							} else if edge.target >= 0 {
+								target = keys[edge.target]
+							} else {
+								target = externalLabels[edge.external]
+							}
+							outgoing = append(outgoing, canonical([]any{edge.relationship, target, edge.shared}))
+						}
+						sort.Strings(outgoing)
+						incomingKeys := make([]string, 0, len(incoming[member]))
+						for _, entry := range incoming[member] {
+							incomingKeys = append(incomingKeys, canonical([]any{entry.edge.relationship, classes[entry.source], entry.edge.shared}))
+						}
+						sort.Strings(incomingKeys)
+						refined[member] = canonical([]any{memberDescriptions[member], classes[member], outgoing, incomingKeys})
+					}
+					next, nextCount := assignClasses(refined)
+					classes = next
+					if nextCount == classCount {
+						break
+					}
+					classCount = nextCount
+				}
 			}
 			root := components[component][0]
 			rootKey := canonical([]any{memberDescriptions[root], classes[root]})
@@ -1273,6 +1383,7 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 		for component := range components {
 			labelComponent(component)
 		}
+		graphKeyCache[cacheKey] = append([]string(nil), keys...)
 		return keys, nil
 	}
 	sourceOccurrenceKeys, err := buildGraphAwareTargetKeys(sourceOccurrenceKeys, nil)

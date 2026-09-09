@@ -448,11 +448,13 @@ func TestCaptureRetainsSinkAcceptedEntityReferenceKeys(t *testing.T) {
 	)
 	stringRaw := bytes.Replace(numericRaw, []byte(`{"type":9007199254740993,"idKeys":[9007199254740995],"descriptionKeys":9}`), []byte(`{"type":"9007199254740993","idKeys":["9007199254740995"],"descriptionKeys":"9"}`), 1)
 	objectRaw := bytes.Replace(numericRaw, []byte(`"type":9007199254740993`), []byte(`"type":{"$number":"9007199254740993"}`), 1)
-	nestedObjectRaw := bytes.Replace(numericRaw, []byte(`"type":9007199254740993`), []byte(`"type":{"attributes":{"traceId":7}}`), 1)
+	nestedObjectRaw := bytes.Replace(numericRaw, []byte(`"type":9007199254740993`), []byte(`"type":{"nested":{"traceId":7}}`), 1)
+	aliasCollisionRaw := bytes.Replace(numericRaw, []byte(`"type":9007199254740993`), []byte(`"type":{"nested":{"trace_id":"a","traceId":"b"}}`), 1)
 	numeric := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, numericRaw)
 	stringValue := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, stringRaw)
 	objectValue := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, objectRaw)
 	nestedObjectValue := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, nestedObjectRaw)
+	aliasCollision := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, aliasCollisionRaw)
 	numericResources, stringResources, objectResources := canonical(numeric.Resources), canonical(stringValue.Resources), canonical(objectValue.Resources)
 	if len(numeric.Diagnostics) != 0 || len(numeric.Shape.Traces) != 1 || !strings.Contains(numericResources, `"type":{"$number":"9007199254740993"}`) || !strings.Contains(numericResources, `"idKeys":[{"$number":"9007199254740995"}]`) || !strings.Contains(numericResources, `"descriptionKeys":{"$number":"9"}`) {
 		t.Fatalf("sink-accepted entity reference keys were discarded: %+v", numeric)
@@ -463,8 +465,11 @@ func TestCaptureRetainsSinkAcceptedEntityReferenceKeys(t *testing.T) {
 	if len(objectValue.Diagnostics) != 0 || numericResources == objectResources || !strings.Contains(objectResources, `"type":{"$object":{"$number":"9007199254740993"}}`) {
 		t.Fatalf("numeric tag collided with a captured object: %s / %s", numericResources, objectResources)
 	}
-	if nestedObjectResources := canonical(nestedObjectValue.Resources); len(nestedObjectValue.Diagnostics) != 0 || !strings.Contains(nestedObjectResources, `"type":{"$object":{"attributes":{"$object":{"traceId":{"$number":"7"}}}}}`) {
-		t.Fatalf("protocol-like keys changed an untyped entity reference object: %s", nestedObjectResources)
+	if len(nestedObjectValue.Diagnostics) != 1 || len(nestedObjectValue.Shape.Traces) != 0 {
+		t.Fatalf("capture-wide reserved-field validation skipped an entity reference value: %+v", nestedObjectValue)
+	}
+	if len(aliasCollision.Diagnostics) != 1 || len(aliasCollision.Shape.Traces) != 0 {
+		t.Fatalf("capture-wide field-alias validation skipped an entity reference value: %+v", aliasCollision)
 	}
 }
 func TestCaptureRejectsMultipleExplicitRoots(t *testing.T) {
@@ -643,6 +648,24 @@ func TestCaptureLinkTargetsIncludePartialTraceCoRoots(t *testing.T) {
 		t.Fatalf("partial-trace co-root reassignment was lost: %q", left.Spans[4].LinkTargets[0])
 	}
 }
+func TestCaptureLinkTargetsIncludeExternalParentPartitions(t *testing.T) {
+	partialRoot := func(span, parent int, name, value string) map[string]any {
+		s := captureSpan(1, span, parent, name)
+		s["attributes"] = []any{map[string]any{"key": "variant", "value": map[string]any{"stringValue": value}}}
+		return s
+	}
+	fixture := func(targetSpan int) CaptureDataset {
+		source := captureSpan(2, 1, 0, "source")
+		source["links"] = []any{map[string]any{"traceId": fmt.Sprintf("%032x", 1), "spanId": fmt.Sprintf("%016x", targetSpan)}}
+		return decodedFixture(t, "external parent partitions",
+			partialRoot(1, 99, "target", "same"), partialRoot(2, 99, "marker", "A"),
+			partialRoot(3, 98, "target", "same"), partialRoot(4, 98, "marker", "B"), source)
+	}
+	left, right := fixture(1), fixture(3)
+	if left.Spans[4].LinkTargets[0] == right.Spans[4].LinkTargets[0] {
+		t.Fatalf("external-parent partition reassignment was lost: %q", left.Spans[4].LinkTargets[0])
+	}
+}
 func TestCaptureLinkTargetsIncludeDescendantSemantics(t *testing.T) {
 	target := func(trace int, value string) []map[string]any {
 		child := captureSpan(trace, 2, 1, "child")
@@ -796,6 +819,22 @@ func TestCaptureLargeLinkCyclePreservesInternalAdjacency(t *testing.T) {
 	plusTwo, plusThree := fixture(2), fixture(3)
 	if plusTwo.Spans[0].LinkTargets[0] == plusThree.Spans[0].LinkTargets[0] {
 		t.Fatalf("large component internal adjacency was lost: %q", plusTwo.Spans[0].LinkTargets[0])
+	}
+}
+func TestCaptureLargeAsymmetricDirectedCycleRefinesQuickly(t *testing.T) {
+	const count = 1024
+	spans := make([]map[string]any, count)
+	for i := range spans {
+		span := captureSpan(i+1, 1, 0, "cycle")
+		span["links"] = []any{map[string]any{"traceId": fmt.Sprintf("%032x", (i+1)%count+1), "spanId": fmt.Sprintf("%016x", 1)}}
+		if i == 0 {
+			span["attributes"] = []any{map[string]any{"key": "marker", "value": map[string]any{"stringValue": "unique"}}}
+		}
+		spans[i] = span
+	}
+	d := decodedFixture(t, "large asymmetric cycle", spans...)
+	if d.Spans[1].LinkTargets[0] == d.Spans[count/2].LinkTargets[0] {
+		t.Fatalf("asymmetric cycle positions were conflated: %q", d.Spans[1].LinkTargets[0])
 	}
 }
 func TestCaptureLargeLinkComponentIgnoresRecordOrder(t *testing.T) {
