@@ -861,25 +861,30 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 	}
 	colors := make([]int, len(d.Spans))
 	fingerprints := make([]string, len(d.Spans))
-	var fingerprint func(int, int) (string, error)
-	fingerprint = func(i, depth int) (string, error) {
+	subtreeHeights := make([]int, len(d.Spans))
+	var fingerprint func(int) (string, error)
+	fingerprint = func(i int) (string, error) {
 		if colors[i] == 1 {
 			return "", fmt.Errorf("cycle in captured trace")
-		}
-		if depth >= 128 {
-			return "", fmt.Errorf("captured trace exceeds 128 levels")
 		}
 		if colors[i] == 2 {
 			return fingerprints[i], nil
 		}
 		colors[i] = 1
 		cs := []string{}
+		subtreeHeights[i] = 1
 		for _, c := range children[i] {
-			f, e := fingerprint(c, depth+1)
+			f, e := fingerprint(c)
 			if e != nil {
 				return "", e
 			}
 			cs = append(cs, f)
+			if height := subtreeHeights[c] + 1; height > subtreeHeights[i] {
+				subtreeHeights[i] = height
+			}
+		}
+		if subtreeHeights[i] > 128 {
+			return "", fmt.Errorf("captured trace exceeds 128 levels")
 		}
 		sort.Strings(cs)
 		fingerprints[i] = digest([]byte(canonical([]any{str(d.Spans[i].Fields["kind"]), NormalizeSpanName(str(d.Spans[i].Fields["name"])), cs})))
@@ -887,7 +892,7 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 		return fingerprints[i], nil
 	}
 	for i := range d.Spans {
-		if _, e := fingerprint(i, 0); e != nil {
+		if _, e := fingerprint(i); e != nil {
 			return fail(e)
 		}
 	}

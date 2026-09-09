@@ -883,9 +883,17 @@ func TestCaptureRejectsSinkMaximumTraceDepth(t *testing.T) {
 		}
 		spans[i] = captureSpan(1, i+1, parent, "depth")
 	}
-	d := DecodeCapture(ValidationReceipt{}, captureFixture(spans...))
-	if len(d.Diagnostics) != 1 || !strings.Contains(d.Diagnostics[0], "exceeds 128 levels") {
-		t.Fatalf("sink-invalid trace depth was accepted: %+v", d.Diagnostics)
+	reversed := append([]map[string]any(nil), spans...)
+	for left, right := 0, len(reversed)-1; left < right; left, right = left+1, right-1 {
+		reversed[left], reversed[right] = reversed[right], reversed[left]
+	}
+	for name, ordered := range map[string][]map[string]any{"parent first": spans, "child first": reversed} {
+		t.Run(name, func(t *testing.T) {
+			d := DecodeCapture(ValidationReceipt{}, captureFixture(ordered...))
+			if len(d.Diagnostics) != 1 || !strings.Contains(d.Diagnostics[0], "exceeds 128 levels") {
+				t.Fatalf("sink-invalid trace depth was accepted: %+v", d.Diagnostics)
+			}
+		})
 	}
 }
 func TestCapturePreservesCapturedParentOccurrenceIdentity(t *testing.T) {
