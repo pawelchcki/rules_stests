@@ -213,6 +213,26 @@ func TestNestedPairScoringBoundsExactChildAssignments(t *testing.T) {
 	}
 }
 
+func TestNestedPairScoringRetainsPartialDescendantOverlap(t *testing.T) {
+	parent := func(shared, unique string) alignedSpan {
+		children := make([]SpanGroup, 0, nestedScoreVertexLimit/2+1)
+		for i := 0; i < nestedScoreVertexLimit/2+1; i++ {
+			marker := fmt.Sprintf("%s-%02d", unique, i)
+			if i < 4 {
+				marker = fmt.Sprintf("%s-%02d", shared, i)
+			}
+			children = append(children, exactSpan("", "internal", "", "branch", "", exactSpan("", "client", "", marker, "")))
+		}
+		return resolveSpanGroup(exactSpan("", "server", "", "parent", "", children...))[0]
+	}
+	left := parent("shared", "left")
+	closer := parent("shared", "right")
+	farther := parent("other", "farther")
+	if got, want := alignedSpanMatchScore(left, closer), alignedSpanMatchScore(left, farther); got <= want {
+		t.Fatalf("bounded descendant score did not prefer partial deeper overlap: %d <= %d", got, want)
+	}
+}
+
 func TestLargeSiblingAlignmentUsesPartialChildOverlap(t *testing.T) {
 	const count = optimalAssignmentVertexLimit/2 + 1
 	leftParents := make([]SpanGroup, 0, count)

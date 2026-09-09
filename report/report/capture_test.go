@@ -1029,6 +1029,35 @@ func TestCaptureLargeRegularLinkGraphStaysBounded(t *testing.T) {
 		t.Fatalf("decoded %d spans, want %d", len(d.Spans), count)
 	}
 }
+func TestCaptureLargeRegularLinkGraphPastCanonicalBudgetRemainsComparable(t *testing.T) {
+	const count = 1700
+	spans := make([]map[string]any, count)
+	reversed := make([]map[string]any, count)
+	for i := range spans {
+		span := captureSpan(i+1, 1, 0, "regular")
+		span["links"] = []any{
+			map[string]any{"traceId": fmt.Sprintf("%032x", (i+1)%count+1), "spanId": fmt.Sprintf("%016x", 1)},
+			map[string]any{"traceId": fmt.Sprintf("%032x", (i+2)%count+1), "spanId": fmt.Sprintf("%016x", 1)},
+		}
+		spans[i] = span
+		reversed[count-1-i] = span
+	}
+	left := decodedFixtureWithEncoding(t, "large regular forward", "protobuf", spans...)
+	right := decodedFixtureWithEncoding(t, "large regular reversed", "protobuf", reversed...)
+	if len(left.Spans) != count || len(right.Spans) != count {
+		t.Fatalf("decoded %d/%d spans, want %d", len(left.Spans), len(right.Spans), count)
+	}
+	rightTargets := map[string]string{}
+	for _, span := range right.Spans {
+		rightTargets[str(span.Fields["traceId"])] = canonical(span.LinkTargets)
+	}
+	for _, span := range left.Spans {
+		traceID := str(span.Fields["traceId"])
+		if canonical(span.LinkTargets) != rightTargets[traceID] {
+			t.Fatalf("bounded canonicalization changed trace %s link targets", traceID)
+		}
+	}
+}
 func TestCaptureRejectsAllZeroParentID(t *testing.T) {
 	span := captureSpan(1, 1, 0, "invalid parent")
 	span["parentSpanId"] = "0000000000000000"

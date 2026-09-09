@@ -234,10 +234,19 @@ func shallowCanonicalSpanKey(span alignedSpan) string {
 }
 
 func canonicalChildMatchKeys(span alignedSpan) []string {
-	keys := make([]string, 0, len(span.children))
-	for _, child := range span.children {
-		keys = append(keys, shallowCanonicalSpanKey(child))
+	keys := []string{}
+	var collect func([]alignedSpan, string)
+	collect = func(children []alignedSpan, prefix string) {
+		for _, child := range children {
+			key := shallowCanonicalSpanKey(child)
+			if prefix != "" {
+				key = prefix + "\x1d" + key
+			}
+			keys = append(keys, key)
+			collect(child.children, key)
+		}
 	}
+	collect(span.children, "")
 	sort.Strings(keys)
 	return keys
 }

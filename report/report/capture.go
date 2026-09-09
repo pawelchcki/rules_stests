@@ -1386,9 +1386,10 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 			// regular, non-vertex-transitive graphs can leave every member tied.
 			// Canonical rooted certificates distinguish such positions and make the
 			// shared component label independent of Tarjan's traversal order. Keep
-			// the exact work bounded; a capture that exceeds the limit becomes a
-			// diagnostic instead of silently receiving record-order-dependent keys.
+			// the exact work bounded; larger tied components use a stable class-level
+			// adjacency certificate instead of dropping sink-accepted telemetry.
 			rootedDigestByMember := map[int]string{}
+			boundedCanonicalization := false
 			if !simpleDirectedCycle {
 				classSizes := map[int]int{}
 				for _, member := range components[component] {
@@ -1403,17 +1404,47 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 					}
 				}
 				if ambiguous > 0 && componentWork > canonicalRootWorkRemaining/int64(ambiguous) {
-					return fmt.Errorf("link graph canonicalization exceeds work limit")
-				}
-				canonicalRootWorkRemaining -= int64(ambiguous) * componentWork
-				for _, member := range components[component] {
-					if classSizes[classes[member]] > 1 {
-						rootedDigestByMember[member] = digest([]byte(canonical(rootedCertificate(member))))
+					boundedCanonicalization = true
+				} else {
+					canonicalRootWorkRemaining -= int64(ambiguous) * componentWork
+					for _, member := range components[component] {
+						if classSizes[classes[member]] > 1 {
+							rootedDigestByMember[member] = digest([]byte(canonical(rootedCertificate(member))))
+						}
 					}
 				}
 			}
-			rooted := rootedDigestByMember[root]
-			if rooted == "" {
+			rooted := ""
+			if boundedCanonicalization {
+				// Exact rooted certificates can require quadratic work for a large
+				// refinement-tied component. Retain an order-independent bounded
+				// certificate of its stable classes and complete class adjacency so
+				// sink-accepted telemetry remains available for comparison.
+				classAdjacency := make([]string, 0, len(components[component]))
+				for _, member := range components[component] {
+					outgoing := make([]string, 0, len(edges[member]))
+					for _, edge := range edges[member] {
+						target := ""
+						if edge.target >= 0 && componentOf[edge.target] == component {
+							target = strconv.Itoa(classes[edge.target])
+						} else if edge.target >= 0 {
+							target = keys[edge.target]
+						} else {
+							target = externalLabels[edge.external]
+						}
+						outgoing = append(outgoing, canonical([]any{edge.relationship, target, edge.shared}))
+					}
+					sort.Strings(outgoing)
+					incomingKeys := make([]string, 0, len(incoming[member]))
+					for _, entry := range incoming[member] {
+						incomingKeys = append(incomingKeys, canonical([]any{entry.edge.relationship, classes[entry.source], entry.edge.shared}))
+					}
+					sort.Strings(incomingKeys)
+					classAdjacency = append(classAdjacency, canonical([]any{memberDescriptions[member], classes[member], outgoing, incomingKeys}))
+				}
+				sort.Strings(classAdjacency)
+				rooted = digest([]byte(canonical(classAdjacency)))
+			} else if rooted = rootedDigestByMember[root]; rooted == "" {
 				rooted = digest([]byte(canonical(rootedCertificate(root))))
 			} else {
 				for _, member := range components[component] {
