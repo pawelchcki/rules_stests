@@ -133,6 +133,8 @@ empty-capture checks, and protection against one good record masking violations.
 
 The checked-in [expectations](../harness/external_features/expected.json) record
 passes, specific gaps, startup/workload rejections, and missing workload opportunities.
+Gap signatures retain stable failure categories, such as an unchanged batch
+size versus missing records, so a different failure mode requires review.
 An improvement or regression changes the expected outcome and fails the suite
 until its evidence is reviewed. `--test_arg=--discover` records results without
 comparing expectations when investigating a new fixture version.
