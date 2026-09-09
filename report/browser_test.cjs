@@ -122,6 +122,13 @@ const path = require('node:path');
     return captureRowDiff(l,r,{left:[0],right:[0]},false,false).diffs;
   });
   assert.ok(losslessEntityNumber.includes('resource.metadata.entityRefs'),'adjacent unsafe entity-reference numbers must remain distinct');
+  const taggedObjectCollision=await page.evaluate(()=>{
+    const source=captureByKey.get('go/case'),l=JSON.parse(JSON.stringify(source)),r=JSON.parse(JSON.stringify(source));
+    l.resources[0].metadata.entityRefs=[{type:{$number:'7'}}];
+    r.resources[0].metadata.entityRefs=[{type:{$object:{$number:'7'}}}];
+    return captureRowDiff(l,r,{left:[0],right:[0]},false,false).diffs;
+  });
+  assert.ok(taggedObjectCollision.includes('resource.metadata.entityRefs'),'numeric tags must not collide with captured objects');
   const originalCardSummary=await page.locator('#compare-summary').innerText();
   const originalRightCard=await page.evaluate(()=>data.captureComparisons[0].traces[0].right.card);
   await page.evaluate(()=>{data.captureComparisons[0].traces[0].right.card='x201';renderCompare();});

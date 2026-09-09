@@ -58,7 +58,9 @@ type CaptureSpanMatch struct {
 
 // reportNumber keeps sink-accepted, intentionally untyped entity-reference
 // numbers distinct from strings without asking a browser to parse them as an
-// imprecise JavaScript Number.
+// imprecise JavaScript Number. normalizeWireContext wraps every user-provided
+// object in the same value domain with $object, so this tag cannot collide with
+// a literal object from the capture.
 type reportNumber string
 
 func (n reportNumber) MarshalJSON() ([]byte, error) {
@@ -287,46 +289,47 @@ func normalizeWireContext(v any, context, encoding string) (any, error) {
 			childContext := ""
 			if context == "entityRefValue" {
 				childContext = context
-			}
-			switch {
-			case context == "tracePayload" && key == "resourceSpans":
-				childContext = "resourceSpans"
-			case context == "resourceSpan" && key == "resource":
-				childContext = "resource"
-			case context == "resourceSpan" && key == "scopeSpans":
-				childContext = "scopeSpans"
-			case context == "resource" && key == "entityRefs":
-				childContext = "entityRefs"
-			case context == "entityRef" && (key == "type" || key == "idKeys" || key == "descriptionKeys"):
-				childContext = "entityRefValue"
-			case context == "scopeSpan" && key == "scope":
-				childContext = "scope"
-			case context == "scopeSpan" && key == "spans":
-				childContext = "spans"
-			case context == "span" && key == "events":
-				childContext = "events"
-			case context == "span" && key == "links":
-				childContext = "links"
-			case context == "span" && key == "status":
-				childContext = "status"
-			case key == "traceId" || key == "spanId" || key == "parentSpanId":
-				childContext = "identity"
-			case context == "keyValue" && key == "value":
-				childContext = "anyValue"
-			case context == "anyValue" && key == "value":
-				childContext = "anyValue"
-			case context == "anyValue" && key == "arrayValue":
-				childContext = "arrayValue"
-			case context == "anyValue" && key == "kvlistValue":
-				childContext = "keyValueList"
-			case context == "arrayValue" && key == "values":
-				childContext = "anyValues"
-			case context == "keyValueList" && key == "values":
-				childContext = "keyValues"
-			case key == "attributes" || key == "filteredAttributes":
-				childContext = "keyValues"
-			case key == "body":
-				childContext = "anyValue"
+			} else {
+				switch {
+				case context == "tracePayload" && key == "resourceSpans":
+					childContext = "resourceSpans"
+				case context == "resourceSpan" && key == "resource":
+					childContext = "resource"
+				case context == "resourceSpan" && key == "scopeSpans":
+					childContext = "scopeSpans"
+				case context == "resource" && key == "entityRefs":
+					childContext = "entityRefs"
+				case context == "entityRef" && (key == "type" || key == "idKeys" || key == "descriptionKeys"):
+					childContext = "entityRefValue"
+				case context == "scopeSpan" && key == "scope":
+					childContext = "scope"
+				case context == "scopeSpan" && key == "spans":
+					childContext = "spans"
+				case context == "span" && key == "events":
+					childContext = "events"
+				case context == "span" && key == "links":
+					childContext = "links"
+				case context == "span" && key == "status":
+					childContext = "status"
+				case key == "traceId" || key == "spanId" || key == "parentSpanId":
+					childContext = "identity"
+				case context == "keyValue" && key == "value":
+					childContext = "anyValue"
+				case context == "anyValue" && key == "value":
+					childContext = "anyValue"
+				case context == "anyValue" && key == "arrayValue":
+					childContext = "arrayValue"
+				case context == "anyValue" && key == "kvlistValue":
+					childContext = "keyValueList"
+				case context == "arrayValue" && key == "values":
+					childContext = "anyValues"
+				case context == "keyValueList" && key == "values":
+					childContext = "keyValues"
+				case key == "attributes" || key == "filteredAttributes":
+					childContext = "keyValues"
+				case key == "body":
+					childContext = "anyValue"
+				}
 			}
 			if !allowedWireField(context, key) || (context == "anyValue" && key == "value" && encoding != "protobuf") {
 				return nil, fmt.Errorf("invalid OTLP %s field %q", context, key)
@@ -386,6 +389,9 @@ func normalizeWireContext(v any, context, encoding string) (any, error) {
 				return nil, err
 			}
 			out[key] = value
+		}
+		if context == "entityRefValue" {
+			return map[string]any{"$object": out}, nil
 		}
 		// prost's AnyValue wraps the oneof in an additional `value` object.
 		// Restrict this unwrapping to known AnyValue positions: an omitted

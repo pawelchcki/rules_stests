@@ -431,14 +431,24 @@ func TestCaptureRetainsSinkAcceptedEntityReferenceKeys(t *testing.T) {
 		1,
 	)
 	stringRaw := bytes.Replace(numericRaw, []byte(`{"type":9007199254740993,"idKeys":[9007199254740995],"descriptionKeys":9}`), []byte(`{"type":"9007199254740993","idKeys":["9007199254740995"],"descriptionKeys":"9"}`), 1)
+	objectRaw := bytes.Replace(numericRaw, []byte(`"type":9007199254740993`), []byte(`"type":{"$number":"9007199254740993"}`), 1)
+	nestedObjectRaw := bytes.Replace(numericRaw, []byte(`"type":9007199254740993`), []byte(`"type":{"attributes":{"traceId":7}}`), 1)
 	numeric := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, numericRaw)
 	stringValue := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, stringRaw)
-	numericResources, stringResources := canonical(numeric.Resources), canonical(stringValue.Resources)
+	objectValue := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, objectRaw)
+	nestedObjectValue := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, nestedObjectRaw)
+	numericResources, stringResources, objectResources := canonical(numeric.Resources), canonical(stringValue.Resources), canonical(objectValue.Resources)
 	if len(numeric.Diagnostics) != 0 || len(numeric.Shape.Traces) != 1 || !strings.Contains(numericResources, `"type":{"$number":"9007199254740993"}`) || !strings.Contains(numericResources, `"idKeys":[{"$number":"9007199254740995"}]`) || !strings.Contains(numericResources, `"descriptionKeys":{"$number":"9"}`) {
 		t.Fatalf("sink-accepted entity reference keys were discarded: %+v", numeric)
 	}
 	if len(stringValue.Diagnostics) != 0 || numericResources == stringResources {
 		t.Fatalf("entity reference value types were collapsed: %s", numericResources)
+	}
+	if len(objectValue.Diagnostics) != 0 || numericResources == objectResources || !strings.Contains(objectResources, `"type":{"$object":{"$number":"9007199254740993"}}`) {
+		t.Fatalf("numeric tag collided with a captured object: %s / %s", numericResources, objectResources)
+	}
+	if nestedObjectResources := canonical(nestedObjectValue.Resources); len(nestedObjectValue.Diagnostics) != 0 || !strings.Contains(nestedObjectResources, `"type":{"$object":{"attributes":{"$object":{"traceId":{"$number":"7"}}}}}`) {
+		t.Fatalf("protocol-like keys changed an untyped entity reference object: %s", nestedObjectResources)
 	}
 }
 func TestCaptureRejectsMultipleExplicitRoots(t *testing.T) {
