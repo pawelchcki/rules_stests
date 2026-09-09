@@ -188,13 +188,10 @@ func TestCaptureRejectsSinkInvalidSpanFields(t *testing.T) {
 		return captureFixture(span)
 	}
 	for name, raw := range map[string][]byte{
-		"missing name": fixture(func(span map[string]any) { delete(span, "name") }),
-		"empty name":   fixture(func(span map[string]any) { span["name"] = "" }),
-		"zero start":   fixture(func(span map[string]any) { span["startTimeUnixNano"] = "0" }),
-		"reversed":     fixture(func(span map[string]any) { span["endTimeUnixNano"] = "1" }),
-		"timestamp overflow": fixture(func(span map[string]any) {
-			span["endTimeUnixNano"] = "18446744073709551616"
-		}),
+		"missing name":     fixture(func(span map[string]any) { delete(span, "name") }),
+		"empty name":       fixture(func(span map[string]any) { span["name"] = "" }),
+		"zero start":       fixture(func(span map[string]any) { span["startTimeUnixNano"] = "0" }),
+		"reversed":         fixture(func(span map[string]any) { span["endTimeUnixNano"] = "1" }),
 		"numeric trace ID": fixture(func(span map[string]any) { span["traceId"] = json.Number("11111111111111111111111111111111") }),
 		"numeric span ID":  fixture(func(span map[string]any) { span["spanId"] = json.Number("1111111111111111") }),
 		"numeric parent ID": fixture(func(span map[string]any) {
@@ -273,6 +270,26 @@ func TestCaptureRejectsSinkInvalidSpanFields(t *testing.T) {
 				t.Fatalf("sink-invalid span entered topology: %+v", d)
 			}
 		})
+	}
+}
+func TestCaptureUsesEncodingSpecificTimestampBounds(t *testing.T) {
+	span := captureSpan(1, 1, 0, "large timestamp")
+	span["startTimeUnixNano"] = "18446744073709551616"
+	span["endTimeUnixNano"] = "18446744073709551617"
+	jsonCapture := DecodeCapture(ValidationReceipt{}, captureFixtureWithEncoding("json", span))
+	protobufCapture := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, captureFixtureWithEncoding("protobuf", span))
+	jsonOverflow := captureSpan(1, 1, 0, "JSON overflow")
+	jsonOverflow["startTimeUnixNano"] = "170141183460469231731687303715884105727"
+	jsonOverflow["endTimeUnixNano"] = "170141183460469231731687303715884105728"
+	overflowCapture := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, captureFixtureWithEncoding("json", jsonOverflow))
+	if len(jsonCapture.Diagnostics) != 0 || len(jsonCapture.Shape.Traces) != 1 {
+		t.Fatalf("sink-accepted JSON timestamps were discarded: %+v", jsonCapture)
+	}
+	if len(protobufCapture.Diagnostics) != 1 || len(protobufCapture.Shape.Traces) != 0 {
+		t.Fatalf("protobuf timestamp overflow entered topology: %+v", protobufCapture)
+	}
+	if len(overflowCapture.Diagnostics) != 1 || len(overflowCapture.Shape.Traces) != 0 {
+		t.Fatalf("JSON i128 timestamp overflow entered topology: %+v", overflowCapture)
 	}
 }
 func TestCaptureRejectsMistypedScopeName(t *testing.T) {

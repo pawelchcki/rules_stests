@@ -661,13 +661,18 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 	if _, err := decoder.Token(); err != io.EOF {
 		return fail(fmt.Errorf("trailing capture data"))
 	}
-	maxSpanTimestamp := new(big.Int).SetUint64(^uint64(0))
+	maxProtobufSpanTimestamp := new(big.Int).SetUint64(^uint64(0))
+	maxJSONSpanTimestamp := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 127), big.NewInt(1))
 	for _, record := range records {
 		r := object(record)
 		if str(r["signal"]) != "traces" {
 			continue
 		}
 		encoding := str(r["encoding"])
+		maxSpanTimestamp := maxProtobufSpanTimestamp
+		if encoding == "json" {
+			maxSpanTimestamp = maxJSONSpanTimestamp
+		}
 		if encoding == "json" && !withinJSONNodeLimit(r["payload"]) {
 			return fail(fmt.Errorf("JSON value exceeds structural limit of %d nodes", maxJSONValueNodes))
 		}
