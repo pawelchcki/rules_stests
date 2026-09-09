@@ -221,6 +221,9 @@ func TestCaptureRejectsSinkInvalidSpanFields(t *testing.T) {
 		"invalid base64 AnyValue": fixture(func(span map[string]any) {
 			span["attributes"] = []any{map[string]any{"key": "invalid", "value": map[string]any{"bytesValue": "%%%"}}}
 		}),
+		"nonzero base64 padding bits": fixture(func(span map[string]any) {
+			span["attributes"] = []any{map[string]any{"key": "invalid", "value": map[string]any{"bytesValue": "AB=="}}}
+		}),
 		"unknown span field": fixture(func(span map[string]any) {
 			span["nmae"] = "typo"
 		}),
@@ -319,6 +322,16 @@ func TestCaptureRetainsMissingAndInvalidLinkIdentities(t *testing.T) {
 		t.Fatalf("sink-accepted invalid links were discarded: %+v", d.Spans[0].LinkTargets)
 	}
 }
+func TestCaptureDoesNotShareUnidentifiedLinkTargets(t *testing.T) {
+	first, second := captureSpan(1, 1, 0, "first"), captureSpan(2, 1, 0, "second")
+	first["links"], second["links"] = []any{map[string]any{}}, []any{map[string]any{}}
+	d := decodedFixture(t, "unidentified links", first, second)
+	for _, span := range d.Spans {
+		if len(span.LinkTargets) != 1 || strings.Contains(span.LinkTargets[0], "shared target") {
+			t.Fatalf("unidentified links were assigned a shared target: %+v", d.Spans)
+		}
+	}
+}
 func TestCaptureRepresentsZeroTelemetry(t *testing.T) {
 	for name, raw := range map[string][]byte{
 		"empty traces":   []byte(`[{"signal":"traces","encoding":"json","payload":{"resourceSpans":[]}}]`),
@@ -381,15 +394,21 @@ func TestCaptureRejectsMalformedTopLevelWireAlias(t *testing.T) {
 	}
 }
 func TestCaptureRetainsSinkAcceptedEntityReferenceKeys(t *testing.T) {
-	raw := bytes.Replace(
+	numericRaw := bytes.Replace(
 		captureFixture(captureSpan(1, 1, 0, "span")),
 		[]byte(`"resource":{"attributes"`),
 		[]byte(`"resource":{"entityRefs":[{"type":7,"idKeys":[7],"descriptionKeys":9}],"attributes"`),
 		1,
 	)
-	d := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, raw)
-	if len(d.Diagnostics) != 0 || len(d.Shape.Traces) != 1 || !strings.Contains(canonical(d.Resources), `"type":"7"`) || !strings.Contains(canonical(d.Resources), `"idKeys":["7"]`) || !strings.Contains(canonical(d.Resources), `"descriptionKeys":"9"`) {
-		t.Fatalf("sink-accepted entity reference keys were discarded: %+v", d)
+	stringRaw := bytes.Replace(numericRaw, []byte(`{"type":7,"idKeys":[7],"descriptionKeys":9}`), []byte(`{"type":"7","idKeys":["7"],"descriptionKeys":"9"}`), 1)
+	numeric := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, numericRaw)
+	stringValue := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, stringRaw)
+	numericResources, stringResources := canonical(numeric.Resources), canonical(stringValue.Resources)
+	if len(numeric.Diagnostics) != 0 || len(numeric.Shape.Traces) != 1 || !strings.Contains(numericResources, `"type":7`) || !strings.Contains(numericResources, `"idKeys":[7]`) || !strings.Contains(numericResources, `"descriptionKeys":9`) {
+		t.Fatalf("sink-accepted entity reference keys were discarded: %+v", numeric)
+	}
+	if len(stringValue.Diagnostics) != 0 || numericResources == stringResources {
+		t.Fatalf("entity reference value types were collapsed: %s", numericResources)
 	}
 }
 func TestCaptureRejectsMultipleExplicitRoots(t *testing.T) {

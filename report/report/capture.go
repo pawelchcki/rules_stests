@@ -202,7 +202,7 @@ func protocolUint32Field(context, key string) bool {
 
 func canonicalBytes(value string) (string, bool) {
 	normalized := strings.NewReplacer("-", "+", "_", "/").Replace(value)
-	for _, encoding := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding} {
+	for _, encoding := range []*base64.Encoding{base64.StdEncoding.Strict(), base64.RawStdEncoding.Strict()} {
 		if raw, err := encoding.DecodeString(normalized); err == nil {
 			return base64.StdEncoding.EncodeToString(raw), true
 		}
@@ -215,13 +215,16 @@ var decimalFloat = regexp.MustCompile(`^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:
 func normalizeWireContext(v any, context, encoding string) (any, error) {
 	switch v := v.(type) {
 	case json.Number:
-		if context == "identity" {
+		if context == "identity" || context == "entityRefValue" {
 			return v, nil
 		}
 		return v.String(), nil
 	case []any:
 		out := make([]any, len(v))
 		childContext := ""
+		if context == "entityRefValue" {
+			childContext = context
+		}
 		switch context {
 		case "resourceSpans":
 			childContext = "resourceSpan"
@@ -241,7 +244,7 @@ func normalizeWireContext(v any, context, encoding string) (any, error) {
 			childContext = "keyValue"
 		}
 		for i, c := range v {
-			if childContext != "" {
+			if childContext != "" && childContext != "entityRefValue" {
 				if _, ok := c.(map[string]any); !ok {
 					return nil, fmt.Errorf("invalid OTLP %s element: expected object", context)
 				}
@@ -264,6 +267,9 @@ func normalizeWireContext(v any, context, encoding string) (any, error) {
 				return nil, fmt.Errorf("duplicate OTLP JSON field spellings for %q", key)
 			}
 			childContext := ""
+			if context == "entityRefValue" {
+				childContext = context
+			}
 			switch {
 			case context == "tracePayload" && key == "resourceSpans":
 				childContext = "resourceSpans"
@@ -273,8 +279,8 @@ func normalizeWireContext(v any, context, encoding string) (any, error) {
 				childContext = "scopeSpans"
 			case context == "resource" && key == "entityRefs":
 				childContext = "entityRefs"
-			case context == "entityRef" && (key == "idKeys" || key == "descriptionKeys"):
-				childContext = key
+			case context == "entityRef" && (key == "type" || key == "idKeys" || key == "descriptionKeys"):
+				childContext = "entityRefValue"
 			case context == "scopeSpan" && key == "scope":
 				childContext = "scope"
 			case context == "scopeSpan" && key == "spans":
@@ -1225,8 +1231,11 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 	for i := range d.Spans {
 		for linkIndex, l := range array(d.Spans[i].Fields["links"]) {
 			link := object(l)
-			tid, _ := linkIdentity(link["traceId"], 16)
-			sid, _ := linkIdentity(link["spanId"], 8)
+			tid, validTraceID := linkIdentity(link["traceId"], 16)
+			sid, validSpanID := linkIdentity(link["spanId"], 8)
+			if !validTraceID || !validSpanID {
+				continue
+			}
 			key := tid + "/" + sid
 			linkTargetSources[key] = append(linkTargetSources[key], fmt.Sprintf("%s occurrence %s link %d", path(i), sourceOccurrenceKeys[i], linkIndex))
 			linkTargetSourcesWithoutScope[key] = append(linkTargetSourcesWithoutScope[key], fmt.Sprintf("%s occurrence %s link %d", path(i), sourceOccurrenceKeysWithoutScope[i], linkIndex))
