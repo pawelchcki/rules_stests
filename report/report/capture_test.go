@@ -136,10 +136,13 @@ func TestCaptureRejectsSinkInvalidSpanFields(t *testing.T) {
 		return captureFixture(span)
 	}
 	for name, raw := range map[string][]byte{
-		"missing name":     fixture(func(span map[string]any) { delete(span, "name") }),
-		"empty name":       fixture(func(span map[string]any) { span["name"] = "" }),
-		"zero start":       fixture(func(span map[string]any) { span["startTimeUnixNano"] = "0" }),
-		"reversed":         fixture(func(span map[string]any) { span["endTimeUnixNano"] = "1" }),
+		"missing name": fixture(func(span map[string]any) { delete(span, "name") }),
+		"empty name":   fixture(func(span map[string]any) { span["name"] = "" }),
+		"zero start":   fixture(func(span map[string]any) { span["startTimeUnixNano"] = "0" }),
+		"reversed":     fixture(func(span map[string]any) { span["endTimeUnixNano"] = "1" }),
+		"timestamp overflow": fixture(func(span map[string]any) {
+			span["endTimeUnixNano"] = "18446744073709551616"
+		}),
 		"numeric trace ID": fixture(func(span map[string]any) { span["traceId"] = json.Number("11111111111111111111111111111111") }),
 		"numeric span ID":  fixture(func(span map[string]any) { span["spanId"] = json.Number("1111111111111111") }),
 		"numeric parent ID": fixture(func(span map[string]any) {
@@ -190,15 +193,15 @@ func TestCaptureRejectsCollidingWireFieldSpellings(t *testing.T) {
 		}
 	}
 }
-func TestCaptureMarksMultipleRootsPartial(t *testing.T) {
-	multipleRoots := decodedFixture(t, "multiple-roots", captureSpan(1, 1, 0, "first"), captureSpan(1, 2, 0, "second"))
-	if multipleRoots.Shape.Traces[0].Coverage != "partial" {
-		t.Fatalf("multi-root trace reported as complete: %+v", multipleRoots.Shape.Traces)
+func TestCaptureRejectsMultipleExplicitRoots(t *testing.T) {
+	d := DecodeCapture(ValidationReceipt{}, captureFixture(captureSpan(1, 1, 0, "first"), captureSpan(1, 2, 0, "second")))
+	if len(d.Diagnostics) != 1 || !strings.Contains(d.Diagnostics[0], "multiple explicit roots") || len(d.Shape.Traces) != 0 {
+		t.Fatalf("multiple explicit roots entered topology: %+v", d)
 	}
 }
 func TestCapturePreservesPartialTraceRootCooccurrence(t *testing.T) {
 	root := func(trace, span int, value string) map[string]any {
-		s := captureSpan(trace, span, 0, "root")
+		s := captureSpan(trace, span, 100+span, "root")
 		s["attributes"] = []any{map[string]any{"key": "variant", "value": map[string]any{"stringValue": value}}}
 		return s
 	}

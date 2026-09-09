@@ -353,7 +353,7 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 	if e := decoder.Decode(new(any)); e != io.EOF {
 		return fail(fmt.Errorf("trailing capture data"))
 	}
-	maxSpanTimestamp := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 127), big.NewInt(1))
+	maxSpanTimestamp := new(big.Int).SetUint64(^uint64(0))
 	for _, record := range records {
 		r := object(record)
 		if str(r["signal"]) != "traces" {
@@ -478,6 +478,7 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 	traceIDs := make([]string, len(d.Spans))
 	spanIDs := make([]string, len(d.Spans))
 	parentIDs := make([]string, len(d.Spans))
+	explicitRoots := map[string]int{}
 	for i, s := range d.Spans {
 		var e error
 		traceIDs[i], e = identity(s.Fields["traceId"], 16, false)
@@ -491,6 +492,12 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 		parentIDs[i], e = identity(s.Fields["parentSpanId"], 8, true)
 		if e != nil {
 			return fail(e)
+		}
+		if parentIDs[i] == "" {
+			explicitRoots[traceIDs[i]]++
+			if explicitRoots[traceIDs[i]] > 1 {
+				return fail(fmt.Errorf("trace %q has multiple explicit roots", traceIDs[i]))
+			}
 		}
 		key := traceIDs[i] + "/" + spanIDs[i]
 		if _, ok := ids[key]; ok {
