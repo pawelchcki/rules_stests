@@ -156,13 +156,6 @@ func metricObjects(c capture, kind string) []object {
 	}
 	return out
 }
-func exemplarCount(c capture) int {
-	n := 0
-	for _, m := range c.Metrics {
-		n += len(objects(m, "exemplars"))
-	}
-	return n
-}
 
 type observation struct {
 	Case       string   `json:"case"`
@@ -245,8 +238,6 @@ func evaluate(e experiment, baseline, changed capture) observation {
 			switch {
 			case actual == 0:
 				o.Violations = append(o.Violations, "no-batches")
-			case actual == prior:
-				o.Violations = append(o.Violations, "batch-size-unchanged")
 			case actual > 1:
 				o.Violations = append(o.Violations, "batch-limit-exceeded")
 			}
@@ -260,6 +251,7 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		check(eligible > 0 && len(baseline.Spans) == 0, len(changed.Spans) == 0 && after > 0, fmt.Sprintf("%d control metric names without exemplars; AlwaysOn exemplars for those names %d; exported spans %d", eligible, after, len(changed.Spans)))
 	case "request-headers":
 		before, after := probeSpans(baseline), probeSpans(changed)
+		beforeRequests, afterRequests := incomingProbeTraces(before), incomingProbeTraces(after)
 		captured, malformed := 0, 0
 		for _, s := range after {
 			present, exact := headerArrayStatus(s)
@@ -269,7 +261,7 @@ func evaluate(e experiment, baseline, changed capture) observation {
 				malformed++
 			}
 		}
-		check(len(before) == 4, len(after) == 4 && captured == 4, fmt.Sprintf("probe server spans %d -> %d; exact header arrays %d/4", len(before), len(after), captured))
+		check(len(before) == 4 && len(beforeRequests) == 4, len(after) == 4 && len(afterRequests) == 4 && captured == 4, fmt.Sprintf("distinct probe requests %d -> %d; server spans %d -> %d; exact header arrays %d/4", len(beforeRequests), len(afterRequests), len(before), len(after), captured))
 		if o.Status == "gap" {
 			if captured != 4 {
 				o.Violations = append(o.Violations, fmt.Sprintf("header-arrays=%d", captured))
@@ -338,10 +330,12 @@ func evaluate(e experiment, baseline, changed capture) observation {
 	case "events":
 		check(len(events(baseline)) > 0, len(changed.Spans) > 0 && len(events(changed)) == 0 && dropped(changed.Spans, "dropped_events_count") > 0, fmt.Sprintf("events %d -> %d; dropped %d", len(events(baseline)), len(events(changed)), dropped(changed.Spans, "dropped_events_count")))
 	case "exemplars":
-		check(exemplarCount(baseline) > 0, len(changed.Metrics) > 0 && exemplarCount(changed) == 0, fmt.Sprintf("exemplars %d -> %d; metric descriptors %d", exemplarCount(baseline), exemplarCount(changed), len(changed.Metrics)))
+		before, preserved, remaining := suppressedExemplars(baseline, changed)
+		check(before > 0, preserved == before && remaining == 0, fmt.Sprintf("exemplar-bearing metric identities preserved %d/%d; remaining exemplars %d", preserved, before, remaining))
 	case "histogram":
-		before, after := len(metricObjects(baseline, "histogram")), len(metricObjects(changed, "exponential_histogram"))
-		check(before > 0, after > 0 && len(metricObjects(changed, "histogram")) == 0, fmt.Sprintf("explicit histogram exports %d -> %d; exponential exports %d", before, len(metricObjects(changed, "histogram")), after))
+		before, converted := convertedHistograms(baseline, changed)
+		remaining := len(metricObjects(changed, "histogram"))
+		check(before > 0, converted == before && remaining == 0, fmt.Sprintf("baseline histogram identities converted %d/%d; remaining explicit exports %d", converted, before, remaining))
 	default:
 		panic("unknown experiment: " + e.Name)
 	}
@@ -376,6 +370,15 @@ func incomingTrace(id string) bool {
 	}
 	return false
 }
+func incomingProbeTraces(spans []object) map[string]bool {
+	traces := map[string]bool{}
+	for _, s := range spans {
+		if id, ok := field(s, "trace_id").(string); ok && incomingTrace(id) {
+			traces[id] = true
+		}
+	}
+	return traces
+}
 func validTrace(id string) bool {
 	decoded, err := hex.DecodeString(id)
 	return err == nil && len(decoded) == 16 && id != strings.Repeat("0", 32)
@@ -406,6 +409,55 @@ func headerArrayStatus(s object) (bool, bool) {
 func headerArray(s object) bool {
 	_, exact := headerArrayStatus(s)
 	return exact
+}
+
+func metricID(m object) string {
+	name, _ := field(m, "name").(string)
+	if name == "" {
+		return ""
+	}
+	unit, _ := field(m, "unit").(string)
+	description, _ := field(m, "description").(string)
+	return name + "\x00" + unit + "\x00" + description
+}
+
+func suppressedExemplars(before, after capture) (int, int, int) {
+	eligible := map[string]bool{}
+	for _, m := range before.Metrics {
+		if id := metricID(m); id != "" && len(objects(m, "data_points")) > 0 && len(objects(m, "exemplars")) > 0 {
+			eligible[id] = true
+		}
+	}
+	preserved := map[string]bool{}
+	remaining := 0
+	for _, m := range after.Metrics {
+		id := metricID(m)
+		if !eligible[id] {
+			continue
+		}
+		if len(objects(m, "data_points")) > 0 {
+			preserved[id] = true
+		}
+		remaining += len(objects(m, "exemplars"))
+	}
+	return len(eligible), len(preserved), remaining
+}
+
+func convertedHistograms(before, after capture) (int, int) {
+	eligible := map[string]bool{}
+	for _, m := range before.Metrics {
+		if id := metricID(m); id != "" && len(objects(m, "histogram")) > 0 && len(objects(m, "data_points")) > 0 {
+			eligible[id] = true
+		}
+	}
+	converted := map[string]bool{}
+	for _, m := range after.Metrics {
+		id := metricID(m)
+		if eligible[id] && len(objects(m, "exponential_histogram")) > 0 && len(objects(m, "data_points")) > 0 {
+			converted[id] = true
+		}
+	}
+	return len(eligible), len(converted)
 }
 
 // Active-request metrics may record against a sampled remote parent before

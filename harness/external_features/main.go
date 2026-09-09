@@ -283,13 +283,20 @@ func collect(app, launcher string, args []string, sink, out string, e experiment
 		// Gin's instrumentation intercepts SIGTERM and flushes the SDK but
 		// leaves the HTTP server running. Lifecycle shutdown is not a feature
 		// claimed by these experiments; stop this owned process after its grace.
-		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil {
+		if err := killAfterGrace(done, func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }); err != nil {
 			return nil, err
 		}
-		<-done
 		stopped = true
 	}
 	return request("GET", sink+"/dump", nil)
+}
+
+func killAfterGrace(done <-chan error, kill func() error) error {
+	if err := kill(); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	<-done
+	return nil
 }
 
 type startupExit struct{ cause error }

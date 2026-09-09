@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/pawelchcki/rules_stests/report"
@@ -163,9 +164,9 @@ func TestExperimentsRequireBaselineAndRejectIgnoredSettings(t *testing.T) {
 			case "log-count":
 				changed.Logs = []object{{"attributes": []any{attr("first", "value")}, "dropped_attributes_count": float64(2)}}
 			case "exemplars":
-				changed.Metrics = []object{{"histogram": object{"dataPoints": []any{object{"count": "1"}}}}}
+				changed.Metrics = []object{{"name": "probe.metric", "histogram": object{"dataPoints": []any{object{"count": "1"}}}}}
 			case "histogram":
-				changed.Metrics = []object{{"data": object{"exponential_histogram": object{"data_points": []any{object{"count": float64(1)}}}}}}
+				changed.Metrics = []object{{"name": "probe.metric", "data": object{"exponential_histogram": object{"data_points": []any{object{"count": float64(1)}}}}}}
 			default:
 				t.Fatal("missing positive fixture")
 			}
@@ -263,6 +264,11 @@ func TestGapSignaturesPreserveFailureModes(t *testing.T) {
 	if ignored, missing := evaluate(spanBatch, baseline, baseline).signature(), evaluate(spanBatch, baseline, capture{}).signature(); ignored == missing {
 		t.Fatalf("missing telemetry matched ignored batch limit: %q", ignored)
 	}
+	jittered := baseline
+	jittered.Records = []object{batchRecord("traces", "spans", jittered.Spans[:3])}
+	if unchanged, jitter := evaluate(spanBatch, baseline, baseline).signature(), evaluate(spanBatch, baseline, jittered).signature(); unchanged != jitter {
+		t.Fatalf("batch-count jitter changed the limit-violation signature: %q != %q", unchanged, jitter)
+	}
 
 	headers := experiment{Name: "request-headers"}
 	if absent, missing := evaluate(headers, capture{Spans: syntheticProbeSpans()}, capture{Spans: syntheticProbeSpans()}).signature(), evaluate(headers, capture{Spans: syntheticProbeSpans()}, capture{}).signature(); absent == missing {
@@ -283,6 +289,19 @@ func TestGapSignaturesPreserveFailureModes(t *testing.T) {
 	}
 	if absent, invalid := evaluate(headers, capture{Spans: syntheticProbeSpans()}, capture{Spans: syntheticProbeSpans()}).signature(), evaluate(headers, capture{Spans: syntheticProbeSpans()}, malformed).signature(); absent == invalid {
 		t.Fatalf("malformed headers matched absent headers: %q", absent)
+	}
+}
+
+func TestMetricChangesPreserveInstrumentIdentity(t *testing.T) {
+	baseline := baselineCapture()
+	unrelated := capture{Metrics: []object{
+		{"name": "unrelated.metric", "data": object{"exponential_histogram": object{"data_points": []any{object{"count": float64(1)}}}}},
+	}}
+	if got := evaluate(experiment{Name: "exemplars"}, baseline, unrelated); got.Status == "pass" {
+		t.Fatal("unrelated metric stood in for the exemplar-bearing instrument")
+	}
+	if got := evaluate(experiment{Name: "histogram"}, baseline, unrelated); got.Status == "pass" {
+		t.Fatal("unrelated exponential histogram stood in for the baseline instrument")
 	}
 }
 
@@ -387,6 +406,26 @@ func TestCapturedHeaderMustBeAnExactArray(t *testing.T) {
 		if headerArray(s) {
 			t.Fatal("empty, mixed or incorrect array accepted")
 		}
+	}
+}
+
+func TestCapturedHeadersRequireDistinctRequests(t *testing.T) {
+	baseline := capture{Spans: syntheticProbeSpans()}
+	changed := capture{Spans: syntheticProbeSpans()}
+	changed.Spans[3]["trace_id"] = field(changed.Spans[2], "trace_id")
+	for _, s := range changed.Spans {
+		s["attributes"] = append(s["attributes"].([]any), object{"key": "http.request.header.x_probe_feature", "value": object{"arrayValue": object{"values": []any{object{"stringValue": "visible"}}}}})
+	}
+	if got := evaluate(experiment{Name: "request-headers"}, baseline, changed); got.Status == "pass" {
+		t.Fatal("duplicate request stood in for a missing header capture")
+	}
+}
+
+func TestKillAfterGraceToleratesExitedProcess(t *testing.T) {
+	done := make(chan error, 1)
+	done <- nil
+	if err := killAfterGrace(done, func() error { return syscall.ESRCH }); err != nil {
+		t.Fatalf("already-exited process failed shutdown: %v", err)
 	}
 }
 

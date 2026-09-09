@@ -16,7 +16,7 @@
     "log-length": "gap:request=32", "exemplars": "pass", "histogram": "pass"
   },
   "gin": {
-	"default-service":"gap:service.name=missing", "span-batch":"gap:batch-size-unchanged", "log-batch":"not_exercised",
+	"default-service":"gap:service.name=missing", "span-batch":"gap:batch-limit-exceeded", "log-batch":"not_exercised",
 	"exemplars-always-on":"pass", "request-headers":"gap:header-arrays=0", "propagation-none":"pass",
     "resource": "pass", "disabled": "pass", "sampler": "pass", "sampler-arg": "pass",
     "span-length": "pass", "attribute-length": "pass", "attribute-count": "pass",
