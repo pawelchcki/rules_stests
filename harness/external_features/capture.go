@@ -187,10 +187,32 @@ func maxLength(items []object) int {
 	n := 0
 	for _, o := range items {
 		for _, a := range attributes(o) {
-			if s, ok := stringValue(field(a, "value")); ok {
-				if size := utf8.RuneCountInString(s); size > n {
-					n = size
+			if size := maxStringValueLength(field(a, "value")); size > n {
+				n = size
+			}
+		}
+	}
+	return n
+}
+func maxStringValueLength(v any) int {
+	n := 0
+	switch v := v.(type) {
+	case map[string]any:
+		for key, child := range v {
+			if canonical(key) == canonical("string_value") {
+				if value, ok := child.(string); ok {
+					n = utf8.RuneCountInString(value)
 				}
+				continue
+			}
+			if size := maxStringValueLength(child); size > n {
+				n = size
+			}
+		}
+	case []any:
+		for _, child := range v {
+			if size := maxStringValueLength(child); size > n {
+				n = size
 			}
 		}
 	}
@@ -240,10 +262,11 @@ func evaluate(e experiment, baseline, changed capture) observation {
 	case "default-service":
 		ok := len(changed.Resources) > 0
 		beforeProbes, afterProbes := probeSpans(baseline), probeSpans(changed)
+		expectedRequests, presentRequests := preservedProbeRequests(baseline, changed)
 		preserved := (len(baseline.Spans) == 0 || len(changed.Spans) > 0) &&
 			(len(baseline.Logs) == 0 || len(changed.Logs) > 0) &&
 			(len(baseline.Metrics) == 0 || len(changed.Metrics) > 0) &&
-			(len(beforeProbes) == 0 || len(afterProbes) == len(beforeProbes))
+			(len(beforeProbes) == 0 || (len(afterProbes) == len(beforeProbes) && presentRequests == expectedRequests))
 		violations := map[string]bool{}
 		for _, r := range changed.Resources {
 			name, present, valid := stringAttribute(r, "service.name")
@@ -269,6 +292,9 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		}
 		if len(beforeProbes) > 0 && len(afterProbes) != len(beforeProbes) {
 			violations[fmt.Sprintf("probe-spans=%d", len(afterProbes))] = true
+		}
+		if expectedRequests > 0 && presentRequests != expectedRequests {
+			violations[fmt.Sprintf("requests=%d", presentRequests)] = true
 		}
 		for v := range violations {
 			o.Violations = append(o.Violations, v)
@@ -380,8 +406,8 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		violations := map[string]bool{}
 		for _, item := range after {
 			for _, a := range attributes(item) {
-				if s, ok := stringValue(field(a, "value")); ok && utf8.RuneCountInString(s) > 8 {
-					violations[fmt.Sprintf("%v=%d", field(a, "key"), utf8.RuneCountInString(s))] = true
+				if size := maxStringValueLength(field(a, "value")); size > 8 {
+					violations[fmt.Sprintf("%v=%d", field(a, "key"), size)] = true
 				}
 			}
 		}
@@ -394,18 +420,20 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		preserved, expected, present := true, 0, 0
 		if e.Name == "event-attributes" {
 			before, after, cap = events(baseline), events(changed), 1
+			expected, present = limitedEventRecords(baseline, changed, cap)
+			preserved = expected == 0 || present == expected
 		}
 		if e.Name == "log-count" {
 			before, after, cap = baseline.Logs, changed.Logs, 1
 			expected, present = limitedCountLogRecords(before, after, cap)
 			preserved = expected == 0 || present == expected
-		} else {
+		} else if e.Name != "event-attributes" {
 			expected, present = preservedProbeRequests(baseline, changed)
 			preserved = expected == 0 || present == expected
 		}
 		check(maxAttributes(before) > cap, len(after) > 0 && maxAttributes(after) == cap && dropped(after, "dropped_attributes_count") > 0 && preserved, fmt.Sprintf("maximum attributes %d -> %d; cap %d; dropped %d; baseline record identities preserved %d/%d", maxAttributes(before), maxAttributes(after), cap, dropped(after, "dropped_attributes_count"), present, expected))
 	case "events":
-		expected, present := preservedProbeRequests(baseline, changed)
+		expected, present := suppressedEventRecords(baseline, changed)
 		preserved := expected == 0 || present == expected
 		check(len(events(baseline)) > 0, len(changed.Spans) > 0 && len(events(changed)) == 0 && dropped(changed.Spans, "dropped_events_count") > 0 && preserved, fmt.Sprintf("events %d -> %d; dropped %d; workload requests preserved %d/%d", len(events(baseline)), len(events(changed)), dropped(changed.Spans, "dropped_events_count"), present, expected))
 	case "exemplars":
@@ -553,6 +581,56 @@ func limitedCountLogRecords(before, after []object, limit int) (int, int) {
 	return expected, present
 }
 
+func limitedEventRecords(before, after capture, limit int) (int, int) {
+	eligible := map[string]int{}
+	for _, span := range before.Spans {
+		spanName, _ := field(span, "name").(string)
+		for _, event := range objects(span, "events") {
+			eventName, _ := field(event, "name").(string)
+			if spanName != "" && eventName != "" && len(attributes(event)) > limit {
+				eligible[spanName+"\x00"+eventName]++
+			}
+		}
+	}
+	preserved := map[string]int{}
+	for _, span := range after.Spans {
+		spanName, _ := field(span, "name").(string)
+		for _, event := range objects(span, "events") {
+			eventName, _ := field(event, "name").(string)
+			key := spanName + "\x00" + eventName
+			if preserved[key] < eligible[key] && len(attributes(event)) == limit && number(field(event, "dropped_attributes_count")) > 0 {
+				preserved[key]++
+			}
+		}
+	}
+	return countIdentities(eligible), countIdentities(preserved)
+}
+
+func suppressedEventRecords(before, after capture) (int, int) {
+	eligible := map[string]int{}
+	for _, span := range before.Spans {
+		if name, ok := field(span, "name").(string); ok && name != "" && len(objects(span, "events")) > 0 {
+			eligible[name]++
+		}
+	}
+	preserved := map[string]int{}
+	for _, span := range after.Spans {
+		name, _ := field(span, "name").(string)
+		if preserved[name] < eligible[name] && len(objects(span, "events")) == 0 && number(field(span, "dropped_events_count")) > 0 {
+			preserved[name]++
+		}
+	}
+	return countIdentities(eligible), countIdentities(preserved)
+}
+
+func countIdentities(items map[string]int) int {
+	total := 0
+	for _, count := range items {
+		total += count
+	}
+	return total
+}
+
 func captureMetricStreams(c capture) []metricStream {
 	if len(c.MetricStreams) > 0 {
 		return c.MetricStreams
@@ -601,13 +679,13 @@ func suppressedExemplars(before, after capture) (int, int, int) {
 	remaining := 0
 	for _, stream := range captureMetricStreams(after) {
 		id := metricID(stream) + "\x00" + metricDataType(stream.Metric)
+		remaining += len(objects(stream.Metric, "exemplars"))
 		if !eligible[id] {
 			continue
 		}
 		if len(objects(stream.Metric, "data_points")) > 0 {
 			preserved[id] = true
 		}
-		remaining += len(objects(stream.Metric, "exemplars"))
 	}
 	return len(eligible), len(preserved), remaining
 }

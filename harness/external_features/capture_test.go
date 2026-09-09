@@ -313,6 +313,12 @@ func TestGapSignaturesPreserveFailureModes(t *testing.T) {
 	if empty, invalid := evaluate(experiment{Name: "default-service"}, capture{Resources: []object{{}}}, emptyService).signature(), evaluate(experiment{Name: "default-service"}, capture{Resources: []object{{}}}, malformedService).signature(); empty == invalid {
 		t.Fatalf("malformed service.name matched an empty string: %q", empty)
 	}
+	identityBaseline := capture{Resources: []object{{}}, Spans: syntheticProbeSpans()}
+	duplicatedDefault := capture{Resources: []object{{}}, Spans: syntheticProbeSpans()}
+	duplicatedDefault.Spans[3]["trace_id"] = field(duplicatedDefault.Spans[2], "trace_id")
+	if preserved, missingRequest := evaluate(experiment{Name: "default-service"}, identityBaseline, identityBaseline).signature(), evaluate(experiment{Name: "default-service"}, identityBaseline, duplicatedDefault).signature(); preserved == missingRequest {
+		t.Fatalf("default-service gap hid a missing request: %q", preserved)
+	}
 }
 
 func TestMetricChangesPreserveInstrumentIdentity(t *testing.T) {
@@ -347,6 +353,16 @@ func TestMetricChangesPreserveInstrumentIdentity(t *testing.T) {
 	if got := evaluate(experiment{Name: "exemplars"}, baseline, changed); got.Status == "pass" {
 		t.Fatal("a different metric type stood in for exemplar-bearing histograms")
 	}
+	preserved := object{"name": "shared.metric", "histogram": object{"dataPoints": []any{object{"count": "1"}}}}
+	newExemplars := object{"name": "new.metric", "histogram": object{"dataPoints": []any{object{"count": "1", "exemplars": []any{object{"timeUnixNano": "1"}}}}}}
+	changed = capture{Metrics: []object{preserved, newExemplars}, MetricStreams: []metricStream{
+		{Metric: preserved, Scope: object{"name": "scope.one"}},
+		{Metric: preserved, Scope: object{"name": "scope.two"}},
+		{Metric: newExemplars, Scope: object{"name": "scope.one"}},
+	}}
+	if got := evaluate(experiment{Name: "exemplars"}, baseline, changed); got.Status == "pass" {
+		t.Fatal("new metric stream exported exemplars under the SDK-wide filter")
+	}
 }
 
 func TestLengthLimitsPreserveBaselineRecords(t *testing.T) {
@@ -362,6 +378,11 @@ func TestLengthLimitsPreserveBaselineRecords(t *testing.T) {
 	if got := evaluate(experiment{Name: "log-length"}, logBaseline, unrelatedLog); got.Status == "pass" {
 		t.Fatal("unrelated log stood in for the baseline log record")
 	}
+	arrayValue := object{"arrayValue": object{"values": []any{object{"stringValue": "long array member"}}}}
+	arraySpan := capture{Spans: []object{{"attributes": []any{attr("scalar", "12345678"), object{"key": "array", "value": arrayValue}}}}}
+	if got := evaluate(experiment{Name: "span-length"}, baselineCapture(), arraySpan); got.Status == "pass" {
+		t.Fatal("oversized string array member was ignored")
+	}
 }
 
 func TestCountLimitsPreserveBaselineRecords(t *testing.T) {
@@ -376,6 +397,16 @@ func TestCountLimitsPreserveBaselineRecords(t *testing.T) {
 	unrelatedLog := capture{Logs: []object{{"body": object{"stringValue": "unrelated log"}, "attributes": []any{attr("first", "value")}, "droppedAttributesCount": float64(1)}}}
 	if got := evaluate(experiment{Name: "log-count"}, logBaseline, unrelatedLog); got.Status == "pass" {
 		t.Fatal("unrelated log stood in for the baseline count-limited record")
+	}
+
+	eventBaseline := capture{Spans: []object{{"name": "INSERT", "events": []any{object{"name": "exception", "attributes": []any{attr("first", "value"), attr("second", "value")}}}}}}
+	unrelatedEvent := capture{Spans: []object{{"name": "SELECT", "events": []any{object{"name": "exception", "attributes": []any{attr("first", "value")}, "droppedAttributesCount": float64(1)}}}}}
+	if got := evaluate(experiment{Name: "event-attributes"}, eventBaseline, unrelatedEvent); got.Status == "pass" {
+		t.Fatal("unrelated event stood in for the baseline exception event")
+	}
+	suppressedEvent := capture{Spans: []object{{"name": "SELECT", "droppedEventsCount": float64(1)}}}
+	if got := evaluate(experiment{Name: "events"}, eventBaseline, suppressedEvent); got.Status == "pass" {
+		t.Fatal("unrelated span stood in for the baseline event-bearing span")
 	}
 }
 

@@ -271,18 +271,18 @@ func collectOnce(app, launcher string, args []string, sink, out string, e experi
 		if response, err := client.Get(base + "/api/tags"); err == nil {
 			io.Copy(io.Discard, response.Body)
 			response.Body.Close()
-			if response.StatusCode == 500 {
-				return nil, &workloadFailure{response.StatusCode}
-			}
-			if response.StatusCode == 200 {
+			if response.StatusCode == 200 || response.StatusCode == 500 {
 				// A concurrently launched fixture can briefly answer on a port this
 				// child lost before the bind failure reaches cmd.Wait. Let the child
-				// settle so that case is classified and retried before the workload.
+				// settle before accepting either success or a workload-level failure.
 				select {
 				case err := <-done:
 					stopped = true
 					return nil, classifyProcessExit(err, log)
 				case <-time.After(100 * time.Millisecond):
+				}
+				if response.StatusCode == 500 {
+					return nil, &workloadFailure{response.StatusCode}
 				}
 				ready = true
 				break
