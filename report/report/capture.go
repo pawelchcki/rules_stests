@@ -1102,13 +1102,44 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 			}
 			root := components[component][0]
 			rootKey := canonical([]any{base[root], memberDescriptions[root]})
+			rootCandidates := []int{root}
 			for _, member := range components[component][1:] {
 				candidate := canonical([]any{base[member], memberDescriptions[member]})
 				if candidate < rootKey {
 					root, rootKey = member, candidate
+					rootCandidates = []int{member}
+				} else if candidate == rootKey {
+					rootCandidates = append(rootCandidates, member)
 				}
 			}
-			adjacencyKey := digest([]byte(canonical(rootedCertificate(root))))[:12]
+			// A uniform simple cycle is vertex-transitive, so every tied root
+			// has the same complete certificate. Other ties need the exact
+			// certificate to avoid falling back to capture/DFS order.
+			uniformSimpleCycle := len(rootCandidates) == len(components[component])
+			if uniformSimpleCycle {
+				for _, member := range components[component] {
+					internal := 0
+					for _, edge := range edges[member] {
+						if edge.target >= 0 && componentOf[edge.target] == component {
+							internal++
+						}
+					}
+					if internal != 1 {
+						uniformSimpleCycle = false
+						break
+					}
+				}
+			}
+			rooted := canonical(rootedCertificate(root))
+			if len(rootCandidates) > 1 && !uniformSimpleCycle {
+				for _, candidate := range rootCandidates[1:] {
+					certificate := canonical(rootedCertificate(candidate))
+					if certificate < rooted {
+						root, rooted = candidate, certificate
+					}
+				}
+			}
+			adjacencyKey := digest([]byte(rooted))[:12]
 			sort.Strings(descriptions)
 			componentKeys[component] = digest([]byte(canonical([]any{descriptions, adjacencyKey})))[:12]
 			for _, member := range components[component] {

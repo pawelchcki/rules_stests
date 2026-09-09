@@ -666,6 +666,36 @@ func TestCaptureLargeLinkComponentIgnoresRecordOrder(t *testing.T) {
 		}
 	}
 }
+func TestCaptureLargeLocallyIdenticalComponentIgnoresRecordOrder(t *testing.T) {
+	const count = 65
+	spans := make([]map[string]any, count)
+	reversed := make([]map[string]any, count)
+	for i := range spans {
+		secondOffset := 2
+		if i == 0 {
+			secondOffset = 3
+		}
+		span := captureSpan(i+1, 1, 0, "identical")
+		span["links"] = []any{
+			map[string]any{"traceId": fmt.Sprintf("%032x", (i+1)%count+1), "spanId": fmt.Sprintf("%016x", 1)},
+			map[string]any{"traceId": fmt.Sprintf("%032x", (i+secondOffset)%count+1), "spanId": fmt.Sprintf("%016x", 1)},
+		}
+		spans[i] = span
+		reversed[count-1-i] = span
+	}
+	left := decodedFixture(t, "forward identical", spans...)
+	right := decodedFixture(t, "reversed identical", reversed...)
+	rightTargets := map[string]string{}
+	for _, span := range right.Spans {
+		rightTargets[str(span.Fields["traceId"])] = canonical(span.LinkTargets)
+	}
+	for _, span := range left.Spans {
+		traceID := str(span.Fields["traceId"])
+		if canonical(span.LinkTargets) != rightTargets[traceID] {
+			t.Fatalf("record order changed trace %s link targets: %s != %s", traceID, canonical(span.LinkTargets), rightTargets[traceID])
+		}
+	}
+}
 func TestCaptureLargeLinkGraphStaysBounded(t *testing.T) {
 	const count = 4096
 	spans := make([]map[string]any, 0, count)
