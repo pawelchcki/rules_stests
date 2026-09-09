@@ -56,11 +56,11 @@ type CaptureSpanMatch struct {
 	Right []int `json:"right,omitempty"`
 }
 
-// reportNumber keeps sink-accepted, intentionally untyped entity-reference
-// numbers distinct from strings without asking a browser to parse them as an
-// imprecise JavaScript Number. normalizeWireContext wraps every user-provided
-// object in the same value domain with $object, so this tag cannot collide with
-// a literal object from the capture.
+// reportNumber keeps sink-accepted numbers distinct from strings without
+// asking a browser to parse them as an imprecise JavaScript Number. In the
+// intentionally untyped value domains that use it, normalizeWireContext wraps
+// every user-provided object with $object, so this tag cannot collide with a
+// literal object from the capture.
 type reportNumber string
 
 func (n reportNumber) MarshalJSON() ([]byte, error) {
@@ -229,6 +229,11 @@ func normalizeWireContext(v any, context, encoding string) (any, error) {
 		if context == "entityRefValue" {
 			return reportNumber(v.String()), nil
 		}
+		if context == "eventTimestamp" {
+			if _, integer := new(big.Int).SetString(v.String(), 10); !integer {
+				return reportNumber(v.String()), nil
+			}
+		}
 		if context == "identity" {
 			return v, nil
 		}
@@ -238,6 +243,8 @@ func normalizeWireContext(v any, context, encoding string) (any, error) {
 		childContext := ""
 		if context == "entityRefValue" {
 			childContext = context
+		} else if context == "eventTimestamp" {
+			childContext = "entityRefValue"
 		}
 		switch context {
 		case "resourceSpans":
@@ -287,8 +294,8 @@ func normalizeWireContext(v any, context, encoding string) (any, error) {
 				return nil, fmt.Errorf("duplicate OTLP JSON field spellings for %q", key)
 			}
 			childContext := ""
-			if context == "entityRefValue" {
-				childContext = context
+			if context == "entityRefValue" || context == "eventTimestamp" {
+				childContext = "entityRefValue"
 			} else {
 				switch {
 				case context == "tracePayload" && key == "resourceSpans":
@@ -311,6 +318,8 @@ func normalizeWireContext(v any, context, encoding string) (any, error) {
 					childContext = "links"
 				case context == "span" && key == "status":
 					childContext = "status"
+				case context == "spanEvent" && key == "timeUnixNano":
+					childContext = "eventTimestamp"
 				case key == "traceId" || key == "spanId" || key == "parentSpanId":
 					childContext = "identity"
 				case context == "keyValue" && key == "value":
@@ -390,7 +399,7 @@ func normalizeWireContext(v any, context, encoding string) (any, error) {
 			}
 			out[key] = value
 		}
-		if context == "entityRefValue" {
+		if context == "entityRefValue" || context == "eventTimestamp" {
 			return map[string]any{"$object": out}, nil
 		}
 		// prost's AnyValue wraps the oneof in an additional `value` object.
@@ -958,8 +967,27 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 		}
 		return keys
 	}
-	sourceOccurrenceKeys := buildTargetOccurrenceKeys(true)
-	sourceOccurrenceKeysWithoutScope := buildTargetOccurrenceKeys(false)
+	withTraceOccurrenceSet := func(keys []string) []string {
+		traceSets := map[string]string{}
+		for traceID, indices := range traces {
+			occurrences := make([]string, 0, len(indices))
+			for _, i := range indices {
+				occurrences = append(occurrences, keys[i])
+			}
+			sort.Strings(occurrences)
+			traceSets[traceID] = digest([]byte(canonical(occurrences)))[:12]
+		}
+		out := make([]string, len(keys))
+		for i, key := range keys {
+			out[i] = digest([]byte(canonical([]any{key, traceSets[traceIDs[i]]})))[:12]
+		}
+		return out
+	}
+	// A target occurrence belongs to its ID-free trace occurrence set. This
+	// distinguishes otherwise-identical roots when their partial-trace co-roots
+	// differ, before link-graph refinement adds incoming and outgoing identity.
+	sourceOccurrenceKeys := withTraceOccurrenceSet(buildTargetOccurrenceKeys(true))
+	sourceOccurrenceKeysWithoutScope := withTraceOccurrenceSet(buildTargetOccurrenceKeys(false))
 	buildGraphAwareTargetKeys := func(base []string, targetDigests map[string]string) ([]string, error) {
 		type graphEdge struct {
 			relationship string

@@ -331,6 +331,22 @@ func TestCaptureCanonicalizesSpanAndEventTimestamps(t *testing.T) {
 		t.Fatalf("timestamps were not canonicalized: %+v", d.Spans[0].Fields)
 	}
 }
+func TestCapturePreservesNonIntegerEventTimestampTypes(t *testing.T) {
+	fixture := func(timestamp any) CaptureDataset {
+		span := captureSpan(1, 1, 0, "timestamps")
+		span["events"] = []any{map[string]any{"name": "event", "timeUnixNano": timestamp}}
+		return DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, captureFixture(span))
+	}
+	numeric := fixture(json.Number("1.5"))
+	stringValue := fixture("1.5")
+	if len(numeric.Diagnostics) != 0 || len(stringValue.Diagnostics) != 0 {
+		t.Fatalf("sink-accepted event timestamps were discarded: %v / %v", numeric.Diagnostics, stringValue.Diagnostics)
+	}
+	numericEvents, stringEvents := canonical(numeric.Spans[0].Fields["events"]), canonical(stringValue.Spans[0].Fields["events"])
+	if numericEvents == stringEvents || !strings.Contains(numericEvents, `"timeUnixNano":{"$number":"1.5"}`) {
+		t.Fatalf("non-integer event timestamp types were collapsed: %s / %s", numericEvents, stringEvents)
+	}
+}
 func TestCaptureRetainsMissingAndInvalidLinkIdentities(t *testing.T) {
 	span := captureSpan(1, 1, 0, "links")
 	span["links"] = []any{map[string]any{}, map[string]any{"traceId": "not-hex", "spanId": "bad"}}
@@ -607,6 +623,24 @@ func TestCaptureLinksPreserveSemanticTargetOccurrence(t *testing.T) {
 	right := decodedFixture(t, "right", span(1, 1, "target", "A"), span(2, 1, "target", "B"), linked(3, 2, "X"), linked(4, 1, "Y"))
 	if left.Spans[2].LinkTargets[0] == right.Spans[2].LinkTargets[0] || !strings.Contains(left.Spans[2].LinkTargets[0], "occurrence") {
 		t.Fatalf("semantic target reassignment was lost: %q == %q", left.Spans[2].LinkTargets[0], right.Spans[2].LinkTargets[0])
+	}
+}
+func TestCaptureLinkTargetsIncludePartialTraceCoRoots(t *testing.T) {
+	partialRoot := func(trace, span, parent int, name, value string) map[string]any {
+		s := captureSpan(trace, span, parent, name)
+		s["attributes"] = []any{map[string]any{"key": "variant", "value": map[string]any{"stringValue": value}}}
+		return s
+	}
+	fixture := func(targetTrace int) CaptureDataset {
+		source := captureSpan(3, 1, 0, "source")
+		source["links"] = []any{map[string]any{"traceId": fmt.Sprintf("%032x", targetTrace), "spanId": fmt.Sprintf("%016x", 1)}}
+		return decodedFixture(t, "partial co-roots",
+			partialRoot(1, 1, 99, "target", "same"), partialRoot(1, 2, 98, "co-root", "A"),
+			partialRoot(2, 1, 99, "target", "same"), partialRoot(2, 2, 98, "co-root", "B"), source)
+	}
+	left, right := fixture(1), fixture(2)
+	if left.Spans[4].LinkTargets[0] == right.Spans[4].LinkTargets[0] {
+		t.Fatalf("partial-trace co-root reassignment was lost: %q", left.Spans[4].LinkTargets[0])
 	}
 }
 func TestCaptureLinkTargetsIncludeDescendantSemantics(t *testing.T) {
