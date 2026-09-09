@@ -224,7 +224,7 @@ receipts.
 
 `//fixtures:external_features_test` compares SDK configuration effects across
 all four fixtures, preserving both passing observations and specific known
-discrepancies. It adds 24 feature IDs beyond the Scheme proof corpus; see
+discrepancies. It adds 22 feature IDs beyond the Scheme proof corpus; see
 [the results and reproduction commands](corpus/EXTERNAL_FEATURES.md).
 
 ## Further reading

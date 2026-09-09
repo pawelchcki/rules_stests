@@ -192,6 +192,11 @@ func evaluate(e experiment, baseline, changed capture) observation {
 	switch e.Name {
 	case "default-service":
 		ok := len(changed.Resources) > 0
+		beforeProbes, afterProbes := probeSpans(baseline), probeSpans(changed)
+		preserved := (len(baseline.Spans) == 0 || len(changed.Spans) > 0) &&
+			(len(baseline.Logs) == 0 || len(changed.Logs) > 0) &&
+			(len(baseline.Metrics) == 0 || len(changed.Metrics) > 0) &&
+			(len(beforeProbes) == 0 || len(afterProbes) == len(beforeProbes))
 		violations := map[string]bool{}
 		for _, r := range changed.Resources {
 			name := attributeValue(r, "service.name")
@@ -206,11 +211,23 @@ func evaluate(e experiment, baseline, changed capture) observation {
 				violations["service.name="+kind] = true
 			}
 		}
+		if len(baseline.Spans) > 0 && len(changed.Spans) == 0 {
+			violations["spans-missing"] = true
+		}
+		if len(baseline.Logs) > 0 && len(changed.Logs) == 0 {
+			violations["logs-missing"] = true
+		}
+		if len(baseline.Metrics) > 0 && len(changed.Metrics) == 0 {
+			violations["metrics-missing"] = true
+		}
+		if len(beforeProbes) > 0 && len(afterProbes) != len(beforeProbes) {
+			violations[fmt.Sprintf("probe-spans=%d", len(afterProbes))] = true
+		}
 		for v := range violations {
 			o.Violations = append(o.Violations, v)
 		}
 		sort.Strings(o.Violations)
-		check(len(baseline.Resources) > 0, ok, "empty OTEL_SERVICE_NAME must produce unknown_service or unknown_service:<executable>")
+		check(len(baseline.Resources) > 0, ok && preserved, "empty OTEL_SERVICE_NAME must produce unknown_service or unknown_service:<executable> without losing baseline signals")
 	case "span-batch", "log-batch":
 		signal, key := "traces", "spans"
 		before, after := baseline.Spans, changed.Spans
@@ -243,16 +260,22 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		check(eligible > 0 && len(baseline.Spans) == 0, len(changed.Spans) == 0 && after > 0, fmt.Sprintf("%d control metric names without exemplars; AlwaysOn exemplars for those names %d; exported spans %d", eligible, after, len(changed.Spans)))
 	case "request-headers":
 		before, after := probeSpans(baseline), probeSpans(changed)
-		captured := 0
+		captured, malformed := 0, 0
 		for _, s := range after {
-			if headerArray(s) {
+			present, exact := headerArrayStatus(s)
+			if exact {
 				captured++
+			} else if present {
+				malformed++
 			}
 		}
 		check(len(before) == 4, len(after) == 4 && captured == 4, fmt.Sprintf("probe server spans %d -> %d; exact header arrays %d/4", len(before), len(after), captured))
 		if o.Status == "gap" {
 			if captured != 4 {
 				o.Violations = append(o.Violations, fmt.Sprintf("header-arrays=%d", captured))
+			}
+			if malformed > 0 {
+				o.Violations = append(o.Violations, fmt.Sprintf("malformed-headers=%d", malformed))
 			}
 			if len(after) != 4 {
 				o.Violations = append(o.Violations, fmt.Sprintf("probe-spans=%d", len(after)))
@@ -357,22 +380,32 @@ func validTrace(id string) bool {
 	decoded, err := hex.DecodeString(id)
 	return err == nil && len(decoded) == 16 && id != strings.Repeat("0", 32)
 }
-func headerArray(s object) bool {
+func headerArrayStatus(s object) (bool, bool) {
+	present, exact := false, false
 	for _, a := range attributes(s) {
 		if field(a, "key") == "http.request.header.x_probe_feature" {
+			if present {
+				return true, false
+			}
+			present = true
 			arrays := objects(field(a, "value"), "array_value")
 			if len(arrays) != 1 {
-				return false
+				continue
 			}
 			values, ok := field(arrays[0], "values").([]any)
 			if !ok || len(values) != 1 {
-				return false
+				continue
 			}
 			value, ok := stringValue(values[0])
-			return ok && value == "visible"
+			exact = ok && value == "visible"
 		}
 	}
-	return false
+	return present, exact
+}
+
+func headerArray(s object) bool {
+	_, exact := headerArrayStatus(s)
+	return exact
 }
 
 // Active-request metrics may record against a sampled remote parent before

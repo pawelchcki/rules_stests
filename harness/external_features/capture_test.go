@@ -268,6 +268,22 @@ func TestGapSignaturesPreserveFailureModes(t *testing.T) {
 	if absent, missing := evaluate(headers, capture{Spans: syntheticProbeSpans()}, capture{Spans: syntheticProbeSpans()}).signature(), evaluate(headers, capture{Spans: syntheticProbeSpans()}, capture{}).signature(); absent == missing {
 		t.Fatalf("missing spans matched absent headers: %q", absent)
 	}
+
+	defaultBaseline := baselineCapture()
+	defaultBaseline.Spans = syntheticProbeSpans()
+	configured := baselineCapture()
+	configured.Spans = nil
+	if preserved, missing := evaluate(experiment{Name: "default-service"}, defaultBaseline, defaultBaseline).signature(), evaluate(experiment{Name: "default-service"}, defaultBaseline, configured).signature(); preserved == missing {
+		t.Fatalf("missing default-service telemetry matched preserved signals: %q", preserved)
+	}
+
+	malformed := capture{Spans: syntheticProbeSpans()}
+	for _, s := range malformed.Spans {
+		s["attributes"] = append(s["attributes"].([]any), attr("http.request.header.x_probe_feature", "visible"))
+	}
+	if absent, invalid := evaluate(headers, capture{Spans: syntheticProbeSpans()}, capture{Spans: syntheticProbeSpans()}).signature(), evaluate(headers, capture{Spans: syntheticProbeSpans()}, malformed).signature(); absent == invalid {
+		t.Fatalf("malformed headers matched absent headers: %q", absent)
+	}
 }
 
 func TestComparisonRecomputesAndRejectsTamperedEvidence(t *testing.T) {
