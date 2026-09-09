@@ -275,6 +275,15 @@ func collectOnce(app, launcher string, args []string, sink, out string, e experi
 				return nil, &workloadFailure{response.StatusCode}
 			}
 			if response.StatusCode == 200 {
+				// A concurrently launched fixture can briefly answer on a port this
+				// child lost before the bind failure reaches cmd.Wait. Let the child
+				// settle so that case is classified and retried before the workload.
+				select {
+				case err := <-done:
+					stopped = true
+					return nil, classifyProcessExit(err, log)
+				case <-time.After(100 * time.Millisecond):
+				}
 				ready = true
 				break
 			}

@@ -153,6 +153,20 @@ func attributeValue(o object, key string) string {
 	}
 	return ""
 }
+func stringAttribute(o object, key string) (string, bool, bool) {
+	found, valid, value := false, false, ""
+	for _, a := range attributes(o) {
+		if field(a, "key") != key {
+			continue
+		}
+		if found {
+			return "", true, false
+		}
+		found = true
+		value, valid = stringValue(field(a, "value"))
+	}
+	return value, found, valid
+}
 func events(c capture) []object {
 	var out []object
 	for _, s := range c.Spans {
@@ -232,14 +246,14 @@ func evaluate(e experiment, baseline, changed capture) observation {
 			(len(beforeProbes) == 0 || len(afterProbes) == len(beforeProbes))
 		violations := map[string]bool{}
 		for _, r := range changed.Resources {
-			name := attributeValue(r, "service.name")
-			ok = ok && (name == "unknown_service" || (strings.HasPrefix(name, "unknown_service:") && len(name) > len("unknown_service:")))
-			if name == "" {
-				kind := "missing"
-				for _, a := range attributes(r) {
-					if field(a, "key") == "service.name" {
-						kind = "empty"
-					}
+			name, present, valid := stringAttribute(r, "service.name")
+			ok = ok && valid && (name == "unknown_service" || (strings.HasPrefix(name, "unknown_service:") && len(name) > len("unknown_service:")))
+			if !valid || name == "" {
+				kind := "malformed"
+				if !present {
+					kind = "missing"
+				} else if valid {
+					kind = "empty"
 				}
 				violations["service.name="+kind] = true
 			}
@@ -310,6 +324,9 @@ func evaluate(e experiment, baseline, changed capture) observation {
 			if malformed > 0 {
 				o.Violations = append(o.Violations, fmt.Sprintf("malformed-headers=%d", malformed))
 			}
+			if len(afterRequests) != 4 {
+				o.Violations = append(o.Violations, fmt.Sprintf("requests=%d", len(afterRequests)))
+			}
 			if len(after) != 4 {
 				o.Violations = append(o.Violations, fmt.Sprintf("probe-spans=%d", len(after)))
 			}
@@ -332,10 +349,15 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		check(len(before) == 4 && len(continued) == 4, len(after) == 4 && len(roots) == 4, fmt.Sprintf("incoming traces continued %d/4; independent roots with propagation disabled %d/4", len(continued), len(roots)))
 	case "resource":
 		ok := len(changed.Resources) > 0
+		expected, present := preservedProbeRequests(baseline, changed)
+		preserved := (len(baseline.Spans) == 0 || len(changed.Spans) > 0) &&
+			(len(baseline.Logs) == 0 || len(changed.Logs) > 0) &&
+			(len(baseline.Metrics) == 0 || len(changed.Metrics) > 0) &&
+			(expected == 0 || present == expected)
 		for _, r := range changed.Resources {
 			ok = ok && attributeValue(r, "probe.external") == "visible" && attributeValue(r, "service.name") == "external-probe"
 		}
-		check(len(baseline.Resources) > 0, ok, fmt.Sprintf("%d resources must retain probe.external=visible and OTEL_SERVICE_NAME precedence", len(changed.Resources)))
+		check(len(baseline.Resources) > 0, ok && preserved, fmt.Sprintf("%d resources must retain probe.external=visible and OTEL_SERVICE_NAME precedence; workload requests preserved %d/%d", len(changed.Resources), present, expected))
 	case "disabled":
 		check(len(baseline.Spans) > 0, len(changed.Records) == 0, fmt.Sprintf("export requests %d -> %d", len(baseline.Records), len(changed.Records)))
 	case "sampler", "sampler-arg":
@@ -369,15 +391,23 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		sort.Strings(o.Violations)
 	case "attribute-count", "event-attributes", "log-count":
 		before, after, cap := baseline.Spans, changed.Spans, 2
+		preserved, expected, present := true, 0, 0
 		if e.Name == "event-attributes" {
 			before, after, cap = events(baseline), events(changed), 1
 		}
 		if e.Name == "log-count" {
 			before, after, cap = baseline.Logs, changed.Logs, 1
+			expected, present = limitedCountLogRecords(before, after, cap)
+			preserved = expected == 0 || present == expected
+		} else {
+			expected, present = preservedProbeRequests(baseline, changed)
+			preserved = expected == 0 || present == expected
 		}
-		check(maxAttributes(before) > cap, len(after) > 0 && maxAttributes(after) == cap && dropped(after, "dropped_attributes_count") > 0, fmt.Sprintf("maximum attributes %d -> %d; cap %d; dropped %d", maxAttributes(before), maxAttributes(after), cap, dropped(after, "dropped_attributes_count")))
+		check(maxAttributes(before) > cap, len(after) > 0 && maxAttributes(after) == cap && dropped(after, "dropped_attributes_count") > 0 && preserved, fmt.Sprintf("maximum attributes %d -> %d; cap %d; dropped %d; baseline record identities preserved %d/%d", maxAttributes(before), maxAttributes(after), cap, dropped(after, "dropped_attributes_count"), present, expected))
 	case "events":
-		check(len(events(baseline)) > 0, len(changed.Spans) > 0 && len(events(changed)) == 0 && dropped(changed.Spans, "dropped_events_count") > 0, fmt.Sprintf("events %d -> %d; dropped %d", len(events(baseline)), len(events(changed)), dropped(changed.Spans, "dropped_events_count")))
+		expected, present := preservedProbeRequests(baseline, changed)
+		preserved := expected == 0 || present == expected
+		check(len(events(baseline)) > 0, len(changed.Spans) > 0 && len(events(changed)) == 0 && dropped(changed.Spans, "dropped_events_count") > 0 && preserved, fmt.Sprintf("events %d -> %d; dropped %d; workload requests preserved %d/%d", len(events(baseline)), len(events(changed)), dropped(changed.Spans, "dropped_events_count"), present, expected))
 	case "exemplars":
 		before, preserved, remaining := suppressedExemplars(baseline, changed)
 		check(before > 0, preserved == before && remaining == 0, fmt.Sprintf("exemplar-bearing metric identities preserved %d/%d; remaining exemplars %d", preserved, before, remaining))
@@ -440,6 +470,11 @@ func incomingServerTraces(spans []object) map[string]bool {
 	}
 	return traces
 }
+func preservedProbeRequests(before, after capture) (int, int) {
+	expected := incomingProbeTraces(probeSpans(before))
+	present := incomingServerTraces(after.Spans)
+	return len(expected), len(present)
+}
 func validTrace(id string) bool {
 	decoded, err := hex.DecodeString(id)
 	return err == nil && len(decoded) == 16 && id != strings.Repeat("0", 32)
@@ -495,6 +530,29 @@ func limitedLogRecords(before, after []object, limit int) (int, int) {
 	return expected, present
 }
 
+func limitedCountLogRecords(before, after []object, limit int) (int, int) {
+	eligible := map[string]int{}
+	for _, record := range before {
+		if body, ok := stringValue(field(record, "body")); ok && body != "" && len(attributes(record)) > limit {
+			eligible[body]++
+		}
+	}
+	preserved := map[string]int{}
+	for _, record := range after {
+		if body, ok := stringValue(field(record, "body")); ok && preserved[body] < eligible[body] && len(attributes(record)) == limit && number(field(record, "dropped_attributes_count")) > 0 {
+			preserved[body]++
+		}
+	}
+	expected, present := 0, 0
+	for _, count := range eligible {
+		expected += count
+	}
+	for _, count := range preserved {
+		present += count
+	}
+	return expected, present
+}
+
 func captureMetricStreams(c capture) []metricStream {
 	if len(c.MetricStreams) > 0 {
 		return c.MetricStreams
@@ -523,17 +581,26 @@ func metricID(stream metricStream) string {
 	return strings.Join(parts, "\x00")
 }
 
+func metricDataType(metric object) string {
+	for _, kind := range []string{"gauge", "sum", "histogram", "exponential_histogram", "summary"} {
+		if len(objects(metric, kind)) > 0 {
+			return canonical(kind)
+		}
+	}
+	return ""
+}
+
 func suppressedExemplars(before, after capture) (int, int, int) {
 	eligible := map[string]bool{}
 	for _, stream := range captureMetricStreams(before) {
-		if id := metricID(stream); id != "" && len(objects(stream.Metric, "data_points")) > 0 && len(objects(stream.Metric, "exemplars")) > 0 {
-			eligible[id] = true
+		if id, kind := metricID(stream), metricDataType(stream.Metric); id != "" && kind != "" && len(objects(stream.Metric, "data_points")) > 0 && len(objects(stream.Metric, "exemplars")) > 0 {
+			eligible[id+"\x00"+kind] = true
 		}
 	}
 	preserved := map[string]bool{}
 	remaining := 0
 	for _, stream := range captureMetricStreams(after) {
-		id := metricID(stream)
+		id := metricID(stream) + "\x00" + metricDataType(stream.Metric)
 		if !eligible[id] {
 			continue
 		}

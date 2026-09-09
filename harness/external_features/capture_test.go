@@ -302,6 +302,17 @@ func TestGapSignaturesPreserveFailureModes(t *testing.T) {
 	if absent, invalid := evaluate(headers, capture{Spans: syntheticProbeSpans()}, capture{Spans: syntheticProbeSpans()}).signature(), evaluate(headers, capture{Spans: syntheticProbeSpans()}, malformed).signature(); absent == invalid {
 		t.Fatalf("malformed headers matched absent headers: %q", absent)
 	}
+	duplicated := capture{Spans: syntheticProbeSpans()}
+	duplicated.Spans[3]["trace_id"] = field(duplicated.Spans[2], "trace_id")
+	if absent, missingRequest := evaluate(headers, capture{Spans: syntheticProbeSpans()}, capture{Spans: syntheticProbeSpans()}).signature(), evaluate(headers, capture{Spans: syntheticProbeSpans()}, duplicated).signature(); absent == missingRequest {
+		t.Fatalf("missing request matched absent headers: %q", absent)
+	}
+
+	emptyService := capture{Resources: []object{{"attributes": []any{attr("service.name", "")}}}}
+	malformedService := capture{Resources: []object{{"attributes": []any{object{"key": "service.name", "value": object{"intValue": float64(1)}}}}}}
+	if empty, invalid := evaluate(experiment{Name: "default-service"}, capture{Resources: []object{{}}}, emptyService).signature(), evaluate(experiment{Name: "default-service"}, capture{Resources: []object{{}}}, malformedService).signature(); empty == invalid {
+		t.Fatalf("malformed service.name matched an empty string: %q", empty)
+	}
 }
 
 func TestMetricChangesPreserveInstrumentIdentity(t *testing.T) {
@@ -331,6 +342,11 @@ func TestMetricChangesPreserveInstrumentIdentity(t *testing.T) {
 	if got := evaluate(experiment{Name: "histogram"}, baseline, changed); got.Status == "pass" {
 		t.Fatal("one scope stood in for a missing histogram stream")
 	}
+	replacement := object{"name": "shared.metric", "sum": object{"dataPoints": []any{object{"asInt": "1"}}}}
+	changed = capture{Metrics: []object{replacement}, MetricStreams: []metricStream{{Metric: replacement, Scope: object{"name": "scope.one"}}, {Metric: replacement, Scope: object{"name": "scope.two"}}}}
+	if got := evaluate(experiment{Name: "exemplars"}, baseline, changed); got.Status == "pass" {
+		t.Fatal("a different metric type stood in for exemplar-bearing histograms")
+	}
 }
 
 func TestLengthLimitsPreserveBaselineRecords(t *testing.T) {
@@ -345,6 +361,32 @@ func TestLengthLimitsPreserveBaselineRecords(t *testing.T) {
 	unrelatedLog := capture{Logs: []object{{"body": object{"stringValue": "unrelated log"}, "attributes": []any{attr("request", "12345678")}}}}
 	if got := evaluate(experiment{Name: "log-length"}, logBaseline, unrelatedLog); got.Status == "pass" {
 		t.Fatal("unrelated log stood in for the baseline log record")
+	}
+}
+
+func TestCountLimitsPreserveBaselineRecords(t *testing.T) {
+	spanBaseline := baselineCapture()
+	spanBaseline.Spans = syntheticProbeSpans()
+	unrelatedSpan := capture{Spans: []object{{"kind": float64(2), "attributes": []any{attr("first", "value"), attr("second", "value")}, "droppedAttributesCount": float64(1)}}}
+	if got := evaluate(experiment{Name: "attribute-count"}, spanBaseline, unrelatedSpan); got.Status == "pass" {
+		t.Fatal("unrelated span stood in for missing count-limited requests")
+	}
+
+	logBaseline := capture{Logs: []object{{"body": object{"stringValue": "workload log"}, "attributes": []any{attr("first", "value"), attr("second", "value")}}}}
+	unrelatedLog := capture{Logs: []object{{"body": object{"stringValue": "unrelated log"}, "attributes": []any{attr("first", "value")}, "droppedAttributesCount": float64(1)}}}
+	if got := evaluate(experiment{Name: "log-count"}, logBaseline, unrelatedLog); got.Status == "pass" {
+		t.Fatal("unrelated log stood in for the baseline count-limited record")
+	}
+}
+
+func TestResourceExperimentPreservesWorkload(t *testing.T) {
+	baseline := baselineCapture()
+	baseline.Spans = syntheticProbeSpans()
+	changed := baselineCapture()
+	changed.Spans = nil
+	changed.Resources = []object{{"attributes": []any{attr("probe.external", "visible"), attr("service.name", "external-probe")}}}
+	if got := evaluate(experiment{Name: "resource"}, baseline, changed); got.Status == "pass" {
+		t.Fatal("unrelated resource stood in for missing workload telemetry")
 	}
 }
 
