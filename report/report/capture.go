@@ -170,7 +170,7 @@ func protocolStringField(context, key string) bool {
 	case "spanEvent":
 		return key == "name"
 	case "spanLink":
-		return key == "traceState"
+		return key == "traceId" || key == "spanId" || key == "traceState"
 	case "status":
 		return key == "message"
 	case "keyValue":
@@ -337,11 +337,6 @@ func normalizeWireContext(v any, context, encoding string) (any, error) {
 				}
 			}
 			if c != nil && protocolStringField(context, key) {
-				if _, ok := c.(string); !ok {
-					return nil, fmt.Errorf("invalid OTLP %s field %q: expected string", context, key)
-				}
-			}
-			if encoding == "json" && c != nil && context == "spanLink" && (key == "traceId" || key == "spanId") {
 				if _, ok := c.(string); !ok {
 					return nil, fmt.Errorf("invalid OTLP %s field %q: expected string", context, key)
 				}
