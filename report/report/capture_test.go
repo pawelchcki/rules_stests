@@ -227,6 +227,31 @@ func TestCaptureSharedTargetsPreserveSemanticSourcePairing(t *testing.T) {
 		t.Fatalf("shared-target source pairing was lost: %q", left.Spans[1].LinkTargets[0])
 	}
 }
+func TestCaptureSharedTargetsIncludeSourceLinkGraph(t *testing.T) {
+	source := func(trace, sharedTarget int, capturedSecond bool) map[string]any {
+		s := captureSpan(trace, 1, 0, "source")
+		secondTarget := 100
+		if capturedSecond {
+			secondTarget = 10
+		}
+		s["links"] = []any{
+			map[string]any{"traceId": fmt.Sprintf("%032x", sharedTarget), "spanId": fmt.Sprintf("%016x", 1)},
+			map[string]any{"traceId": fmt.Sprintf("%032x", secondTarget), "spanId": fmt.Sprintf("%016x", 1)},
+		}
+		return s
+	}
+	fixture := func(targets ...int) CaptureDataset {
+		return decodedFixture(t, "source links",
+			source(1, targets[0], false), source(2, targets[1], false),
+			source(3, targets[2], true), source(4, targets[3], true),
+			captureSpan(10, 1, 0, "captured destination"))
+	}
+	left := fixture(98, 98, 99, 99)
+	right := fixture(98, 99, 98, 99)
+	if left.Spans[1].LinkTargets[0] == right.Spans[1].LinkTargets[0] {
+		t.Fatalf("shared target ignored source link graph: %q", left.Spans[1].LinkTargets[0])
+	}
+}
 func TestCapturePreservesSharedCapturedLinkTargets(t *testing.T) {
 	linked := func(trace, span, targetTrace int) map[string]any {
 		s := captureSpan(trace, span, 0, "source")
@@ -316,12 +341,56 @@ func TestCaptureLinkTargetOccurrencePropagatesAcrossGraph(t *testing.T) {
 		t.Fatalf("multi-hop target relationship was lost: %q", left.Spans[2].LinkTargets[0])
 	}
 }
+func TestCaptureLinkTargetOccurrenceTraversesLongGraph(t *testing.T) {
+	chain := func(first, count int, value string) []map[string]any {
+		spans := make([]map[string]any, 0, count)
+		for offset := 0; offset < count; offset++ {
+			trace := first + offset
+			s := captureSpan(trace, 1, 0, "chain")
+			if offset+1 < count {
+				s["links"] = []any{map[string]any{"traceId": fmt.Sprintf("%032x", trace+1), "spanId": fmt.Sprintf("%016x", 1)}}
+			} else {
+				s["attributes"] = []any{map[string]any{"key": "endpoint", "value": map[string]any{"stringValue": value}}}
+			}
+			spans = append(spans, s)
+		}
+		return spans
+	}
+	fixture := func(xTarget, yTarget int) CaptureDataset {
+		x, y := captureSpan(1, 1, 0, "source"), captureSpan(2, 1, 0, "source")
+		x["attributes"], y["attributes"] = []any{map[string]any{"key": "source", "value": map[string]any{"stringValue": "X"}}}, []any{map[string]any{"key": "source", "value": map[string]any{"stringValue": "Y"}}}
+		x["links"], y["links"] = []any{map[string]any{"traceId": fmt.Sprintf("%032x", xTarget), "spanId": fmt.Sprintf("%016x", 1)}}, []any{map[string]any{"traceId": fmt.Sprintf("%032x", yTarget), "spanId": fmt.Sprintf("%016x", 1)}}
+		spans := []map[string]any{x, y}
+		spans = append(spans, chain(10, 130, "A")...)
+		spans = append(spans, chain(1000, 130, "B")...)
+		return decodedFixture(t, "long graph", spans...)
+	}
+	left := fixture(10, 1000)
+	right := fixture(1000, 10)
+	if left.Spans[0].LinkTargets[0] == right.Spans[0].LinkTargets[0] {
+		t.Fatalf("long graph endpoint was truncated: %q", left.Spans[0].LinkTargets[0])
+	}
+}
 func TestCaptureRejectsAllZeroParentID(t *testing.T) {
 	span := captureSpan(1, 1, 0, "invalid parent")
 	span["parentSpanId"] = "0000000000000000"
 	d := DecodeCapture(ValidationReceipt{}, captureFixture(span))
 	if len(d.Diagnostics) != 1 || !strings.Contains(d.Diagnostics[0], "invalid trace/span identity") {
 		t.Fatalf("all-zero parent ID was accepted: %+v", d)
+	}
+}
+func TestCaptureRejectsSinkMaximumTraceDepth(t *testing.T) {
+	spans := make([]map[string]any, 129)
+	for i := range spans {
+		parent := 0
+		if i > 0 {
+			parent = i
+		}
+		spans[i] = captureSpan(1, i+1, parent, "depth")
+	}
+	d := DecodeCapture(ValidationReceipt{}, captureFixture(spans...))
+	if len(d.Diagnostics) != 1 || !strings.Contains(d.Diagnostics[0], "exceeds 128 levels") {
+		t.Fatalf("sink-invalid trace depth was accepted: %+v", d.Diagnostics)
 	}
 }
 func TestCapturePreservesCapturedParentOccurrenceIdentity(t *testing.T) {

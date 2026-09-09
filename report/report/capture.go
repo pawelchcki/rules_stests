@@ -440,7 +440,7 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 		if colors[i] == 1 {
 			return "", fmt.Errorf("cycle in captured trace")
 		}
-		if depth > 128 {
+		if depth >= 128 {
 			return "", fmt.Errorf("captured trace exceeds 128 levels")
 		}
 		if colors[i] == 2 {
@@ -497,6 +497,81 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 	}
 	sourceOccurrenceKeys := buildTargetOccurrenceKeys(true)
 	sourceOccurrenceKeysWithoutScope := buildTargetOccurrenceKeys(false)
+	buildGraphAwareTargetKeys := func(base []string, targetDigests map[string]string) ([]string, error) {
+		keys := make([]string, len(d.Spans))
+		for root := range d.Spans {
+			visited := map[int]int{}
+			external := map[string]int{}
+			var visit func(int) (any, error)
+			visit = func(i int) (any, error) {
+				if reference, ok := visited[i]; ok {
+					return map[string]any{"reference": reference}, nil
+				}
+				visited[i] = len(visited)
+				outgoing := []any{}
+				for _, value := range array(d.Spans[i].Fields["links"]) {
+					link := object(value)
+					tid, err := identity(link["traceId"], 16, false)
+					if err != nil {
+						return nil, err
+					}
+					sid, err := identity(link["spanId"], 8, false)
+					if err != nil {
+						return nil, err
+					}
+					targetKey := tid + "/" + sid
+					relation := "external trace/span"
+					if tid == traceIDs[i] {
+						relation = "external span in same trace"
+					}
+					if sid == parentIDs[i] && tid == traceIDs[i] {
+						relation = "external parent"
+					}
+					descriptor := map[string]any{"relationship": relation}
+					if j, ok := ids[targetKey]; ok {
+						if j == i {
+							descriptor["relationship"] = "self"
+						} else if tid == traceIDs[i] {
+							descriptor["relationship"] = "captured in same trace"
+						} else {
+							descriptor["relationship"] = "captured in another trace"
+						}
+						target, err := visit(j)
+						if err != nil {
+							return nil, err
+						}
+						descriptor["target"] = target
+					} else {
+						reference, ok := external[targetKey]
+						if !ok {
+							reference = len(external)
+							external[targetKey] = reference
+						}
+						descriptor["externalTarget"] = reference
+					}
+					if shared := targetDigests[targetKey]; shared != "" {
+						descriptor["sharedTarget"] = shared
+					}
+					outgoing = append(outgoing, descriptor)
+				}
+				return map[string]any{"occurrence": base[i], "links": outgoing}, nil
+			}
+			graph, err := visit(root)
+			if err != nil {
+				return nil, err
+			}
+			keys[root] = digest([]byte(canonical(graph)))[:12]
+		}
+		return keys, nil
+	}
+	sourceOccurrenceKeys, err := buildGraphAwareTargetKeys(sourceOccurrenceKeys, nil)
+	if err != nil {
+		return fail(err)
+	}
+	sourceOccurrenceKeysWithoutScope, err = buildGraphAwareTargetKeys(sourceOccurrenceKeysWithoutScope, nil)
+	if err != nil {
+		return fail(err)
+	}
 	linkTargetSources := map[string][]string{}
 	linkTargetSourcesWithoutScope := map[string][]string{}
 	for i := range d.Spans {
@@ -532,60 +607,6 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 	}
 	linkTargetDigests := sharedTargetDigests(linkTargetSources)
 	linkTargetDigestsWithoutScope := sharedTargetDigests(linkTargetSourcesWithoutScope)
-	buildGraphAwareTargetKeys := func(base []string, targetDigests map[string]string) ([]string, error) {
-		keys := append([]string(nil), base...)
-		// Parent topology is limited to 128 levels above. Propagate link colors
-		// to the same bound so multi-hop relationships participate without
-		// recursive traversal getting stuck on cyclic links.
-		for round := 0; round < 128; round++ {
-			next := make([]string, len(d.Spans))
-			stable := true
-			for i := range d.Spans {
-				outgoing := []any{}
-				for _, value := range array(d.Spans[i].Fields["links"]) {
-					link := object(value)
-					tid, err := identity(link["traceId"], 16, false)
-					if err != nil {
-						return nil, err
-					}
-					sid, err := identity(link["spanId"], 8, false)
-					if err != nil {
-						return nil, err
-					}
-					relation := "external trace/span"
-					if tid == traceIDs[i] {
-						relation = "external span in same trace"
-					}
-					if sid == parentIDs[i] && tid == traceIDs[i] {
-						relation = "external parent"
-					}
-					descriptor := map[string]any{"relationship": relation}
-					if j, ok := ids[tid+"/"+sid]; ok {
-						if j == i {
-							descriptor["relationship"] = "self"
-						} else {
-							descriptor["relationship"] = "captured in another trace"
-							if tid == traceIDs[i] {
-								descriptor["relationship"] = "captured in same trace"
-							}
-							descriptor["targetOccurrence"] = keys[j]
-						}
-					}
-					if shared := targetDigests[tid+"/"+sid]; shared != "" {
-						descriptor["sharedTarget"] = shared
-					}
-					outgoing = append(outgoing, descriptor)
-				}
-				next[i] = digest([]byte(canonical([]any{base[i], outgoing})))[:12]
-				stable = stable && next[i] == keys[i]
-			}
-			keys = next
-			if stable {
-				break
-			}
-		}
-		return keys, nil
-	}
 	targetOccurrenceKeys, err := buildGraphAwareTargetKeys(sourceOccurrenceKeys, linkTargetDigests)
 	if err != nil {
 		return fail(err)
