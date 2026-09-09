@@ -549,6 +549,14 @@ func maximumWeightMaximumCardinalityPairs(leftCount, rightCount int, score func(
 // potentially quadratic compatibility graph, then applies score-improving
 // swaps that cannot reduce the number of matches.
 func linearMemoryMaximumCardinalityPairs(leftCount, rightCount int, score func(int, int) (int, bool)) ([]int, []bool) {
+	return linearMemoryMaximumCardinalityPairsWithSeed(leftCount, rightCount, score, nil)
+}
+
+// linearMemoryMaximumCardinalityPairsWithSeed starts from a cheap known-good
+// matching, but keeps every seeded edge on the augmenting paths. The seed can
+// improve the common exact-match case without locking a wildcard pairing that
+// would reduce the maximum cardinality.
+func linearMemoryMaximumCardinalityPairsWithSeed(leftCount, rightCount int, score func(int, int) (int, bool), seed []int) ([]int, []bool) {
 	leftToRight := make([]int, leftCount)
 	rightToLeft := make([]int, rightCount)
 	for i := range leftToRight {
@@ -556,6 +564,14 @@ func linearMemoryMaximumCardinalityPairs(leftCount, rightCount int, score func(i
 	}
 	for i := range rightToLeft {
 		rightToLeft[i] = -1
+	}
+	for left, right := range seed {
+		if left >= leftCount || right < 0 || right >= rightCount || rightToLeft[right] >= 0 {
+			continue
+		}
+		if _, compatible := score(left, right); compatible {
+			leftToRight[left], rightToLeft[right] = right, left
+		}
 	}
 	distance := make([]int, leftCount)
 	for {
@@ -644,53 +660,36 @@ func maximumCardinalityPairs(left, right []alignedSpan, score func(alignedSpan, 
 			return value, value >= 0
 		})
 	}
-	// Lock byte-for-byte equivalent subtrees through a canonical-key index
-	// before the linear-memory fallback. This keeps reordered large sibling
-	// lists child-aware without evaluating recursive pair scores quadratically.
-	matchedRight := make([]int, len(left))
-	usedRight := make([]bool, len(right))
-	for i := range matchedRight {
-		matchedRight[i] = -1
+	// Seed byte-for-byte equivalent subtrees through a canonical-key index.
+	// The linear-memory matcher can still reassign every seed through an
+	// augmenting path when wildcards make another pairing necessary.
+	seed := make([]int, len(left))
+	for i := range seed {
+		seed[i] = -1
 	}
 	rightByKey := map[string][]int{}
 	for rightIndex, candidate := range right {
 		key := canonicalSpanKey(candidate)
 		rightByKey[key] = append(rightByKey[key], rightIndex)
 	}
-	remainingLeft := []int{}
 	for leftIndex, candidate := range left {
 		key := canonicalSpanKey(candidate)
 		matches := rightByKey[key]
 		if len(matches) == 0 {
-			remainingLeft = append(remainingLeft, leftIndex)
 			continue
 		}
-		rightIndex := matches[0]
+		seed[leftIndex] = matches[0]
 		rightByKey[key] = matches[1:]
-		matchedRight[leftIndex], usedRight[rightIndex] = rightIndex, true
 	}
-	remainingRight := []int{}
-	for rightIndex := range right {
-		if !usedRight[rightIndex] {
-			remainingRight = append(remainingRight, rightIndex)
-		}
-	}
-	remainingMatches, _ := linearMemoryMaximumCardinalityPairs(len(remainingLeft), len(remainingRight), func(leftIndex, rightIndex int) (int, bool) {
-		leftCandidate := left[remainingLeft[leftIndex]]
-		rightCandidate := right[remainingRight[rightIndex]]
+	return linearMemoryMaximumCardinalityPairsWithSeed(len(left), len(right), func(leftIndex, rightIndex int) (int, bool) {
+		leftCandidate := left[leftIndex]
+		rightCandidate := right[rightIndex]
 		value := shallowAlignedSpanMatchScore(leftCandidate, rightCandidate)
 		if value >= 0 {
 			value += childOverlapScore(leftCandidate, rightCandidate)
 		}
 		return value, value >= 0
-	})
-	for leftIndex, rightIndex := range remainingMatches {
-		if rightIndex >= 0 {
-			resolvedLeft, resolvedRight := remainingLeft[leftIndex], remainingRight[rightIndex]
-			matchedRight[resolvedLeft], usedRight[resolvedRight] = resolvedRight, true
-		}
-	}
-	return matchedRight, usedRight
+	}, seed)
 }
 
 func resolvePairedChildren(left, right alignedSpan) ([]alignedSpan, []alignedSpan) {
@@ -897,44 +896,28 @@ func choosePairedTraceCandidates(leftGroups, rightGroups []TraceGroup) ([]resolv
 	left := canonicalTraceCandidates(leftGroups)
 	right := canonicalTraceCandidates(rightGroups)
 	if len(leftGroups)+len(rightGroups) > optimalAssignmentVertexLimit {
-		matchedRight := make([]int, len(leftGroups))
-		usedRight := make([]bool, len(rightGroups))
-		for i := range matchedRight {
-			matchedRight[i] = -1
+		seed := make([]int, len(leftGroups))
+		for i := range seed {
+			seed[i] = -1
 		}
 		rightByKey := map[string][]int{}
 		for rightIndex, candidate := range right {
 			key := canonicalTraceKey(candidate)
 			rightByKey[key] = append(rightByKey[key], rightIndex)
 		}
-		remainingLeft := []int{}
 		for leftIndex, candidate := range left {
 			key := canonicalTraceKey(candidate)
 			matches := rightByKey[key]
 			if len(matches) == 0 {
-				remainingLeft = append(remainingLeft, leftIndex)
 				continue
 			}
-			rightIndex := matches[0]
+			seed[leftIndex] = matches[0]
 			rightByKey[key] = matches[1:]
-			matchedRight[leftIndex], usedRight[rightIndex] = rightIndex, true
 		}
-		remainingRight := []int{}
-		for rightIndex := range right {
-			if !usedRight[rightIndex] {
-				remainingRight = append(remainingRight, rightIndex)
-			}
-		}
-		remainingMatches, _ := maximumWeightMaximumCardinalityPairs(len(remainingLeft), len(remainingRight), func(leftIndex, rightIndex int) (int, bool) {
-			resolvedLeft, resolvedRight := remainingLeft[leftIndex], remainingRight[rightIndex]
-			choice, compatible := bestShallowTracePair(resolvedLeft, leftGroups[resolvedLeft], resolvedRight, rightGroups[resolvedRight])
+		matchedRight, _ := linearMemoryMaximumCardinalityPairsWithSeed(len(leftGroups), len(rightGroups), func(leftIndex, rightIndex int) (int, bool) {
+			choice, compatible := bestShallowTracePair(leftIndex, leftGroups[leftIndex], rightIndex, rightGroups[rightIndex])
 			return choice.score, compatible
-		})
-		for leftIndex, rightIndex := range remainingMatches {
-			if rightIndex >= 0 {
-				matchedRight[remainingLeft[leftIndex]] = remainingRight[rightIndex]
-			}
-		}
+		}, seed)
 		for leftIndex, rightIndex := range matchedRight {
 			if rightIndex >= 0 {
 				choice, _ := bestTracePair(leftIndex, leftGroups[leftIndex], rightIndex, rightGroups[rightIndex])
@@ -1016,44 +999,27 @@ func traceMatchScore(left, right resolvedTrace) (int, bool) {
 
 func maximumCardinalityTracePairs(left, right []resolvedTrace) ([]int, []bool) {
 	if len(left)+len(right) > optimalAssignmentVertexLimit {
-		matchedRight := make([]int, len(left))
-		usedRight := make([]bool, len(right))
-		for i := range matchedRight {
-			matchedRight[i] = -1
+		seed := make([]int, len(left))
+		for i := range seed {
+			seed[i] = -1
 		}
 		rightByKey := map[string][]int{}
 		for rightIndex, candidate := range right {
 			key := canonicalTraceKey(candidate)
 			rightByKey[key] = append(rightByKey[key], rightIndex)
 		}
-		remainingLeft := []int{}
 		for leftIndex, candidate := range left {
 			key := canonicalTraceKey(candidate)
 			matches := rightByKey[key]
 			if len(matches) == 0 {
-				remainingLeft = append(remainingLeft, leftIndex)
 				continue
 			}
-			rightIndex := matches[0]
+			seed[leftIndex] = matches[0]
 			rightByKey[key] = matches[1:]
-			matchedRight[leftIndex], usedRight[rightIndex] = rightIndex, true
 		}
-		remainingRight := []int{}
-		for rightIndex := range right {
-			if !usedRight[rightIndex] {
-				remainingRight = append(remainingRight, rightIndex)
-			}
-		}
-		remainingMatches, _ := linearMemoryMaximumCardinalityPairs(len(remainingLeft), len(remainingRight), func(leftIndex, rightIndex int) (int, bool) {
-			return shallowTraceMatchScore(left[remainingLeft[leftIndex]], right[remainingRight[rightIndex]])
-		})
-		for leftIndex, rightIndex := range remainingMatches {
-			if rightIndex >= 0 {
-				resolvedLeft, resolvedRight := remainingLeft[leftIndex], remainingRight[rightIndex]
-				matchedRight[resolvedLeft], usedRight[resolvedRight] = resolvedRight, true
-			}
-		}
-		return matchedRight, usedRight
+		return linearMemoryMaximumCardinalityPairsWithSeed(len(left), len(right), func(leftIndex, rightIndex int) (int, bool) {
+			return shallowTraceMatchScore(left[leftIndex], right[rightIndex])
+		}, seed)
 	}
 	return maximumWeightMaximumCardinalityPairs(len(left), len(right), func(leftIndex, rightIndex int) (int, bool) {
 		return traceMatchScore(left[leftIndex], right[rightIndex])

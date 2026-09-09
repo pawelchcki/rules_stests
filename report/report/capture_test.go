@@ -272,6 +272,14 @@ func TestCaptureRejectsSinkInvalidSpanFields(t *testing.T) {
 		})
 	}
 }
+func TestCaptureAcceptsFiniteDoubleUnderflow(t *testing.T) {
+	span := captureSpan(1, 1, 0, "underflow")
+	span["attributes"] = []any{map[string]any{"key": "tiny", "value": map[string]any{"doubleValue": "1e-9999"}}}
+	d := decodedFixture(t, "finite double underflow", span)
+	if got := canonical(d.Spans[0].Fields["attributes"]); !strings.Contains(got, `"doubleValue":"0"`) {
+		t.Fatalf("finite underflow was not canonicalized to zero: %s", got)
+	}
+}
 func TestCaptureUsesEncodingSpecificTimestampBounds(t *testing.T) {
 	span := captureSpan(1, 1, 0, "large timestamp")
 	span["startTimeUnixNano"] = "18446744073709551616"
@@ -755,6 +763,31 @@ func TestCaptureLargeLocallyIdenticalComponentIgnoresRecordOrder(t *testing.T) {
 		if canonical(span.LinkTargets) != rightTargets[traceID] {
 			t.Fatalf("record order changed trace %s link targets: %s != %s", traceID, canonical(span.LinkTargets), rightTargets[traceID])
 		}
+	}
+}
+func TestCaptureLargeComponentRefinesUntilStable(t *testing.T) {
+	const count = 129
+	spans := make([]map[string]any, 0, count+2)
+	for i := 0; i < count; i++ {
+		secondOffset := 2
+		if i == 0 {
+			secondOffset = 3
+		}
+		span := captureSpan(i+1, 1, 0, "identical")
+		span["links"] = []any{
+			map[string]any{"traceId": fmt.Sprintf("%032x", (i+1)%count+1), "spanId": fmt.Sprintf("%016x", 1)},
+			map[string]any{"traceId": fmt.Sprintf("%032x", (i+secondOffset)%count+1), "spanId": fmt.Sprintf("%016x", 1)},
+		}
+		spans = append(spans, span)
+	}
+	for source, target := range []int{40, 64} {
+		span := captureSpan(1000+source, 1, 0, fmt.Sprintf("source-%d", source))
+		span["links"] = []any{map[string]any{"traceId": fmt.Sprintf("%032x", target+1), "spanId": fmt.Sprintf("%016x", 1)}}
+		spans = append(spans, span)
+	}
+	d := decodedFixture(t, "stable large component refinement", spans...)
+	if d.Spans[count].LinkTargets[0] == d.Spans[count+1].LinkTargets[0] {
+		t.Fatalf("distant non-equivalent members retained one target key: %q", d.Spans[count].LinkTargets[0])
 	}
 }
 func TestCaptureLargeLinkGraphStaysBounded(t *testing.T) {

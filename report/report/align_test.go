@@ -86,6 +86,26 @@ func TestLargePairingPreservesMaximumCardinality(t *testing.T) {
 	}
 }
 
+func TestLargeExactSeedsRemainAugmentable(t *testing.T) {
+	leftRoots := []SpanGroup{
+		exactSpan("", "server", "", "", ""),
+		exactSpan("", "server", "", "A", ""),
+	}
+	rightRoots := []SpanGroup{
+		exactSpan("", "server", "", "", ""),
+		exactSpan("", "server", "", "B", ""),
+	}
+	for i := 0; i < optimalAssignmentVertexLimit/2-1; i++ {
+		common := exactSpan("", "server", "", fmt.Sprintf("common-%03d", i), "")
+		leftRoots = append(leftRoots, common)
+		rightRoots = append(rightRoots, common)
+	}
+	alignment := AlignShapes(shapeOf("left", leftRoots...), shapeOf("right", rightRoots...))
+	if alignment.Summary.Matched != len(leftRoots) || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 {
+		t.Fatalf("exact seeds blocked a maximum-cardinality wildcard pairing: %#v", alignment.Summary)
+	}
+}
+
 func TestLargeSiblingAlignmentUsesChildStructure(t *testing.T) {
 	const count = optimalAssignmentVertexLimit/2 + 1
 	leftParents := make([]SpanGroup, 0, count)

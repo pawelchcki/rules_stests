@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -421,7 +422,7 @@ func normalizeWireContext(v any, context, encoding string) (any, error) {
 					return nil, fmt.Errorf("invalid OTLP double AnyValue")
 				}
 				number, err := strconv.ParseFloat(scalar, 64)
-				if err != nil || math.IsNaN(number) || math.IsInf(number, 0) {
+				if (err != nil && !errors.Is(err, strconv.ErrRange)) || math.IsNaN(number) || math.IsInf(number, 0) {
 					return nil, fmt.Errorf("invalid OTLP double AnyValue")
 				}
 				out["doubleValue"] = strconv.FormatFloat(number, 'g', -1, 64)
@@ -1155,10 +1156,10 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 					}
 				}
 			}
-			// A bounded color refinement captures canonical member positions
-			// with linear storage and O(E) work per round, including regular
-			// components where local outgoing descriptions are identical.
-			for range 16 {
+			// Color refinement captures canonical member positions with linear
+			// storage and O(E) work per round. Each non-terminal round splits at
+			// least one class, so a component-sized bound reaches convergence.
+			for range len(components[component]) {
 				refined := map[int]string{}
 				for _, member := range components[component] {
 					outgoing := []string{}
