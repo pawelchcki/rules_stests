@@ -21,6 +21,11 @@ var whitespacePattern = regexp.MustCompile(`\s+`)
 // cubic (left+right)-square assignment.
 const optimalAssignmentVertexLimit = 128
 
+// Candidate scores are evaluated for every compatible edge of an outer exact
+// assignment. Keep recursive exact child assignments small so a 63-by-63
+// parent matrix cannot launch thousands of separate 126-vertex assignments.
+const nestedScoreVertexLimit = 16
+
 func isHTTPMethod(value string) bool {
 	switch value {
 	case "connect", "delete", "get", "head", "options", "patch", "post", "put", "trace":
@@ -143,6 +148,9 @@ func alignedSpanMatchScore(left, right alignedSpan) int {
 	score := shallowAlignedSpanMatchScore(left, right)
 	if score < 0 {
 		return score
+	}
+	if len(left.children)+len(right.children) > nestedScoreVertexLimit {
+		return score + childOverlapScore(left, right)
 	}
 	if left.childGroups != nil || right.childGroups != nil {
 		left.children, right.children = choosePairedCandidates(left.childGroups, right.childGroups)

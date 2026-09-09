@@ -192,6 +192,27 @@ func TestLargeSiblingAlignmentUsesChildStructure(t *testing.T) {
 	}
 }
 
+func TestNestedPairScoringBoundsExactChildAssignments(t *testing.T) {
+	children := func(reverse bool) []SpanGroup {
+		groups := make([]SpanGroup, 0, nestedScoreVertexLimit/2+1)
+		for i := 0; i < nestedScoreVertexLimit/2+1; i++ {
+			child := exactSpan("", "client", "", fmt.Sprintf("child-%02d", i), "")
+			if reverse {
+				groups = append([]SpanGroup{child}, groups...)
+			} else {
+				groups = append(groups, child)
+			}
+		}
+		return groups
+	}
+	left := resolveSpanGroup(exactSpan("", "internal", "", "parent", "", children(false)...))[0]
+	right := resolveSpanGroup(exactSpan("", "internal", "", "parent", "", children(true)...))[0]
+	want := shallowAlignedSpanMatchScore(left, right) + childOverlapScore(left, right)
+	if got := alignedSpanMatchScore(left, right); got != want {
+		t.Fatalf("large nested candidate used recursive exact scoring: got %d, want bounded score %d", got, want)
+	}
+}
+
 func TestLargeSiblingAlignmentUsesPartialChildOverlap(t *testing.T) {
 	const count = optimalAssignmentVertexLimit/2 + 1
 	leftParents := make([]SpanGroup, 0, count)
