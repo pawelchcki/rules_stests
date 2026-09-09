@@ -11,13 +11,16 @@ import (
 	"testing"
 )
 
-func captureFixture(spans ...map[string]any) []byte {
+func captureFixtureWithEncoding(encoding string, spans ...map[string]any) []byte {
 	values := make([]any, len(spans))
 	for i, s := range spans {
 		values[i] = s
 	}
-	b, _ := json.Marshal([]any{map[string]any{"signal": "traces", "payload": map[string]any{"resourceSpans": []any{map[string]any{"resource": map[string]any{"attributes": []any{map[string]any{"key": "service.name", "value": map[string]any{"stringValue": "realworld"}}}}, "scopeSpans": []any{map[string]any{"scope": map[string]any{"name": "fixture", "version": "1"}, "spans": values}}}}}}})
+	b, _ := json.Marshal([]any{map[string]any{"signal": "traces", "encoding": encoding, "payload": map[string]any{"resourceSpans": []any{map[string]any{"resource": map[string]any{"attributes": []any{map[string]any{"key": "service.name", "value": map[string]any{"stringValue": "realworld"}}}}, "scopeSpans": []any{map[string]any{"scope": map[string]any{"name": "fixture", "version": "1"}, "spans": values}}}}}}})
 	return b
+}
+func captureFixture(spans ...map[string]any) []byte {
+	return captureFixtureWithEncoding("json", spans...)
 }
 func captureSpan(trace, span, parent int, name string) map[string]any {
 	p := ""
@@ -26,17 +29,20 @@ func captureSpan(trace, span, parent int, name string) map[string]any {
 	}
 	return map[string]any{"traceId": fmt.Sprintf("%032x", trace), "spanId": fmt.Sprintf("%016x", span), "parentSpanId": p, "name": name, "kind": 2, "startTimeUnixNano": "18446744073709551000", "endTimeUnixNano": "18446744073709551615"}
 }
-func decodedFixture(t *testing.T, profile string, spans ...map[string]any) CaptureDataset {
+func decodedFixtureWithEncoding(t *testing.T, profile, encoding string, spans ...map[string]any) CaptureDataset {
 	t.Helper()
-	d := DecodeCapture(ValidationReceipt{Profile: profile, Scenario: "case", Outcome: "verified", Revision: strings.Repeat("a", 40)}, captureFixture(spans...))
+	d := DecodeCapture(ValidationReceipt{Profile: profile, Scenario: "case", Outcome: "verified", Revision: strings.Repeat("a", 40)}, captureFixtureWithEncoding(encoding, spans...))
 	if len(d.Diagnostics) > 0 {
 		t.Fatal(d.Diagnostics)
 	}
 	return d
 }
+func decodedFixture(t *testing.T, profile string, spans ...map[string]any) CaptureDataset {
+	return decodedFixtureWithEncoding(t, profile, "json", spans...)
+}
 func TestCaptureWireFormatsAndPrecision(t *testing.T) {
-	otlp := `[{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"GET /tags","kind":"SPAN_KIND_SERVER","status":{"code":"STATUS_CODE_OK"},"attributes":[{"key":"large","value":{"intValue":"09223372036854775807"}},{"key":"bytes","value":{"bytesValue":"AQI="}},{"key":"array","value":{"arrayValue":{"values":[{"boolValue":true},{"stringValue":"9223372036854775807"}]}}}],"startTimeUnixNano":"1","endTimeUnixNano":"2"}]}]}]}}]`
-	proto := `[{"signal":"traces","payload":{"resource_spans":[{"resource":null,"schema_url":"","scope_spans":[{"scope":null,"schema_url":"","spans":[{"trace_id":"00000000000000000000000000000001","span_id":"0000000000000001","parent_span_id":"","name":"GET /tags","kind":2,"status":{"code":1,"message":""},"attributes":[{"key":"array","value":{"value":{"array_value":{"values":[{"value":{"bool_value":true}},{"value":{"string_value":"9223372036854775807"}}]}}}},{"key":"bytes","value":{"value":{"bytes_value":[1,2]}}},{"key":"large","value":{"value":{"int_value":9223372036854775807}}}],"events":[],"links":[],"flags":0,"dropped_attributes_count":0,"dropped_events_count":0,"dropped_links_count":0,"start_time_unix_nano":1,"end_time_unix_nano":2,"trace_state":""}]}]}]}}]`
+	otlp := `[{"signal":"traces","encoding":"json","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"00000000000000000000000000000001","spanId":"0000000000000001","name":"GET /tags","kind":"SPAN_KIND_SERVER","status":{"code":"STATUS_CODE_OK"},"attributes":[{"key":"large","value":{"intValue":"09223372036854775807"}},{"key":"bytes","value":{"bytesValue":"AQI="}},{"key":"array","value":{"arrayValue":{"values":[{"boolValue":true},{"stringValue":"9223372036854775807"}]}}}],"startTimeUnixNano":"1","endTimeUnixNano":"2"}]}]}]}}]`
+	proto := `[{"signal":"traces","encoding":"protobuf","payload":{"resource_spans":[{"resource":null,"schema_url":"","scope_spans":[{"scope":null,"schema_url":"","spans":[{"trace_id":"00000000000000000000000000000001","span_id":"0000000000000001","parent_span_id":"","name":"GET /tags","kind":2,"status":{"code":1,"message":""},"attributes":[{"key":"array","value":{"value":{"array_value":{"values":[{"value":{"bool_value":true}},{"value":{"string_value":"9223372036854775807"}}]}}}},{"key":"bytes","value":{"value":{"bytes_value":[1,2]}}},{"key":"large","value":{"value":{"int_value":9223372036854775807}}}],"events":[],"links":[],"flags":0,"dropped_attributes_count":0,"dropped_events_count":0,"dropped_links_count":0,"start_time_unix_nano":1,"end_time_unix_nano":2,"trace_state":""}]}]}]}}]`
 	a, b := DecodeCapture(ValidationReceipt{}, []byte(otlp)), DecodeCapture(ValidationReceipt{}, []byte(proto))
 	if len(a.Diagnostics) > 0 || len(b.Diagnostics) > 0 {
 		t.Fatalf("diagnostics %v %v", a.Diagnostics, b.Diagnostics)
@@ -75,10 +81,46 @@ func TestCaptureCanonicalizesAcceptedBase64Variants(t *testing.T) {
 	}
 	standard := DecodeCapture(ValidationReceipt{}, fixture("+w=="))
 	urlSafe := DecodeCapture(ValidationReceipt{}, fixture("-w"))
-	protobuf := DecodeCapture(ValidationReceipt{}, fixture([]any{251}))
+	span := captureSpan(1, 1, 0, "bytes")
+	span["attributes"] = []any{map[string]any{"key": "bytes", "value": map[string]any{"bytesValue": []any{251}}}}
+	protobuf := DecodeCapture(ValidationReceipt{}, captureFixtureWithEncoding("protobuf", span))
 	if len(standard.Diagnostics) > 0 || len(urlSafe.Diagnostics) > 0 || len(protobuf.Diagnostics) > 0 ||
 		!reflect.DeepEqual(standard, urlSafe) || !reflect.DeepEqual(standard, protobuf) {
 		t.Fatalf("base64 variants differ:\n%s\n%s\n%s", canonical(standard), canonical(urlSafe), canonical(protobuf))
+	}
+}
+func TestCaptureRejectsSinkInvalidJSONEncoding(t *testing.T) {
+	byteArray := captureSpan(1, 1, 0, "bytes")
+	byteArray["attributes"] = []any{map[string]any{"key": "bytes", "value": map[string]any{"bytesValue": []any{1, 2}}}}
+
+	duplicate := bytes.Replace(
+		captureFixture(captureSpan(1, 1, 0, "valid")),
+		[]byte(`"name":"valid"`),
+		[]byte(`"name":"first","name":"valid"`),
+		1,
+	)
+
+	oversized := captureSpan(1, 1, 0, "oversized")
+	values := make([]any, maxJSONValueNodes)
+	for i := range values {
+		values[i] = map[string]any{}
+	}
+	oversized["attributes"] = []any{map[string]any{"key": "wide", "value": map[string]any{"arrayValue": map[string]any{"values": values}}}}
+
+	for name, test := range map[string]struct {
+		raw  []byte
+		want string
+	}{
+		"protobuf byte array":   {captureFixture(byteArray), "unexpected JSON type"},
+		"duplicate object key":  {duplicate, "duplicate JSON key"},
+		"structural node limit": {captureFixture(oversized), "exceeds structural limit"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, test.raw)
+			if len(d.Diagnostics) != 1 || !strings.Contains(d.Diagnostics[0], test.want) || len(d.Shape.Traces) != 0 {
+				t.Fatalf("sink-invalid JSON entered topology: %+v", d)
+			}
+		})
 	}
 }
 func TestInternIndexesCanonicalMetadata(t *testing.T) {
@@ -571,7 +613,7 @@ func TestCaptureLargeLinkGraphStaysBounded(t *testing.T) {
 		s["links"] = []any{map[string]any{"traceId": fmt.Sprintf("%032x", target), "spanId": fmt.Sprintf("%016x", 1)}}
 		spans = append(spans, s)
 	}
-	d := decodedFixture(t, "large link graph", spans...)
+	d := decodedFixtureWithEncoding(t, "large link graph", "protobuf", spans...)
 	if size := len(canonical(d)); size > 8000000 {
 		t.Fatalf("large link graph projection grew to %d bytes", size)
 	}

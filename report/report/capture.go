@@ -87,8 +87,8 @@ func defaults(m map[string]any, values map[string]any) map[string]any {
 
 // Only protocol field spellings are normalized. Attribute names live in `key`
 // values and are never rewritten. Decimal strings preserve 64-bit precision in JS.
-func normalizeWire(v any) (any, error) {
-	return normalizeWireContext(v, "tracePayload")
+func normalizeWire(v any, encoding string) (any, error) {
+	return normalizeWireContext(v, "tracePayload", encoding)
 }
 
 var allowedWireFields = map[string][]string{
@@ -185,7 +185,7 @@ func canonicalBytes(value string) (string, bool) {
 	return "", false
 }
 
-func normalizeWireContext(v any, context string) (any, error) {
+func normalizeWireContext(v any, context, encoding string) (any, error) {
 	switch v := v.(type) {
 	case json.Number:
 		if context == "identity" {
@@ -225,7 +225,7 @@ func normalizeWireContext(v any, context string) (any, error) {
 				}
 			}
 			var err error
-			out[i], err = normalizeWireContext(c, childContext)
+			out[i], err = normalizeWireContext(c, childContext, encoding)
 			if err != nil {
 				return nil, err
 			}
@@ -327,13 +327,13 @@ func normalizeWireContext(v any, context string) (any, error) {
 				case "bytesValue":
 					_, stringValue := c.(string)
 					_, arrayValue := c.([]any)
-					valid = stringValue || arrayValue
+					valid = stringValue || (encoding == "protobuf" && arrayValue)
 				}
 				if !valid {
 					return nil, fmt.Errorf("invalid OTLP AnyValue variant %q: unexpected JSON type", key)
 				}
 			}
-			value, err := normalizeWireContext(c, childContext)
+			value, err := normalizeWireContext(c, childContext, encoding)
 			if err != nil {
 				return nil, err
 			}
@@ -534,6 +534,82 @@ func semanticSpanProjection(d *CaptureDataset, index int, includeScope bool) map
 	return projection
 }
 
+const maxJSONValueNodes = 16 * 1024
+
+func decodeUniqueJSON(decoder *json.Decoder) (any, error) {
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	delimiter, composite := token.(json.Delim)
+	if !composite {
+		return token, nil
+	}
+	switch delimiter {
+	case '[':
+		values := []any{}
+		for decoder.More() {
+			value, err := decodeUniqueJSON(decoder)
+			if err != nil {
+				return nil, err
+			}
+			values = append(values, value)
+		}
+		if _, err := decoder.Token(); err != nil {
+			return nil, err
+		}
+		return values, nil
+	case '{':
+		values := map[string]any{}
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return nil, err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return nil, fmt.Errorf("invalid JSON object key")
+			}
+			if _, exists := values[key]; exists {
+				return nil, fmt.Errorf("duplicate JSON key %q", key)
+			}
+			value, err := decodeUniqueJSON(decoder)
+			if err != nil {
+				return nil, err
+			}
+			values[key] = value
+		}
+		if _, err := decoder.Token(); err != nil {
+			return nil, err
+		}
+		return values, nil
+	default:
+		return nil, fmt.Errorf("unexpected JSON delimiter %q", delimiter)
+	}
+}
+
+func withinJSONNodeLimit(value any) bool {
+	nodes := 0
+	stack := []any{value}
+	for len(stack) > 0 {
+		value = stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		nodes++
+		if nodes > maxJSONValueNodes {
+			return false
+		}
+		switch value := value.(type) {
+		case []any:
+			stack = append(stack, value...)
+		case map[string]any:
+			for _, child := range value {
+				stack = append(stack, child)
+			}
+		}
+	}
+	return true
+}
+
 // DecodeCapture handles trace readability errors as diagnostics. The assembler
 // has already checked these bytes against the accepted receipt digest.
 func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
@@ -548,11 +624,15 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(input))
 	decoder.UseNumber()
-	var records []any
-	if e := decoder.Decode(&records); e != nil {
-		return fail(fmt.Errorf("unreadable trace capture: %w", e))
+	value, decodeErr := decodeUniqueJSON(decoder)
+	if decodeErr != nil {
+		return fail(fmt.Errorf("unreadable trace capture: %w", decodeErr))
 	}
-	if e := decoder.Decode(new(any)); e != io.EOF {
+	records, ok := value.([]any)
+	if !ok {
+		return fail(fmt.Errorf("unreadable trace capture: expected array"))
+	}
+	if _, err := decoder.Token(); err != io.EOF {
 		return fail(fmt.Errorf("trailing capture data"))
 	}
 	maxSpanTimestamp := new(big.Int).SetUint64(^uint64(0))
@@ -561,7 +641,11 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 		if str(r["signal"]) != "traces" {
 			continue
 		}
-		normalized, err := normalizeWire(r["payload"])
+		encoding := str(r["encoding"])
+		if encoding == "json" && !withinJSONNodeLimit(r["payload"]) {
+			return fail(fmt.Errorf("JSON value exceeds structural limit of %d nodes", maxJSONValueNodes))
+		}
+		normalized, err := normalizeWire(r["payload"], encoding)
 		if err != nil {
 			return fail(err)
 		}
