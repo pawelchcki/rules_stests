@@ -1,6 +1,7 @@
 package report
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -169,6 +170,15 @@ func TestCaptureRejectsSinkInvalidSpanFields(t *testing.T) {
 		"numeric string AnyValue": fixture(func(span map[string]any) {
 			span["attributes"] = []any{map[string]any{"key": "invalid", "value": map[string]any{"stringValue": 7}}}
 		}),
+		"invalid base64 AnyValue": fixture(func(span map[string]any) {
+			span["attributes"] = []any{map[string]any{"key": "invalid", "value": map[string]any{"bytesValue": "%%%"}}}
+		}),
+		"unknown span field": fixture(func(span map[string]any) {
+			span["nmae"] = "typo"
+		}),
+		"numeric status message": fixture(func(span map[string]any) {
+			span["status"] = map[string]any{"message": 7}
+		}),
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, raw)
@@ -176,6 +186,13 @@ func TestCaptureRejectsSinkInvalidSpanFields(t *testing.T) {
 				t.Fatalf("sink-invalid span entered topology: %+v", d)
 			}
 		})
+	}
+}
+func TestCaptureRejectsMistypedScopeName(t *testing.T) {
+	raw := bytes.Replace(captureFixture(captureSpan(1, 1, 0, "span")), []byte(`"name":"fixture"`), []byte(`"name":7`), 1)
+	d := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, raw)
+	if len(d.Diagnostics) != 1 || len(d.Shape.Traces) != 0 {
+		t.Fatalf("mistyped scope name entered topology: %+v", d)
 	}
 }
 func TestCaptureTreatsOmittedRepeatedTraceFieldsAsEmpty(t *testing.T) {

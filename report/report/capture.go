@@ -87,7 +87,81 @@ func defaults(m map[string]any, values map[string]any) map[string]any {
 // Only protocol field spellings are normalized. Attribute names live in `key`
 // values and are never rewritten. Decimal strings preserve 64-bit precision in JS.
 func normalizeWire(v any) (any, error) {
-	return normalizeWireContext(v, "")
+	return normalizeWireContext(v, "tracePayload")
+}
+
+var allowedWireFields = map[string][]string{
+	"tracePayload": {"resourceSpans"},
+	"resourceSpan": {"resource", "scopeSpans", "schemaUrl"},
+	"resource":     {"attributes", "droppedAttributesCount", "entityRefs"},
+	"entityRef":    {"schemaUrl", "type", "idKeys", "descriptionKeys"},
+	"scopeSpan":    {"scope", "spans", "schemaUrl"},
+	"scope":        {"name", "version", "attributes", "droppedAttributesCount"},
+	"span":         {"traceId", "spanId", "traceState", "parentSpanId", "name", "kind", "startTimeUnixNano", "endTimeUnixNano", "attributes", "droppedAttributesCount", "events", "droppedEventsCount", "links", "droppedLinksCount", "status", "flags"},
+	"spanEvent":    {"timeUnixNano", "name", "attributes", "droppedAttributesCount"},
+	"spanLink":     {"traceId", "spanId", "traceState", "attributes", "droppedAttributesCount", "flags"},
+	"status":       {"message", "code"},
+	"keyValue":     {"key", "value"},
+	"anyValue":     {"value", "stringValue", "boolValue", "intValue", "doubleValue", "arrayValue", "kvlistValue", "bytesValue"},
+	"arrayValue":   {"values"},
+	"keyValueList": {"values"},
+}
+
+func allowedWireField(context, key string) bool {
+	fields := allowedWireFields[context]
+	if fields == nil {
+		return true
+	}
+	for _, field := range fields {
+		if key == field {
+			return true
+		}
+	}
+	return false
+}
+
+func protocolStringField(context, key string) bool {
+	switch context {
+	case "resourceSpan", "scopeSpan":
+		return key == "schemaUrl"
+	case "entityRef":
+		return key == "schemaUrl" || key == "type"
+	case "scope":
+		return key == "name" || key == "version"
+	case "span":
+		return key == "traceState" || key == "name"
+	case "spanEvent":
+		return key == "name"
+	case "spanLink":
+		return key == "traceState"
+	case "status":
+		return key == "message"
+	case "keyValue":
+		return key == "key"
+	}
+	return false
+}
+
+func protocolArrayField(context, key string) bool {
+	switch context {
+	case "tracePayload":
+		return key == "resourceSpans"
+	case "resourceSpan":
+		return key == "scopeSpans"
+	case "resource":
+		return key == "attributes" || key == "entityRefs"
+	case "entityRef":
+		return key == "idKeys" || key == "descriptionKeys"
+	case "scopeSpan":
+		return key == "spans"
+	case "scope", "spanEvent", "spanLink":
+		return key == "attributes"
+	case "span":
+		return key == "attributes" || key == "events" || key == "links"
+	case "arrayValue", "keyValueList":
+		return key == "values"
+	}
+	return false
 }
 
 func canonicalBytes(value string) (string, bool) {
@@ -110,12 +184,30 @@ func normalizeWireContext(v any, context string) (any, error) {
 	case []any:
 		out := make([]any, len(v))
 		childContext := ""
-		if context == "anyValues" {
+		switch context {
+		case "resourceSpans":
+			childContext = "resourceSpan"
+		case "scopeSpans":
+			childContext = "scopeSpan"
+		case "spans":
+			childContext = "span"
+		case "events":
+			childContext = "spanEvent"
+		case "links":
+			childContext = "spanLink"
+		case "entityRefs":
+			childContext = "entityRef"
+		case "anyValues":
 			childContext = "anyValue"
-		} else if context == "keyValues" {
+		case "keyValues":
 			childContext = "keyValue"
 		}
 		for i, c := range v {
+			if (context == "idKeys" || context == "descriptionKeys") && c != nil {
+				if _, ok := c.(string); !ok {
+					return nil, fmt.Errorf("invalid OTLP entity reference key: expected string")
+				}
+			}
 			var err error
 			out[i], err = normalizeWireContext(c, childContext)
 			if err != nil {
@@ -138,6 +230,26 @@ func normalizeWireContext(v any, context string) (any, error) {
 			}
 			childContext := ""
 			switch {
+			case context == "tracePayload" && key == "resourceSpans":
+				childContext = "resourceSpans"
+			case context == "resourceSpan" && key == "resource":
+				childContext = "resource"
+			case context == "resourceSpan" && key == "scopeSpans":
+				childContext = "scopeSpans"
+			case context == "resource" && key == "entityRefs":
+				childContext = "entityRefs"
+			case context == "entityRef" && (key == "idKeys" || key == "descriptionKeys"):
+				childContext = key
+			case context == "scopeSpan" && key == "scope":
+				childContext = "scope"
+			case context == "scopeSpan" && key == "spans":
+				childContext = "spans"
+			case context == "span" && key == "events":
+				childContext = "events"
+			case context == "span" && key == "links":
+				childContext = "links"
+			case context == "span" && key == "status":
+				childContext = "status"
 			case key == "traceId" || key == "spanId" || key == "parentSpanId":
 				childContext = "identity"
 			case context == "keyValue" && key == "value":
@@ -156,6 +268,27 @@ func normalizeWireContext(v any, context string) (any, error) {
 				childContext = "keyValues"
 			case key == "body":
 				childContext = "anyValue"
+			}
+			if !allowedWireField(context, key) {
+				return nil, fmt.Errorf("invalid OTLP %s field %q", context, key)
+			}
+			if c != nil && protocolStringField(context, key) {
+				if _, ok := c.(string); !ok {
+					return nil, fmt.Errorf("invalid OTLP %s field %q: expected string", context, key)
+				}
+			}
+			if c != nil && protocolArrayField(context, key) {
+				if _, ok := c.([]any); !ok {
+					return nil, fmt.Errorf("invalid OTLP %s field %q: expected array", context, key)
+				}
+			}
+			if c != nil {
+				expectsObject := (context == "resourceSpan" && key == "resource") || (context == "scopeSpan" && key == "scope") || (context == "span" && key == "status") || (context == "keyValue" && key == "value")
+				if expectsObject {
+					if _, ok := c.(map[string]any); !ok {
+						return nil, fmt.Errorf("invalid OTLP %s field %q: expected object", context, key)
+					}
+				}
 			}
 			if context == "anyValue" && c != nil {
 				valid := true
@@ -248,14 +381,19 @@ func normalizeWireContext(v any, context string) (any, error) {
 		if b := array(out["bytesValue"]); b != nil {
 			raw := make([]byte, len(b))
 			for i, x := range b {
-				n, _ := strconv.ParseUint(str(x), 10, 8)
+				n, err := strconv.ParseUint(str(x), 10, 8)
+				if err != nil {
+					return nil, fmt.Errorf("invalid OTLP bytes AnyValue")
+				}
 				raw[i] = byte(n)
 			}
 			out["bytesValue"] = base64.StdEncoding.EncodeToString(raw)
 		} else if value, ok := out["bytesValue"].(string); ok {
-			if canonical, valid := canonicalBytes(value); valid {
-				out["bytesValue"] = canonical
+			canonical, valid := canonicalBytes(value)
+			if !valid {
+				return nil, fmt.Errorf("invalid OTLP bytes AnyValue")
 			}
+			out["bytesValue"] = canonical
 		}
 		return out, nil
 	default:
