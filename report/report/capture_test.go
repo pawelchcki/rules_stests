@@ -106,13 +106,6 @@ func TestCaptureRejectsSinkInvalidJSONEncoding(t *testing.T) {
 		1,
 	)
 
-	oversized := captureSpan(1, 1, 0, "oversized")
-	values := make([]any, maxJSONValueNodes)
-	for i := range values {
-		values[i] = map[string]any{}
-	}
-	oversized["attributes"] = []any{map[string]any{"key": "wide", "value": map[string]any{"arrayValue": map[string]any{"values": values}}}}
-
 	for name, test := range map[string]struct {
 		raw  []byte
 		want string
@@ -122,7 +115,6 @@ func TestCaptureRejectsSinkInvalidJSONEncoding(t *testing.T) {
 		"symbolic span kind":     {captureFixture(symbolicKind), "expected integer enum"},
 		"symbolic status code":   {captureFixture(symbolicStatus), "expected integer enum"},
 		"duplicate object key":   {duplicate, "duplicate JSON key"},
-		"structural node limit":  {captureFixture(oversized), "exceeds structural limit"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, test.raw)
@@ -130,6 +122,18 @@ func TestCaptureRejectsSinkInvalidJSONEncoding(t *testing.T) {
 				t.Fatalf("sink-invalid JSON entered topology: %+v", d)
 			}
 		})
+	}
+}
+func TestCaptureAcceptsWideSinkValidJSON(t *testing.T) {
+	span := captureSpan(1, 1, 0, "wide")
+	values := make([]any, 16*1024)
+	for i := range values {
+		values[i] = map[string]any{}
+	}
+	span["attributes"] = []any{map[string]any{"key": "wide", "value": map[string]any{"arrayValue": map[string]any{"values": values}}}}
+	d := DecodeCapture(ValidationReceipt{}, captureFixture(span))
+	if len(d.Diagnostics) != 0 || len(d.Spans) != 1 {
+		t.Fatalf("sink-valid wide JSON capture was rejected: %+v", d.Diagnostics)
 	}
 }
 func TestInternIndexesCanonicalMetadata(t *testing.T) {
@@ -1090,6 +1094,24 @@ func TestCaptureLargeRegularLinkGraphRetainsTriangleIncidence(t *testing.T) {
 	withoutTriangles := fixture([]int{176, 247, 318})
 	if withTriangles.Spans[0].LinkTargets[0] == withoutTriangles.Spans[0].LinkTargets[0] {
 		t.Fatal("large regular graph certificate erased triangle incidence")
+	}
+}
+func TestCaptureLargeBidirectionalCycleReusesAutomorphismOrbit(t *testing.T) {
+	const count = 4096
+	spans := make([]map[string]any, count)
+	for i := range spans {
+		span := captureSpan(i+1, 1, 0, "cycle")
+		previous := (i + count - 1) % count
+		next := (i + 1) % count
+		span["links"] = []any{
+			map[string]any{"traceId": fmt.Sprintf("%032x", previous+1), "spanId": fmt.Sprintf("%016x", 1)},
+			map[string]any{"traceId": fmt.Sprintf("%032x", next+1), "spanId": fmt.Sprintf("%016x", 1)},
+		}
+		spans[i] = span
+	}
+	d := decodedFixtureWithEncoding(t, "bidirectional cycle", "protobuf", spans...)
+	if len(d.Spans) != count {
+		t.Fatalf("decoded %d spans, want %d", len(d.Spans), count)
 	}
 }
 func TestCaptureRejectsAllZeroParentID(t *testing.T) {

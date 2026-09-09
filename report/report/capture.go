@@ -675,8 +675,6 @@ func semanticSpanProjection(d *CaptureDataset, index int, includeScope bool) map
 	return projection
 }
 
-const maxJSONValueNodes = 16 * 1024
-
 func decodeUniqueJSON(decoder *json.Decoder) (any, error) {
 	token, err := decoder.Token()
 	if err != nil {
@@ -729,28 +727,6 @@ func decodeUniqueJSON(decoder *json.Decoder) (any, error) {
 	}
 }
 
-func withinJSONNodeLimit(value any) bool {
-	nodes := 0
-	stack := []any{value}
-	for len(stack) > 0 {
-		value = stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		nodes++
-		if nodes > maxJSONValueNodes {
-			return false
-		}
-		switch value := value.(type) {
-		case []any:
-			stack = append(stack, value...)
-		case map[string]any:
-			for _, child := range value {
-				stack = append(stack, child)
-			}
-		}
-	}
-	return true
-}
-
 // DecodeCapture handles trace readability errors as diagnostics. The assembler
 // has already checked these bytes against the accepted receipt digest.
 func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
@@ -787,9 +763,6 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 		maxSpanTimestamp := maxProtobufSpanTimestamp
 		if encoding == "json" {
 			maxSpanTimestamp = maxJSONSpanTimestamp
-		}
-		if encoding == "json" && !withinJSONNodeLimit(r["payload"]) {
-			return fail(fmt.Errorf("JSON value exceeds structural limit of %d nodes", maxJSONValueNodes))
 		}
 		normalized, err := normalizeWire(r["payload"], encoding)
 		if err != nil {
@@ -1242,10 +1215,14 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 				}
 				return visit(root)
 			}
+			type streamedCertificate struct {
+				digest string
+				order  []int
+			}
 			rootedGeneration := 0
 			rootedSeen := make([]int, len(d.Spans))
 			rootedReferences := make([]int, len(d.Spans))
-			rootedDigest := func(root int) string {
+			streamedRootedCertificate := func(root int) streamedCertificate {
 				rootedGeneration++
 				hasher := sha256.New()
 				var buffer [binary.MaxVarintLen64]byte
@@ -1262,6 +1239,7 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 					_, _ = hasher.Write([]byte(value))
 				}
 				nextReference := 0
+				order := make([]int, 0, len(components[component]))
 				var visit func(int)
 				visit = func(member int) {
 					if rootedSeen[member] == rootedGeneration {
@@ -1272,6 +1250,7 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 					rootedSeen[member] = rootedGeneration
 					rootedReferences[member] = nextReference
 					nextReference++
+					order = append(order, member)
 					writeTag('n')
 					writeString(base[member])
 					writeInt(len(edges[member]))
@@ -1292,7 +1271,7 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 					}
 				}
 				visit(root)
-				return hex.EncodeToString(hasher.Sum(nil))
+				return streamedCertificate{digest: hex.EncodeToString(hasher.Sum(nil)), order: order}
 			}
 			// Small components retain a rooted certificate for every member.
 			// Large components retain one complete adjacency certificate in
@@ -1438,23 +1417,66 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 			// A stable refinement class is not necessarily an automorphism class:
 			// regular, non-vertex-transitive graphs can leave every member tied.
 			// Complete rooted certificates distinguish such positions and make the
-			// shared component label independent of Tarjan's traversal order. The
-			// streaming representation retains incidence with linear per-root memory.
+			// shared component label independent of Tarjan's traversal order. Discover
+			// automorphism generators while doing so: symmetric components then reuse
+			// one exact identity per orbit instead of rescanning once per vertex.
 			rootedDigestByMember := map[int]string{}
 			if !simpleDirectedCycle {
 				classSizes := map[int]int{}
 				for _, member := range components[component] {
 					classSizes[classes[member]]++
 				}
-				for _, member := range components[component] {
-					if classSizes[classes[member]] > 1 {
-						rootedDigestByMember[member] = rootedDigest(member)
+				assigned := map[int]bool{}
+				knownDigest := map[int]string{}
+				for _, representative := range components[component] {
+					if classSizes[classes[representative]] == 1 || assigned[representative] {
+						continue
+					}
+					representativeCertificate := streamedRootedCertificate(representative)
+					knownDigest[representative] = representativeCertificate.digest
+					orbit := map[int]bool{representative: true}
+					generators := [][]int{}
+					expandOrbit := func() {
+						for changed := true; changed; {
+							changed = false
+							for member := range orbit {
+								for _, generator := range generators {
+									if mapped := generator[member]; !orbit[mapped] {
+										orbit[mapped] = true
+										changed = true
+									}
+								}
+							}
+						}
+					}
+					for _, candidate := range components[component] {
+						if classes[candidate] != classes[representative] || orbit[candidate] {
+							continue
+						}
+						if candidateDigest, known := knownDigest[candidate]; known && candidateDigest != representativeCertificate.digest {
+							continue
+						}
+						candidateCertificate := streamedRootedCertificate(candidate)
+						knownDigest[candidate] = candidateCertificate.digest
+						if candidateCertificate.digest != representativeCertificate.digest {
+							continue
+						}
+						generator := make([]int, len(d.Spans))
+						for index, member := range representativeCertificate.order {
+							generator[member] = candidateCertificate.order[index]
+						}
+						generators = append(generators, generator)
+						expandOrbit()
+					}
+					for member := range orbit {
+						rootedDigestByMember[member] = representativeCertificate.digest
+						assigned[member] = true
 					}
 				}
 			}
 			rooted := rootedDigestByMember[root]
 			if rooted == "" {
-				rooted = rootedDigest(root)
+				rooted = streamedRootedCertificate(root).digest
 			} else {
 				for _, member := range components[component] {
 					candidateKey := canonical([]any{memberDescriptions[member], classes[member]})
