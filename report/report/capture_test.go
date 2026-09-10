@@ -124,6 +124,27 @@ func TestCaptureRejectsSinkInvalidJSONEncoding(t *testing.T) {
 		})
 	}
 }
+
+func TestCaptureValidatesNonTraceJSONBeforeProjection(t *testing.T) {
+	trace := captureFixture(captureSpan(1, 1, 0, "valid"))
+	for name, record := range map[string]string{
+		"metric string field":       `{"signal":"metrics","encoding":"json","payload":{"resourceMetrics":[{"scopeMetrics":[{"metrics":[{"name":7}]}]}]}}`,
+		"log collection field":      `{"signal":"logs","encoding":"json","payload":{"resourceLogs":[{"scopeLogs":[{"logRecords":[{"attributes":{}}]}]}]}}`,
+		"metric duplicate spelling": `{"signal":"metrics","encoding":"json","payload":{"resource_metrics":[],"resourceMetrics":[]}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			raw := append([]byte{}, trace[:len(trace)-1]...)
+			raw = append(raw, ',')
+			raw = append(raw, record...)
+			raw = append(raw, ']')
+			d := DecodeCapture(ValidationReceipt{Outcome: "expected-failure"}, raw)
+			if len(d.Diagnostics) != 1 || len(d.Shape.Traces) != 0 || len(d.Spans) != 0 {
+				t.Fatalf("sink-invalid non-trace payload entered topology: %+v", d)
+			}
+		})
+	}
+}
+
 func TestCaptureAcceptsWideSinkValidJSON(t *testing.T) {
 	span := captureSpan(1, 1, 0, "wide")
 	values := make([]any, 16*1024)

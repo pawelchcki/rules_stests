@@ -242,6 +242,47 @@ var captureWideCollectionFields = map[string]bool{
 	"scope_spans": true, "scopeSpans": true, "spans": true, "values": true,
 }
 
+func validateCaptureWideJSON(v any) error {
+	switch value := v.(type) {
+	case []any:
+		for _, item := range value {
+			if err := validateCaptureWideJSON(item); err != nil {
+				return err
+			}
+		}
+	case map[string]any:
+		keys := make([]string, 0, len(value))
+		for key := range value {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			item := value[key]
+			if strings.ContainsRune(key, '_') {
+				if camel := lowerCamelWireField(key); camel != key {
+					if _, duplicate := value[camel]; duplicate {
+						return fmt.Errorf("duplicate OTLP JSON field spellings for %q", camel)
+					}
+				}
+			}
+			if item != nil && captureWideStringFields[key] {
+				if _, ok := item.(string); !ok {
+					return fmt.Errorf("invalid OTLP field %q: expected string", key)
+				}
+			}
+			if item != nil && captureWideCollectionFields[key] {
+				if _, ok := item.([]any); !ok {
+					return fmt.Errorf("invalid OTLP field %q: expected array", key)
+				}
+			}
+			if err := validateCaptureWideJSON(item); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func protocolUint32Field(context, key string) bool {
 	if key == "droppedAttributesCount" {
 		return context == "resource" || context == "scope" || context == "span" || context == "spanEvent" || context == "spanLink"
@@ -756,10 +797,18 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 	maxJSONSpanTimestamp := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 127), big.NewInt(1))
 	for _, record := range records {
 		r := object(record)
+		if str(r["encoding"]) == "json" {
+			if err := validateCaptureWideJSON(r["payload"]); err != nil {
+				return fail(err)
+			}
+		}
+	}
+	for _, record := range records {
+		r := object(record)
+		encoding := str(r["encoding"])
 		if str(r["signal"]) != "traces" {
 			continue
 		}
-		encoding := str(r["encoding"])
 		maxSpanTimestamp := maxProtobufSpanTimestamp
 		if encoding == "json" {
 			maxSpanTimestamp = maxJSONSpanTimestamp
