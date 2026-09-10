@@ -475,7 +475,7 @@ func evaluate(e experiment, baseline, changed capture) observation {
 				malformed++
 			}
 		}
-		expectedSpans, presentSpans := matchingWorkloadSpans(baseline, changed)
+		expectedSpans, presentSpans := matchingWorkloadSpansIgnoringHeader(baseline, changed)
 		expectedMetrics, presentMetrics := matchingMetricStreams(baseline, changed)
 		expectedLogs, presentLogs := matchingLogStreams(baseline, changed, nil)
 		preserved := expectedSpans > 0 && presentSpans == expectedSpans && presentMetrics == expectedMetrics && presentLogs == expectedLogs
@@ -775,6 +775,10 @@ func matchingWorkloadSpansIgnoringEvents(before, after capture) (int, int) {
 	return matchingWorkloadSpansWithID(before, after, nil, workloadSpanIDIgnoringEvents, true)
 }
 
+func matchingWorkloadSpansIgnoringHeader(before, after capture) (int, int) {
+	return matchingWorkloadSpansWithID(before, after, nil, workloadSpanIDIgnoringHeader, true)
+}
+
 func matchingLengthLimitedWorkloadSpans(before, after capture, limit int, limitEvents bool) (int, int) {
 	return matchingWorkloadSpansWithID(before, after, nil, func(span object) string {
 		return workloadSpanIDWithStringLimit(span, limit, limitEvents)
@@ -973,6 +977,21 @@ func workloadSpanIDIgnoringEvents(span object) string {
 	}, false, true)
 }
 
+func workloadSpanIDIgnoringHeader(span object) string {
+	normalized := make(object, len(span))
+	for key, value := range span {
+		normalized[key] = value
+	}
+	var retained []any
+	for _, attribute := range attributes(span) {
+		if field(attribute, "key") != "http.request.header.x_probe_feature" {
+			retained = append(retained, attribute)
+		}
+	}
+	normalized["attributes"] = retained
+	return workloadSpanID(normalized)
+}
+
 func workloadSpanIDForPropagation(span object) string {
 	if !isProbeServerSpan(span) {
 		return workloadSpanID(span)
@@ -994,12 +1013,17 @@ func workloadSpanIDWithStringLimit(span object, limit int, limitEvents bool) str
 	var values []string
 	for _, attribute := range attributes(span) {
 		key, _ := field(attribute, "key").(string)
-		if key == "" || lengthLimitedSpanAttributeIgnores[key] {
+		if key == "" {
+			continue
+		}
+		if volatilePortSpanAttributes[key] {
+			encoded, _ := json.Marshal([]any{key, "<port>"})
+			values = append(values, string(encoded))
 			continue
 		}
 		value := mapStringValues(field(attribute, "value"), func(value string) string {
 			value = normalizeExternalStatePath(value)
-			if key == "http.host" || key == "net.host.name" || key == "server.address" {
+			if key == "http.host" || key == "http.server_name" || key == "net.host.name" || key == "server.address" {
 				value = normalizeEndpointPort(value)
 			}
 			if key == "http.url" || key == "url.full" {
@@ -1023,7 +1047,7 @@ func workloadSpanIDWithStringLimit(span object, limit int, limitEvents bool) str
 	return string(encoded)
 }
 
-var lengthLimitedSpanAttributeIgnores = map[string]bool{
+var volatilePortSpanAttributes = map[string]bool{
 	"client.port":       true,
 	"net.host.port":     true,
 	"net.peer.port":     true,
@@ -1037,20 +1061,28 @@ func workloadSpanIDWithValue(span object, normalize func(any) any, includeEvents
 		return ""
 	}
 	name = normalizeExternalStatePath(name)
-	stableKeys := map[string]bool{
-		"db.name": true, "db.namespace": true, "db.operation": true, "db.operation.name": true,
-		"db.query.text": true, "db.sql.table": true, "db.statement": true, "db.system": true, "db.system.name": true,
-		"http.method": true, "http.request.method": true, "http.response.status_code": true,
-		"http.route": true, "http.status_code": true, "http.target": true,
-		"url.path": true, "user_agent.original": true, "http.user_agent": true,
-	}
 	var values []string
 	for _, attribute := range attributes(span) {
 		key, _ := field(attribute, "key").(string)
-		if !stableKeys[key] {
+		if key == "" {
+			continue
+		}
+		if volatilePortSpanAttributes[key] {
+			encoded, _ := json.Marshal([]any{key, "<port>"})
+			values = append(values, string(encoded))
 			continue
 		}
 		value := normalize(field(attribute, "value"))
+		value = mapStringValues(value, func(value string) string {
+			value = normalizeExternalStatePath(value)
+			if key == "http.host" || key == "http.server_name" || key == "net.host.name" || key == "server.address" {
+				value = normalizeEndpointPort(value)
+			}
+			if key == "http.url" || key == "url.full" {
+				value = normalizeURLPort(value)
+			}
+			return value
+		})
 		encoded, _ := json.Marshal([]any{key, normalizedJSONValue(value)})
 		values = append(values, string(encoded))
 	}

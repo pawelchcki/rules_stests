@@ -541,6 +541,16 @@ func TestWorkloadSpanIdentityPreservesFlagsAndEvents(t *testing.T) {
 	}
 }
 
+func TestWorkloadSpanIdentityPreservesAllStableAttributes(t *testing.T) {
+	baseline := capture{Spans: syntheticProbeSpans()}
+	changed := capture{Spans: syntheticProbeSpans()}
+	baseline.Spans[0]["attributes"] = append(baseline.Spans[0]["attributes"].([]any), attr("network.protocol.version", "1.1"), attr("url.scheme", "http"), attr("server.address", "127.0.0.1:12345"))
+	changed.Spans[0]["attributes"] = append(changed.Spans[0]["attributes"].([]any), attr("url.scheme", "http"), attr("server.address", "127.0.0.1:54321"))
+	if expected, present := matchingWorkloadSpans(baseline, changed); expected != 4 || present != 3 {
+		t.Fatalf("dropped stable span attribute was not detected: %d/%d", present, expected)
+	}
+}
+
 func TestWorkloadSpanIdentityPreservesTopologyAndMultiplicity(t *testing.T) {
 	baseline := capture{Spans: syntheticProbeSpans()}
 	detached := capture{Spans: syntheticProbeSpans()}
