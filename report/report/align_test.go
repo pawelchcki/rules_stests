@@ -330,6 +330,39 @@ func TestAlignShapesPairsReorderedDuplicateSiblingsByDetails(t *testing.T) {
 	}
 }
 
+func TestAlignShapesBreaksScoreTiesIndependentlyOfSiblingOrder(t *testing.T) {
+	leftChildren := []SpanGroup{
+		exactSpan("", "client", "", "request", ""),
+		exactSpan("", "client", "ok", "request", "200"),
+	}
+	rightChildren := []SpanGroup{
+		exactSpan("", "client", "", "request", "500"),
+		exactSpan("", "client", "error", "request", ""),
+	}
+	root := func(children ...SpanGroup) SpanGroup {
+		return exactSpan("", "server", "", "root", "", children...)
+	}
+	pairings := func(alignment *ShapeAlignment) string {
+		pairs := []string{}
+		for _, row := range alignment.Traces[0].Spans {
+			if row.Depth != 1 || row.Left == nil || row.Right == nil {
+				continue
+			}
+			pairs = append(pairs, strings.Join([]string{
+				row.Left.Status, row.Left.HTTPStatus,
+				row.Right.Status, row.Right.HTTPStatus,
+				strings.Join(row.Diffs, ","),
+			}, "/"))
+		}
+		return strings.Join(pairs, "|")
+	}
+	forward := pairings(AlignShapes(shapeOf("left", root(leftChildren...)), shapeOf("right", root(rightChildren...))))
+	reversed := pairings(AlignShapes(shapeOf("left", root(leftChildren...)), shapeOf("right", root(rightChildren[1], rightChildren[0]))))
+	if forward != reversed {
+		t.Fatalf("score-tied sibling assignment depended on right order: %q != %q", forward, reversed)
+	}
+}
+
 func TestAlignShapesPrefersWildcardSiblingsWithMatchingSpecificity(t *testing.T) {
 	unnamed := exactSpan("", "server", "error", "", "500")
 	named := exactSpan("", "server", "error", "B", "500")
