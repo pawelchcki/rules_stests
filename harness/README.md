@@ -1,13 +1,13 @@
 # Harness
 
 The harness launches extracted OCI filesystems, drives RealWorld Hurl cases,
-and validates captured OTLP without requiring a container runtime or host
+and validates captured OTLP and native Datadog traces without requiring a container runtime or host
 language installation.
 
 ## Launcher
 
 Extraction and launching are separate tools. `oci_rootfs_extract <layout>
-<rootfs> <single|multi>` verifies and overlays an OCI layout as a Bazel build
+<rootfs> <single|multi> [zstd-tool]` verifies and overlays an OCI layout as a Bazel build
 action. `app_launcher --runtime=<python|ruby|native> --instance=<name>
 --rootfs=<directory> [injection options] -- <command> [arguments...]` consumes
 an already-materialized directory and executes the application directly.
@@ -31,7 +31,8 @@ corpus_service(
 `python` and `ruby` use the existing bundled runtime layouts and take an
 entrypoint/Rails command; `native` takes a rootfs-relative executable path.
 The optional `injection` accepts the existing `otel_injection`,
-`python_auto_injection`, and `ruby_auto_injection` configurations. The macro
+`python_auto_injection`, and `ruby_auto_injection` configurations, plus neutral
+`instrumentation_injection` and `datadog_python_injection`. The macro
 declares app/agent runfiles and forwards service environment, dependencies,
 health checks and lifecycle settings to `rules_itest`. Fixtures and examples
 call `corpus_service` explicitly for each service, including instrumentation
@@ -41,11 +42,12 @@ to those named services.
 For services built directly by Bazel, use `exe = ":server"` and omit rootfs,
 runtime, instance, command and injection. Arguments, environment and runfiles
 go directly to that executable without bundled-runtime or seed-state setup.
-The OTel sink uses this form. Future corpora can use either form and attach
+The telemetry sink uses this form. Future corpora can use either form and attach
 their own tests; `corpus_service` imposes no RealWorld API contract.
 
 | Option | Meaning |
 | --- | --- |
+| `--instrumentation-rootfs=DIR` | Resolve agent data and `{instrumentation_rootfs}` without OTel defaults |
 | `--otel-rootfs=DIR` | Resolve agent data; enable the placeholder and OTel defaults |
 | `--env=KEY=VALUE` | Set an environment variable after runtime isolation |
 | `--prepend-path=KEY=VALUE` | Prepend one colon-separated path entry |
@@ -79,14 +81,29 @@ Pass selected `.hurl` files after the options to limit the run. Under
 `service_test`, the driver reads assigned service ports, brackets the workload
 with sink snapshots, and runs either validation or candidate generation.
 
-## OTLP sink
+## Telemetry sink
 
-`otel_sink_service` accepts OTLP/HTTP protobuf or JSON at `/v1/traces`,
+`telemetry_sink_service` and the retained `otel_sink_service` both run
+`telemetry_sink` (also available through the `otel_sink` alias). Each accepts
+OTLP/HTTP protobuf or JSON at `/v1/traces`,
 `/v1/metrics`, and `/v1/logs`. `/healthz` reports readiness, `/stats` reports
 capture and validator measurements, `/dump` freezes a JSON snapshot,
 `/dump.scm` renders it as Scheme, `/reset` clears all signals, and
 `/reset/traces` preserves startup metrics and logs. `/validate` executes a
 profile bundle; `/candidate` renders a candidate trace shape.
+
+Datadog supports `GET /info`, POST/PUT v0.4 JSON or MessagePack, and
+POST/PUT v0.5 MessagePack at `/v0.4/traces` and `/v0.5/traces`.
+Select `protocol=datadog` on dump, stats, reset, validation, or candidate
+operations. Each protocol has independent snapshots and counters; unqualified
+operations select OTLP. Native IDs and nanosecond integers become lossless
+Scheme decimal strings. Decodable semantic violations remain in the capture
+and produce HTTP 409 when assertions reject them.
+
+The Hurl driver accepts `--telemetry-sink-suffix`,
+`--telemetry-profile-manifest`, `--telemetry-mode`, `--telemetry-case`, and
+`--telemetry-xfail`; legacy `--otel-*` aliases remain available. The selected
+manifest supplies family, wire version, app identity, and candidate namespace.
 
 The module map is intentionally narrow: `server` routes requests; `http` and
 `otlp*` decode transports; `storage`, `data`, and `trace_forest` own capture

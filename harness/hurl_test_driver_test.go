@@ -103,6 +103,7 @@ func TestValidateProofSetMatchesNormalizedPlanExactly(t *testing.T) {
 }
 
 func TestEmitValidationReceiptIsOptInAndWritesDigests(t *testing.T) {
+	t.Setenv("TELEMETRY_TEST_REVISION", "")
 	root := t.TempDir()
 	t.Setenv("TEST_UNDECLARED_OUTPUTS_DIR", root)
 	t.Setenv("OTEL_TEST_REVISION", "")
@@ -144,6 +145,7 @@ func TestEmitValidationReceiptIsOptInAndWritesDigests(t *testing.T) {
 }
 
 func TestEmitExpectedFailureReceiptPreservesRejectedCapture(t *testing.T) {
+	t.Setenv("TELEMETRY_TEST_REVISION", "")
 	root := t.TempDir()
 	t.Setenv("TEST_UNDECLARED_OUTPUTS_DIR", root)
 	t.Setenv("OTEL_TEST_REVISION", strings.Repeat("b", 40))
@@ -269,5 +271,70 @@ func TestPayloadHasServiceName(t *testing.T) {
 				t.Fatalf("payloadHasServiceName() = %v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestDatadogProofMarkersCannotSatisfyOTLPAndConversely(t *testing.T) {
+	proof := proofPlanProof{FeatureID: "trace.identity", Assertion: "ids", Basis: "observed"}
+	dd := []byte("[[DATADOG-PROOF-V2|trace.identity|ids|observed]]")
+	otlp := []byte("[[OTLP-PROOF-V1|trace.identity|ids|observed]]")
+	for _, tc := range []struct {
+		family string
+		output []byte
+		valid  bool
+	}{
+		{"datadog", dd, true}, {"datadog", otlp, false}, {"", dd, false}, {"", otlp, true},
+	} {
+		_, err := validateFamilyProofSet([]proofPlanProof{proof}, tc.output, tc.family)
+		if (err == nil) != tc.valid {
+			t.Fatalf("family=%q output=%s: %v", tc.family, tc.output, err)
+		}
+	}
+}
+
+func TestDatadogStartupResetSelectsIndependentProtocol(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("protocol") != "datadog" {
+			t.Errorf("unqualified operation: %s", r.URL)
+		}
+		if r.URL.Path == "/stats" {
+			w.Write([]byte(`{"trace_requests":1,"trace_spans":1}`))
+		} else {
+			w.Write([]byte(`{}`))
+		}
+	}))
+	defer server.Close()
+	if err := resetStartupTelemetryAt(server.Client(), server.URL, time.Second, time.Millisecond, time.Millisecond, map[string]bool{"traces": true}, "datadog"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDatadogReceiptIdentityAndRevisionIsolation(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("TEST_UNDECLARED_OUTPUTS_DIR", root)
+	t.Setenv("OTEL_TEST_REVISION", strings.Repeat("a", 40))
+	t.Setenv("TELEMETRY_TEST_REVISION", "")
+	profile := atomicProfile{ID: "dd", Scenario: "tags", Family: "datadog", WireVersion: "v0.5", Plan: []byte("plan"), Shape: []byte("shape"), ValidationMode: "exact"}
+	if err := emitValidationReceipt(profile, []byte("capture"), nil); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "datadog", "receipts", "dd", "tags.json")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("Datadog consumed the legacy revision")
+	}
+	t.Setenv("TELEMETRY_TEST_REVISION", strings.Repeat("b", 40))
+	if err := emitValidationReceipt(profile, []byte("capture"), nil); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var receipt validationReceipt
+	if err := json.Unmarshal(data, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.SchemaVersion != 2 || receipt.Family != "datadog" || receipt.WireVersion != "v0.5" || receipt.Revision != strings.Repeat("b", 40) || receipt.ScenarioShapeSHA256 == "" {
+		t.Fatalf("wrong identity: %+v", receipt)
 	}
 }

@@ -1,8 +1,9 @@
 """Explicit reference services and their RealWorld contract tests."""
 
+load("//corpus:registry.bzl", "REALWORLD_BASE_HURL_CASES")
 load("//bazel:oci_images.lock.bzl", "RUBY_IMAGES_PUBLISHED")
 load("//rules:corpus_service.bzl", "corpus_service")
-load("//rules:realworld_app.bzl", "otlp_env", "python_auto_injection", "ruby_auto_injection")
+load("//rules:realworld_app.bzl", "datadog_env", "datadog_python_injection", "otlp_env", "python_auto_injection", "ruby_auto_injection")
 load("//rules:realworld_service_tests.bzl", "realworld_service_tests")
 load("//rules:otel_profile.bzl", "otel_report_manifest")
 load(":external_features.bzl", "external_feature_tests")
@@ -319,4 +320,119 @@ otel_report_manifest(
     # This is an explicit owner declaration, not an inference from missing
     # receipts: an unexpected absent runner remains an assembly failure.
     unavailable_profiles = ["//corpus:ruby-rails-auto-v0-1-0"] if not RUBY_IMAGES_PUBLISHED else [],
+)
+
+corpus_service(
+    name = "aiohttp_datadog_service",
+    rootfs = "//harness:aiohttp_rootfs",
+    runtime = "python",
+    instance = "aiohttp-datadog",
+    command = "serve",
+    args = _PYTHON_ARGS,
+    injection = datadog_python_injection(aiohttp = True),
+    env = datadog_env(service = "aiohttp-datadog", wire_version = "v0.5"),
+    deps = ["//harness:telemetry_sink_service"],
+    so_reuseport_aware = True,
+    autoassign_port = True,
+    expected_start_duration = "5s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    hygienic = False,
+    shutdown_timeout = "10s",
+)
+
+realworld_service_tests(
+    name = "aiohttp_datadog",
+    service = ":aiohttp_datadog_service",
+    telemetry_profile = "//corpus:python-aiohttp-datadog-v4-14-0-v05",
+    telemetry_sink = "//harness:telemetry_sink_service",
+    scenarios = REALWORLD_BASE_HURL_CASES + ["propagation_datadog"],
+    tags = ["datadog"],
+)
+
+corpus_service(
+    name = "aiohttp_datadog_v04_service",
+    rootfs = "//harness:aiohttp_rootfs",
+    runtime = "python",
+    instance = "aiohttp-datadog",
+    command = "serve",
+    args = _PYTHON_ARGS,
+    injection = datadog_python_injection(aiohttp = True),
+    env = datadog_env(service = "aiohttp-datadog", wire_version = "v0.4"),
+    deps = ["//harness:telemetry_sink_service"],
+    so_reuseport_aware = True,
+    autoassign_port = True,
+    expected_start_duration = "5s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    hygienic = False,
+    shutdown_timeout = "10s",
+)
+
+realworld_service_tests(
+    name = "aiohttp_datadog_v04",
+    service = ":aiohttp_datadog_v04_service",
+    telemetry_profile = "//corpus:python-aiohttp-datadog-v4-14-0-v04",
+    telemetry_sink = "//harness:telemetry_sink_service",
+    scenarios = ["tags"],
+    tags = ["datadog"],
+)
+
+corpus_service(
+    name = "django_datadog_service",
+    rootfs = "//harness:django_rootfs",
+    runtime = "python",
+    instance = "django-datadog",
+    command = "serve",
+    args = _PYTHON_ARGS,
+    injection = datadog_python_injection(),
+    env = datadog_env(service = "django-datadog", wire_version = "v0.5"),
+    deps = ["//harness:telemetry_sink_service"],
+    so_reuseport_aware = True,
+    autoassign_port = True,
+    expected_start_duration = "5s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    hygienic = False,
+    shutdown_timeout = "10s",
+)
+
+realworld_service_tests(
+    name = "django_datadog",
+    service = ":django_datadog_service",
+    telemetry_profile = "//corpus:python-django-datadog-v4-14-0-v05",
+    telemetry_sink = "//harness:telemetry_sink_service",
+    scenarios = REALWORLD_BASE_HURL_CASES + ["propagation_datadog"],
+    tags = ["datadog"],
+)
+
+corpus_service(
+    name = "django_datadog_v04_service",
+    rootfs = "//harness:django_rootfs",
+    runtime = "python",
+    instance = "django-datadog",
+    command = "serve",
+    args = _PYTHON_ARGS,
+    injection = datadog_python_injection(),
+    env = datadog_env(service = "django-datadog", wire_version = "v0.4"),
+    deps = ["//harness:telemetry_sink_service"],
+    so_reuseport_aware = True,
+    autoassign_port = True,
+    expected_start_duration = "5s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    hygienic = False,
+    shutdown_timeout = "10s",
+)
+
+realworld_service_tests(
+    name = "django_datadog_v04",
+    service = ":django_datadog_v04_service",
+    telemetry_profile = "//corpus:python-django-datadog-v4-14-0-v04",
+    telemetry_sink = "//harness:telemetry_sink_service",
+    scenarios = ["tags"],
+    tags = ["datadog"],
+)
+
+test_suite(
+    name = "datadog_suite",
+    tests = [":aiohttp_datadog_hurl_test", ":django_datadog_hurl_test",
+             ":aiohttp_datadog_v04_hurl_test", ":django_datadog_v04_hurl_test"],
+    tags = ["datadog"],
 )

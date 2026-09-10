@@ -1,9 +1,11 @@
-load("//corpus:registry.bzl", "OTEL_CORE_LIBRARIES", "declare_otel_profiles")
-load("//rules:otel_profile.bzl", "otel_realworld_profile", "otel_standard_registry")
+load("@rules_go//go:def.bzl", "go_binary")
+load("@rules_itest//:itest.bzl", "service_test")
+load("//corpus:registry.bzl", "DATADOG_CORE_LIBRARIES", "declare_datadog_profiles", "OTEL_CORE_LIBRARIES", "declare_otel_profiles")
+load("//rules:otel_profile.bzl", "datadog_realworld_profile", "telemetry_feature_registry", "otel_realworld_profile", "otel_standard_registry")
 
 package(default_visibility = ["//visibility:public"])
 
-exports_files(glob(["**/*.scm", "**/*.hurl"]))
+exports_files(glob(["**/*.scm", "**/*.hurl", "**/*.json"]))
 
 filegroup(
     name = "core_libraries",
@@ -23,3 +25,21 @@ filegroup(
 )
 
 declare_otel_profiles(otel_realworld_profile)
+
+filegroup(name = "datadog_core_libraries", srcs = DATADOG_CORE_LIBRARIES)
+telemetry_feature_registry(
+    name = "datadog_feature_registry",
+    scheme = "datadog/catalog.scm",
+    catalog = "datadog/features.json",
+)
+declare_datadog_profiles(datadog_realworld_profile)
+
+go_binary(name = "datadog_conformance_probe", srcs = ["datadog/tests/conformance.go"])
+service_test(
+    name = "datadog_conformance_test",
+    timeout = "long",
+    args = ["--shape-library=$(rootpath datadog/capture/shapes.scm)"],
+    data = [":datadog_core_libraries", "datadog/catalog.scm", "datadog/capture/shapes.scm"],
+    services = ["//harness:telemetry_sink_service"],
+    test = ":datadog_conformance_probe",
+)

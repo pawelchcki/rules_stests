@@ -23,21 +23,21 @@ def _realworld_hurl_case_test(name, case, service, otel_sink = None,
                               otel_xfail = "", flaky = False, tags = [], **kwargs):
     spec = _LOCAL_CASES.get(case) or _SPEC_ANCHOR.same_package_label("hurl/{}.hurl".format(case))
     args = [
-        "--service-suffix=" + str(service),
+        "--service-suffix=" + str(native.package_relative_label(service)),
         "--jobs=1",
         "--hurl-rootfs=" + _rootpath(_HURL_ROOTFS),
     ]
     data = [_HURL_ROOTFS, spec]
     if otel_sink:
         args.extend([
-            "--otel-sink-suffix=" + str(otel_sink),
-            "--otel-mode=" + otel_mode,
-            "--otel-case=" + case,
-            "--otel-profile-manifest=" + _rootpath(otel_profile),
+            "--telemetry-sink-suffix=" + str(native.package_relative_label(otel_sink)),
+            "--telemetry-mode=" + otel_mode,
+            "--telemetry-case=" + case,
+            "--telemetry-profile-manifest=" + _rootpath(otel_profile),
         ])
         data.append(otel_profile)
         if otel_xfail:
-            args.append("--otel-xfail=" + otel_xfail)
+            args.append("--telemetry-xfail=" + otel_xfail)
     args.append(_rootpath(spec))
     service_test(
         name = name,
@@ -50,12 +50,20 @@ def _realworld_hurl_case_test(name, case, service, otel_sink = None,
         **kwargs
     )
 
-def realworld_hurl_test_suite(name, service, otel_sink = None,
+def realworld_hurl_test_suite(name, service, telemetry_sink = None, telemetry_profile = None, otel_sink = None,
                               otel_profile = None, otel_candidates = True,
                               otel_flaky_reason = "", otel_flaky_cases = {},
                               otel_xfails = {}, flaky = False, tags = [],
                               cases = REALWORLD_BASE_HURL_CASES, **kwargs):
     """Creates one test per RealWorld scenario from one atomic profile label."""
+    if telemetry_sink != None:
+        if otel_sink != None:
+            fail("supply only one of telemetry_sink and otel_sink")
+        otel_sink = telemetry_sink
+    if telemetry_profile != None:
+        if otel_profile != None:
+            fail("supply only one of telemetry_profile and otel_profile")
+        otel_profile = telemetry_profile
     if bool(otel_sink) != bool(otel_profile):
         fail("otel_sink and the atomic otel_profile label must be supplied together")
     if not cases:

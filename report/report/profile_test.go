@@ -215,3 +215,27 @@ func TestCheckedInProfilePlanSnapshotsAndDescriptorOwnership(t *testing.T) {
 		t.Fatal("language-neutral RealWorld contract owns implementation descriptors")
 	}
 }
+
+func TestCompileDatadogIdentityAndLegacySchema(t *testing.T) {
+	source := strings.Replace(profileTestSource, "(id 'test-profile)", `(id 'test-profile) (family 'datadog) (wire-version "v0.5") (application "aiohttp") (shape-namespace "datadog.realworld.shape.test-profile")`, 1)
+	plan, err := compileProfileFixture(source, profileTestImplementation, profileTestRules, profileTestShapes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.SchemaVersion != 2 || plan.Family != "datadog" || plan.WireVersion != "v0.5" || plan.Application != "aiohttp" {
+		t.Fatalf("wrong identity: %+v", plan)
+	}
+	for _, bad := range []string{strings.Replace(source, "v0.5", "v0.3", 1), strings.Replace(source, `(family 'datadog)`, "", 1)} {
+		if _, err := compileProfileFixture(bad, profileTestImplementation, profileTestRules, profileTestShapes); err == nil {
+			t.Fatal("accepted invalid family identity")
+		}
+	}
+	legacy, err := compileProfileFixture(profileTestSource, profileTestImplementation, profileTestRules, profileTestShapes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(legacy)
+	if legacy.SchemaVersion != 1 || bytes.Contains(data, []byte(`"family"`)) || bytes.Contains(data, []byte(`"wireVersion"`)) {
+		t.Fatalf("legacy schema changed: %s", data)
+	}
+}

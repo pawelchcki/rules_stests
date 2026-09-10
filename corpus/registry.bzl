@@ -1,4 +1,4 @@
-"""Single source of truth for the executable OpenTelemetry corpus."""
+"""Single source of truth for the executable telemetry corpus."""
 
 # Scenarios that come from the pinned upstream RealWorld API spec archive.
 REALWORLD_UPSTREAM_HURL_CASES = [
@@ -17,17 +17,18 @@ REALWORLD_UPSTREAM_HURL_CASES = [
     "tags",
 ]
 
-# Scenarios this repository owns, because they exercise OpenTelemetry behaviour
+# Scenarios this repository owns, because they exercise telemetry behaviour
 # the upstream API conformance suite has no reason to cover.
 REALWORLD_LOCAL_HURL_CASES = {
     "propagation": Label("//corpus:realworld/hurl/propagation.hurl"),
     "propagation_b3": Label("//corpus:realworld/hurl/propagation_b3.hurl"),
+    "propagation_datadog": Label("//corpus:realworld/hurl/propagation_datadog.hurl"),
     "unicode": Label("//corpus:realworld/hurl/unicode.hurl"),
 }
 
-# Scenarios that only make sense under a particular OTEL_* setting, so only the
-# variant configured for them runs them.
-REALWORLD_VARIANT_HURL_CASES = ["propagation_b3"]
+# Scenarios that need a particular propagator or telemetry family, so only the
+# profile configured for them runs them.
+REALWORLD_VARIANT_HURL_CASES = ["propagation_b3", "propagation_datadog"]
 
 # What every profile runs unless it says otherwise.
 REALWORLD_BASE_HURL_CASES = REALWORLD_UPSTREAM_HURL_CASES + sorted([
@@ -158,4 +159,44 @@ def declare_otel_profiles(otel_realworld_profile):
             signals = declaration.signals,
             scenarios = scenarios if scenarios else REALWORLD_BASE_HURL_CASES,
             standard_registry = ":otel_standard_registry",
+        )
+
+# Datadog has a separate wire feature catalog and proof runtime. The shared
+# scenario observations describe application HTTP behavior, not telemetry.
+DATADOG_CORE_LIBRARIES = [
+    "telemetry/contract-error.scm",
+    "datadog/capture/shapes.scm",
+    "datadog/proofs.scm",
+    "datadog/trace-shape.scm",
+    "realworld/scenarios.scm",
+    "datadog/profile.scm",
+]
+
+DATADOG_PROFILES = {
+    "python-aiohttp-datadog-v4-14-0-v05": struct(application = "aiohttp", wire_version = "v0.5", scenarios = REALWORLD_BASE_HURL_CASES + ["propagation_datadog"]),
+    "python-django-datadog-v4-14-0-v05": struct(application = "django", wire_version = "v0.5", scenarios = REALWORLD_BASE_HURL_CASES + ["propagation_datadog"]),
+    "python-aiohttp-datadog-v4-14-0-v04": struct(application = "aiohttp", wire_version = "v0.4", scenarios = ["tags"]),
+    "python-django-datadog-v4-14-0-v04": struct(application = "django", wire_version = "v0.4", scenarios = ["tags"]),
+}
+
+# Exact expectations are enabled incrementally as their stack layer lands.
+DATADOG_REVIEWED_SHAPES = [
+]
+
+def declare_datadog_profiles(datadog_realworld_profile):
+    """Declares Datadog's independent profiles and native wire assertions."""
+    for profile_id, declaration in DATADOG_PROFILES.items():
+        datadog_realworld_profile(
+            name = profile_id,
+            specification = "datadog/realworld/profile/{}.scm".format(profile_id),
+            implementation_libraries = ["datadog/implementation/python-v4.14.0.scm"],
+            runtime_libraries = [],
+            scenario_shapes = {
+                path.rsplit("/", 1)[1][:-4]: path
+                for path in DATADOG_REVIEWED_SHAPES
+                if path.startswith("datadog/realworld/shape/{}/".format(profile_id))
+            },
+            signals = ["traces"],
+            scenarios = declaration.scenarios,
+            wire_version = declaration.wire_version,
         )
