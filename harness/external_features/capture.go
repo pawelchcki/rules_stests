@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/url"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -542,7 +543,7 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		check(len(baseline.Spans) > 0, len(changed.Records) == 0, fmt.Sprintf("export requests %d -> %d", len(baseline.Records), len(changed.Records)))
 	case "sampler", "sampler-arg":
 		expectedMetrics, presentMetrics := matchingMetricStreams(baseline, changed)
-		expectedLogs, presentLogs := matchingLogStreams(baseline, changed, nil)
+		expectedLogs, presentLogs := matchingLogStreamsIgnoringCorrelation(baseline, changed)
 		otherSignalsAlive := (len(baseline.Metrics) == 0 || (expectedMetrics > 0 && presentMetrics == expectedMetrics)) &&
 			(len(baseline.Logs) == 0 || (expectedLogs > 0 && presentLogs == expectedLogs))
 		check(len(baseline.Spans) > 0, len(changed.Spans) == 0 && otherSignalsAlive, fmt.Sprintf("spans %d -> %d; other baseline signals still exported: %t", len(baseline.Spans), len(changed.Spans), otherSignalsAlive))
@@ -825,10 +826,41 @@ func workloadSpanID(span object) string {
 }
 
 func workloadSpanIDWithStringLimit(span object, limit int) string {
-	return workloadSpanIDWithValue(span, func(value any) any {
-		normalized, _ := normalizeStringValues(value, limit)
-		return normalized
-	})
+	name, _ := field(span, "name").(string)
+	if name == "" {
+		return ""
+	}
+	var values []string
+	for _, attribute := range attributes(span) {
+		key, _ := field(attribute, "key").(string)
+		if key == "" || lengthLimitedSpanAttributeIgnores[key] {
+			continue
+		}
+		value := mapStringValues(field(attribute, "value"), func(value string) string {
+			value = normalizeExternalStatePath(value)
+			if key == "http.host" || key == "net.host.name" || key == "server.address" {
+				value = normalizeEndpointPort(value)
+			}
+			if key == "http.url" || key == "url.full" {
+				value = normalizeURLPort(value)
+			}
+			return value
+		})
+		value, _ = normalizeStringValues(value, limit)
+		encoded, _ := json.Marshal([]any{key, normalizedJSONValue(value)})
+		values = append(values, string(encoded))
+	}
+	sort.Strings(values)
+	encoded, _ := json.Marshal([]any{normalizeExternalStatePath(name), number(field(span, "kind")), values})
+	return string(encoded)
+}
+
+var lengthLimitedSpanAttributeIgnores = map[string]bool{
+	"client.port":       true,
+	"net.host.port":     true,
+	"net.peer.port":     true,
+	"network.peer.port": true,
+	"server.port":       true,
 }
 
 func workloadSpanIDWithValue(span object, normalize func(any) any) string {
@@ -911,26 +943,9 @@ func headerArray(s object) bool {
 }
 
 func matchingLengthLimitedLogStreams(before, after capture, limit int) (int, int) {
-	eligible := map[string]int{}
-	for _, stream := range captureLogStreams(before) {
-		if id := logLengthStreamID(stream, limit); id != "" {
-			eligible[id]++
-		}
-	}
-	preserved := map[string]int{}
-	for _, stream := range captureLogStreams(after) {
-		if id := logLengthStreamID(stream, limit); id != "" && preserved[id] < eligible[id] {
-			preserved[id]++
-		}
-	}
-	expected, present := 0, 0
-	for _, count := range eligible {
-		expected += count
-	}
-	for _, count := range preserved {
-		present += count
-	}
-	return expected, present
+	return matchingLogStreamsWithID(before, after, nil, func(stream logStream) string {
+		return logLengthStreamID(stream, limit)
+	}, true)
 }
 
 func preservedLongLogAttributes(before, after capture, limit int) (int, int, int) {
@@ -1049,17 +1064,40 @@ func captureLogStreams(c capture) []logStream {
 }
 
 func matchingLogStreams(before, after capture, ignoredResourceAttributes map[string]bool) (int, int) {
-	eligible := map[string]int{}
-	for _, stream := range captureLogStreams(before) {
-		if id := logStreamID(stream, ignoredResourceAttributes); id != "" {
-			eligible[id]++
+	return matchingLogStreamsWithID(before, after, ignoredResourceAttributes, func(stream logStream) string {
+		return logStreamID(stream, ignoredResourceAttributes)
+	}, true)
+}
+
+func matchingLogStreamsIgnoringCorrelation(before, after capture) (int, int) {
+	return matchingLogStreamsWithID(before, after, nil, func(stream logStream) string {
+		return logStreamID(stream, nil)
+	}, false)
+}
+
+func matchingLogStreamsWithID(before, after capture, ignoredResourceAttributes map[string]bool, identify func(logStream) string, includeCorrelation bool) (int, int) {
+	identities := func(c capture) map[string]int {
+		items := map[string]int{}
+		for _, stream := range captureLogStreams(c) {
+			id := identify(stream)
+			if id == "" {
+				continue
+			}
+			if includeCorrelation {
+				encoded, _ := json.Marshal([]string{id, logCorrelationID(c, stream.Record, ignoredResourceAttributes)})
+				id = string(encoded)
+			}
+			items[id]++
 		}
+		return items
 	}
+	eligible := identities(before)
 	preserved := map[string]int{}
-	for _, stream := range captureLogStreams(after) {
-		if id := logStreamID(stream, ignoredResourceAttributes); id != "" && preserved[id] < eligible[id] {
-			preserved[id]++
+	for id, count := range identities(after) {
+		if count > eligible[id] {
+			count = eligible[id]
 		}
+		preserved[id] = count
 	}
 	return countIdentities(eligible), countIdentities(preserved)
 }
@@ -1090,19 +1128,9 @@ func logLengthStreamID(stream logStream, limit int) string {
 }
 
 func matchingCountLimitedLogStreams(before, after capture, limit int) (int, int) {
-	eligible := map[string]int{}
-	for _, stream := range captureLogStreams(before) {
-		if id := logCountStreamID(stream, limit); id != "" {
-			eligible[id]++
-		}
-	}
-	preserved := map[string]int{}
-	for _, stream := range captureLogStreams(after) {
-		if id := logCountStreamID(stream, limit); id != "" && preserved[id] < eligible[id] {
-			preserved[id]++
-		}
-	}
-	return countIdentities(eligible), countIdentities(preserved)
+	return matchingLogStreamsWithID(before, after, nil, func(stream logStream) string {
+		return logCountStreamID(stream, limit)
+	}, true)
 }
 
 func logCountStreamID(stream logStream, limit int) string {
@@ -1162,6 +1190,32 @@ func stableLogRecordID(record object, includeAttributes bool) string {
 	}
 	encoded, _ := json.Marshal(parts)
 	return string(encoded)
+}
+
+func logCorrelationID(c capture, record object, ignoredResourceAttributes map[string]bool) string {
+	traceID, _ := field(record, "trace_id").(string)
+	spanID, _ := field(record, "span_id").(string)
+	state, target := "none", ""
+	if traceID != "" || spanID != "" {
+		state = "invalid"
+		if validTrace(traceID) && validSpan(spanID) {
+			state = "unmatched"
+			for _, stream := range captureSpanStreams(c) {
+				if field(stream.Span, "trace_id") == traceID && field(stream.Span, "span_id") == spanID {
+					state = "matched"
+					target = workloadSpanShapeID(stream.Span) + "\x00" + spanContextID(stream, ignoredResourceAttributes)
+					break
+				}
+			}
+		}
+	}
+	encoded, _ := json.Marshal([]any{state, target, number(field(record, "flags"))})
+	return string(encoded)
+}
+
+func validSpan(id string) bool {
+	decoded, err := hex.DecodeString(id)
+	return err == nil && len(decoded) == 8 && id != strings.Repeat("0", 16)
 }
 
 func logRecordIdentity(record object) string {
@@ -1367,14 +1421,14 @@ func matchingNonHistogramMetricStreams(before, after capture) (int, int) {
 }
 
 func controlMetricPointID(stream metricStream, point object, ignoredResourceAttributes map[string]bool) string {
-	id, kind := metricIDIgnoring(stream, ignoredResourceAttributes), metricDataType(stream.Metric)
-	if id == "" || kind == "" {
+	id, metricType := metricIDIgnoring(stream, ignoredResourceAttributes), metricTypeID(stream.Metric)
+	if id == "" || metricType == "" {
 		return ""
 	}
 	if transientMetricPoints(stream) {
-		return id + "\x00" + kind
+		return id + "\x00" + metricType
 	}
-	return id + "\x00" + kind + "\x00" + metricPointAttributeSetID(point)
+	return id + "\x00" + metricType + "\x00" + metricPointAttributeSetID(point)
 }
 
 // Connection states can appear and disappear between exports independently of
@@ -1408,11 +1462,11 @@ func metricIDIgnoring(stream metricStream, ignoredResourceAttributes map[string]
 }
 
 func metricPointID(stream metricStream, point object, ignoredResourceAttributes map[string]bool) string {
-	id, kind := metricIDIgnoring(stream, ignoredResourceAttributes), metricDataType(stream.Metric)
-	if id == "" || kind == "" {
+	id, metricType := metricIDIgnoring(stream, ignoredResourceAttributes), metricTypeID(stream.Metric)
+	if id == "" || metricType == "" {
 		return ""
 	}
-	return id + "\x00" + kind + "\x00" + metricPointAttributeSetID(point)
+	return id + "\x00" + metricType + "\x00" + metricPointAttributeSetID(point)
 }
 
 func metricSeriesID(stream metricStream, point object) string {
@@ -1420,7 +1474,7 @@ func metricSeriesID(stream metricStream, point object) string {
 	if id == "" {
 		return ""
 	}
-	return id + "\x00" + metricPointAttributeSetID(point)
+	return id + "\x00" + metricAggregationID(stream.Metric) + "\x00" + metricPointAttributeSetID(point)
 }
 
 var metricPointAttributeIgnores = map[string]bool{
@@ -1468,6 +1522,40 @@ func normalizeEndpointPort(value string) string {
 		}
 	}
 	return net.JoinHostPort(host, "<port>")
+}
+
+func normalizeURLPort(value string) string {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" {
+		return value
+	}
+	parsed.Host = normalizeEndpointPort(parsed.Host)
+	return parsed.String()
+}
+
+func mapStringValues(value any, transform func(string) string) any {
+	switch value := value.(type) {
+	case map[string]any:
+		normalized := make(map[string]any, len(value))
+		for key, child := range value {
+			if canonical(key) == canonical("string_value") {
+				if text, ok := child.(string); ok {
+					normalized[key] = transform(text)
+					continue
+				}
+			}
+			normalized[key] = mapStringValues(child, transform)
+		}
+		return normalized
+	case []any:
+		normalized := make([]any, len(value))
+		for index, child := range value {
+			normalized[index] = mapStringValues(child, transform)
+		}
+		return normalized
+	default:
+		return value
+	}
 }
 
 func normalizeExternalStatePath(value string) string {
@@ -1560,6 +1648,26 @@ func metricDataType(metric object) string {
 	return ""
 }
 
+func metricTypeID(metric object) string {
+	kind := metricDataType(metric)
+	if kind == "" {
+		return ""
+	}
+	encoded, _ := json.Marshal([]any{kind, metricAggregationID(metric)})
+	return string(encoded)
+}
+
+func metricAggregationID(metric object) string {
+	kind := metricDataType(metric)
+	data := objects(metric, kind)
+	if len(data) == 0 {
+		return ""
+	}
+	monotonic, _ := field(data[0], "is_monotonic").(bool)
+	encoded, _ := json.Marshal([]any{number(field(data[0], "aggregation_temporality")), monotonic})
+	return string(encoded)
+}
+
 func suppressedExemplars(before, after capture) (int, int, int) {
 	eligible := map[string]bool{}
 	for _, stream := range captureMetricStreams(before) {
@@ -1623,9 +1731,9 @@ func unsampledExemplars(before, after capture) (int, int, int) {
 		if transientMetricPoints(stream) {
 			continue
 		}
-		baseID, kind := metricID(stream), metricDataType(stream.Metric)
-		streamID := baseID + "\x00" + kind
-		if baseID != "" && kind != "" && len(objects(stream.Metric, "exemplars")) > 0 {
+		baseID, metricType := metricID(stream), metricTypeID(stream.Metric)
+		streamID := baseID + "\x00" + metricType
+		if baseID != "" && metricType != "" && len(objects(stream.Metric, "exemplars")) > 0 {
 			excluded[streamID] = true
 		}
 	}
@@ -1633,7 +1741,7 @@ func unsampledExemplars(before, after capture) (int, int, int) {
 		if transientMetricPoints(stream) {
 			continue
 		}
-		streamID := metricID(stream) + "\x00" + metricDataType(stream.Metric)
+		streamID := metricID(stream) + "\x00" + metricTypeID(stream.Metric)
 		if excluded[streamID] {
 			continue
 		}

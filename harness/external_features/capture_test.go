@@ -751,6 +751,15 @@ func TestLengthLimitsPreserveBaselineRecords(t *testing.T) {
 	if got := evaluate(experiment{Name: "span-length"}, arrayBaseline, arrayChanged); got.Status == "pass" {
 		t.Fatal("a dropped long array member was credited as preserved")
 	}
+	stableAttributeBaseline := capture{Spans: syntheticProbeSpans()}
+	stableAttributeChanged := capture{Spans: syntheticProbeSpans()}
+	for index := range stableAttributeBaseline.Spans {
+		stableAttributeBaseline.Spans[index]["attributes"] = append(stableAttributeBaseline.Spans[index]["attributes"].([]any), attr("network.protocol.version", "1.1"))
+		stableAttributeChanged.Spans[index]["attributes"] = []any{attr("http.route", "api/tags"), attr("http.user_agent", "external")}
+	}
+	if got := evaluate(experiment{Name: "span-length"}, stableAttributeBaseline, stableAttributeChanged); got.Status == "pass" {
+		t.Fatal("span-length passed after dropping a short non-whitelisted attribute")
+	}
 }
 
 func TestLengthLimitsPreserveIndividualSpanContext(t *testing.T) {
@@ -1330,6 +1339,31 @@ func TestMetricIdentityIncludesStableStreamAttributes(t *testing.T) {
 	volatileResource.Resource = object{"attributes": []any{attr("deployment.environment", "prod"), attr("process.pid", "2")}}
 	if metricID(base) != metricID(volatileResource) {
 		t.Fatal("volatile process ID split one metric stream across captures")
+	}
+	sum := func(temporality float64, monotonic bool) metricStream {
+		return metricStream{Metric: object{"name": "requests", "sum": object{"aggregationTemporality": temporality, "isMonotonic": monotonic, "dataPoints": []any{object{"attributes": []any{attr("route", "tags")}}}}}}
+	}
+	point := object{"attributes": []any{attr("route", "tags")}}
+	if controlMetricPointID(sum(1, true), point, nil) == controlMetricPointID(sum(2, true), point, nil) {
+		t.Fatal("metric identity omitted aggregation temporality")
+	}
+	if controlMetricPointID(sum(1, true), point, nil) == controlMetricPointID(sum(1, false), point, nil) {
+		t.Fatal("metric identity omitted monotonicity")
+	}
+}
+
+func TestLogIdentityPreservesCorrelationExceptForSamplers(t *testing.T) {
+	traceID, spanID := fmt.Sprintf("%032x", 1), fmt.Sprintf("%016x", 2)
+	span := object{"trace_id": traceID, "span_id": spanID, "name": "GET api/tags", "kind": float64(2), "attributes": []any{attr("http.route", "api/tags")}}
+	correlated := object{"body": object{"stringValue": "workload log"}, "trace_id": traceID, "span_id": spanID, "flags": float64(1)}
+	uncorrelated := object{"body": object{"stringValue": "workload log"}}
+	baseline := capture{Spans: []object{span}, Logs: []object{correlated}}
+	changed := capture{Spans: []object{span}, Logs: []object{uncorrelated}}
+	if expected, present := matchingLogStreams(baseline, changed, nil); expected != 1 || present != 0 {
+		t.Fatalf("lost log correlation was preserved: %d/%d", present, expected)
+	}
+	if expected, present := matchingLogStreamsIgnoringCorrelation(baseline, changed); expected != 1 || present != 1 {
+		t.Fatalf("sampler correlation exclusion did not preserve the log: %d/%d", present, expected)
 	}
 }
 
