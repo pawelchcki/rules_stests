@@ -2,19 +2,19 @@ use crate::data::{Record, RequestMetadata};
 use crate::http::{read_request, respond, valid_token};
 use crate::platform::write_stdout;
 use crate::stats::{self, ValidationStats};
-use crate::{otlp, scheme, storage, validation};
+use crate::{datadog, otlp, scheme, storage, validation};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::ffi::CStr;
 use core::time::Duration;
 use rustix::fd::OwnedFd;
-use rustix::net::sockopt::{set_socket_reuseport, set_socket_timeout, Timeout};
+use rustix::net::sockopt::{Timeout, set_socket_reuseport, set_socket_timeout};
 use rustix::net::{
-    acceptfrom, bind, listen, socket, AddressFamily, Ipv4Addr, SocketAddrAny, SocketAddrV4,
-    SocketType,
+    AddressFamily, Ipv4Addr, SocketAddrAny, SocketAddrV4, SocketType, acceptfrom, bind, listen,
+    socket,
 };
-use rustix::time::{clock_gettime, ClockId};
+use rustix::time::{ClockId, clock_gettime};
 
 const MAX_CAPTURE_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CAPTURE_RECORDS: usize = 4096;
@@ -31,9 +31,12 @@ pub(crate) fn serve(port: u16, output: &CStr) -> Result<(), String> {
     let mut records = Vec::<Record>::new();
     let mut frozen_records = None::<Vec<Record>>;
     let mut validation_stats = ValidationStats::default();
+    let mut dd_records = Vec::<Record>::new();
+    let mut dd_frozen_records = None::<Vec<Record>>;
+    let mut dd_validation_stats = ValidationStats::default();
     storage::persist(output, &records)?;
     let startup = format!(
-        "otel_sink: listening on 0.0.0.0:{port}; pretty JSON output: {}\n",
+        "telemetry_sink: listening on 0.0.0.0:{port}; pretty JSON output: {}\n",
         String::from_utf8_lossy(output.to_bytes())
     );
     write_stdout(startup.as_bytes());
@@ -44,7 +47,7 @@ pub(crate) fn serve(port: u16, output: &CStr) -> Result<(), String> {
         if let Err(error) =
             set_socket_timeout(&connection, Timeout::Send, Some(Duration::from_secs(2)))
         {
-            write_stdout(format!("otel_sink: set send timeout: {error}\n").as_bytes());
+            write_stdout(format!("telemetry_sink: set send timeout: {error}\n").as_bytes());
             continue;
         }
         if let Err(error) =
@@ -65,6 +68,9 @@ pub(crate) fn serve(port: u16, output: &CStr) -> Result<(), String> {
             &mut records,
             &mut frozen_records,
             &mut validation_stats,
+            &mut dd_records,
+            &mut dd_frozen_records,
+            &mut dd_validation_stats,
         );
     }
 }
@@ -76,8 +82,11 @@ fn handle_connection(
     records: &mut Vec<Record>,
     frozen_records: &mut Option<Vec<Record>>,
     validation_stats: &mut ValidationStats,
+    dd_records: &mut Vec<Record>,
+    dd_frozen_records: &mut Option<Vec<Record>>,
+    dd_validation_stats: &mut ValidationStats,
 ) {
-    let request = match read_request(connection) {
+    let mut request = match read_request(connection) {
         Ok(request) => request,
         Err(error) => {
             respond(
@@ -90,6 +99,57 @@ fn handle_connection(
         }
     };
 
+    let original_path = request.path.clone();
+    let (path, query) = original_path
+        .split_once('?')
+        .unwrap_or((&original_path, ""));
+    let query_value = |name: &str| {
+        query
+            .split('&')
+            .filter_map(|p| p.split_once('='))
+            .find(|(key, _)| *key == name)
+            .map(|(_, value)| value)
+    };
+    let protocol = query_value("protocol").unwrap_or("otlp");
+    if protocol != "otlp" && protocol != "datadog" {
+        respond(
+            connection,
+            400,
+            "text/plain",
+            b"unknown telemetry protocol\n",
+        );
+        return;
+    }
+    let dd_intake = matches!(path, "/v0.4/traces" | "/v0.5/traces");
+    let otlp_intake = matches!(path, "/v1/traces" | "/v1/metrics" | "/v1/logs");
+    if query_value("protocol").is_some()
+        && ((dd_intake && protocol != "datadog") || (otlp_intake && protocol != "otlp"))
+    {
+        respond(
+            connection,
+            400,
+            "text/plain",
+            b"intake protocol does not match endpoint\n",
+        );
+        return;
+    }
+    let is_dd = dd_intake || (!otlp_intake && protocol == "datadog");
+    let (records, frozen_records, validation_stats) = if is_dd {
+        (dd_records, dd_frozen_records, dd_validation_stats)
+    } else {
+        (records, frozen_records, validation_stats)
+    };
+    let dd_output = alloc::ffi::CString::new(format!(
+        "{}.datadog.json",
+        String::from_utf8_lossy(output.to_bytes())
+    ))
+    .unwrap();
+    let output = if is_dd { dd_output.as_c_str() } else { output };
+    request.path = path.to_string();
+    if request.method == "GET" && path == "/info" {
+        respond(connection, 200, "application/json", b"{\"endpoints\":[\"/v0.4/traces\",\"/v0.5/traces\"],\"client_drop_p0s\":false,\"span_events\":false}\n");
+        return;
+    }
     if request.method == "GET" && request.path == "/healthz" {
         respond(
             connection,
@@ -115,7 +175,11 @@ fn handle_connection(
     }
     if request.method == "GET" && request.path == "/dump.scm" {
         let snapshot = freeze_records(records, frozen_records);
-        match validation::capture_to_scheme(snapshot) {
+        match if is_dd {
+            datadog::capture_to_scheme(snapshot)
+        } else {
+            validation::capture_to_scheme(snapshot)
+        } {
             Ok(input) => respond(connection, 200, "text/x-scheme", &input),
             Err(error) => respond(connection, 500, "text/plain", error.as_bytes()),
         }
@@ -161,10 +225,14 @@ fn handle_connection(
         }
         return;
     }
-    if request.method == "GET" && request.path.starts_with("/candidate?app=") {
-        let app = &request.path["/candidate?app=".len()..];
+    if request.method == "GET" && path == "/candidate" {
+        let app = query_value("app").unwrap_or("");
         let snapshot = frozen_records.as_deref().unwrap_or(records);
-        match validation::scenario_shape_candidate(snapshot, app) {
+        match if is_dd {
+            datadog::candidate(snapshot, app)
+        } else {
+            validation::scenario_shape_candidate(snapshot, app)
+        } {
             Ok(candidate) => respond(connection, 200, "text/x-scheme", &candidate),
             Err(error) => respond(connection, 422, "text/plain", error.as_bytes()),
         }
@@ -172,10 +240,10 @@ fn handle_connection(
     }
     if request.method == "POST" && request.path == "/validate" {
         let snapshot = frozen_records.as_deref().unwrap_or(records);
-        validate(connection, &request.body, snapshot, validation_stats);
+        validate(connection, &request.body, snapshot, validation_stats, is_dd);
         return;
     }
-    if request.method != "POST" {
+    if request.method != "POST" && !(is_dd && request.method == "PUT") {
         respond(connection, 405, "text/plain", b"expected POST\n");
         return;
     }
@@ -201,9 +269,14 @@ fn validate(
     source: &[u8],
     records: &[Record],
     validation_stats: &mut ValidationStats,
+    is_dd: bool,
 ) {
     let started = clock_gettime(ClockId::Monotonic);
-    let input = match validation::capture_to_scheme(records) {
+    let input = match if is_dd {
+        datadog::capture_to_scheme(records)
+    } else {
+        validation::capture_to_scheme(records)
+    } {
         Ok(input) => input,
         Err(error) => {
             let finished = clock_gettime(ClockId::Monotonic);
@@ -211,7 +284,10 @@ fn validate(
             validation_stats.failures += 1;
             validation_stats.last_duration_ms = stats::elapsed_millis(started, finished);
             validation_stats.last_calls = 0;
-            let message = format!("OTLP contract assertion: {error}");
+            let message = format!(
+                "{} contract assertion: {error}",
+                if is_dd { "Datadog" } else { "OTLP" }
+            );
             respond(connection, 409, "text/plain", message.as_bytes());
             return;
         }
@@ -246,7 +322,7 @@ fn ingest(
     records: &mut Vec<Record>,
 ) {
     let signal = match request.path.as_str() {
-        "/v1/traces" => "traces",
+        "/v1/traces" | "/v0.4/traces" | "/v0.5/traces" => "traces",
         "/v1/metrics" => "metrics",
         "/v1/logs" => "logs",
         _ => {
@@ -254,6 +330,7 @@ fn ingest(
             return;
         }
     };
+    let is_dd = request.path.starts_with("/v0.");
     let content_encoding_count = request
         .headers
         .iter()
@@ -295,12 +372,27 @@ fn ingest(
     if content_type != "application/json"
         && content_type != "application/x-protobuf"
         && content_type != "application/protobuf"
+        && !(is_dd && content_type == "application/msgpack")
     {
         respond(
             connection,
             415,
             "text/plain",
             format!("unsupported content type {content_type:?}\n").as_bytes(),
+        );
+        return;
+    }
+    if is_dd
+        && !matches!(
+            content_type.as_str(),
+            "application/msgpack" | "application/json"
+        )
+    {
+        respond(
+            connection,
+            415,
+            "text/plain",
+            b"unsupported Datadog content type\n",
         );
         return;
     }
@@ -325,7 +417,20 @@ fn ingest(
         );
         return;
     }
-    let (encoding, payload) = match otlp::decode(signal, &content_type, &request.body) {
+    let (encoding, payload) = match if is_dd {
+        datadog::decode(&request.path, &content_type, &request.body).map(|p| {
+            (
+                if content_type == "application/json" {
+                    "json"
+                } else {
+                    "msgpack"
+                },
+                p,
+            )
+        })
+    } else {
+        otlp::decode(signal, &content_type, &request.body)
+    } {
         Ok(decoded) => decoded,
         Err(error) => {
             respond(connection, 400, "text/plain", error.as_bytes());
@@ -419,7 +524,14 @@ fn ingest(
         respond(connection, 500, "text/plain", error.as_bytes());
         return;
     }
-    if encoding == "json" {
+    if is_dd {
+        respond(
+            connection,
+            200,
+            "application/json",
+            b"{\"rate_by_service\":{}}\n",
+        );
+    } else if encoding == "json" {
         respond(connection, 200, "application/json", b"{}\n");
     } else {
         respond(connection, 200, "application/x-protobuf", b"");
