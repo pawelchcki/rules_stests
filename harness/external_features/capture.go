@@ -966,10 +966,18 @@ func controlMetricPointID(stream metricStream, point object, ignoredResourceAttr
 	if id == "" || kind == "" {
 		return ""
 	}
-	if name, _ := field(stream.Metric, "name").(string); name == "system.network.connections" {
+	if transientMetricPoints(stream) {
 		return id + "\x00" + kind
 	}
 	return id + "\x00" + kind + "\x00" + metricPointAttributeSetID(point)
+}
+
+// Connection states can appear and disappear between exports independently of
+// the workload. Preserve this observer as a stream, but never use one of its
+// momentary state points as cross-process exemplar evidence.
+func transientMetricPoints(stream metricStream) bool {
+	name, _ := field(stream.Metric, "name").(string)
+	return name == "system.network.connections"
 }
 
 func metricID(stream metricStream) string {
@@ -1134,6 +1142,9 @@ func metricDataType(metric object) string {
 func suppressedExemplars(before, after capture) (int, int, int) {
 	eligible := map[string]bool{}
 	for _, stream := range captureMetricStreams(before) {
+		if transientMetricPoints(stream) {
+			continue
+		}
 		for _, point := range objects(stream.Metric, "data_points") {
 			if id := metricPointID(stream, point, nil); id != "" && len(objects(point, "exemplars")) > 0 {
 				eligible[id] = true
@@ -1188,6 +1199,9 @@ func unsampledExemplars(before, after capture) (int, int, int) {
 	eligible := map[string]bool{}
 	excluded := map[string]bool{}
 	for _, stream := range captureMetricStreams(before) {
+		if transientMetricPoints(stream) {
+			continue
+		}
 		baseID, kind := metricID(stream), metricDataType(stream.Metric)
 		streamID := baseID + "\x00" + kind
 		if baseID != "" && kind != "" && len(objects(stream.Metric, "exemplars")) > 0 {
@@ -1195,6 +1209,9 @@ func unsampledExemplars(before, after capture) (int, int, int) {
 		}
 	}
 	for _, stream := range captureMetricStreams(before) {
+		if transientMetricPoints(stream) {
+			continue
+		}
 		streamID := metricID(stream) + "\x00" + metricDataType(stream.Metric)
 		if excluded[streamID] {
 			continue

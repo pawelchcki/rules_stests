@@ -520,6 +520,9 @@ func TestControlMetricsPreserveDataPointIdentities(t *testing.T) {
 	if expected, present := matchingMetricStreams(before, after); expected != 1 || present != 1 {
 		t.Fatalf("transient connection states split one observer stream: %d/%d", present, expected)
 	}
+	if expected, present, exemplars := unsampledExemplars(before, after); expected != 0 || present != 0 || exemplars != 0 {
+		t.Fatalf("transient connection points supplied exemplar evidence: eligible=%d preserved=%d exemplars=%d", expected, present, exemplars)
+	}
 }
 
 func TestEventLimitsPreserveParentOccurrences(t *testing.T) {
