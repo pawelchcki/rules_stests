@@ -623,12 +623,17 @@ func TestProcessPortOwnership(t *testing.T) {
 	}
 	defer listener.Close()
 	port := listener.Addr().(*net.TCPAddr).Port
-	owned, err := processExclusivelyOwnsTCPPort(os.Getpid(), port)
-	if err != nil || !owned {
-		t.Fatalf("current process listener not recognized: owned=%t err=%v", owned, err)
+	owned, shared, err := processTCPPortOwnership(os.Getpid(), port)
+	if err != nil || !owned || shared {
+		t.Fatalf("current process listener not recognized: owned=%t shared=%t err=%v", owned, shared, err)
 	}
-	if exclusivelyOwnsSocketInodes(map[string]bool{"child": true, "foreign": true}, map[string]bool{"child": true}) {
-		t.Fatal("a child listener was treated as exclusive beside a foreign SO_REUSEPORT listener")
+	owned, shared = socketOwnership(map[string]bool{"child": true, "foreign": true}, map[string]bool{"child": true})
+	if owned || !shared {
+		t.Fatalf("shared SO_REUSEPORT listeners were misclassified: owned=%t shared=%t", owned, shared)
+	}
+	owned, shared = socketOwnership(map[string]bool{"foreign": true}, map[string]bool{"child": true})
+	if owned || shared {
+		t.Fatalf("a foreign-only listener was misclassified: owned=%t shared=%t", owned, shared)
 	}
 }
 

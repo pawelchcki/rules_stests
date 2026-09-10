@@ -272,9 +272,12 @@ func collectOnce(app, launcher string, args []string, sink, out string, e experi
 			io.Copy(io.Discard, response.Body)
 			response.Body.Close()
 			if response.StatusCode == 200 || response.StatusCode == 500 {
-				owned, err := processExclusivelyOwnsTCPPort(cmd.Process.Pid, port)
+				owned, shared, err := processTCPPortOwnership(cmd.Process.Pid, port)
 				if err != nil {
 					return nil, err
+				}
+				if shared {
+					return nil, errPortInUse
 				}
 				if !owned {
 					// A concurrent fixture may be answering on the relinquished
@@ -329,7 +332,7 @@ func collectOnce(app, launcher string, args []string, sink, out string, e experi
 	return request("GET", sink+"/dump", nil)
 }
 
-func processExclusivelyOwnsTCPPort(pid, port int) (bool, error) {
+func processTCPPortOwnership(pid, port int) (bool, bool, error) {
 	inodes := map[string]bool{}
 	readTable := false
 	for _, name := range []string{"tcp", "tcp6"} {
@@ -354,11 +357,11 @@ func processExclusivelyOwnsTCPPort(pid, port int) (bool, error) {
 		}
 	}
 	if !readTable {
-		return false, fmt.Errorf("read TCP socket table for process %d", pid)
+		return false, false, fmt.Errorf("read TCP socket table for process %d", pid)
 	}
 	entries, err := os.ReadDir(fmt.Sprintf("/proc/%d/fd", pid))
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	owned := map[string]bool{}
 	for _, entry := range entries {
@@ -372,19 +375,23 @@ func processExclusivelyOwnsTCPPort(pid, port int) (bool, error) {
 			}
 		}
 	}
-	return exclusivelyOwnsSocketInodes(inodes, owned), nil
+	exclusive, shared := socketOwnership(inodes, owned)
+	return exclusive, shared, nil
 }
 
-func exclusivelyOwnsSocketInodes(listening, owned map[string]bool) bool {
+func socketOwnership(listening, owned map[string]bool) (bool, bool) {
 	if len(listening) == 0 {
-		return false
+		return false, false
 	}
+	target, foreign := false, false
 	for inode := range listening {
-		if !owned[inode] {
-			return false
+		if owned[inode] {
+			target = true
+		} else {
+			foreign = true
 		}
 	}
-	return true
+	return target && !foreign, target && foreign
 }
 
 func classifyProcessExit(cause error, log *os.File) error {
