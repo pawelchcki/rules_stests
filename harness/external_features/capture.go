@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
+	"math/big"
 	"net"
 	"net/url"
 	"sort"
@@ -81,7 +84,16 @@ func objects(v any, name string) []object {
 }
 func decodeCapture(data []byte) (capture, error) {
 	var records []object
-	if err := json.Unmarshal(data, &records); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&records); err != nil {
+		return capture{}, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			err = fmt.Errorf("unexpected trailing JSON value")
+		}
 		return capture{}, err
 	}
 	c := capture{Records: records}
@@ -200,7 +212,7 @@ func attributes(o object) []object {
 	return out
 }
 func number(v any) float64 {
-	if n, ok := v.(float64); ok {
+	if n, ok := otlpNumber(v); ok {
 		return n
 	}
 	return 0
@@ -906,9 +918,9 @@ func validWorkloadSpanStructure(c capture) bool {
 		}
 		spanID, _ := field(span, "span_id").(string)
 		key := traceID + "\x00" + spanID
-		start, startValid := otlpNumber(field(span, "start_time_unix_nano"))
-		end, endValid := otlpNumber(field(span, "end_time_unix_nano"))
-		if !validSpan(spanID) || spanIDs[key] || !startValid || !endValid || start <= 0 || end < start {
+		start, startValid := otlpTimestamp(field(span, "start_time_unix_nano"))
+		end, endValid := otlpTimestamp(field(span, "end_time_unix_nano"))
+		if !validSpan(spanID) || spanIDs[key] || !startValid || !endValid || start.Sign() <= 0 || end.Cmp(start) < 0 {
 			return false
 		}
 		spanIDs[key] = true
@@ -1284,11 +1296,11 @@ func spanEventSetIDWithValue(span object, normalize func(any) any) string {
 			values = append(values, string(encoded))
 		}
 		sort.Strings(values)
-		eventTime, eventTimeValid := finiteOTLPNumber(field(event, "time_unix_nano"))
-		start, startValid := finiteOTLPNumber(field(span, "start_time_unix_nano"))
-		end, endValid := finiteOTLPNumber(field(span, "end_time_unix_nano"))
-		insideParent := eventTimeValid && startValid && endValid && eventTime >= start && eventTime <= end
-		encoded, _ := json.Marshal([]any{name, eventTimeValid && eventTime > 0, insideParent, number(field(event, "dropped_attributes_count")), values})
+		eventTime, eventTimeValid := otlpTimestamp(field(event, "time_unix_nano"))
+		start, startValid := otlpTimestamp(field(span, "start_time_unix_nano"))
+		end, endValid := otlpTimestamp(field(span, "end_time_unix_nano"))
+		insideParent := eventTimeValid && startValid && endValid && eventTime.Cmp(start) >= 0 && eventTime.Cmp(end) <= 0
+		encoded, _ := json.Marshal([]any{name, eventTimeValid && eventTime.Sign() > 0, insideParent, number(field(event, "dropped_attributes_count")), values})
 		eventIDs = append(eventIDs, string(encoded))
 	}
 	sort.Strings(eventIDs)
@@ -1742,10 +1754,10 @@ func stableLogRecordID(record object, includeAttributes bool) string {
 }
 
 func logTimestampID(record object) string {
-	eventTime, eventValid := finiteOTLPNumber(field(record, "time_unix_nano"))
-	observedTime, observedValid := finiteOTLPNumber(field(record, "observed_time_unix_nano"))
-	ordered := !eventValid || !observedValid || observedTime >= eventTime
-	encoded, _ := json.Marshal([]bool{eventValid && eventTime > 0, observedValid && observedTime > 0, ordered})
+	eventTime, eventValid := otlpTimestamp(field(record, "time_unix_nano"))
+	observedTime, observedValid := otlpTimestamp(field(record, "observed_time_unix_nano"))
+	ordered := !eventValid || !observedValid || observedTime.Cmp(eventTime) >= 0
+	encoded, _ := json.Marshal([]bool{eventValid && eventTime.Sign() > 0, observedValid && observedTime.Sign() > 0, ordered})
 	return string(encoded)
 }
 
@@ -2191,12 +2203,12 @@ func controlMetricPointIDWithExemplars(stream metricStream, point object, ignore
 }
 
 func metricTimestampID(point object) string {
-	end, endValid := finiteOTLPNumber(field(point, "time_unix_nano"))
+	end, endValid := otlpTimestamp(field(point, "time_unix_nano"))
 	startValue := field(point, "start_time_unix_nano")
-	start, startValid := finiteOTLPNumber(startValue)
-	startPresent := startValid && start > 0
-	ordered := !startPresent || (endValid && end >= start)
-	encoded, _ := json.Marshal([]bool{endValid && end > 0, startPresent, startValue == nil || startValid, ordered})
+	start, startValid := otlpTimestamp(startValue)
+	startPresent := startValid && start.Sign() > 0
+	ordered := !startPresent || (endValid && end.Cmp(start) >= 0)
+	encoded, _ := json.Marshal([]bool{endValid && end.Sign() > 0, startPresent, startValue == nil || startValid, ordered})
 	return string(encoded)
 }
 
@@ -2225,6 +2237,7 @@ func metricIDIgnoring(stream metricStream, ignoredResourceAttributes map[string]
 		name, unit, description, scopeName, scopeVersion, stream.Schema, stream.ResourceSchema,
 		containerAttributeContextID(stream.Scope, nil),
 		resourceAttributeContextID(stream.Resource, ignoredResourceAttributes),
+		metricMetadataID(stream.Metric),
 	}
 	encoded, _ := json.Marshal(parts)
 	return string(encoded)
@@ -2364,7 +2377,7 @@ func summaryQuantileEvidence(point object) (int, bool) {
 func metricExemplarSetID(point object) string {
 	unique := map[string]bool{}
 	for _, exemplar := range objects(point, "exemplars") {
-		timestamp, timestampValid := finiteOTLPNumber(field(exemplar, "time_unix_nano"))
+		timestamp, timestampValid := otlpTimestamp(field(exemplar, "time_unix_nano"))
 		valueContainer := exemplar
 		if nested, ok := field(exemplar, "value").(map[string]any); ok {
 			valueContainer = nested
@@ -2385,7 +2398,7 @@ func metricExemplarSetID(point object) string {
 			}
 		}
 		filtered := object{"attributes": field(exemplar, "filtered_attributes")}
-		encoded, _ := json.Marshal([]any{timestampValid && timestamp > 0, valueKind, context, attributeSetID(filtered, nil)})
+		encoded, _ := json.Marshal([]any{timestampValid && timestamp.Sign() > 0, valueKind, context, attributeSetID(filtered, nil)})
 		unique[string(encoded)] = true
 	}
 	var ids []string
@@ -2460,7 +2473,31 @@ func containerAttributeContextID(container object, ignored map[string]bool) stri
 }
 
 func resourceAttributeContextID(container object, ignored map[string]bool) string {
-	encoded, _ := json.Marshal([]any{attributeSetIDWithValue(container, ignored, normalizeResourceAttributeValue), number(field(container, "dropped_attributes_count"))})
+	encoded, _ := json.Marshal([]any{
+		attributeSetIDWithValue(container, ignored, normalizeResourceAttributeValue),
+		number(field(container, "dropped_attributes_count")),
+		objectCollectionSetID(container, "entity_refs"),
+	})
+	return string(encoded)
+}
+
+func metricMetadataID(metric object) string {
+	return objectCollectionSetID(metric, "metadata")
+}
+
+func objectCollectionSetID(container object, name string) string {
+	items, valid := directObjectCollection(container, name)
+	if !valid {
+		encoded, _ := json.Marshal(normalizedJSONValue(field(container, name)))
+		return "invalid:" + string(encoded)
+	}
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		encoded, _ := json.Marshal(normalizedJSONValue(item))
+		ids = append(ids, string(encoded))
+	}
+	sort.Strings(ids)
+	encoded, _ := json.Marshal(ids)
 	return string(encoded)
 }
 
@@ -2717,11 +2754,32 @@ func otlpNumber(value any) (float64, bool) {
 	switch value := value.(type) {
 	case float64:
 		return value, true
+	case json.Number:
+		number, err := strconv.ParseFloat(string(value), 64)
+		return number, err == nil
 	case string:
 		number, err := strconv.ParseFloat(value, 64)
 		return number, err == nil
 	default:
 		return 0, false
+	}
+}
+
+func otlpTimestamp(value any) (*big.Int, bool) {
+	switch value := value.(type) {
+	case json.Number:
+		timestamp, valid := new(big.Int).SetString(string(value), 10)
+		return timestamp, valid && timestamp.Sign() >= 0
+	case string:
+		timestamp, valid := new(big.Int).SetString(value, 10)
+		return timestamp, valid && timestamp.Sign() >= 0
+	case float64:
+		if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || math.Trunc(value) != value || value > 9007199254740991 {
+			return nil, false
+		}
+		return big.NewInt(int64(value)), true
+	default:
+		return nil, false
 	}
 }
 
@@ -2773,11 +2831,11 @@ func unsampledExemplars(before, after capture) (int, int, int) {
 func validExemplarCount(point object) (int, bool) {
 	exemplars := objects(point, "exemplars")
 	for _, exemplar := range exemplars {
-		timestamp, timestampValid := otlpNumber(field(exemplar, "time_unix_nano"))
+		timestamp, timestampValid := otlpTimestamp(field(exemplar, "time_unix_nano"))
 		value, _ := field(exemplar, "value").(map[string]any)
 		_, intValid := otlpNumber(field(value, "as_int"))
 		_, doubleValid := otlpNumber(field(value, "as_double"))
-		if !timestampValid || timestamp <= 0 || (!intValid && !doubleValid) {
+		if !timestampValid || timestamp.Sign() <= 0 || (!intValid && !doubleValid) {
 			return 0, false
 		}
 	}

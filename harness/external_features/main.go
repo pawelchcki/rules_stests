@@ -774,8 +774,8 @@ func verifyResult(r result, dir string) error {
 			if err != nil {
 				return err
 			}
-			if e.Name == "sampler-arg" && len(control.Spans) == 0 {
-				return fmt.Errorf("traceidratio=1 control has no spans")
+			if e.Name == "sampler-arg" && !validSamplerControl(control) {
+				return fmt.Errorf("traceidratio=1 control does not contain four distinct probe request traces")
 			}
 		}
 		var want observation

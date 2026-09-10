@@ -1183,7 +1183,17 @@ func TestLogBatchBurstMonitorsOwnership(t *testing.T) {
 
 func TestComparisonRecomputesAndRejectsTamperedEvidence(t *testing.T) {
 	dir := t.TempDir()
-	data := []byte(`[{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"name":"GET /api/tags"}]}]}]}}]`)
+	spanValues := make([]any, len(syntheticProbeSpans()))
+	for index, span := range syntheticProbeSpans() {
+		spanValues[index] = span
+	}
+	data, err := json.Marshal([]any{object{
+		"signal":  "traces",
+		"payload": object{"resourceSpans": []any{object{"scopeSpans": []any{object{"spans": spanValues}}}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	c, err := decodeCapture(data)
 	if err != nil {
 		t.Fatal(err)
@@ -1212,6 +1222,19 @@ func TestComparisonRecomputesAndRejectsTamperedEvidence(t *testing.T) {
 		t.Fatal("edited outcome accepted")
 	}
 	r.Observations[0].Status = original
+	invalidControl := []byte(`[{"signal":"traces","payload":{"spans":[{"name":"startup","kind":1,"trace_id":"0000000000000000000000000000000a","span_id":"000000000000000a"}]}}]`)
+	controlName := samplerArgumentControl.Name
+	if err := os.WriteFile(filepath.Join(dir, controlName+".capture.json"), invalidControl, 0600); err != nil {
+		t.Fatal(err)
+	}
+	r.Captures[controlName] = fmt.Sprintf("%x", sha256.Sum256(invalidControl))
+	if err := verifyResult(r, dir); err == nil {
+		t.Fatal("invalid replayed sampler control accepted")
+	}
+	if err := os.WriteFile(filepath.Join(dir, controlName+".capture.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	r.Captures[controlName] = fmt.Sprintf("%x", sha256.Sum256(data))
 	if err := os.WriteFile(filepath.Join(dir, "baseline.capture.json"), []byte("[]"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -1866,6 +1889,12 @@ func TestStreamContextsPreserveResourceAndScopeDropCounters(t *testing.T) {
 	if logStreamID(baseLog, nil) == logStreamID(changedLog, nil) {
 		t.Fatal("log scope dropped-attribute count was omitted")
 	}
+	baseSpan.Resource = object{"entityRefs": []any{object{"schemaUrl": "https://example.test/entity", "type": float64(1), "idKeys": []any{float64(2)}}}}
+	changedSpan = baseSpan
+	changedSpan.Resource = object{}
+	if spanContextID(baseSpan, nil) == spanContextID(changedSpan, nil) {
+		t.Fatal("resource entity references were omitted")
+	}
 }
 
 func TestSignalIdentitiesValidateTimestamps(t *testing.T) {
@@ -1888,6 +1917,72 @@ func TestSignalIdentitiesValidateTimestamps(t *testing.T) {
 	}
 	if expected, present := matchingMetricStreams(capture{Metrics: []object{metric("5", "10")}}, capture{Metrics: []object{metric("11", "10")}}); expected != 1 || present != 0 {
 		t.Fatalf("invalid metric time window was accepted: %d/%d", present, expected)
+	}
+}
+
+func TestSignalIdentitiesCompareNanosecondTimestampsExactly(t *testing.T) {
+	const earlier = "1700000000000000000"
+	const later = "1700000000000000001"
+	decoded, err := decodeCapture([]byte(`[{"signal":"traces","payload":{"resourceSpans":[{"scopeSpans":[{"spans":[{"name":"workload","startTimeUnixNano":1700000000000000000,"endTimeUnixNano":1700000000000000001}]}]}]}}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	start, valid := otlpTimestamp(field(decoded.Spans[0], "start_time_unix_nano"))
+	if !valid || start.String() != earlier {
+		t.Fatalf("numeric JSON timestamp lost precision: %v, %t", start, valid)
+	}
+
+	baselineSpans := capture{Spans: syntheticProbeSpans()}
+	changedSpans := capture{Spans: syntheticProbeSpans()}
+	baselineSpans.Spans[0]["start_time_unix_nano"] = earlier
+	baselineSpans.Spans[0]["end_time_unix_nano"] = later
+	changedSpans.Spans[0]["start_time_unix_nano"] = later
+	changedSpans.Spans[0]["end_time_unix_nano"] = earlier
+	if expected, present := matchingWorkloadSpans(baselineSpans, changedSpans); expected != 4 || present != 5 {
+		t.Fatalf("one-nanosecond span inversion was accepted: %d/%d", present, expected)
+	}
+
+	eventBaseline := capture{Spans: syntheticProbeSpans()}
+	eventChanged := capture{Spans: syntheticProbeSpans()}
+	for _, candidate := range []capture{eventBaseline, eventChanged} {
+		candidate.Spans[0]["start_time_unix_nano"] = earlier
+		candidate.Spans[0]["end_time_unix_nano"] = earlier
+	}
+	eventBaseline.Spans[0]["events"] = []any{object{"name": "exception", "timeUnixNano": earlier}}
+	eventChanged.Spans[0]["events"] = []any{object{"name": "exception", "timeUnixNano": later}}
+	if expected, present := matchingWorkloadSpans(eventBaseline, eventChanged); expected != 4 || present != 3 {
+		t.Fatalf("one-nanosecond event overflow was accepted: %d/%d", present, expected)
+	}
+
+	baselineLog := object{"body": object{"stringValue": "workload"}, "timeUnixNano": later, "observedTimeUnixNano": later}
+	changedLog := object{"body": object{"stringValue": "workload"}, "timeUnixNano": later, "observedTimeUnixNano": earlier}
+	if expected, present := matchingLogStreams(capture{Logs: []object{baselineLog}}, capture{Logs: []object{changedLog}}, nil); expected != 1 || present != 0 {
+		t.Fatalf("one-nanosecond log inversion was accepted: %d/%d", present, expected)
+	}
+
+	metric := func(start, end string) object {
+		return object{"name": "queue.depth", "gauge": object{"dataPoints": []any{object{"value": object{"asInt": "1"}, "startTimeUnixNano": start, "timeUnixNano": end}}}}
+	}
+	if expected, present := matchingMetricStreams(capture{Metrics: []object{metric(earlier, later)}}, capture{Metrics: []object{metric(later, earlier)}}); expected != 1 || present != 0 {
+		t.Fatalf("one-nanosecond metric inversion was accepted: %d/%d", present, expected)
+	}
+}
+
+func TestMetricIdentityPreservesMetadata(t *testing.T) {
+	metric := object{
+		"name": "queue.depth", "metadata": []any{attr("prometheus.type", "gauge"), attr("prometheus.help", "Queue depth")},
+		"gauge": object{"dataPoints": []any{object{"value": object{"asInt": "1"}}}},
+	}
+	changed := cloneObject(metric)
+	delete(changed, "metadata")
+	if expected, present := matchingMetricStreams(capture{Metrics: []object{metric}}, capture{Metrics: []object{changed}}); expected != 1 || present != 0 {
+		t.Fatalf("metric metadata loss was accepted: %d/%d", present, expected)
+	}
+	reordered := cloneObject(metric)
+	metadata := reordered["metadata"].([]any)
+	metadata[0], metadata[1] = metadata[1], metadata[0]
+	if expected, present := matchingMetricStreams(capture{Metrics: []object{metric}}, capture{Metrics: []object{reordered}}); expected != 1 || present != 1 {
+		t.Fatalf("metric metadata order was treated as semantic: %d/%d", present, expected)
 	}
 }
 

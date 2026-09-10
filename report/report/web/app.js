@@ -992,6 +992,13 @@ function renderParityScenarios() {
   });
 }
 
+// The browser regression harness intentionally mutates a synthetic preview.
+// Keep its reviewed hooks explicit even though initialization is asynchronous.
+Object.assign(globalThis, {
+  data, $, manifestByProfile, shapeByKey, coverageByKey, captureByKey,
+  plannedByKey, otherProfileForCapture, parityPeer, renderCompare,
+  renderParityOverview, renderFeatures, renderCoverageGrid, captureRowDiff,
+});
 setup();
 })().catch((error) => {
   console.error(error);
