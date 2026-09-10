@@ -16,6 +16,11 @@ type metricStream struct {
 	Resource, Scope        object
 	ResourceSchema, Schema string
 }
+type spanStream struct {
+	Span                   object
+	Resource, Scope        object
+	ResourceSchema, Schema string
+}
 type logStream struct {
 	Record                 object
 	Resource, Scope        object
@@ -24,6 +29,7 @@ type logStream struct {
 type capture struct {
 	Records                         []object
 	Spans, Logs, Metrics, Resources []object
+	SpanStreams                     []spanStream
 	MetricStreams                   []metricStream
 	LogStreams                      []logStream
 }
@@ -80,7 +86,11 @@ func decodeCapture(data []byte) (capture, error) {
 		signal, _ := field(r, "signal").(string)
 		switch signal {
 		case "traces":
-			c.Spans = append(c.Spans, objects(p, "spans")...)
+			streams := spanStreams(p)
+			c.SpanStreams = append(c.SpanStreams, streams...)
+			for _, stream := range streams {
+				c.Spans = append(c.Spans, stream.Span)
+			}
 		case "logs":
 			streams := logStreams(p)
 			c.LogStreams = append(c.LogStreams, streams...)
@@ -124,6 +134,22 @@ func metricStreams(payload any) []metricStream {
 			schema, _ := field(scopeMetrics, "schema_url").(string)
 			for _, metric := range objects(scopeMetrics, "metrics") {
 				streams = append(streams, metricStream{Metric: metric, Resource: resource, Scope: scope, ResourceSchema: resourceSchema, Schema: schema})
+			}
+		}
+	}
+	return streams
+}
+
+func spanStreams(payload any) []spanStream {
+	var streams []spanStream
+	for _, resourceSpans := range objects(payload, "resource_spans") {
+		resource, _ := field(resourceSpans, "resource").(map[string]any)
+		resourceSchema, _ := field(resourceSpans, "schema_url").(string)
+		for _, scopeSpans := range objects(resourceSpans, "scope_spans") {
+			scope, _ := field(scopeSpans, "scope").(map[string]any)
+			schema, _ := field(scopeSpans, "schema_url").(string)
+			for _, span := range objects(scopeSpans, "spans") {
+				streams = append(streams, spanStream{Span: span, Resource: resource, Scope: scope, ResourceSchema: resourceSchema, Schema: schema})
 			}
 		}
 	}
@@ -339,8 +365,8 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		ok := len(changed.Resources) > 0
 		beforeProbes, afterProbes := probeSpans(baseline), probeSpans(changed)
 		expectedRequests, presentRequests := preservedProbeRequests(baseline, changed)
-		expectedWorkloadSpans, presentWorkloadSpans := matchingWorkloadSpans(baseline, changed)
 		ignoredResourceAttributes := map[string]bool{"service.name": true}
+		expectedWorkloadSpans, presentWorkloadSpans := matchingWorkloadSpansIgnoring(baseline, changed, ignoredResourceAttributes)
 		expectedMetrics, presentMetrics := matchingMetricStreamsIgnoring(baseline, changed, ignoredResourceAttributes)
 		expectedLogs, presentLogs := matchingLogStreams(baseline, changed, ignoredResourceAttributes)
 		preserved := (len(baseline.Spans) == 0 || (expectedWorkloadSpans > 0 && presentWorkloadSpans == expectedWorkloadSpans)) &&
@@ -384,6 +410,9 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		}
 		if len(beforeProbes) > 0 && len(afterProbes) != len(beforeProbes) {
 			violations[fmt.Sprintf("probe-spans=%d", len(afterProbes))] = true
+		}
+		if expectedWorkloadSpans > 0 && presentWorkloadSpans != expectedWorkloadSpans {
+			violations[fmt.Sprintf("workload-spans=%d/%d", presentWorkloadSpans, expectedWorkloadSpans)] = true
 		}
 		if expectedRequests > 0 && presentRequests != expectedRequests {
 			violations[fmt.Sprintf("requests=%d", presentRequests)] = true
@@ -472,8 +501,8 @@ func evaluate(e experiment, baseline, changed capture) observation {
 	case "resource":
 		ok := len(changed.Resources) > 0
 		expected, present := preservedProbeRequests(baseline, changed)
-		expectedWorkloadSpans, presentWorkloadSpans := matchingWorkloadSpans(baseline, changed)
 		ignoredResourceAttributes := map[string]bool{"probe.external": true, "process.owner": true, "service.name": true}
+		expectedWorkloadSpans, presentWorkloadSpans := matchingWorkloadSpansIgnoring(baseline, changed, ignoredResourceAttributes)
 		expectedMetrics, presentMetrics := matchingMetricStreamsIgnoring(baseline, changed, ignoredResourceAttributes)
 		expectedLogs, presentLogs := matchingLogStreams(baseline, changed, ignoredResourceAttributes)
 		preserved := (len(baseline.Spans) == 0 || (expectedWorkloadSpans > 0 && presentWorkloadSpans == expectedWorkloadSpans)) &&
@@ -621,9 +650,13 @@ func preservedProbeRequests(before, after capture) (int, int) {
 }
 
 func matchingWorkloadSpans(before, after capture) (int, int) {
-	eligible := workloadSpanIdentities(before)
+	return matchingWorkloadSpansIgnoring(before, after, nil)
+}
+
+func matchingWorkloadSpansIgnoring(before, after capture, ignoredResourceAttributes map[string]bool) (int, int) {
+	eligible := workloadSpanIdentities(before, ignoredResourceAttributes)
 	preserved := map[string]int{}
-	for id, count := range workloadSpanIdentities(after) {
+	for id, count := range workloadSpanIdentities(after, ignoredResourceAttributes) {
 		if count > eligible[id] {
 			count = eligible[id]
 		}
@@ -632,9 +665,10 @@ func matchingWorkloadSpans(before, after capture) (int, int) {
 	return countIdentities(eligible), countIdentities(preserved)
 }
 
-func workloadSpanIdentities(c capture) map[string]int {
+func workloadSpanIdentities(c capture, ignoredResourceAttributes map[string]bool) map[string]int {
 	traceIDs := map[string]bool{}
-	for _, span := range c.Spans {
+	for _, stream := range captureSpanStreams(c) {
+		span := stream.Span
 		if number(field(span, "kind")) != 2 {
 			continue
 		}
@@ -646,15 +680,40 @@ func workloadSpanIdentities(c capture) map[string]int {
 		}
 	}
 	identities := map[string]int{}
-	for _, span := range c.Spans {
+	for _, stream := range captureSpanStreams(c) {
+		span := stream.Span
 		traceID, _ := field(span, "trace_id").(string)
 		if traceIDs[traceID] {
 			if id := workloadSpanID(span); id != "" {
+				id += "\x00" + spanContextID(stream, ignoredResourceAttributes)
 				identities[id]++
 			}
 		}
 	}
 	return identities
+}
+
+func captureSpanStreams(c capture) []spanStream {
+	if len(c.SpanStreams) > 0 {
+		return c.SpanStreams
+	}
+	streams := make([]spanStream, 0, len(c.Spans))
+	for _, span := range c.Spans {
+		streams = append(streams, spanStream{Span: span})
+	}
+	return streams
+}
+
+func spanContextID(stream spanStream, ignoredResourceAttributes map[string]bool) string {
+	scopeName, _ := field(stream.Scope, "name").(string)
+	scopeVersion, _ := field(stream.Scope, "version").(string)
+	parts := []string{
+		scopeName, scopeVersion, stream.Schema, stream.ResourceSchema,
+		attributeSetID(stream.Scope, nil),
+		attributeSetID(stream.Resource, resourceAttributeIgnores(ignoredResourceAttributes)),
+	}
+	encoded, _ := json.Marshal(parts)
+	return string(encoded)
 }
 
 func workloadSpanID(span object) string {
@@ -787,13 +846,14 @@ func preservedLongSpanAttributes(before, after capture, limit int) (int, int, in
 
 func identifiedIncomingSpans(c capture) []identifiedRecord {
 	groups := map[string][]object{}
-	for _, span := range c.Spans {
+	for _, stream := range captureSpanStreams(c) {
+		span := stream.Span
 		traceID, _ := field(span, "trace_id").(string)
 		name, _ := field(span, "name").(string)
 		if !incomingTrace(traceID) || name == "" {
 			continue
 		}
-		encoded, _ := json.Marshal([]any{traceID, normalizeExternalStatePath(name), number(field(span, "kind"))})
+		encoded, _ := json.Marshal([]any{traceID, normalizeExternalStatePath(name), number(field(span, "kind")), spanContextID(stream, nil)})
 		groups[string(encoded)] = append(groups[string(encoded)], span)
 	}
 	var identified []identifiedRecord
@@ -996,12 +1056,13 @@ func limitedEventRecords(before, after capture, limit int) (int, int) {
 
 func identifiedSpans(c capture) []identifiedRecord {
 	groups := map[string][]object{}
-	for _, span := range c.Spans {
+	for _, stream := range captureSpanStreams(c) {
+		span := stream.Span
 		name, _ := field(span, "name").(string)
 		if name == "" {
 			continue
 		}
-		parts := []any{name, number(field(span, "kind")), attributeSetID(span, nil)}
+		parts := []any{name, number(field(span, "kind")), attributeSetID(span, nil), spanContextID(stream, nil)}
 		encoded, _ := json.Marshal(parts)
 		groups[string(encoded)] = append(groups[string(encoded)], span)
 	}

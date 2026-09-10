@@ -79,12 +79,31 @@ func TestDecodeBothWireRepresentations(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(c.Spans) != 1 || len(c.Resources) != 2 || len(events(c)) != 1 {
+		if len(c.Spans) != 1 || len(c.SpanStreams) != 1 || len(c.Resources) != 2 || len(events(c)) != 1 {
 			t.Fatalf("bad decoding: %+v", c)
 		}
 		if attributeValue(c.Resources[0], "service.name") != "probe" || attributeValue(c.Resources[1], "service.name") != "" || maxAttributes(c.Spans) != 1 || maxLength(c.Spans) != 4 {
 			t.Fatalf("nested attributes leaked or string lost: %+v", c)
 		}
+	}
+}
+
+func TestDecodePreservesSpanStreamContext(t *testing.T) {
+	data := []byte(`[{
+		"signal":"traces","payload":{"resourceSpans":[
+			{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"one"}}]},"scopeSpans":[{"scope":{"name":"scope.one"},"spans":[{"traceId":"00000000000000000000000000000001","name":"GET /api/tags","kind":2,"attributes":[{"key":"http.route","value":{"stringValue":"/api/tags"}}]}]}]},
+			{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"two"}}]},"scopeSpans":[{"scope":{"name":"scope.two"},"spans":[{"traceId":"00000000000000000000000000000001","name":"GET /api/tags","kind":2,"attributes":[{"key":"http.route","value":{"stringValue":"/api/tags"}}]}]}]}
+		]}}]`)
+	c, err := decodeCapture(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Spans) != 2 || len(c.SpanStreams) != 2 || spanContextID(c.SpanStreams[0], nil) == spanContextID(c.SpanStreams[1], nil) {
+		t.Fatalf("span stream context was flattened: %+v", c.SpanStreams)
+	}
+	duplicated := capture{Spans: []object{c.Spans[0], c.Spans[0]}, SpanStreams: []spanStream{c.SpanStreams[0], c.SpanStreams[0]}}
+	if expected, present := matchingWorkloadSpans(c, duplicated); expected != 2 || present != 1 {
+		t.Fatalf("one contextual span stream stood in for another: %d/%d", present, expected)
 	}
 }
 
@@ -606,6 +625,15 @@ func TestResourceChecksPreserveRegistrationSpans(t *testing.T) {
 	}
 	if got := evaluate(experiment{Name: "span-batch"}, batchBaseline, batchChanged); got.Status == "pass" {
 		t.Fatal("singleton probe batches hid lost registration spans")
+	}
+	defaultBaseline := batchBaseline
+	defaultBaseline.Resources = []object{{}}
+	defaultPreserved := batchBaseline
+	defaultPreserved.Resources = []object{{}}
+	defaultMissing := batchChanged
+	defaultMissing.Resources = []object{{}}
+	if preserved, missing := evaluate(experiment{Name: "default-service"}, defaultBaseline, defaultPreserved).signature(), evaluate(experiment{Name: "default-service"}, defaultBaseline, defaultMissing).signature(); preserved == missing {
+		t.Fatalf("default-service gap hid workload span loss: %q", missing)
 	}
 }
 
