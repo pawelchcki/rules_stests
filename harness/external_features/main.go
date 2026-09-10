@@ -95,8 +95,8 @@ func run(app, launcher, expected string, discover bool, args []string) error {
 			if err != nil {
 				return err
 			}
-			if e.Name == "sampler-arg" && len(control.Spans) == 0 {
-				return fmt.Errorf("traceidratio=1 control exported no spans")
+			if e.Name == "sampler-arg" && !validSamplerControl(control) {
+				return fmt.Errorf("traceidratio=1 control did not export four distinct probe request traces")
 			}
 		}
 		changed, err := collect(e)

@@ -561,7 +561,7 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		check(len(baseline.Spans) > 0, len(changed.Records) == 0, fmt.Sprintf("export requests %d -> %d", len(baseline.Records), len(changed.Records)))
 	case "sampler", "sampler-arg":
 		expectedMetrics, presentMetrics := matchingMetricStreamsIgnoringExemplars(baseline, changed)
-		expectedLogs, presentLogs := matchingLogStreamsIgnoringCorrelation(baseline, changed)
+		expectedLogs, presentLogs := matchingLogStreamsForSampler(baseline, changed)
 		otherSignalsAlive := (len(baseline.Metrics) == 0 || (expectedMetrics > 0 && presentMetrics == expectedMetrics)) &&
 			(len(baseline.Logs) == 0 || (expectedLogs > 0 && presentLogs == expectedLogs))
 		check(len(baseline.Spans) > 0, len(changed.Spans) == 0 && otherSignalsAlive, fmt.Sprintf("spans %d -> %d; other baseline signals still exported: %t", len(baseline.Spans), len(changed.Spans), otherSignalsAlive))
@@ -783,7 +783,7 @@ func matchingWorkloadSpansIgnoring(before, after capture, ignoredResourceAttribu
 func matchingWorkloadSpansIgnoringParents(before, after capture) (int, int) {
 	eligible := workloadSpanIdentitiesWithParentID(before, nil, workloadSpanIDForPropagation, spanParentRelationshipIDForPropagation)
 	actual := workloadSpanIdentitiesWithParentID(after, nil, workloadSpanIDForPropagation, spanParentRelationshipIDForPropagation)
-	return matchingWorkloadIdentityCounts(eligible, actual, after)
+	return matchingWorkloadIdentityCounts(eligible, actual, before, after)
 }
 
 func matchingWorkloadSpansIgnoringEvents(before, after capture) (int, int) {
@@ -809,15 +809,80 @@ func matchingCountLimitedWorkloadSpans(before, after capture) (int, int) {
 func matchingWorkloadSpansWithID(before, after capture, ignoredResourceAttributes map[string]bool, identify func(object) string, includeParent bool) (int, int) {
 	eligible := workloadSpanIdentitiesWithID(before, ignoredResourceAttributes, identify, includeParent)
 	actual := workloadSpanIdentitiesWithID(after, ignoredResourceAttributes, identify, includeParent)
-	return matchingWorkloadIdentityCounts(eligible, actual, after)
+	return matchingWorkloadIdentityCounts(eligible, actual, before, after)
 }
 
-func matchingWorkloadIdentityCounts(eligible, actual map[string]int, changed capture) (int, int) {
+func matchingWorkloadIdentityCounts(eligible, actual map[string]int, baseline, changed capture) (int, int) {
 	expected, present := matchingIdentityCounts(eligible, actual)
-	if !validWorkloadSpanStructure(changed) && present == expected {
+	if (!validWorkloadSpanStructure(changed) || !sameIdentityCounts(workloadTracePartitions(baseline), workloadTracePartitions(changed))) && present == expected {
 		present = expected + 1
 	}
 	return expected, present
+}
+
+func sameIdentityCounts(left, right map[string]int) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for id, count := range left {
+		if right[id] != count {
+			return false
+		}
+	}
+	return true
+}
+
+func workloadTracePartitions(c capture) map[string]int {
+	traceIDs := map[string]bool{}
+	for _, stream := range captureSpanStreams(c) {
+		if isProbeServerSpan(stream.Span) {
+			traceID, _ := field(stream.Span, "trace_id").(string)
+			if validTrace(traceID) {
+				traceIDs[traceID] = true
+			}
+		}
+	}
+	type partition struct {
+		spans, servers, roots int
+		spanIDs               map[string]bool
+		parentIDs             []string
+	}
+	partitions := map[string]*partition{}
+	for _, stream := range captureSpanStreams(c) {
+		traceID, _ := field(stream.Span, "trace_id").(string)
+		if !traceIDs[traceID] {
+			continue
+		}
+		current := partitions[traceID]
+		if current == nil {
+			current = &partition{spanIDs: map[string]bool{}}
+			partitions[traceID] = current
+		}
+		current.spans++
+		if isProbeServerSpan(stream.Span) {
+			current.servers++
+		}
+		spanID, _ := field(stream.Span, "span_id").(string)
+		current.spanIDs[spanID] = true
+		parentID, _ := field(stream.Span, "parent_span_id").(string)
+		current.parentIDs = append(current.parentIDs, parentID)
+	}
+	counts := map[string]int{}
+	for _, current := range partitions {
+		for _, parentID := range current.parentIDs {
+			if !current.spanIDs[parentID] {
+				current.roots++
+			}
+		}
+		encoded, _ := json.Marshal([]int{current.spans, current.servers, current.roots})
+		counts[string(encoded)]++
+	}
+	return counts
+}
+
+func validSamplerControl(c capture) bool {
+	probes := probeSpans(c)
+	return len(probes) == 4 && len(incomingProbeTraces(probes)) == 4
 }
 
 func validWorkloadSpanStructure(c capture) bool {
@@ -1546,6 +1611,12 @@ func matchingLogStreamsIgnoringCorrelation(before, after capture) (int, int) {
 	}, nil)
 }
 
+func matchingLogStreamsForSampler(before, after capture) (int, int) {
+	return matchingLogStreamsWithID(before, after, nil, func(stream logStream) string {
+		return logStreamID(stream, nil)
+	}, logCorrelationValidityID)
+}
+
 func matchingLogStreamsForPropagation(before, after capture) (int, int) {
 	return matchingLogStreamsWithID(before, after, nil, func(stream logStream) string {
 		return logStreamID(stream, nil)
@@ -1697,6 +1768,18 @@ func logCorrelationID(c capture, record object, ignoredResourceAttributes map[st
 	}
 	encoded, _ := json.Marshal([]any{state, target, number(field(record, "flags"))})
 	return string(encoded)
+}
+
+func logCorrelationValidityID(_ capture, record object, _ map[string]bool) string {
+	traceID, _ := field(record, "trace_id").(string)
+	spanID, _ := field(record, "span_id").(string)
+	if traceID == "" && spanID == "" {
+		return "none"
+	}
+	if validTrace(traceID) && validSpan(spanID) {
+		return "valid"
+	}
+	return "invalid"
 }
 
 func logCorrelationIDForPropagation(c capture, record object, ignoredResourceAttributes map[string]bool) string {
@@ -2319,10 +2402,8 @@ func normalizeEndpointPort(value string) string {
 	if err != nil || port == "" {
 		return value
 	}
-	for _, digit := range port {
-		if digit < '0' || digit > '9' {
-			return value
-		}
+	if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+		return value
 	}
 	return net.JoinHostPort(host, "<port>")
 }

@@ -522,6 +522,15 @@ func TestWorkloadSpanIdentityRejectsInvalidSpanStructure(t *testing.T) {
 	}
 }
 
+func TestWorkloadSpanIdentityPreservesTracePartitions(t *testing.T) {
+	baseline := capture{Spans: syntheticProbeSpans()}
+	changed := capture{Spans: syntheticProbeSpans()}
+	changed.Spans[0]["trace_id"] = field(changed.Spans[1], "trace_id")
+	if expected, present := matchingWorkloadSpans(baseline, changed); expected != 4 || present != 5 {
+		t.Fatalf("merged independent request traces were accepted: %d/%d", present, expected)
+	}
+}
+
 func TestWorkloadSpanIdentityPreservesFlagsAndEvents(t *testing.T) {
 	baseline := capture{Spans: syntheticProbeSpans()}
 	changed := capture{Spans: syntheticProbeSpans()}
@@ -1109,6 +1118,23 @@ func TestSamplerPreservesMetricAndLogIdentities(t *testing.T) {
 	}
 }
 
+func TestSamplerControlRequiresFourProbeRequestTraces(t *testing.T) {
+	if !validSamplerControl(capture{Spans: syntheticProbeSpans()}) {
+		t.Fatal("complete sampler control was rejected")
+	}
+	incidental := capture{Spans: []object{{
+		"name": "startup", "kind": float64(1), "trace_id": fmt.Sprintf("%032x", 10), "span_id": fmt.Sprintf("%016x", 10),
+	}}}
+	if validSamplerControl(incidental) {
+		t.Fatal("incidental span stood in for sampled probe requests")
+	}
+	duplicated := capture{Spans: syntheticProbeSpans()}
+	duplicated.Spans[0]["trace_id"] = field(duplicated.Spans[1], "trace_id")
+	if validSamplerControl(duplicated) {
+		t.Fatal("duplicate probe trace stood in for an independent request")
+	}
+}
+
 func TestResourceExperimentPreservesWorkload(t *testing.T) {
 	baseline := baselineCapture()
 	baseline.Spans = syntheticProbeSpans()
@@ -1643,6 +1669,16 @@ func TestLogIdentityPreservesCorrelationExceptForSamplers(t *testing.T) {
 	if expected, present := matchingLogStreamsIgnoringCorrelation(baseline, changed); expected != 1 || present != 1 {
 		t.Fatalf("sampler correlation exclusion did not preserve the log: %d/%d", present, expected)
 	}
+	if expected, present := matchingLogStreamsForSampler(baseline, changed); expected != 1 || present != 0 {
+		t.Fatalf("sampler accepted lost correlation validity: %d/%d", present, expected)
+	}
+	validChanged := object{
+		"body":     object{"stringValue": "workload log"},
+		"trace_id": fmt.Sprintf("%032x", 10), "span_id": fmt.Sprintf("%016x", 10), "flags": float64(0),
+	}
+	if expected, present := matchingLogStreamsForSampler(baseline, capture{Logs: []object{validChanged}}); expected != 1 || present != 1 {
+		t.Fatalf("sampler did not normalize changed valid correlation: %d/%d", present, expected)
+	}
 }
 
 func TestMetricPointIdentityNormalizesRandomizedEndpointPorts(t *testing.T) {
@@ -1662,6 +1698,13 @@ func TestMetricPointIdentityNormalizesRandomizedEndpointPorts(t *testing.T) {
 	}
 	if got := normalizeEndpointPort("::1"); got != "::1" {
 		t.Fatalf("bare IPv6 address was treated as a host-port pair: %q", got)
+	}
+	invalidPort := metricStream{Metric: metric("127.0.0.1:99999")}
+	if metricPointID(baseline, objects(baseline.Metric, "data_points")[0], nil) == metricPointID(invalidPort, objects(invalidPort.Metric, "data_points")[0], nil) {
+		t.Fatal("out-of-range endpoint port was normalized as valid")
+	}
+	if got := normalizeURLPort("http://127.0.0.1:99999/api/tags"); got != "http://127.0.0.1:99999/api/tags" {
+		t.Fatalf("out-of-range URL port was normalized: %q", got)
 	}
 }
 
