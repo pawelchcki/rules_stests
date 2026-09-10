@@ -2066,7 +2066,7 @@ func TestExplicitHistogramIdentityPreservesBucketLayout(t *testing.T) {
 	metric := object{"name": "request.duration", "histogram": object{"dataPoints": []any{point}}}
 	for name, changedPoint := range map[string]object{
 		"bounds":  {"count": "2", "explicitBounds": []any{float64(2)}, "bucketCounts": []any{"1", "1"}},
-		"buckets": {"count": "2", "explicitBounds": []any{float64(1)}, "bucketCounts": []any{"2", "0", "0"}},
+		"buckets": {"count": "2", "explicitBounds": []any{float64(1)}, "bucketCounts": []any{"2", "0"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			changed := object{"name": "request.duration", "histogram": object{"dataPoints": []any{changedPoint}}}
@@ -2074,6 +2074,51 @@ func TestExplicitHistogramIdentityPreservesBucketLayout(t *testing.T) {
 				t.Fatalf("histogram layout change was accepted: %d/%d", present, expected)
 			}
 		})
+	}
+}
+
+func TestMetricIdentityPreservesExemplarMultiplicity(t *testing.T) {
+	exemplar := object{"timeUnixNano": "1", "value": object{"asInt": "1"}}
+	point := object{"count": "1", "exemplars": []any{exemplar}}
+	metric := object{"name": "queue.latency", "histogram": object{"dataPoints": []any{point}}}
+	changedPoint := cloneObject(point)
+	changedPoint["exemplars"] = append(changedPoint["exemplars"].([]any), cloneObject(exemplar))
+	changed := object{"name": "queue.latency", "histogram": object{"dataPoints": []any{changedPoint}}}
+	if expected, present := matchingMetricStreams(capture{Metrics: []object{metric}}, capture{Metrics: []object{changed}}); expected != 1 || present != 0 {
+		t.Fatalf("duplicate exemplar was accepted: %d/%d", present, expected)
+	}
+}
+
+func TestSpanIdentityPreservesEventOrder(t *testing.T) {
+	baseline := capture{Spans: syntheticProbeSpans()}
+	changed := capture{Spans: syntheticProbeSpans()}
+	first := object{"name": "first", "timeUnixNano": "100"}
+	second := object{"name": "second", "timeUnixNano": "100"}
+	baseline.Spans[0]["events"] = []any{first, second}
+	changed.Spans[0]["events"] = []any{cloneObject(second), cloneObject(first)}
+	if expected, present := matchingWorkloadSpans(baseline, changed); expected != 4 || present != 3 {
+		t.Fatalf("event reordering was accepted: %d/%d", present, expected)
+	}
+}
+
+func TestSpanIdentityPreservesParentIntervalRelationship(t *testing.T) {
+	baseline := capture{Spans: syntheticProbeSpans()}
+	changed := capture{Spans: syntheticProbeSpans()}
+	for _, candidate := range []capture{baseline, changed} {
+		candidate.Spans[0]["start_time_unix_nano"] = "100"
+		candidate.Spans[0]["end_time_unix_nano"] = "200"
+	}
+	child := object{
+		"name": "SELECT", "kind": float64(3), "trace_id": field(baseline.Spans[0], "trace_id"),
+		"span_id": fmt.Sprintf("%016x", 50), "parent_span_id": field(baseline.Spans[0], "span_id"),
+		"start_time_unix_nano": "120", "end_time_unix_nano": "130",
+	}
+	changedChild := cloneObject(child)
+	changedChild["start_time_unix_nano"], changedChild["end_time_unix_nano"] = "201", "202"
+	baseline.Spans = append(baseline.Spans, child)
+	changed.Spans = append(changed.Spans, changedChild)
+	if expected, present := matchingWorkloadSpans(baseline, changed); expected != 5 || present != 4 {
+		t.Fatalf("child interval corruption was accepted: %d/%d", present, expected)
 	}
 }
 

@@ -1012,7 +1012,7 @@ func spanParentRelationshipID(c capture, child spanStream, ignoredResourceAttrib
 	traceID, _ := field(child.Span, "trace_id").(string)
 	for _, candidate := range captureSpanStreams(c) {
 		if field(candidate.Span, "trace_id") == traceID && field(candidate.Span, "span_id") == parentID {
-			return "local\x00" + workloadSpanShapeID(candidate.Span) + "\x00" + spanContextID(candidate, ignoredResourceAttributes)
+			return "local\x00" + workloadSpanShapeID(candidate.Span) + "\x00" + spanContextID(candidate, ignoredResourceAttributes) + "\x00" + spanIntervalRelationshipID(child.Span, candidate.Span)
 		}
 	}
 	if isPropagationProbeServerSpan(child.Span) {
@@ -1045,10 +1045,22 @@ func spanParentRelationshipIDForPropagation(c capture, child spanStream, ignored
 				}
 				shapeID = workloadSpanShapeID(normalized)
 			}
-			return "local\x00" + shapeID + "\x00" + spanContextID(candidate, ignoredResourceAttributes)
+			return "local\x00" + shapeID + "\x00" + spanContextID(candidate, ignoredResourceAttributes) + "\x00" + spanIntervalRelationshipID(child.Span, candidate.Span)
 		}
 	}
 	return "remote"
+}
+
+func spanIntervalRelationshipID(child, parent object) string {
+	childStart, childStartValid := otlpTimestamp(field(child, "start_time_unix_nano"))
+	childEnd, childEndValid := otlpTimestamp(field(child, "end_time_unix_nano"))
+	parentStart, parentStartValid := otlpTimestamp(field(parent, "start_time_unix_nano"))
+	parentEnd, parentEndValid := otlpTimestamp(field(parent, "end_time_unix_nano"))
+	valid := childStartValid && childEndValid && parentStartValid && parentEndValid
+	startsInside := valid && childStart.Cmp(parentStart) >= 0 && childStart.Cmp(parentEnd) <= 0
+	endsInside := valid && childEnd.Cmp(parentStart) >= 0 && childEnd.Cmp(parentEnd) <= 0
+	encoded, _ := json.Marshal([]bool{valid, startsInside, endsInside})
+	return string(encoded)
 }
 
 func captureSpanStreams(c capture) []spanStream {
@@ -1312,7 +1324,6 @@ func spanEventSetIDWithValue(span object, normalize func(any) any) string {
 		encoded, _ := json.Marshal([]any{name, eventTimeValid && eventTime.Sign() > 0, insideParent, number(field(event, "dropped_attributes_count")), values})
 		eventIDs = append(eventIDs, string(encoded))
 	}
-	sort.Strings(eventIDs)
 	encoded, _ := json.Marshal(eventIDs)
 	return string(encoded)
 }
@@ -2205,7 +2216,7 @@ func controlMetricPointIDWithExemplars(stream metricStream, point object, ignore
 	}
 	parts := []string{id, metricType, metricPointAttributeSetID(point), metricMeasurementID(stream.Metric, point), metricTimestampID(point)}
 	if includeExemplars {
-		parts = append(parts, metricExemplarSetID(point))
+		parts = append(parts, metricExemplarSetID(stream.Metric, point))
 	}
 	encoded, _ := json.Marshal(parts)
 	return string(encoded)
@@ -2322,7 +2333,7 @@ func metricMeasurementID(metric, point object) string {
 	case "histogram":
 		count, countValid := finiteOTLPNumber(field(point, "count"))
 		total, bucketsValid, hasBuckets := bucketCountEvidence(field(point, "bucket_counts"))
-		return fmt.Sprintf("histogram:count=%t:positive=%t:buckets=%t:total=%t:layout=%s:sum=%s:min=%s:max=%s", countValid, count > 0, hasBuckets && bucketsValid, !hasBuckets || total == count, histogramBucketLayoutID(point), optionalNumberState(field(point, "sum")), optionalNumberState(field(point, "min")), optionalNumberState(field(point, "max")))
+		return fmt.Sprintf("histogram:count=%t:positive=%t:buckets=%t:total=%t:layout=%s:sum=%s:min=%s:max=%s", countValid, count > 0, hasBuckets && bucketsValid, !hasBuckets || total == count, histogramBucketLayoutID(metric, point), optionalNumberState(field(point, "sum")), optionalNumberState(field(point, "min")), optionalNumberState(field(point, "max")))
 	case "exponentialhistogram":
 		return fmt.Sprintf("exponential-histogram:valid=%t:sum=%s:min=%s:max=%s", validExponentialHistogramPoint(point), optionalNumberState(field(point, "sum")), optionalNumberState(field(point, "min")), optionalNumberState(field(point, "max")))
 	case "summary":
@@ -2334,7 +2345,7 @@ func metricMeasurementID(metric, point object) string {
 	}
 }
 
-func histogramBucketLayoutID(point object) string {
+func histogramBucketLayoutID(metric, point object) string {
 	bounds, boundsValid := field(point, "explicit_bounds").([]any)
 	counts, countsValid := field(point, "bucket_counts").([]any)
 	if field(point, "explicit_bounds") == nil {
@@ -2343,14 +2354,26 @@ func histogramBucketLayoutID(point object) string {
 	if field(point, "bucket_counts") == nil {
 		countsValid = true
 	}
+	distribution := normalizedJSONValue(field(point, "bucket_counts"))
+	// These wall-clock instruments have stable aggregation layouts, but their
+	// observations naturally cross neighboring buckets between process runs.
+	if volatileDurationMetric(metric) {
+		distribution = []any{"volatile-duration-distribution", len(counts)}
+	}
 	encoded, _ := json.Marshal([]any{
 		normalizedJSONValue(field(point, "explicit_bounds")),
+		distribution,
 		boundsValid,
 		countsValid,
 		len(counts),
 		boundsValid && countsValid && (len(counts) == 0 || len(counts) == len(bounds)+1),
 	})
 	return string(encoded)
+}
+
+func volatileDurationMetric(metric object) bool {
+	name, _ := field(metric, "name").(string)
+	return name == "http.server.duration" || name == "asyncio.process.duration"
 }
 
 func finiteOTLPNumber(value any) (float64, bool) {
@@ -2402,8 +2425,8 @@ func summaryQuantileEvidence(point object) (int, bool) {
 	return len(quantiles), true
 }
 
-func metricExemplarSetID(point object) string {
-	unique := map[string]bool{}
+func metricExemplarSetID(metric, point object) string {
+	var ids []string
 	for _, exemplar := range objects(point, "exemplars") {
 		timestamp, timestampValid := otlpTimestamp(field(exemplar, "time_unix_nano"))
 		valueContainer := exemplar
@@ -2427,13 +2450,18 @@ func metricExemplarSetID(point object) string {
 		}
 		filtered := object{"attributes": field(exemplar, "filtered_attributes")}
 		encoded, _ := json.Marshal([]any{timestampValid && timestamp.Sign() > 0, valueKind, context, attributeSetID(filtered, nil)})
-		unique[string(encoded)] = true
-	}
-	var ids []string
-	for id := range unique {
-		ids = append(ids, id)
+		ids = append(ids, string(encoded))
 	}
 	sort.Strings(ids)
+	if volatileDurationMetric(metric) {
+		unique := ids[:0]
+		for _, id := range ids {
+			if len(unique) == 0 || unique[len(unique)-1] != id {
+				unique = append(unique, id)
+			}
+		}
+		ids = unique
+	}
 	encoded, _ := json.Marshal(ids)
 	return string(encoded)
 }
