@@ -349,7 +349,7 @@ func TestExperimentsRequireBaselineAndRejectIgnoredSettings(t *testing.T) {
 				changed.Spans = syntheticProbeSpans()
 				changed.Logs[0]["body"] = object{"stringValue": "workload log"}
 			case "histogram":
-				changed.Metrics = []object{{"name": "probe.metric", "data": object{"exponential_histogram": object{"data_points": []any{object{"count": float64(1), "positive": object{"bucket_counts": []any{float64(1)}}}}}}}}
+				changed.Metrics = []object{{"name": "probe.metric", "data": object{"exponential_histogram": object{"data_points": []any{object{"time_unix_nano": "2", "count": float64(1), "positive": object{"bucket_counts": []any{float64(1)}}}}}}}}
 			default:
 				t.Fatal("missing positive fixture")
 			}
@@ -656,12 +656,13 @@ func TestKnownGapCannotHideAdditionalViolations(t *testing.T) {
 		}
 	}
 	changed := baselineCapture()
-	changed.Logs = []object{{"attributes": []any{attr("request", strings.Repeat("r", 32))}}}
-	if got := evaluate(e, baselineCapture(), changed).signature(); got != "gap:request=32" {
+	changed.Logs = []object{{"body": object{"stringValue": "workload log"}, "attributes": []any{attr("request", strings.Repeat("r", 32))}}}
+	initialGap := "gap:attributes=0/3,records=0/1,request=32"
+	if got := evaluate(e, baselineCapture(), changed).signature(); got != initialGap {
 		t.Fatalf("unexpected gap signature: %s", got)
 	}
 	changed.Logs[0]["attributes"] = append(changed.Logs[0]["attributes"].([]any), attr("code.file.path", "unexpected oversized value"))
-	if got := evaluate(e, baselineCapture(), changed).signature(); got == "gap:request=32" {
+	if got := evaluate(e, baselineCapture(), changed).signature(); got == initialGap {
 		t.Fatal("known gap hid a new violation")
 	}
 
@@ -1077,10 +1078,10 @@ func TestCountLimitsPreserveBaselineRecords(t *testing.T) {
 	if got := evaluate(experiment{Name: "attribute-count"}, noProbeBaseline, cappedUnrelated); got.Status != "not_exercised" {
 		t.Fatalf("attribute-count without baseline probe evidence was %s", got.Status)
 	}
-	unnamedLogBaseline := capture{Logs: []object{{"attributes": []any{attr("first", "value"), attr("second", "value")}}}}
+	unnamedLogBaseline := capture{}
 	cappedUnrelatedLog := capture{Logs: []object{{"body": object{"stringValue": "unrelated"}, "attributes": []any{attr("first", "value")}, "droppedAttributesCount": float64(1)}}}
 	if got := evaluate(experiment{Name: "log-count"}, unnamedLogBaseline, cappedUnrelatedLog); got.Status != "not_exercised" {
-		t.Fatalf("log-count without identifiable baseline logs was %s", got.Status)
+		t.Fatalf("log-count without baseline logs was %s", got.Status)
 	}
 
 	logBaseline := capture{Logs: []object{{"body": object{"stringValue": "workload log"}, "attributes": []any{attr("first", "value"), attr("second", "value")}}}}
@@ -1629,7 +1630,7 @@ func TestCountEventAndHistogramExperimentsPreserveOtherSignals(t *testing.T) {
 	}
 
 	histogram := object{"name": "duration", "histogram": object{"dataPoints": []any{object{"attributes": []any{attr("route", "tags")}, "count": "1"}}}}
-	exponential := object{"name": "duration", "exponentialHistogram": object{"dataPoints": []any{object{"attributes": []any{attr("route", "tags")}, "count": "1", "positive": object{"bucketCounts": []any{"1"}}}}}}
+	exponential := object{"name": "duration", "exponentialHistogram": object{"dataPoints": []any{object{"attributes": []any{attr("route", "tags")}, "startTimeUnixNano": "1", "timeUnixNano": "2", "count": "1", "positive": object{"bucketCounts": []any{"1"}}}}}}
 	histogramBase := capture{Spans: syntheticProbeSpans(), Metrics: []object{histogram, metric}, Logs: []object{logRecord}}
 	histogramChanged := capture{Spans: syntheticProbeSpans(), Metrics: []object{exponential, metric}, Logs: []object{logRecord}}
 	if got := evaluate(experiment{Name: "histogram"}, histogramBase, histogramChanged); got.Status != "pass" {
@@ -1701,6 +1702,27 @@ func TestLogIdentityPreservesCorrelationExceptForSamplers(t *testing.T) {
 	}
 	if expected, present := matchingLogStreamsForSampler(baseline, capture{Logs: []object{validChanged}}); expected != 1 || present != 1 {
 		t.Fatalf("sampler did not normalize changed valid correlation: %d/%d", present, expected)
+	}
+}
+
+func TestLogCorrelationPreservesSpanOccurrences(t *testing.T) {
+	span := func(trace, id int) object {
+		return object{
+			"trace_id": fmt.Sprintf("%032x", trace), "span_id": fmt.Sprintf("%016x", id),
+			"name": "POST /api/users", "kind": float64(2), "attributes": []any{attr("http.status_code", "409")},
+		}
+	}
+	first, second := span(1, 1), span(2, 2)
+	log := func(target object) object {
+		return object{
+			"body":     object{"stringValue": "registration conflict"},
+			"trace_id": field(target, "trace_id"), "span_id": field(target, "span_id"),
+		}
+	}
+	baseline := capture{Spans: []object{first, second}, Logs: []object{log(first), log(second)}}
+	changed := capture{Spans: []object{first, second}, Logs: []object{log(first), log(first)}}
+	if expected, present := matchingLogStreams(baseline, changed, nil); expected != 2 || present != 1 {
+		t.Fatalf("duplicate correlation target was accepted: %d/%d", present, expected)
 	}
 }
 
@@ -1811,6 +1833,46 @@ func TestLogIdentityPreservesStructuredBodiesAndDroppedCounts(t *testing.T) {
 	changed["droppedAttributesCount"] = float64(1)
 	if expected, present := matchingLogStreams(capture{Logs: []object{ordinary}}, capture{Logs: []object{changed}}, nil); expected != 1 || present != 0 {
 		t.Fatalf("log dropped-attribute corruption was not detected: %d/%d", present, expected)
+	}
+}
+
+func TestLogIdentityPreservesBodylessRecords(t *testing.T) {
+	bodyless := object{"eventName": "cache.refresh", "severityNumber": float64(9), "attributes": []any{attr("cache.name", "users")}}
+	ordinary := object{"body": object{"stringValue": "ordinary"}}
+	if expected, present := matchingLogStreams(capture{Logs: []object{bodyless, ordinary}}, capture{Logs: []object{ordinary}}, nil); expected != 2 || present != 1 {
+		t.Fatalf("bodyless log loss was not detected: %d/%d", present, expected)
+	}
+}
+
+func TestWorkloadIdentityRetainsMalformedAttributeKeys(t *testing.T) {
+	baseline := object{"name": "GET /api/tags", "kind": float64(2), "attributes": []any{attr("http.route", "/api/tags")}}
+	for name, malformed := range map[string]any{
+		"empty":      object{"key": "", "value": object{"stringValue": "bad"}},
+		"non-string": object{"key": float64(7), "value": object{"stringValue": "bad"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := cloneObject(baseline)
+			changed["attributes"] = append(changed["attributes"].([]any), malformed)
+			if workloadSpanID(baseline) == workloadSpanID(changed) {
+				t.Fatal("malformed attribute key was omitted from span identity")
+			}
+		})
+	}
+}
+
+func TestSummaryIdentityPreservesQuantileRanks(t *testing.T) {
+	point := func(first, second float64) object {
+		return object{"count": "2", "sum": float64(3), "quantileValues": []any{
+			object{"quantile": first, "value": float64(1)},
+			object{"quantile": second, "value": float64(2)},
+		}}
+	}
+	metric := func(point object) object {
+		return object{"name": "request.size", "summary": object{"dataPoints": []any{point}}}
+	}
+	baseline, changed := capture{Metrics: []object{metric(point(0.5, 0.9))}}, capture{Metrics: []object{metric(point(0.6, 0.8))}}
+	if expected, present := matchingMetricStreams(baseline, changed); expected != 1 || present != 0 {
+		t.Fatalf("changed summary quantile ranks were accepted: %d/%d", present, expected)
 	}
 }
 
@@ -2156,7 +2218,7 @@ func TestSpanIdentityPreservesParentIntervalRelationship(t *testing.T) {
 }
 
 func TestExponentialHistogramRequiresValidMappingParameters(t *testing.T) {
-	valid := object{"count": "1", "scale": float64(0), "zeroThreshold": float64(0), "zeroCount": "0", "min": float64(1), "max": float64(1), "positive": object{"bucketCounts": []any{"1"}}}
+	valid := object{"startTimeUnixNano": "1", "timeUnixNano": "2", "flags": float64(0), "attributes": []any{attr("route", "tags")}, "count": "1", "scale": float64(0), "zeroThreshold": float64(0), "zeroCount": "0", "min": float64(1), "max": float64(1), "positive": object{"bucketCounts": []any{"1"}}}
 	if !validExponentialHistogramPoint(valid) {
 		t.Fatal("valid exponential histogram rejected")
 	}
@@ -2165,6 +2227,12 @@ func TestExponentialHistogramRequiresValidMappingParameters(t *testing.T) {
 		"threshold":       func(point object) { point["zeroThreshold"] = float64(-1) },
 		"extrema":         func(point object) { point["min"], point["max"] = float64(2), float64(1) },
 		"fractionalCount": func(point object) { point["count"] = float64(1.5) },
+		"zero timestamp":  func(point object) { point["timeUnixNano"] = "0" },
+		"late start":      func(point object) { point["startTimeUnixNano"] = "3" },
+		"invalid flags":   func(point object) { point["flags"] = float64(2) },
+		"invalid attrs": func(point object) {
+			point["attributes"] = []any{object{"key": "", "value": object{"stringValue": "bad"}}}
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := cloneObject(valid)
@@ -2198,6 +2266,15 @@ func TestAlwaysOnRejectsMalformedExemplarContext(t *testing.T) {
 		"missing span": func(exemplar object) { delete(exemplar, "spanId") },
 		"zero trace":   func(exemplar object) { exemplar["traceId"] = strings.Repeat("0", 32) },
 		"short span":   func(exemplar object) { exemplar["spanId"] = "01" },
+		"empty filtered key": func(exemplar object) {
+			exemplar["filteredAttributes"] = []any{object{"key": "", "value": object{"stringValue": "bad"}}}
+		},
+		"missing filtered value": func(exemplar object) {
+			exemplar["filteredAttributes"] = []any{object{"key": "sampled"}}
+		},
+		"duplicate filtered key": func(exemplar object) {
+			exemplar["filteredAttributes"] = []any{attr("sampled", "one"), attr("sampled", "two")}
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := valid()

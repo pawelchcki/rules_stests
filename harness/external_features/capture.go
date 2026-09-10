@@ -1142,8 +1142,11 @@ func workloadSpanIDWithStringLimit(span object, limit int, limitEvents bool) str
 	}
 	var values []string
 	for _, attribute := range attributes(span) {
-		key, _ := field(attribute, "key").(string)
-		if key == "" {
+		keyValue := field(attribute, "key")
+		key, validKey := keyValue.(string)
+		if !validKey || key == "" {
+			encoded, _ := json.Marshal([]any{"invalid-key", normalizedJSONValue(keyValue), normalizedJSONValue(field(attribute, "value"))})
+			values = append(values, string(encoded))
 			continue
 		}
 		value := normalizeSpanAttributeValue(key, field(attribute, "value"), func(value string) string {
@@ -1196,8 +1199,11 @@ func workloadSpanIDWithValue(span object, normalize func(any) any, includeEvents
 	name = normalizeExternalStatePath(name)
 	var values []string
 	for _, attribute := range attributes(span) {
-		key, _ := field(attribute, "key").(string)
-		if key == "" {
+		keyValue := field(attribute, "key")
+		key, validKey := keyValue.(string)
+		if !validKey || key == "" {
+			encoded, _ := json.Marshal([]any{"invalid-key", normalizedJSONValue(keyValue), normalizedJSONValue(field(attribute, "value"))})
+			values = append(values, string(encoded))
 			continue
 		}
 		value := normalizeSpanAttributeValue(key, normalize(field(attribute, "value")), func(value string) string {
@@ -1804,7 +1810,7 @@ func logCorrelationID(c capture, record object, ignoredResourceAttributes map[st
 			for _, stream := range captureSpanStreams(c) {
 				if field(stream.Span, "trace_id") == traceID && field(stream.Span, "span_id") == spanID {
 					state = "matched"
-					target = workloadSpanShapeID(stream.Span) + "\x00" + spanContextID(stream, ignoredResourceAttributes)
+					target = correlatedSpanOccurrenceID(c, stream, ignoredResourceAttributes)
 					break
 				}
 			}
@@ -1812,6 +1818,22 @@ func logCorrelationID(c capture, record object, ignoredResourceAttributes map[st
 	}
 	encoded, _ := json.Marshal([]any{state, target, number(field(record, "flags"))})
 	return string(encoded)
+}
+
+func correlatedSpanOccurrenceID(c capture, matched spanStream, ignoredResourceAttributes map[string]bool) string {
+	base := workloadSpanShapeID(matched.Span) + "\x00" + spanContextID(matched, ignoredResourceAttributes)
+	ordinal := 0
+	for _, candidate := range captureSpanStreams(c) {
+		candidateBase := workloadSpanShapeID(candidate.Span) + "\x00" + spanContextID(candidate, ignoredResourceAttributes)
+		if candidateBase != base {
+			continue
+		}
+		if field(candidate.Span, "trace_id") == field(matched.Span, "trace_id") && field(candidate.Span, "span_id") == field(matched.Span, "span_id") {
+			break
+		}
+		ordinal++
+	}
+	return fmt.Sprintf("%s\x00%d", base, ordinal)
 }
 
 func logCorrelationValidityID(_ capture, record object, _ map[string]bool) string {
@@ -1860,7 +1882,7 @@ func validSpan(id string) bool {
 func logRecordIdentity(record object) string {
 	bodyValue := field(record, "body")
 	if bodyValue == nil {
-		return ""
+		return `["absent-body"]`
 	}
 	if body, ok := stringValue(bodyValue); ok {
 		if strings.HasPrefix(body, "Started ") {
@@ -2351,7 +2373,7 @@ func metricMeasurementID(metric, point object) string {
 	case "summary":
 		count, countValid := finiteOTLPNumber(field(point, "count"))
 		quantiles, quantilesValid := summaryQuantileEvidence(point)
-		return fmt.Sprintf("summary:count=%t:positive=%t:sum=%s:quantiles=%d:valid=%t", countValid, count > 0, optionalNumberState(field(point, "sum")), quantiles, quantilesValid)
+		return fmt.Sprintf("summary:count=%t:positive=%t:sum=%s:quantiles=%s:valid=%t", countValid, count > 0, optionalNumberState(field(point, "sum")), quantiles, quantilesValid)
 	default:
 		return kind + ":missing"
 	}
@@ -2423,18 +2445,26 @@ func bucketCountEvidence(value any) (float64, bool, bool) {
 	return total, true, true
 }
 
-func summaryQuantileEvidence(point object) (int, bool) {
+func summaryQuantileEvidence(point object) (string, bool) {
 	quantiles := objects(point, "quantile_values")
 	previous := float64(-1)
+	ranks := make([]any, 0, len(quantiles))
+	valid := true
 	for _, quantile := range quantiles {
 		q, qValid := finiteOTLPNumber(field(quantile, "quantile"))
 		_, valueValid := finiteOTLPNumber(field(quantile, "value"))
-		if !qValid || !valueValid || q < 0 || q > 1 || q < previous {
-			return len(quantiles), false
+		if !qValid || !valueValid || q < 0 || q > 1 || q <= previous {
+			valid = false
 		}
-		previous = q
+		if qValid {
+			ranks = append(ranks, q)
+			previous = q
+		} else {
+			ranks = append(ranks, normalizedJSONValue(field(quantile, "quantile")))
+		}
 	}
-	return len(quantiles), true
+	encoded, _ := json.Marshal(ranks)
+	return string(encoded), valid
 }
 
 func metricExemplarSetID(metric, point object) string {
@@ -2588,6 +2618,76 @@ func attributeSetIDWithValue(container object, ignored map[string]bool, normaliz
 	sort.Strings(values)
 	encoded, _ := json.Marshal(values)
 	return string(encoded)
+}
+
+func validKeyValueCollection(value any) bool {
+	if value == nil {
+		return true
+	}
+	items, ok := value.([]any)
+	if !ok {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, item := range items {
+		attribute, ok := item.(map[string]any)
+		if !ok {
+			return false
+		}
+		key, ok := field(attribute, "key").(string)
+		if !ok || key == "" || seen[key] || !validAnyValue(field(attribute, "value")) {
+			return false
+		}
+		seen[key] = true
+	}
+	return true
+}
+
+func validAnyValue(value any) bool {
+	wrapper, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	if len(wrapper) == 1 {
+		for key, child := range wrapper {
+			if canonical(key) == "value" {
+				return validAnyValue(child)
+			}
+		}
+	}
+	kinds := 0
+	valid := true
+	for key, child := range wrapper {
+		switch canonical(key) {
+		case "stringvalue", "boolvalue", "intvalue", "doublevalue", "bytesvalue":
+			kinds++
+			valid = child != nil
+		case "arrayvalue":
+			kinds++
+			array, ok := child.(map[string]any)
+			valuesValue := field(array, "values")
+			values, valuesOK := valuesValue.([]any)
+			valid = ok && (valuesValue == nil || valuesOK)
+			if valid && valuesOK {
+				for _, value := range values {
+					if !validAnyValue(value) {
+						valid = false
+						break
+					}
+				}
+			}
+		case "kvlistvalue":
+			kinds++
+			list, ok := child.(map[string]any)
+			valid = ok && validKeyValueCollection(field(list, "values"))
+		default:
+			valid = false
+		}
+		if !valid {
+			return false
+		}
+	}
+	return kinds == 1
 }
 
 func normalizeResourceAttributeValue(key string, value any) any {
@@ -2788,6 +2888,9 @@ func convertedHistograms(before, after capture) (int, int) {
 }
 
 func validExponentialHistogramPoint(point object) bool {
+	if !validMetricPointMetadata(point) {
+		return false
+	}
 	count, ok := otlpNumber(field(point, "count"))
 	if !ok || count <= 0 || math.Trunc(count) != count {
 		return false
@@ -2831,6 +2934,30 @@ func validExponentialHistogramPoint(point object) bool {
 		}
 	}
 	return evidence && total == count
+}
+
+func validMetricPointMetadata(point object) bool {
+	timestamp, timestampValid := otlpTimestamp(field(point, "time_unix_nano"))
+	if !timestampValid || timestamp.Sign() <= 0 {
+		return false
+	}
+	start := big.NewInt(0)
+	if value := field(point, "start_time_unix_nano"); value != nil {
+		var startValid bool
+		start, startValid = otlpTimestamp(value)
+		if !startValid {
+			return false
+		}
+	}
+	flags := float64(0)
+	if value := field(point, "flags"); value != nil {
+		var flagsValid bool
+		flags, flagsValid = otlpNumber(value)
+		if !flagsValid || math.Trunc(flags) != flags {
+			return false
+		}
+	}
+	return start.Cmp(timestamp) <= 0 && (flags == 0 || flags == 1) && validKeyValueCollection(field(point, "attributes"))
 }
 
 func optionalFiniteNumber(value any) (float64, bool) {
@@ -2925,7 +3052,10 @@ func unsampledExemplars(before, after capture) (int, int, int) {
 }
 
 func validExemplarCount(point object) (int, bool) {
-	exemplars := objects(point, "exemplars")
+	exemplars, collectionValid := directObjectCollection(point, "exemplars")
+	if !collectionValid {
+		return 0, false
+	}
 	for _, exemplar := range exemplars {
 		timestamp, timestampValid := otlpTimestamp(field(exemplar, "time_unix_nano"))
 		value, _ := field(exemplar, "value").(map[string]any)
@@ -2938,7 +3068,7 @@ func validExemplarCount(point object) (int, bool) {
 		if traceString && spanString {
 			contextValid = (traceID == "" && spanID == "") || (validTrace(traceID) && validSpan(spanID))
 		}
-		if !timestampValid || timestamp.Sign() <= 0 || (!intValid && !doubleValid) || !contextValid {
+		if !timestampValid || timestamp.Sign() <= 0 || intValid == doubleValid || !contextValid || !validKeyValueCollection(field(exemplar, "filtered_attributes")) {
 			return 0, false
 		}
 	}
