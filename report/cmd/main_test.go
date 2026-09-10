@@ -224,6 +224,24 @@ func TestRunRendersDeclaredMembershipAndReceiptOutcomes(t *testing.T) {
 			if len(model.Receipts) != 2 || model.Receipts[1].Outcome != "xfail" {
 				t.Fatalf("missing run results: %#v", model.Receipts)
 			}
+			if len(model.PlannedChecks) != 2 || model.PlannedChecks[1].Passed != 1 || model.PlannedChecks[1].ExpectedFailure != 1 {
+				t.Fatalf("missing planned checks or mixed outcomes: %+v", model.PlannedChecks)
+			}
+			wantedUnrun := 2
+			if limited {
+				wantedUnrun = 1
+			}
+			if model.PlannedChecks[0].NoResult != wantedUnrun {
+				t.Fatal("unavailable profile lost declared check scope")
+			}
+			if len(model.Captures) != 2 || len(model.Captures[0].Diagnostics) == 0 {
+				t.Fatal("unreadable capture should remain a comparison diagnostic")
+			}
+			// Integrity failure must stop assembly before readability diagnostics.
+			write("receipts/python/case.capture.json", []byte("tampered"))
+			if err := run(filepath.Join(root, "matrix.md"), filepath.Join(root, "metadata.json"), out, "go,python", "case,failure", revision, filepath.Join(root, "bep.json"), "", membership, map[string]bool{"go": true}, specs, nil); err == nil || !strings.Contains(err.Error(), "capture digest mismatch") {
+				t.Fatalf("capture corruption passed trust boundary: %v", err)
+			}
 			if strings.Contains(string(html), "<script src=") || strings.Contains(string(html), "<link rel=") {
 				t.Fatal("report has external assets")
 			}

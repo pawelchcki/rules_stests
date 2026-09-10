@@ -252,3 +252,23 @@ code, .evidence, td, .span-name { overflow-wrap: anywhere; }
   .diff-side::before { display: block; font-weight: 600; content: 'Left expectation'; }
   .diff-side + .diff-side::before { content: 'Right expectation'; }
 }
+
+/* Parity differences carry no success/failure meaning. */
+.capture-trace { margin: 1rem 0; border: 1px solid var(--border, #ccd0d5); padding: .75rem; }
+.capture-trace pre { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 40rem; max-height: 32rem; overflow: auto; }
+.capture-trace table { width: 100%; }
+.capture-trace button { margin: .15rem; }
+#feature-matrix td { min-width: 15rem; }
+#feature-matrix details { max-width: 32rem; overflow-wrap: anywhere; }
+#comparison-context { font-weight: 600; }
+#compare-body { overflow-x: auto; }
+.capture-tree > table { table-layout: fixed; min-width: 64rem; }
+.capture-tree > table > thead th:first-child { width: 20%; }
+.capture-tree > table > thead th:nth-child(2) { width: 12%; }
+.capture-field-scroll { overflow-x: auto; }
+.capture-fields { table-layout: fixed; min-width: 40rem; }
+.capture-fields th:first-child { width: 24%; }
+.capture-fields th { position: static; overflow-wrap: anywhere; }
+.occurrence-buttons { max-height: 12rem; overflow: auto; }
+[data-diagnostic] pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.panel, .panel h2, .panel details { scroll-margin-top: calc(var(--nav-height, 5rem) + 1rem); }

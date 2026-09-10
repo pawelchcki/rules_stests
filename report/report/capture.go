@@ -1,0 +1,1850 @@
+package report
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"math"
+	"math/big"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+)
+
+type CaptureDataset struct {
+	Key         string           `json:"key"`
+	Profile     string           `json:"profile"`
+	Scenario    string           `json:"scenario"`
+	Revision    string           `json:"revision"`
+	Outcome     string           `json:"outcome"`
+	Diagnostics []string         `json:"diagnostics,omitempty"`
+	Resources   []map[string]any `json:"resources"`
+	Scopes      []map[string]any `json:"scopes"`
+	Spans       []CapturedSpan   `json:"spans"`
+	Shape       ScenarioShape    `json:"shape"`
+}
+type CapturedSpan struct {
+	Resource                int            `json:"resource"`
+	Scope                   int            `json:"scope"`
+	Fields                  map[string]any `json:"fields"`
+	Parent                  string         `json:"parent"`
+	ParentWithoutScope      string         `json:"parentWithoutScope"`
+	LinkTargets             []string       `json:"linkTargets"`
+	LinkTargetsWithoutScope []string       `json:"linkTargetsWithoutScope"`
+	TraceRoots              string         `json:"traceRoots,omitempty"`
+	TraceRootsWithoutScope  string         `json:"traceRootsWithoutScope,omitempty"`
+}
+type CaptureComparison struct {
+	Left     string              `json:"left"`
+	Right    string              `json:"right"`
+	Scenario string              `json:"scenario"`
+	Traces   []CaptureTraceMatch `json:"traces"`
+}
+type CaptureTraceMatch struct {
+	Left  *TraceRef          `json:"left,omitempty"`
+	Right *TraceRef          `json:"right,omitempty"`
+	Spans []CaptureSpanMatch `json:"spans"`
+}
+type CaptureSpanMatch struct {
+	Depth int   `json:"depth"`
+	Left  []int `json:"left,omitempty"`
+	Right []int `json:"right,omitempty"`
+}
+
+// reportNumber keeps sink-accepted numbers distinct from strings without
+// asking a browser to parse them as an imprecise JavaScript Number. In the
+// intentionally untyped value domains that use it, normalizeWireContext wraps
+// every user-provided object with $object, so this tag cannot collide with a
+// literal object from the capture.
+type reportNumber string
+
+func (n reportNumber) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]string{"$number": string(n)})
+}
+
+func object(v any) map[string]any { m, _ := v.(map[string]any); return m }
+func array(v any) []any           { a, _ := v.([]any); return a }
+func repeatedField(v any, name string) ([]any, error) {
+	if v == nil {
+		return nil, nil
+	}
+	items, ok := v.([]any)
+	if !ok {
+		return nil, fmt.Errorf("unreadable %s", name)
+	}
+	return items, nil
+}
+func str(v any) string {
+	if v == nil {
+		return ""
+	}
+	return fmt.Sprint(v)
+}
+func canonical(v any) string { b, _ := json.Marshal(v); return string(b) }
+func defaults(m map[string]any, values map[string]any) map[string]any {
+	if m == nil {
+		m = map[string]any{}
+	}
+	for k, v := range values {
+		if m[k] == nil {
+			m[k] = v
+		}
+	}
+	return m
+}
+
+// Only protocol field spellings are normalized. Attribute names live in `key`
+// values and are never rewritten. Decimal strings preserve 64-bit precision in JS.
+func normalizeWire(v any, encoding string) (any, error) {
+	return normalizeWireContext(v, "tracePayload", encoding)
+}
+
+var allowedWireFields = map[string][]string{
+	"tracePayload": {"resourceSpans"},
+	"resourceSpan": {"resource", "scopeSpans", "schemaUrl"},
+	"resource":     {"attributes", "droppedAttributesCount", "entityRefs"},
+	"entityRef":    {"schemaUrl", "type", "idKeys", "descriptionKeys"},
+	"scopeSpan":    {"scope", "spans", "schemaUrl"},
+	"scope":        {"name", "version", "attributes", "droppedAttributesCount"},
+	"span":         {"traceId", "spanId", "traceState", "parentSpanId", "name", "kind", "startTimeUnixNano", "endTimeUnixNano", "attributes", "droppedAttributesCount", "events", "droppedEventsCount", "links", "droppedLinksCount", "status", "flags"},
+	"spanEvent":    {"timeUnixNano", "name", "attributes", "droppedAttributesCount"},
+	"spanLink":     {"traceId", "spanId", "traceState", "attributes", "droppedAttributesCount", "flags"},
+	"status":       {"message", "code"},
+	"keyValue":     {"key", "value"},
+	"anyValue":     {"value", "stringValue", "boolValue", "intValue", "doubleValue", "arrayValue", "kvlistValue", "bytesValue"},
+	"arrayValue":   {"values"},
+	"keyValueList": {"values"},
+}
+
+func allowedWireField(context, key string) bool {
+	fields := allowedWireFields[context]
+	if fields == nil {
+		return true
+	}
+	for _, field := range fields {
+		if key == field {
+			return true
+		}
+	}
+	return false
+}
+
+func snakeWireField(field string) string {
+	var out strings.Builder
+	for _, character := range field {
+		if character >= 'A' && character <= 'Z' {
+			out.WriteByte('_')
+			character += 'a' - 'A'
+		}
+		out.WriteRune(character)
+	}
+	return out.String()
+}
+
+func lowerCamelWireField(field string) string {
+	var out strings.Builder
+	uppercase := false
+	for _, character := range field {
+		if character == '_' {
+			uppercase = true
+		} else if uppercase {
+			if character >= 'a' && character <= 'z' {
+				character -= 'a' - 'A'
+			}
+			out.WriteRune(character)
+			uppercase = false
+		} else {
+			out.WriteRune(character)
+		}
+	}
+	return out.String()
+}
+
+func canonicalWireField(context, spelling string) (string, bool) {
+	fields, known := allowedWireFields[context]
+	if !known {
+		return spelling, true
+	}
+	for _, field := range fields {
+		if spelling == field || spelling == snakeWireField(field) {
+			return field, true
+		}
+	}
+	return "", false
+}
+
+func protocolStringField(context, key string) bool {
+	switch context {
+	case "resourceSpan", "scopeSpan":
+		return key == "schemaUrl"
+	case "entityRef":
+		return key == "schemaUrl"
+	case "scope":
+		return key == "name" || key == "version"
+	case "span":
+		return key == "traceState" || key == "name"
+	case "spanEvent":
+		return key == "name"
+	case "spanLink":
+		return key == "traceId" || key == "spanId" || key == "traceState"
+	case "status":
+		return key == "message"
+	case "keyValue":
+		return key == "key"
+	}
+	return false
+}
+
+func protocolArrayField(context, key string) bool {
+	switch context {
+	case "tracePayload":
+		return key == "resourceSpans"
+	case "resourceSpan":
+		return key == "scopeSpans"
+	case "resource":
+		return key == "attributes" || key == "entityRefs"
+	case "scopeSpan":
+		return key == "spans"
+	case "scope", "spanEvent", "spanLink":
+		return key == "attributes"
+	case "span":
+		return key == "attributes" || key == "events" || key == "links"
+	case "arrayValue", "keyValueList":
+		return key == "values"
+	}
+	return false
+}
+
+var captureWideStringFields = map[string]bool{
+	"description": true, "event_name": true, "eventName": true, "key": true,
+	"message": true, "name": true, "parent_span_id": true, "parentSpanId": true,
+	"schema_url": true, "schemaUrl": true, "severity_text": true, "severityText": true,
+	"span_id": true, "spanId": true, "string_value": true, "stringValue": true,
+	"trace_id": true, "traceId": true, "trace_state": true, "traceState": true,
+	"unit": true, "version": true,
+}
+
+var captureWideCollectionFields = map[string]bool{
+	"attributes": true, "bucket_counts": true, "bucketCounts": true, "data_points": true, "dataPoints": true,
+	"entity_refs": true, "entityRefs": true, "events": true, "exemplars": true,
+	"explicit_bounds": true, "explicitBounds": true, "filtered_attributes": true, "filteredAttributes": true,
+	"links": true, "log_records": true, "logRecords": true, "metrics": true,
+	"quantile_values": true, "quantileValues": true, "resource_logs": true, "resourceLogs": true,
+	"resource_metrics": true, "resourceMetrics": true, "resource_spans": true, "resourceSpans": true,
+	"scope_logs": true, "scopeLogs": true, "scope_metrics": true, "scopeMetrics": true,
+	"scope_spans": true, "scopeSpans": true, "spans": true, "values": true,
+}
+
+func validateCaptureWideJSON(v any) error {
+	switch value := v.(type) {
+	case []any:
+		for _, item := range value {
+			if err := validateCaptureWideJSON(item); err != nil {
+				return err
+			}
+		}
+	case map[string]any:
+		keys := make([]string, 0, len(value))
+		for key := range value {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			item := value[key]
+			if strings.ContainsRune(key, '_') {
+				if camel := lowerCamelWireField(key); camel != key {
+					if _, duplicate := value[camel]; duplicate {
+						return fmt.Errorf("duplicate OTLP JSON field spellings for %q", camel)
+					}
+				}
+			}
+			if item != nil && captureWideStringFields[key] {
+				if _, ok := item.(string); !ok {
+					return fmt.Errorf("invalid OTLP field %q: expected string", key)
+				}
+			}
+			if item != nil && captureWideCollectionFields[key] {
+				if _, ok := item.([]any); !ok {
+					return fmt.Errorf("invalid OTLP field %q: expected array", key)
+				}
+			}
+			if err := validateCaptureWideJSON(item); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func protocolUint32Field(context, key string) bool {
+	if key == "droppedAttributesCount" {
+		return context == "resource" || context == "scope" || context == "span" || context == "spanEvent" || context == "spanLink"
+	}
+	if context == "span" {
+		return key == "flags" || key == "droppedEventsCount" || key == "droppedLinksCount"
+	}
+	return context == "spanLink" && key == "flags"
+}
+
+func canonicalBytes(value string) (string, bool) {
+	normalized := strings.NewReplacer("-", "+", "_", "/").Replace(value)
+	for _, encoding := range []*base64.Encoding{base64.StdEncoding.Strict(), base64.RawStdEncoding.Strict()} {
+		if raw, err := encoding.DecodeString(normalized); err == nil {
+			return base64.StdEncoding.EncodeToString(raw), true
+		}
+	}
+	return "", false
+}
+
+var decimalFloat = regexp.MustCompile(`^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$`)
+
+func normalizeWireContext(v any, context, encoding string) (any, error) {
+	switch v := v.(type) {
+	case json.Number:
+		if context == "entityRefValue" {
+			return reportNumber(v.String()), nil
+		}
+		if context == "spanTimestamp" {
+			if _, err := strconv.ParseUint(v.String(), 10, 64); err != nil {
+				return nil, fmt.Errorf("invalid OTLP numeric span timestamp")
+			}
+		}
+		if context == "eventTimestamp" {
+			if _, integer := new(big.Int).SetString(v.String(), 10); !integer {
+				return reportNumber(v.String()), nil
+			}
+		}
+		if context == "identity" {
+			return v, nil
+		}
+		return v.String(), nil
+	case []any:
+		out := make([]any, len(v))
+		childContext := ""
+		if context == "entityRefValue" {
+			childContext = context
+		} else if context == "eventTimestamp" {
+			childContext = "entityRefValue"
+		}
+		switch context {
+		case "resourceSpans":
+			childContext = "resourceSpan"
+		case "scopeSpans":
+			childContext = "scopeSpan"
+		case "spans":
+			childContext = "span"
+		case "events":
+			childContext = "spanEvent"
+		case "links":
+			childContext = "spanLink"
+		case "entityRefs":
+			childContext = "entityRef"
+		case "anyValues":
+			childContext = "anyValue"
+		case "keyValues":
+			childContext = "keyValue"
+		}
+		for i, c := range v {
+			if childContext != "" && childContext != "entityRefValue" {
+				if _, ok := c.(map[string]any); !ok {
+					return nil, fmt.Errorf("invalid OTLP %s element: expected object", context)
+				}
+			}
+			var err error
+			out[i], err = normalizeWireContext(c, childContext, encoding)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return out, nil
+	case map[string]any:
+		out := map[string]any{}
+		fieldNames := make([]string, 0, len(v))
+		for k := range v {
+			fieldNames = append(fieldNames, k)
+		}
+		sort.Strings(fieldNames)
+		for _, k := range fieldNames {
+			c := v[k]
+			if strings.ContainsRune(k, '_') {
+				if camel := lowerCamelWireField(k); camel != k {
+					if _, duplicate := v[camel]; duplicate {
+						return nil, fmt.Errorf("duplicate OTLP JSON field spellings for %q", camel)
+					}
+				}
+			}
+			if c != nil && captureWideStringFields[k] {
+				if _, ok := c.(string); !ok {
+					return nil, fmt.Errorf("invalid OTLP field %q: expected string", k)
+				}
+			}
+			if c != nil && captureWideCollectionFields[k] {
+				if _, ok := c.([]any); !ok {
+					return nil, fmt.Errorf("invalid OTLP field %q: expected array", k)
+				}
+			}
+			key, validSpelling := canonicalWireField(context, k)
+			if !validSpelling {
+				return nil, fmt.Errorf("invalid OTLP %s field %q", context, k)
+			}
+			if _, exists := out[key]; exists {
+				return nil, fmt.Errorf("duplicate OTLP JSON field spellings for %q", key)
+			}
+			childContext := ""
+			if context == "entityRefValue" || context == "eventTimestamp" {
+				childContext = "entityRefValue"
+			} else {
+				switch {
+				case context == "tracePayload" && key == "resourceSpans":
+					childContext = "resourceSpans"
+				case context == "resourceSpan" && key == "resource":
+					childContext = "resource"
+				case context == "resourceSpan" && key == "scopeSpans":
+					childContext = "scopeSpans"
+				case context == "resource" && key == "entityRefs":
+					childContext = "entityRefs"
+				case context == "entityRef" && (key == "type" || key == "idKeys" || key == "descriptionKeys"):
+					childContext = "entityRefValue"
+				case context == "scopeSpan" && key == "scope":
+					childContext = "scope"
+				case context == "scopeSpan" && key == "spans":
+					childContext = "spans"
+				case context == "span" && key == "events":
+					childContext = "events"
+				case context == "span" && key == "links":
+					childContext = "links"
+				case context == "span" && key == "status":
+					childContext = "status"
+				case context == "span" && (key == "startTimeUnixNano" || key == "endTimeUnixNano"):
+					childContext = "spanTimestamp"
+				case context == "spanEvent" && key == "timeUnixNano":
+					childContext = "eventTimestamp"
+				case key == "traceId" || key == "spanId" || key == "parentSpanId":
+					childContext = "identity"
+				case context == "keyValue" && key == "value":
+					childContext = "anyValue"
+				case context == "anyValue" && key == "value":
+					childContext = "anyValue"
+				case context == "anyValue" && key == "arrayValue":
+					childContext = "arrayValue"
+				case context == "anyValue" && key == "kvlistValue":
+					childContext = "keyValueList"
+				case context == "arrayValue" && key == "values":
+					childContext = "anyValues"
+				case context == "keyValueList" && key == "values":
+					childContext = "keyValues"
+				case key == "attributes" || key == "filteredAttributes":
+					childContext = "keyValues"
+				case key == "body":
+					childContext = "anyValue"
+				}
+			}
+			if !allowedWireField(context, key) || (context == "anyValue" && key == "value" && encoding != "protobuf") {
+				return nil, fmt.Errorf("invalid OTLP %s field %q", context, key)
+			}
+			if encoding == "json" && ((context == "span" && key == "kind") || (context == "status" && key == "code")) && c != nil {
+				if _, ok := c.(json.Number); !ok {
+					return nil, fmt.Errorf("invalid OTLP %s field %q: expected integer enum", context, key)
+				}
+			}
+			if c != nil && protocolStringField(context, key) {
+				if _, ok := c.(string); !ok {
+					return nil, fmt.Errorf("invalid OTLP %s field %q: expected string", context, key)
+				}
+			}
+			if c != nil && protocolArrayField(context, key) {
+				if _, ok := c.([]any); !ok {
+					return nil, fmt.Errorf("invalid OTLP %s field %q: expected array", context, key)
+				}
+			}
+			if c != nil && protocolUint32Field(context, key) {
+				number, ok := c.(json.Number)
+				if !ok {
+					return nil, fmt.Errorf("invalid OTLP %s field %q: expected uint32", context, key)
+				}
+				if _, err := strconv.ParseUint(number.String(), 10, 32); err != nil {
+					return nil, fmt.Errorf("invalid OTLP %s field %q: expected uint32", context, key)
+				}
+			}
+			if c != nil {
+				expectsObject := (context == "resourceSpan" && key == "resource") || (context == "scopeSpan" && key == "scope") || (context == "span" && key == "status") || (context == "keyValue" && key == "value")
+				if expectsObject {
+					if _, ok := c.(map[string]any); !ok {
+						return nil, fmt.Errorf("invalid OTLP %s field %q: expected object", context, key)
+					}
+				}
+			}
+			if context == "anyValue" && c != nil {
+				valid := true
+				switch key {
+				case "stringValue":
+					_, valid = c.(string)
+				case "boolValue":
+					_, valid = c.(bool)
+				case "arrayValue", "kvlistValue":
+					_, valid = c.(map[string]any)
+				case "bytesValue":
+					_, stringValue := c.(string)
+					_, arrayValue := c.([]any)
+					valid = stringValue || (encoding == "protobuf" && arrayValue)
+				}
+				if !valid {
+					return nil, fmt.Errorf("invalid OTLP AnyValue variant %q: unexpected JSON type", key)
+				}
+			}
+			value, err := normalizeWireContext(c, childContext, encoding)
+			if err != nil {
+				return nil, err
+			}
+			out[key] = value
+		}
+		if context == "entityRefValue" || context == "eventTimestamp" {
+			return map[string]any{"$object": out}, nil
+		}
+		// prost's AnyValue wraps the oneof in an additional `value` object.
+		// Restrict this unwrapping to known AnyValue positions: an omitted
+		// KeyValue.key otherwise has the same single-field wire shape.
+		if context == "anyValue" {
+			if len(out) == 1 {
+				if value, exists := out["value"]; exists && value == nil {
+					return map[string]any{}, nil
+				}
+				if inner := object(out["value"]); inner != nil {
+					for k := range inner {
+						if strings.HasSuffix(k, "Value") {
+							return inner, nil
+						}
+					}
+				}
+			}
+			populated := 0
+			for _, key := range []string{"stringValue", "boolValue", "intValue", "doubleValue", "arrayValue", "kvlistValue", "bytesValue"} {
+				if value, exists := out[key]; exists {
+					if value == nil {
+						delete(out, key)
+					} else {
+						populated++
+					}
+				}
+			}
+			if populated > 1 {
+				return nil, fmt.Errorf("invalid OTLP AnyValue: expected at most one variant, got %d", populated)
+			}
+		}
+		if context == "keyValue" {
+			if value, exists := out["value"]; exists && value == nil {
+				delete(out, "value")
+			}
+			defaults(out, map[string]any{"key": ""})
+		}
+		for _, k := range []string{"attributes"} {
+			if a := array(out[k]); a != nil {
+				sort.SliceStable(a, func(i, j int) bool { return canonical(a[i]) < canonical(a[j]) })
+			}
+		}
+		for _, kind := range []string{"arrayValue", "kvlistValue"} {
+			if value := object(out[kind]); value != nil {
+				defaults(value, map[string]any{"values": []any{}})
+			}
+		}
+		if kv := object(out["kvlistValue"]); kv != nil {
+			a := array(kv["values"])
+			sort.SliceStable(a, func(i, j int) bool { return canonical(a[i]) < canonical(a[j]) })
+		}
+		if value, ok := out["doubleValue"]; ok {
+			scalar := str(value)
+			if scalar == "NaN" || scalar == "Infinity" || scalar == "-Infinity" {
+				out["doubleValue"] = scalar
+			} else {
+				if !decimalFloat.MatchString(scalar) {
+					return nil, fmt.Errorf("invalid OTLP double AnyValue")
+				}
+				number, err := strconv.ParseFloat(scalar, 64)
+				if (err != nil && !errors.Is(err, strconv.ErrRange)) || math.IsNaN(number) || math.IsInf(number, 0) {
+					return nil, fmt.Errorf("invalid OTLP double AnyValue")
+				}
+				out["doubleValue"] = strconv.FormatFloat(number, 'g', -1, 64)
+			}
+		}
+		if value, ok := out["intValue"]; ok {
+			number, err := strconv.ParseInt(str(value), 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid OTLP integer AnyValue")
+			}
+			out["intValue"] = strconv.FormatInt(number, 10)
+		}
+		if b := array(out["bytesValue"]); b != nil {
+			raw := make([]byte, len(b))
+			for i, x := range b {
+				n, err := strconv.ParseUint(str(x), 10, 8)
+				if err != nil {
+					return nil, fmt.Errorf("invalid OTLP bytes AnyValue")
+				}
+				raw[i] = byte(n)
+			}
+			out["bytesValue"] = base64.StdEncoding.EncodeToString(raw)
+		} else if value, ok := out["bytesValue"].(string); ok {
+			canonical, valid := canonicalBytes(value)
+			if !valid {
+				return nil, fmt.Errorf("invalid OTLP bytes AnyValue")
+			}
+			out["bytesValue"] = canonical
+		}
+		return out, nil
+	default:
+		return v, nil
+	}
+}
+func enumValue(v any, prefix string, names []string) (string, bool) {
+	s := str(v)
+	if n, e := strconv.Atoi(s); e == nil {
+		if n >= 0 && n < len(names) {
+			return names[n], true
+		}
+		return "", false
+	}
+	s = strings.ToLower(strings.TrimPrefix(s, prefix))
+	if s == "" {
+		return names[0], true
+	}
+	for _, name := range names {
+		if s == name {
+			return name, true
+		}
+	}
+	return "", false
+}
+func identity(v any, width int, optional bool) (string, error) {
+	s, ok := v.(string)
+	if !ok {
+		return "", fmt.Errorf("invalid trace/span identity %q", str(v))
+	}
+	s = strings.ToLower(s)
+	if optional && s == "" {
+		return "", nil
+	}
+	b, e := hex.DecodeString(s)
+	if e != nil || len(b) != width || strings.Trim(s, "0") == "" {
+		return "", fmt.Errorf("invalid trace/span identity %q", s)
+	}
+	return s, nil
+}
+
+func linkIdentity(v any, width int) (string, bool) {
+	s, ok := v.(string)
+	if !ok {
+		return str(v), false
+	}
+	s = strings.ToLower(s)
+	b, err := hex.DecodeString(s)
+	return s, err == nil && len(b) == width && strings.Trim(s, "0") != ""
+}
+func intern(items *[]map[string]any, indexes map[string]int, v map[string]any) int {
+	key := canonical(v)
+	if i, ok := indexes[key]; ok {
+		return i
+	}
+	*items = append(*items, v)
+	i := len(*items) - 1
+	indexes[key] = i
+	return i
+}
+func metadataFields(v any, schema any, scope bool) map[string]any {
+	m := defaults(object(v), map[string]any{"attributes": []any{}, "droppedAttributesCount": "0"})
+	if scope {
+		m = defaults(m, map[string]any{"name": "", "version": ""})
+	} else {
+		m = defaults(m, map[string]any{"entityRefs": []any{}})
+		for _, value := range array(m["entityRefs"]) {
+			defaults(object(value), map[string]any{"schemaUrl": "", "type": "", "idKeys": []any{}, "descriptionKeys": []any{}})
+		}
+	}
+	return map[string]any{"metadata": m, "schemaUrl": str(schema)}
+}
+
+func semanticSpanProjection(d *CaptureDataset, index int, includeScope bool) map[string]any {
+	span := d.Spans[index]
+	fields := map[string]any{}
+	for key, value := range span.Fields {
+		switch key {
+		case "traceId", "spanId", "parentSpanId", "startTimeUnixNano", "endTimeUnixNano", "events", "links":
+			continue
+		default:
+			fields[key] = value
+		}
+	}
+	events := []any{}
+	for _, value := range array(span.Fields["events"]) {
+		event := map[string]any{}
+		for key, field := range object(value) {
+			if key != "timeUnixNano" {
+				event[key] = field
+			}
+		}
+		events = append(events, event)
+	}
+	fields["events"] = events
+	links := []any{}
+	for i, value := range array(span.Fields["links"]) {
+		link := map[string]any{}
+		for key, field := range object(value) {
+			if key != "traceId" && key != "spanId" {
+				link[key] = field
+			}
+		}
+		targets := span.LinkTargets
+		if !includeScope && len(span.LinkTargetsWithoutScope) == len(span.LinkTargets) {
+			targets = span.LinkTargetsWithoutScope
+		}
+		if i < len(targets) {
+			link["relationship"] = targets[i]
+		}
+		links = append(links, link)
+	}
+	fields["links"] = links
+	projection := map[string]any{"span": fields, "resource": d.Resources[span.Resource]}
+	if includeScope {
+		projection["scope"] = d.Scopes[span.Scope]
+	}
+	return projection
+}
+
+func decodeUniqueJSON(decoder *json.Decoder) (any, error) {
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	delimiter, composite := token.(json.Delim)
+	if !composite {
+		return token, nil
+	}
+	switch delimiter {
+	case '[':
+		values := []any{}
+		for decoder.More() {
+			value, err := decodeUniqueJSON(decoder)
+			if err != nil {
+				return nil, err
+			}
+			values = append(values, value)
+		}
+		if _, err := decoder.Token(); err != nil {
+			return nil, err
+		}
+		return values, nil
+	case '{':
+		values := map[string]any{}
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return nil, err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return nil, fmt.Errorf("invalid JSON object key")
+			}
+			if _, exists := values[key]; exists {
+				return nil, fmt.Errorf("duplicate JSON key %q", key)
+			}
+			value, err := decodeUniqueJSON(decoder)
+			if err != nil {
+				return nil, err
+			}
+			values[key] = value
+		}
+		if _, err := decoder.Token(); err != nil {
+			return nil, err
+		}
+		return values, nil
+	default:
+		return nil, fmt.Errorf("unexpected JSON delimiter %q", delimiter)
+	}
+}
+
+// DecodeCapture handles trace readability errors as diagnostics. The assembler
+// has already checked these bytes against the accepted receipt digest.
+func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
+	d = CaptureDataset{Key: receipt.Profile + "/" + receipt.Scenario, Profile: receipt.Profile, Scenario: receipt.Scenario, Revision: receipt.Revision, Outcome: receipt.Outcome, Spans: []CapturedSpan{}}
+	d.Shape = ScenarioShape{Profile: d.Profile, Scenario: d.Scenario, Traces: []TraceGroup{}, ExactCounts: true, Scopes: map[string]int{}, Statuses: map[string]int{}}
+	resourceIndexes := map[string]int{}
+	scopeIndexes := map[string]int{}
+	fail := func(err error) CaptureDataset {
+		d.Diagnostics = append(d.Diagnostics, err.Error())
+		d.Shape.Traces = nil
+		return d
+	}
+	decoder := json.NewDecoder(bytes.NewReader(input))
+	decoder.UseNumber()
+	value, decodeErr := decodeUniqueJSON(decoder)
+	if decodeErr != nil {
+		return fail(fmt.Errorf("unreadable trace capture: %w", decodeErr))
+	}
+	records, ok := value.([]any)
+	if !ok {
+		return fail(fmt.Errorf("unreadable trace capture: expected array"))
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return fail(fmt.Errorf("trailing capture data"))
+	}
+	maxProtobufSpanTimestamp := new(big.Int).SetUint64(^uint64(0))
+	maxJSONSpanTimestamp := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 127), big.NewInt(1))
+	for _, record := range records {
+		r := object(record)
+		if str(r["encoding"]) == "json" {
+			if err := validateCaptureWideJSON(r["payload"]); err != nil {
+				return fail(err)
+			}
+		}
+	}
+	for _, record := range records {
+		r := object(record)
+		encoding := str(r["encoding"])
+		if str(r["signal"]) != "traces" {
+			continue
+		}
+		maxSpanTimestamp := maxProtobufSpanTimestamp
+		if encoding == "json" {
+			maxSpanTimestamp = maxJSONSpanTimestamp
+		}
+		normalized, err := normalizeWire(r["payload"], encoding)
+		if err != nil {
+			return fail(err)
+		}
+		payload := object(normalized)
+		if payload == nil {
+			return fail(fmt.Errorf("unreadable trace payload"))
+		}
+		resources, err := repeatedField(payload["resourceSpans"], "resourceSpans")
+		if err != nil {
+			return fail(err)
+		}
+		for _, resource := range resources {
+			rs := object(resource)
+			if rs == nil {
+				return fail(fmt.Errorf("unreadable resourceSpan"))
+			}
+			groups, err := repeatedField(rs["scopeSpans"], "scopeSpans")
+			if err != nil {
+				return fail(err)
+			}
+			for _, group := range groups {
+				ss := object(group)
+				if ss == nil {
+					return fail(fmt.Errorf("unreadable scopeSpan"))
+				}
+				spans, err := repeatedField(ss["spans"], "spans")
+				if err != nil {
+					return fail(err)
+				}
+				if len(spans) == 0 {
+					continue
+				}
+				ri := intern(&d.Resources, resourceIndexes, metadataFields(rs["resource"], rs["schemaUrl"], false))
+				si := intern(&d.Scopes, scopeIndexes, metadataFields(ss["scope"], ss["schemaUrl"], true))
+				for _, span := range spans {
+					fields := object(span)
+					if fields == nil {
+						return fail(fmt.Errorf("unreadable span"))
+					}
+					fields = defaults(fields, map[string]any{"traceState": "", "parentSpanId": "", "name": "", "startTimeUnixNano": "0", "endTimeUnixNano": "0", "attributes": []any{}, "events": []any{}, "links": []any{}, "flags": "0", "droppedAttributesCount": "0", "droppedEventsCount": "0", "droppedLinksCount": "0"})
+					name, ok := fields["name"].(string)
+					if !ok {
+						return fail(fmt.Errorf("invalid span name"))
+					}
+					if name == "" {
+						return fail(fmt.Errorf("span has no name"))
+					}
+					start, validStart := new(big.Int).SetString(str(fields["startTimeUnixNano"]), 10)
+					end, validEnd := new(big.Int).SetString(str(fields["endTimeUnixNano"]), 10)
+					if !validStart || start.Cmp(maxSpanTimestamp) > 0 {
+						return fail(fmt.Errorf("invalid span start timestamp"))
+					}
+					if !validEnd || end.Cmp(maxSpanTimestamp) > 0 {
+						return fail(fmt.Errorf("invalid span end timestamp"))
+					}
+					if start.Sign() <= 0 || end.Cmp(start) < 0 {
+						return fail(fmt.Errorf("span timestamps are not ordered"))
+					}
+					fields["startTimeUnixNano"], fields["endTimeUnixNano"] = start.String(), end.String()
+					attributes, err := repeatedField(fields["attributes"], "span attributes")
+					if err != nil {
+						return fail(err)
+					}
+					events, err := repeatedField(fields["events"], "span events")
+					if err != nil {
+						return fail(err)
+					}
+					links, err := repeatedField(fields["links"], "span links")
+					if err != nil {
+						return fail(err)
+					}
+					fields["attributes"], fields["events"], fields["links"] = attributes, events, links
+					kind, validKind := enumValue(fields["kind"], "SPAN_KIND_", []string{"unspecified", "internal", "server", "client", "producer", "consumer"})
+					if !validKind {
+						return fail(fmt.Errorf("invalid span kind %v", fields["kind"]))
+					}
+					fields["kind"] = kind
+					status := defaults(object(fields["status"]), map[string]any{"code": "0", "message": ""})
+					statusCode, validStatus := enumValue(status["code"], "STATUS_CODE_", []string{"unset", "ok", "error"})
+					if !validStatus {
+						return fail(fmt.Errorf("invalid span status %v", status["code"]))
+					}
+					status["code"] = statusCode
+					fields["status"] = status
+					for _, event := range events {
+						eventFields := object(event)
+						if eventFields == nil {
+							return fail(fmt.Errorf("unreadable span event"))
+						}
+						defaults(eventFields, map[string]any{"timeUnixNano": "0", "name": "", "attributes": []any{}, "droppedAttributesCount": "0"})
+						if timestamp, valid := new(big.Int).SetString(str(eventFields["timeUnixNano"]), 10); valid {
+							eventFields["timeUnixNano"] = timestamp.String()
+						}
+						if _, err := repeatedField(eventFields["attributes"], "span event attributes"); err != nil {
+							return fail(err)
+						}
+					}
+					for _, link := range links {
+						linkFields := object(link)
+						if linkFields == nil {
+							return fail(fmt.Errorf("unreadable span link"))
+						}
+						defaults(linkFields, map[string]any{"traceId": "", "spanId": "", "traceState": "", "attributes": []any{}, "droppedAttributesCount": "0", "flags": "0"})
+						if _, err := repeatedField(linkFields["attributes"], "span link attributes"); err != nil {
+							return fail(err)
+						}
+					}
+					d.Spans = append(d.Spans, CapturedSpan{Resource: ri, Scope: si, Fields: fields})
+				}
+			}
+		}
+	}
+	ids := map[string]int{}
+	traces := map[string][]int{}
+	parents := make([]int, len(d.Spans))
+	children := make([][]int, len(d.Spans))
+	traceIDs := make([]string, len(d.Spans))
+	spanIDs := make([]string, len(d.Spans))
+	parentIDs := make([]string, len(d.Spans))
+	explicitRoots := map[string]int{}
+	for i, s := range d.Spans {
+		var e error
+		traceIDs[i], e = identity(s.Fields["traceId"], 16, false)
+		if e != nil {
+			return fail(e)
+		}
+		spanIDs[i], e = identity(s.Fields["spanId"], 8, false)
+		if e != nil {
+			return fail(e)
+		}
+		parentIDs[i], e = identity(s.Fields["parentSpanId"], 8, true)
+		if e != nil {
+			return fail(e)
+		}
+		if parentIDs[i] == "" {
+			explicitRoots[traceIDs[i]]++
+			if explicitRoots[traceIDs[i]] > 1 {
+				return fail(fmt.Errorf("trace %q has multiple explicit roots", traceIDs[i]))
+			}
+		}
+		key := traceIDs[i] + "/" + spanIDs[i]
+		if _, ok := ids[key]; ok {
+			return fail(fmt.Errorf("duplicate span identity %s", key))
+		}
+		ids[key] = i
+		traces[traceIDs[i]] = append(traces[traceIDs[i]], i)
+	}
+	externalParentAnchors := map[string]bool{}
+	for i := range d.Spans {
+		parents[i] = -1
+		if parentIDs[i] != "" {
+			if p, ok := ids[traceIDs[i]+"/"+parentIDs[i]]; ok {
+				parents[i] = p
+				children[p] = append(children[p], i)
+			} else {
+				externalParentAnchors[traceIDs[i]+"/"+parentIDs[i]] = true
+			}
+		}
+	}
+	colors := make([]int, len(d.Spans))
+	fingerprints := make([]string, len(d.Spans))
+	subtreeHeights := make([]int, len(d.Spans))
+	var fingerprint func(int) (string, error)
+	fingerprint = func(i int) (string, error) {
+		if colors[i] == 1 {
+			return "", fmt.Errorf("cycle in captured trace")
+		}
+		if colors[i] == 2 {
+			return fingerprints[i], nil
+		}
+		colors[i] = 1
+		cs := []string{}
+		subtreeHeights[i] = 1
+		for _, c := range children[i] {
+			f, e := fingerprint(c)
+			if e != nil {
+				return "", e
+			}
+			cs = append(cs, f)
+			if height := subtreeHeights[c] + 1; height > subtreeHeights[i] {
+				subtreeHeights[i] = height
+			}
+		}
+		if subtreeHeights[i] > 128 {
+			return "", fmt.Errorf("captured trace exceeds 128 levels")
+		}
+		sort.Strings(cs)
+		fingerprints[i] = digest([]byte(canonical([]any{str(d.Spans[i].Fields["kind"]), NormalizeSpanName(str(d.Spans[i].Fields["name"])), cs})))
+		colors[i] = 2
+		return fingerprints[i], nil
+	}
+	for i := range d.Spans {
+		if _, e := fingerprint(i); e != nil {
+			return fail(e)
+		}
+	}
+	// Structural paths retain parent and local link relationships without IDs.
+	var path func(int) string
+	path = func(i int) string {
+		label := str(d.Spans[i].Fields["kind"]) + " " + NormalizeSpanName(str(d.Spans[i].Fields["name"])) + " [" + fingerprints[i][:12] + "]"
+		if parents[i] < 0 {
+			return label
+		}
+		return path(parents[i]) + " / " + label
+	}
+	buildTargetOccurrenceKeys := func(includeScope bool) ([]string, map[string]string) {
+		keys := make([]string, len(d.Spans))
+		subtrees := make([]string, len(d.Spans))
+		var subtree func(int) string
+		subtree = func(i int) string {
+			if subtrees[i] != "" {
+				return subtrees[i]
+			}
+			descendants := make([]string, 0, len(children[i]))
+			for _, child := range children[i] {
+				descendants = append(descendants, subtree(child))
+			}
+			sort.Strings(descendants)
+			subtrees[i] = digest([]byte(canonical([]any{semanticSpanProjection(&d, i, includeScope), descendants})))[:12]
+			return subtrees[i]
+		}
+		var key func(int) string
+		externalParentPartitions := map[string][]string{}
+		for i := range d.Spans {
+			if parents[i] < 0 && parentIDs[i] != "" {
+				anchor := traceIDs[i] + "/" + parentIDs[i]
+				externalParentPartitions[anchor] = append(externalParentPartitions[anchor], subtree(i))
+			}
+		}
+		externalParentLabels := map[string]string{}
+		for anchor, partition := range externalParentPartitions {
+			sort.Strings(partition)
+			externalParentLabels[anchor] = digest([]byte(canonical(partition)))[:12]
+		}
+		key = func(i int) string {
+			if keys[i] != "" {
+				return keys[i]
+			}
+			parent := "root"
+			if parents[i] >= 0 {
+				parent = key(parents[i])
+			} else if parentIDs[i] != "" {
+				parent = "external parent " + externalParentLabels[traceIDs[i]+"/"+parentIDs[i]]
+			}
+			keys[i] = digest([]byte(canonical([]any{parent, subtree(i)})))[:12]
+			return keys[i]
+		}
+		for i := range d.Spans {
+			key(i)
+		}
+		return keys, externalParentLabels
+	}
+	withTraceOccurrenceSet := func(keys []string) []string {
+		traceSets := map[string]string{}
+		for traceID, indices := range traces {
+			occurrences := make([]string, 0, len(indices))
+			for _, i := range indices {
+				occurrences = append(occurrences, keys[i])
+			}
+			sort.Strings(occurrences)
+			traceSets[traceID] = digest([]byte(canonical(occurrences)))[:12]
+		}
+		out := make([]string, len(keys))
+		for i, key := range keys {
+			out[i] = digest([]byte(canonical([]any{key, traceSets[traceIDs[i]]})))[:12]
+		}
+		return out
+	}
+	// A target occurrence belongs to its ID-free trace occurrence set. This
+	// distinguishes otherwise-identical roots when their partial-trace co-roots
+	// differ, before link-graph refinement adds incoming and outgoing identity.
+	targetOccurrenceBase, externalParentLabels := buildTargetOccurrenceKeys(true)
+	targetOccurrenceBaseWithoutScope, externalParentLabelsWithoutScope := buildTargetOccurrenceKeys(false)
+	sourceOccurrenceKeys := withTraceOccurrenceSet(targetOccurrenceBase)
+	sourceOccurrenceKeysWithoutScope := withTraceOccurrenceSet(targetOccurrenceBaseWithoutScope)
+	graphKeyCache := map[string][]string{}
+	buildGraphAwareTargetKeys := func(base []string, targetDigests, parentLabels map[string]string) ([]string, error) {
+		sharedTargets := make([]string, 0, len(targetDigests))
+		for target, targetDigest := range targetDigests {
+			if targetDigest != "" {
+				sharedTargets = append(sharedTargets, target+"\x00"+targetDigest)
+			}
+		}
+		sort.Strings(sharedTargets)
+		cacheKey := digest([]byte(canonical([]any{base, sharedTargets})))
+		if cached := graphKeyCache[cacheKey]; cached != nil {
+			return append([]string(nil), cached...), nil
+		}
+		type graphEdge struct {
+			relationship string
+			target       int
+			external     string
+			shared       string
+		}
+		edges := make([][]graphEdge, len(d.Spans))
+		externalIncoming := map[string][]string{}
+		for i := range d.Spans {
+			for linkIndex, value := range array(d.Spans[i].Fields["links"]) {
+				link := object(value)
+				tid, validTraceID := linkIdentity(link["traceId"], 16)
+				sid, validSpanID := linkIdentity(link["spanId"], 8)
+				targetKey := tid + "/" + sid
+				edge := graphEdge{relationship: "external trace/span", target: -1, external: targetKey, shared: targetDigests[targetKey]}
+				validTarget := validTraceID && validSpanID
+				if !validTarget {
+					edge.relationship = "invalid trace/span"
+					if tid == "" && sid == "" {
+						edge.relationship = "missing trace/span"
+					}
+				} else if tid == traceIDs[i] {
+					edge.relationship = "external span in same trace"
+				}
+				if validTarget && externalParentAnchors[targetKey] {
+					edge.relationship = "external parent " + parentLabels[targetKey]
+				}
+				if j, ok := ids[targetKey]; validTarget && ok {
+					edge.target = j
+					edge.external = ""
+					if j == i {
+						edge.relationship = "self"
+					} else if tid == traceIDs[i] {
+						edge.relationship = "captured in same trace"
+					} else {
+						edge.relationship = "captured in another trace"
+					}
+				} else if validTarget {
+					externalIncoming[targetKey] = append(externalIncoming[targetKey], canonical([]any{base[i], linkIndex, edge.relationship}))
+				}
+				edges[i] = append(edges[i], edge)
+			}
+		}
+		adjacent := make([]map[int]bool, len(d.Spans))
+		for source := range edges {
+			adjacent[source] = map[int]bool{}
+			for _, edge := range edges[source] {
+				if edge.target >= 0 {
+					adjacent[source][edge.target] = true
+				}
+			}
+		}
+		externalLabels := map[string]string{}
+		for target, incoming := range externalIncoming {
+			sort.Strings(incoming)
+			externalLabels[target] = digest([]byte(canonical(incoming)))[:12]
+		}
+
+		// Collapse cycles once, then label the resulting component DAG from its
+		// leaves. This retains complete reachable-graph identity without
+		// serializing the same suffix independently for every span.
+		indexes := make([]int, len(d.Spans))
+		lowlinks := make([]int, len(d.Spans))
+		onStack := make([]bool, len(d.Spans))
+		for i := range indexes {
+			indexes[i] = -1
+		}
+		stack := []int{}
+		components := [][]int{}
+		nextIndex := 0
+		var connect func(int)
+		connect = func(i int) {
+			indexes[i], lowlinks[i] = nextIndex, nextIndex
+			nextIndex++
+			stack = append(stack, i)
+			onStack[i] = true
+			for _, edge := range edges[i] {
+				if edge.target < 0 {
+					continue
+				}
+				if indexes[edge.target] < 0 {
+					connect(edge.target)
+					if lowlinks[edge.target] < lowlinks[i] {
+						lowlinks[i] = lowlinks[edge.target]
+					}
+				} else if onStack[edge.target] && indexes[edge.target] < lowlinks[i] {
+					lowlinks[i] = indexes[edge.target]
+				}
+			}
+			if lowlinks[i] != indexes[i] {
+				return
+			}
+			component := []int{}
+			for {
+				last := len(stack) - 1
+				member := stack[last]
+				stack = stack[:last]
+				onStack[member] = false
+				component = append(component, member)
+				if member == i {
+					break
+				}
+			}
+			components = append(components, component)
+		}
+		for i := range d.Spans {
+			if indexes[i] < 0 {
+				connect(i)
+			}
+		}
+		componentOf := make([]int, len(d.Spans))
+		for component, members := range components {
+			for _, member := range members {
+				componentOf[member] = component
+			}
+		}
+
+		keys := make([]string, len(d.Spans))
+		componentKeys := make([]string, len(components))
+		componentState := make([]int, len(components))
+		var labelComponent func(int) error
+		labelComponent = func(component int) error {
+			if componentState[component] == 2 {
+				return nil
+			}
+			componentState[component] = 1
+			for _, member := range components[component] {
+				for _, edge := range edges[member] {
+					if edge.target >= 0 && componentOf[edge.target] != component {
+						if err := labelComponent(componentOf[edge.target]); err != nil {
+							return err
+						}
+					}
+				}
+			}
+			rootedCertificate := func(root int) any {
+				visited := map[int]int{}
+				var visit func(int) any
+				visit = func(member int) any {
+					if reference, ok := visited[member]; ok {
+						return map[string]any{"reference": reference}
+					}
+					visited[member] = len(visited)
+					outgoing := make([]any, 0, len(edges[member]))
+					for _, edge := range edges[member] {
+						descriptor := map[string]any{"relationship": edge.relationship}
+						if edge.target < 0 {
+							descriptor["externalTarget"] = externalLabels[edge.external]
+						} else if componentOf[edge.target] == component {
+							descriptor["target"] = visit(edge.target)
+						} else {
+							descriptor["target"] = keys[edge.target]
+						}
+						if edge.shared != "" {
+							descriptor["sharedTarget"] = edge.shared
+						}
+						outgoing = append(outgoing, descriptor)
+					}
+					return map[string]any{"occurrence": base[member], "links": outgoing}
+				}
+				return visit(root)
+			}
+			type streamedCertificate struct {
+				digest string
+				order  []int
+			}
+			rootedGeneration := 0
+			rootedSeen := make([]int, len(d.Spans))
+			rootedReferences := make([]int, len(d.Spans))
+			streamedRootedCertificate := func(root int) streamedCertificate {
+				rootedGeneration++
+				hasher := sha256.New()
+				var buffer [binary.MaxVarintLen64]byte
+				writeTag := func(tag byte) {
+					buffer[0] = tag
+					_, _ = hasher.Write(buffer[:1])
+				}
+				writeInt := func(value int) {
+					length := binary.PutUvarint(buffer[:], uint64(value))
+					_, _ = hasher.Write(buffer[:length])
+				}
+				writeString := func(value string) {
+					writeInt(len(value))
+					_, _ = hasher.Write([]byte(value))
+				}
+				nextReference := 0
+				order := make([]int, 0, len(components[component]))
+				var visit func(int)
+				visit = func(member int) {
+					if rootedSeen[member] == rootedGeneration {
+						writeTag('r')
+						writeInt(rootedReferences[member])
+						return
+					}
+					rootedSeen[member] = rootedGeneration
+					rootedReferences[member] = nextReference
+					nextReference++
+					order = append(order, member)
+					writeTag('n')
+					writeString(base[member])
+					writeInt(len(edges[member]))
+					for _, edge := range edges[member] {
+						writeString(edge.relationship)
+						writeString(edge.shared)
+						switch {
+						case edge.target < 0:
+							writeTag('e')
+							writeString(externalLabels[edge.external])
+						case componentOf[edge.target] != component:
+							writeTag('x')
+							writeString(keys[edge.target])
+						default:
+							writeTag('i')
+							visit(edge.target)
+						}
+					}
+				}
+				visit(root)
+				return streamedCertificate{digest: hex.EncodeToString(hasher.Sum(nil)), order: order}
+			}
+			// Small components retain a rooted certificate for every member.
+			// Large components retain one complete adjacency certificate in
+			// their shared label, avoiding the former per-root quadratic work.
+			if len(components[component]) <= 64 {
+				for _, root := range components[component] {
+					keys[root] = digest([]byte(canonical(rootedCertificate(root))))[:12]
+				}
+				componentState[component] = 2
+				return nil
+			}
+			descriptions := make([]string, 0, len(components[component]))
+			memberDescriptions := map[int]string{}
+			for _, member := range components[component] {
+				outgoing := make([]any, 0, len(edges[member]))
+				for _, edge := range edges[member] {
+					descriptor := map[string]any{"relationship": edge.relationship}
+					if edge.target < 0 {
+						descriptor["externalTarget"] = externalLabels[edge.external]
+					} else if componentOf[edge.target] == component {
+						descriptor["componentTarget"] = map[string]any{"occurrence": base[edge.target], "reciprocal": adjacent[edge.target][member]}
+					} else {
+						descriptor["target"] = keys[edge.target]
+					}
+					if edge.shared != "" {
+						descriptor["sharedTarget"] = edge.shared
+					}
+					outgoing = append(outgoing, descriptor)
+				}
+				memberDescriptions[member] = canonical([]any{base[member], outgoing})
+				descriptions = append(descriptions, memberDescriptions[member])
+			}
+			assignClasses := func(signatures map[int]string) ([]int, int) {
+				unique := map[string]bool{}
+				for _, signature := range signatures {
+					unique[signature] = true
+				}
+				ordered := make([]string, 0, len(unique))
+				for signature := range unique {
+					ordered = append(ordered, signature)
+				}
+				sort.Strings(ordered)
+				classBySignature := map[string]int{}
+				for class, signature := range ordered {
+					classBySignature[signature] = class
+				}
+				classes := make([]int, len(d.Spans))
+				for member, signature := range signatures {
+					classes[member] = classBySignature[signature]
+				}
+				return classes, len(ordered)
+			}
+			initial := map[int]string{}
+			for _, member := range components[component] {
+				initial[member] = memberDescriptions[member]
+			}
+			classes, classCount := assignClasses(initial)
+			incoming := make([][]struct {
+				source int
+				edge   graphEdge
+			}, len(d.Spans))
+			for _, source := range components[component] {
+				for _, edge := range edges[source] {
+					if edge.target >= 0 && componentOf[edge.target] == component {
+						incoming[edge.target] = append(incoming[edge.target], struct {
+							source int
+							edge   graphEdge
+						}{source: source, edge: edge})
+					}
+				}
+			}
+			cycleSuccessors := make([]int, len(d.Spans))
+			simpleDirectedCycle := true
+			for _, member := range components[component] {
+				internalTargets := []int{}
+				for _, edge := range edges[member] {
+					if edge.target >= 0 && componentOf[edge.target] == component {
+						internalTargets = append(internalTargets, edge.target)
+					}
+				}
+				if len(internalTargets) != 1 || len(incoming[member]) != 1 {
+					simpleDirectedCycle = false
+					break
+				}
+				cycleSuccessors[member] = internalTargets[0]
+			}
+			if simpleDirectedCycle {
+				// Pointer doubling propagates an asymmetric marker around a long
+				// directed cycle in O((V+E) log V), instead of one edge per round.
+				for distance := 1; distance < len(components[component]); distance *= 2 {
+					refined := map[int]string{}
+					nextSuccessors := append([]int(nil), cycleSuccessors...)
+					for _, member := range components[component] {
+						refined[member] = canonical([]any{classes[member], classes[cycleSuccessors[member]]})
+						nextSuccessors[member] = cycleSuccessors[cycleSuccessors[member]]
+					}
+					classes, classCount = assignClasses(refined)
+					cycleSuccessors = nextSuccessors
+				}
+			} else {
+				// General color refinement captures canonical member positions
+				// with linear storage. Components that are not simple cycles keep
+				// refining until their equitable partition is stable.
+				for range len(components[component]) {
+					refined := map[int]string{}
+					for _, member := range components[component] {
+						outgoing := []string{}
+						for _, edge := range edges[member] {
+							target := ""
+							if edge.target >= 0 && componentOf[edge.target] == component {
+								target = strconv.Itoa(classes[edge.target])
+							} else if edge.target >= 0 {
+								target = keys[edge.target]
+							} else {
+								target = externalLabels[edge.external]
+							}
+							outgoing = append(outgoing, canonical([]any{edge.relationship, target, edge.shared}))
+						}
+						sort.Strings(outgoing)
+						incomingKeys := make([]string, 0, len(incoming[member]))
+						for _, entry := range incoming[member] {
+							incomingKeys = append(incomingKeys, canonical([]any{entry.edge.relationship, classes[entry.source], entry.edge.shared}))
+						}
+						sort.Strings(incomingKeys)
+						refined[member] = canonical([]any{memberDescriptions[member], classes[member], outgoing, incomingKeys})
+					}
+					next, nextCount := assignClasses(refined)
+					classes = next
+					if nextCount == classCount {
+						break
+					}
+					classCount = nextCount
+				}
+			}
+			root := components[component][0]
+			rootKey := canonical([]any{memberDescriptions[root], classes[root]})
+			for _, member := range components[component][1:] {
+				candidate := canonical([]any{memberDescriptions[member], classes[member]})
+				if candidate < rootKey {
+					root, rootKey = member, candidate
+				}
+			}
+			// A stable refinement class is not necessarily an automorphism class:
+			// regular, non-vertex-transitive graphs can leave every member tied.
+			// Complete rooted certificates distinguish such positions and make the
+			// shared component label independent of Tarjan's traversal order. Discover
+			// automorphism generators while doing so: symmetric components then reuse
+			// one exact identity per orbit instead of rescanning once per vertex.
+			rootedDigestByMember := map[int]string{}
+			if !simpleDirectedCycle {
+				classSizes := map[int]int{}
+				for _, member := range components[component] {
+					classSizes[classes[member]]++
+				}
+				assigned := map[int]bool{}
+				knownDigest := map[int]string{}
+				for _, representative := range components[component] {
+					if classSizes[classes[representative]] == 1 || assigned[representative] {
+						continue
+					}
+					representativeCertificate := streamedRootedCertificate(representative)
+					knownDigest[representative] = representativeCertificate.digest
+					orbit := map[int]bool{representative: true}
+					generators := [][]int{}
+					expandOrbit := func() {
+						for changed := true; changed; {
+							changed = false
+							for member := range orbit {
+								for _, generator := range generators {
+									if mapped := generator[member]; !orbit[mapped] {
+										orbit[mapped] = true
+										changed = true
+									}
+								}
+							}
+						}
+					}
+					for _, candidate := range components[component] {
+						if classes[candidate] != classes[representative] || orbit[candidate] {
+							continue
+						}
+						if candidateDigest, known := knownDigest[candidate]; known && candidateDigest != representativeCertificate.digest {
+							continue
+						}
+						candidateCertificate := streamedRootedCertificate(candidate)
+						knownDigest[candidate] = candidateCertificate.digest
+						if candidateCertificate.digest != representativeCertificate.digest {
+							continue
+						}
+						generator := make([]int, len(d.Spans))
+						for index, member := range representativeCertificate.order {
+							generator[member] = candidateCertificate.order[index]
+						}
+						generators = append(generators, generator)
+						expandOrbit()
+					}
+					for member := range orbit {
+						rootedDigestByMember[member] = representativeCertificate.digest
+						assigned[member] = true
+					}
+				}
+			}
+			rooted := rootedDigestByMember[root]
+			if rooted == "" {
+				rooted = streamedRootedCertificate(root).digest
+			} else {
+				for _, member := range components[component] {
+					candidateKey := canonical([]any{memberDescriptions[member], classes[member]})
+					if candidateKey == rootKey && rootedDigestByMember[member] < rooted {
+						rooted = rootedDigestByMember[member]
+					}
+				}
+			}
+			adjacencyKey := digest([]byte(rooted))[:12]
+			sort.Strings(descriptions)
+			componentKeys[component] = digest([]byte(canonical([]any{descriptions, adjacencyKey})))[:12]
+			for _, member := range components[component] {
+				position := strconv.Itoa(classes[member])
+				if rooted := rootedDigestByMember[member]; rooted != "" {
+					position += ":" + rooted[:12]
+				}
+				keys[member] = digest([]byte(canonical([]any{memberDescriptions[member], componentKeys[component], position})))[:12]
+			}
+			componentState[component] = 2
+			return nil
+		}
+		for component := range components {
+			if err := labelComponent(component); err != nil {
+				return nil, err
+			}
+		}
+		graphKeyCache[cacheKey] = append([]string(nil), keys...)
+		return keys, nil
+	}
+	sourceOccurrenceKeys, err := buildGraphAwareTargetKeys(sourceOccurrenceKeys, nil, externalParentLabels)
+	if err != nil {
+		return fail(err)
+	}
+	sourceOccurrenceKeysWithoutScope, err = buildGraphAwareTargetKeys(sourceOccurrenceKeysWithoutScope, nil, externalParentLabelsWithoutScope)
+	if err != nil {
+		return fail(err)
+	}
+	linkTargetSources := map[string][]string{}
+	linkTargetSourcesWithoutScope := map[string][]string{}
+	for i := range d.Spans {
+		for linkIndex, l := range array(d.Spans[i].Fields["links"]) {
+			link := object(l)
+			tid, validTraceID := linkIdentity(link["traceId"], 16)
+			sid, validSpanID := linkIdentity(link["spanId"], 8)
+			if !validTraceID || !validSpanID {
+				continue
+			}
+			key := tid + "/" + sid
+			linkTargetSources[key] = append(linkTargetSources[key], fmt.Sprintf("%s occurrence %s link %d", path(i), sourceOccurrenceKeys[i], linkIndex))
+			linkTargetSourcesWithoutScope[key] = append(linkTargetSourcesWithoutScope[key], fmt.Sprintf("%s occurrence %s link %d", path(i), sourceOccurrenceKeysWithoutScope[i], linkIndex))
+		}
+	}
+	for _, sources := range linkTargetSources {
+		sort.Strings(sources)
+	}
+	for _, sources := range linkTargetSourcesWithoutScope {
+		sort.Strings(sources)
+	}
+	sharedTargetDigests := func(targetSources map[string][]string) map[string]string {
+		result := map[string]string{}
+		for key, sources := range targetSources {
+			if len(sources) > 1 {
+				result[key] = digest([]byte(canonical(sources)))[:12]
+			}
+		}
+		return result
+	}
+	linkTargetDigests := sharedTargetDigests(linkTargetSources)
+	linkTargetDigestsWithoutScope := sharedTargetDigests(linkTargetSourcesWithoutScope)
+	targetOccurrenceKeys, err := buildGraphAwareTargetKeys(sourceOccurrenceKeys, linkTargetDigests, externalParentLabels)
+	if err != nil {
+		return fail(err)
+	}
+	targetOccurrenceKeysWithoutScope, err := buildGraphAwareTargetKeys(sourceOccurrenceKeysWithoutScope, linkTargetDigestsWithoutScope, externalParentLabelsWithoutScope)
+	if err != nil {
+		return fail(err)
+	}
+	for i := range d.Spans {
+		for _, l := range array(d.Spans[i].Fields["links"]) {
+			link := object(l)
+			tid, validTraceID := linkIdentity(link["traceId"], 16)
+			sid, validSpanID := linkIdentity(link["spanId"], 8)
+			validTarget := validTraceID && validSpanID
+			target := "external trace/span"
+			if !validTarget {
+				target = "invalid trace/span"
+				if tid == "" && sid == "" {
+					target = "missing trace/span"
+				}
+			}
+			targetWithoutScope := target
+			if validTarget && tid == traceIDs[i] {
+				target = "external span in same trace"
+				targetWithoutScope = target
+			}
+			if validTarget && externalParentAnchors[tid+"/"+sid] {
+				anchor := tid + "/" + sid
+				target = "external parent " + externalParentLabels[anchor]
+				targetWithoutScope = "external parent " + externalParentLabelsWithoutScope[anchor]
+			}
+			if j, ok := ids[tid+"/"+sid]; validTarget && ok {
+				relation := "in another trace "
+				if tid == traceIDs[i] {
+					relation = "in same trace "
+				}
+				target = "captured " + relation + path(j) + " occurrence " + targetOccurrenceKeys[j]
+				targetWithoutScope = "captured " + relation + path(j) + " occurrence " + targetOccurrenceKeysWithoutScope[j]
+				if j == i {
+					target = "self"
+					targetWithoutScope = target
+				}
+			}
+			if shared := linkTargetDigests[tid+"/"+sid]; shared != "" {
+				target += " (shared target " + shared + ")"
+			}
+			if shared := linkTargetDigestsWithoutScope[tid+"/"+sid]; shared != "" {
+				targetWithoutScope += " (shared target " + shared + ")"
+			}
+			d.Spans[i].LinkTargets = append(d.Spans[i].LinkTargets, target)
+			d.Spans[i].LinkTargetsWithoutScope = append(d.Spans[i].LinkTargetsWithoutScope, targetWithoutScope)
+		}
+	}
+	buildDescendantPartitions := func() []string {
+		partitions := make([]string, len(d.Spans))
+		var partition func(int) string
+		partition = func(i int) string {
+			if partitions[i] != "" {
+				return partitions[i]
+			}
+			descendants := make([]string, 0, len(children[i]))
+			for _, child := range children[i] {
+				descendants = append(descendants, canonical([]any{semanticSpanProjection(&d, child, false), partition(child)}))
+			}
+			sort.Strings(descendants)
+			partitions[i] = digest([]byte(canonical(descendants)))[:12]
+			return partitions[i]
+		}
+		for i := range d.Spans {
+			partition(i)
+		}
+		return partitions
+	}
+	descendantPartitions := buildDescendantPartitions()
+	descendantScopePartitions := make([]string, len(d.Spans))
+	var descendantScopePartition func(int) string
+	descendantScopePartition = func(i int) string {
+		if descendantScopePartitions[i] != "" {
+			return descendantScopePartitions[i]
+		}
+		descendants := make([]string, 0, len(children[i]))
+		for _, child := range children[i] {
+			descendants = append(descendants, canonical([]any{fingerprints[child], d.Scopes[d.Spans[child].Scope], descendantScopePartition(child)}))
+		}
+		sort.Strings(descendants)
+		descendantScopePartitions[i] = digest([]byte(canonical(descendants)))[:12]
+		return descendantScopePartitions[i]
+	}
+	for i := range d.Spans {
+		descendantScopePartition(i)
+	}
+	buildOccurrenceKeys := func(includeScope bool) []string {
+		keys := make([]string, len(d.Spans))
+		var key func(int) string
+		key = func(i int) string {
+			if keys[i] != "" {
+				return keys[i]
+			}
+			parent := "root"
+			if parents[i] >= 0 {
+				parent = key(parents[i])
+			} else if parentIDs[i] != "" {
+				parent = "external parent"
+			}
+			parts := []any{parent, semanticSpanProjection(&d, i, includeScope)}
+			if includeScope {
+				parts = append(parts, descendantScopePartitions[i])
+			}
+			keys[i] = digest([]byte(canonical(parts)))[:12]
+			return keys[i]
+		}
+		for i := range d.Spans {
+			key(i)
+		}
+		return keys
+	}
+	occurrenceKeys := buildOccurrenceKeys(true)
+	occurrenceKeysWithoutScope := buildOccurrenceKeys(false)
+	buildExternalParents := func(keys []string) map[string][]string {
+		result := map[string][]string{}
+		for i := range d.Spans {
+			if parents[i] < 0 && parentIDs[i] != "" {
+				key := traceIDs[i] + "/" + parentIDs[i]
+				result[key] = append(result[key], keys[i])
+			}
+		}
+		for _, children := range result {
+			sort.Strings(children)
+		}
+		return result
+	}
+	externalParents := buildExternalParents(occurrenceKeys)
+	externalParentsWithoutScope := buildExternalParents(occurrenceKeysWithoutScope)
+	for i := range d.Spans {
+		if parents[i] >= 0 {
+			d.Spans[i].Parent = path(parents[i]) + " occurrence " + occurrenceKeys[parents[i]]
+			d.Spans[i].ParentWithoutScope = path(parents[i]) + " occurrence " + occurrenceKeysWithoutScope[parents[i]]
+		} else if parentIDs[i] != "" {
+			key := traceIDs[i] + "/" + parentIDs[i]
+			d.Spans[i].Parent = "external parent (partial trace), children occurrences " + digest([]byte(canonical(externalParents[key])))
+			d.Spans[i].ParentWithoutScope = "external parent (partial trace), children occurrences " + digest([]byte(canonical(externalParentsWithoutScope[key])))
+		} else {
+			d.Spans[i].Parent = "root"
+			d.Spans[i].ParentWithoutScope = "root"
+		}
+	}
+	for _, indices := range traces {
+		roots := []int{}
+		withScope := []string{}
+		withoutScope := []string{}
+		for _, i := range indices {
+			withScope = append(withScope, occurrenceKeys[i])
+			withoutScope = append(withoutScope, occurrenceKeysWithoutScope[i])
+			if parents[i] < 0 {
+				roots = append(roots, i)
+			}
+		}
+		if len(roots) == 0 {
+			continue
+		}
+		sort.Strings(withScope)
+		sort.Strings(withoutScope)
+		rootSet := digest([]byte(canonical(withScope)))[:12]
+		rootSetWithoutScope := digest([]byte(canonical(withoutScope)))[:12]
+		for _, i := range roots {
+			d.Spans[i].TraceRoots = rootSet
+			d.Spans[i].TraceRootsWithoutScope = rootSetWithoutScope
+		}
+	}
+	var groups func([]int) []SpanGroup
+	groups = func(indices []int) []SpanGroup {
+		perTrace := map[string]map[string]int{}
+		for _, i := range indices {
+			if perTrace[fingerprints[i]] == nil {
+				perTrace[fingerprints[i]] = map[string]int{}
+			}
+			perTrace[fingerprints[i]][traceIDs[i]]++
+		}
+		byKey := map[string][]int{}
+		for _, i := range indices {
+			key := fingerprints[i]
+			if perTrace[fingerprints[i]][traceIDs[i]] > 1 {
+				key += "\x00" + descendantPartitions[i]
+			}
+			byKey[key] = append(byKey[key], i)
+		}
+		keys := make([]string, 0, len(byKey))
+		for k := range byKey {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		out := []SpanGroup{}
+		for _, k := range keys {
+			occ := byKey[k]
+			sort.Ints(occ)
+			s := d.Spans[occ[0]]
+			for _, i := range occ {
+				if str(d.Spans[i].Fields["name"]) < str(s.Fields["name"]) {
+					s = d.Spans[i]
+				}
+			}
+			cs := []int{}
+			for _, i := range occ {
+				cs = append(cs, children[i]...)
+			}
+			out = append(out, SpanGroup{Count: len(occ), ExactCount: true, Span: SpanNode{Name: str(s.Fields["name"]), Kind: str(s.Fields["kind"]), Occurrences: occ, Children: groups(cs)}})
+		}
+		return out
+	}
+	type traceStructure struct {
+		roots    []int
+		count    int
+		coverage string
+	}
+	structures := map[string]*traceStructure{}
+	for _, indices := range traces {
+		roots := []int{}
+		keys := []string{}
+		coverage := "complete"
+		for _, i := range indices {
+			if parents[i] < 0 {
+				roots = append(roots, i)
+				keys = append(keys, fingerprints[i])
+				if parentIDs[i] != "" {
+					coverage = "partial"
+				}
+			}
+		}
+		if len(roots) != 1 {
+			coverage = "partial"
+		}
+		sort.Strings(keys)
+		key := coverage + canonical(keys)
+		if structures[key] == nil {
+			structures[key] = &traceStructure{coverage: coverage}
+		}
+		g := structures[key]
+		g.roots = append(g.roots, roots...)
+		g.count++
+	}
+	keys := []string{}
+	for k := range structures {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		g := structures[k]
+		d.Shape.Traces = append(d.Shape.Traces, TraceGroup{Count: g.count, ExactCount: true, Coverage: g.coverage, Roots: groups(g.roots)})
+	}
+	d.Shape.TraceCount = len(traces)
+	d.Shape.SpanCount = len(d.Spans)
+	return d
+}

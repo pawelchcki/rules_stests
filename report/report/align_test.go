@@ -35,6 +35,281 @@ func findRow(t *testing.T, alignment *ShapeAlignment, name string) SpanMatch {
 	return SpanMatch{}
 }
 
+func TestLargeTraceAlignmentUsesBoundedPairing(t *testing.T) {
+	left := &ScenarioShape{ExactCounts: true}
+	right := &ScenarioShape{ExactCounts: true}
+	for i := 0; i < optimalAssignmentVertexLimit/2+1; i++ {
+		name := fmt.Sprintf("root-%03d", i)
+		group := TraceGroup{Count: 1, ExactCount: true, Coverage: "complete", Roots: []SpanGroup{exactSpan("", "server", "", name, "")}}
+		left.Traces = append(left.Traces, group)
+		right.Traces = append(right.Traces, group)
+	}
+	alignment := AlignShapes(left, right)
+	if alignment.Summary.TraceMatched != len(left.Traces) || alignment.Summary.TraceLeftOnly != 0 || alignment.Summary.TraceRightOnly != 0 {
+		t.Fatalf("bounded trace pairing lost exact matches: %+v", alignment.Summary)
+	}
+}
+
+func TestLargeTraceAlignmentUsesDescendantStructure(t *testing.T) {
+	const count = optimalAssignmentVertexLimit/2 + 1
+	left := &ScenarioShape{ExactCounts: true}
+	right := &ScenarioShape{ExactCounts: true}
+	for i := 0; i < count; i++ {
+		group := TraceGroup{Count: 1, ExactCount: true, Coverage: "complete", Roots: []SpanGroup{exactSpan("", "server", "", "root", "", exactSpan("", "client", "", fmt.Sprintf("child-%03d", i), ""))}}
+		left.Traces = append(left.Traces, group)
+		right.Traces = append([]TraceGroup{group}, right.Traces...)
+	}
+	alignment := AlignShapes(left, right)
+	if alignment.Summary.TraceMatched != count || alignment.Summary.TraceLeftOnly != 0 || alignment.Summary.TraceRightOnly != 0 || alignment.Summary.Differing != 0 || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 {
+		t.Fatalf("large reordered traces ignored descendant structure: %#v", alignment.Summary)
+	}
+}
+
+func TestLargeMultiRootTraceAlignmentScoresEveryRoot(t *testing.T) {
+	const count = optimalAssignmentVertexLimit/2 + 1
+	left := &ScenarioShape{ExactCounts: true}
+	right := &ScenarioShape{ExactCounts: true}
+	for i := 0; i < count; i++ {
+		common := exactSpan("", "server", "unset", "common", "")
+		child := exactSpan("", "client", "unset", fmt.Sprintf("child-%03d", i), "")
+		leftDetail := exactSpan("", "server", "unset", "detail", "", child)
+		rightDetail := exactSpan("", "server", "error", "detail", "", child)
+		leftTrace := TraceGroup{Count: 1, ExactCount: true, Coverage: "complete", Roots: []SpanGroup{common, leftDetail}}
+		rightTrace := TraceGroup{Count: 1, ExactCount: true, Coverage: "complete", Roots: []SpanGroup{common, rightDetail}}
+		left.Traces = append(left.Traces, leftTrace)
+		right.Traces = append([]TraceGroup{rightTrace}, right.Traces...)
+	}
+	alignment := AlignShapes(left, right)
+	if alignment.Summary.TraceMatched != count || alignment.Summary.TraceLeftOnly != 0 || alignment.Summary.TraceRightOnly != 0 || alignment.Summary.Matched != count*3 || alignment.Summary.Differing != count || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 {
+		t.Fatalf("large multi-root pairing ignored secondary roots: %#v", alignment.Summary)
+	}
+}
+
+func TestShallowTraceScoreRetainsLargeRootMultiplicity(t *testing.T) {
+	trace := func(ok, failed int) resolvedTrace {
+		result := resolvedTrace{card: "", coverage: "complete"}
+		for range ok {
+			result.roots = append(result.roots, resolveSpanGroup(exactSpan("", "server", "ok", "root", ""))[0])
+		}
+		for range failed {
+			result.roots = append(result.roots, resolveSpanGroup(exactSpan("", "server", "error", "root", ""))[0])
+		}
+		return result
+	}
+	mostlyOK, mostlyFailed := trace(16, 1), trace(1, 16)
+	same, compatible := shallowTraceMatchScore(mostlyOK, mostlyOK)
+	crossed, crossedCompatible := shallowTraceMatchScore(mostlyOK, mostlyFailed)
+	if !compatible || !crossedCompatible || same <= crossed {
+		t.Fatalf("large root multiplicity did not affect one-to-one score: same=%d crossed=%d", same, crossed)
+	}
+}
+
+func TestLargePairingPreservesMaximumCardinality(t *testing.T) {
+	count := optimalAssignmentVertexLimit/2 + 1
+	matched, _ := maximumWeightMaximumCardinalityPairs(count, count, func(left, right int) (int, bool) {
+		switch {
+		case left == 0 && right == 0:
+			return 10, true
+		case left == 0 && right == 1:
+			return 9, true
+		case left == 1 && right == 0:
+			return 1, true
+		default:
+			return 1, left == right
+		}
+	})
+	for left, right := range matched {
+		if right < 0 {
+			t.Fatalf("large maximum-cardinality pairing left %d unmatched: %v", left, matched)
+		}
+	}
+}
+
+func TestLargeExactSeedsRemainAugmentable(t *testing.T) {
+	leftRoots := []SpanGroup{
+		exactSpan("", "server", "", "", ""),
+		exactSpan("", "server", "", "A", ""),
+	}
+	rightRoots := []SpanGroup{
+		exactSpan("", "server", "", "", ""),
+		exactSpan("", "server", "", "B", ""),
+	}
+	for i := 0; i < optimalAssignmentVertexLimit/2-1; i++ {
+		common := exactSpan("", "server", "", fmt.Sprintf("common-%03d", i), "")
+		leftRoots = append(leftRoots, common)
+		rightRoots = append(rightRoots, common)
+	}
+	alignment := AlignShapes(shapeOf("left", leftRoots...), shapeOf("right", rightRoots...))
+	if alignment.Summary.Matched != len(leftRoots) || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 {
+		t.Fatalf("exact seeds blocked a maximum-cardinality wildcard pairing: %#v", alignment.Summary)
+	}
+}
+
+func TestLargeAssignmentAllowsThreeWayScoreImprovement(t *testing.T) {
+	parent := func(children ...int) SpanGroup {
+		groups := make([]SpanGroup, 0, len(children))
+		for _, child := range children {
+			groups = append(groups, exactSpan("", "client", "", fmt.Sprintf("child-%d", child), ""))
+		}
+		return exactSpan("", "internal", "", "parent", "", groups...)
+	}
+	leftRoots := []SpanGroup{
+		parent(0, 1, 4, 5),
+		parent(2, 4, 5),
+		parent(0, 2, 4, 5),
+	}
+	rightRoots := []SpanGroup{
+		parent(0, 1, 2, 3),
+		parent(1, 5),
+		parent(5),
+	}
+	for i := 0; i < optimalAssignmentVertexLimit/2-2; i++ {
+		common := exactSpan("", "server", "", fmt.Sprintf("common-%03d", i), "")
+		leftRoots = append(leftRoots, common)
+		rightRoots = append(rightRoots, common)
+	}
+	shape := func(profile string, children []SpanGroup) *ScenarioShape {
+		return shapeOf(profile, exactSpan("", "server", "", "root", "", children...))
+	}
+	alignment := AlignShapes(shape("left", leftRoots), shape("right", rightRoots))
+	if alignment.Summary.Matched != 71 {
+		t.Fatalf("three-way score improvement was missed: %#v", alignment.Summary)
+	}
+}
+
+func TestLargeAssignmentOptimizesUnmatchedCandidates(t *testing.T) {
+	wildcard := exactSpan("", "server", "", "", "")
+	concrete := exactSpan("", "server", "", "A", "")
+	common := make([]SpanGroup, optimalAssignmentVertexLimit/2)
+	for i := range common {
+		common[i] = exactSpan("", "server", "", fmt.Sprintf("common-%03d", i), "")
+	}
+	shape := func(profile string, children []SpanGroup) *ScenarioShape {
+		return shapeOf(profile, exactSpan("", "server", "", "root", "", children...))
+	}
+	assertConcretePair := func(t *testing.T, alignment *ShapeAlignment, leftOnly, rightOnly int) {
+		t.Helper()
+		row := findRow(t, alignment, "A")
+		if row.Kind != "matched" || row.Left == nil || row.Right == nil || row.Left.Name != "A" || row.Right.Name != "A" || alignment.Summary.LeftOnly != leftOnly || alignment.Summary.RightOnly != rightOnly {
+			t.Fatalf("unmatched candidate was excluded from score optimization: row=%#v summary=%#v", row, alignment.Summary)
+		}
+	}
+	t.Run("unmatched right", func(t *testing.T) {
+		left := append([]SpanGroup{concrete}, common...)
+		right := append([]SpanGroup{wildcard}, common...)
+		right = append(right, concrete)
+		assertConcretePair(t, AlignShapes(shape("left", left), shape("right", right)), 0, 1)
+	})
+	t.Run("unmatched left", func(t *testing.T) {
+		left := append([]SpanGroup{wildcard}, common...)
+		left = append(left, concrete)
+		right := append([]SpanGroup{concrete}, common...)
+		assertConcretePair(t, AlignShapes(shape("left", left), shape("right", right)), 1, 0)
+	})
+}
+
+func TestLargeSiblingAlignmentUsesChildStructure(t *testing.T) {
+	const count = optimalAssignmentVertexLimit/2 + 1
+	leftParents := make([]SpanGroup, 0, count)
+	rightParents := make([]SpanGroup, 0, count)
+	for i := 0; i < count; i++ {
+		parent := exactSpan("", "internal", "", "parent", "", exactSpan("", "client", "", fmt.Sprintf("child-%03d", i), ""))
+		leftParents = append(leftParents, parent)
+		rightParents = append([]SpanGroup{parent}, rightParents...)
+	}
+	root := func(children []SpanGroup) *ScenarioShape {
+		return shapeOf("profile", exactSpan("", "server", "", "root", "", children...))
+	}
+	exact, _ := bestShallowSpanPair(leftParents[0], rightParents[count-1])
+	mismatch, _ := bestShallowSpanPair(leftParents[0], rightParents[0])
+	if exact.score <= mismatch.score {
+		t.Fatalf("child-aware shallow score did not prefer exact subtree: %d <= %d", exact.score, mismatch.score)
+	}
+	alignment := AlignShapes(root(leftParents), root(rightParents))
+	if alignment.Summary.Differing != 0 || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 || alignment.Summary.Matched != 1+count*2 {
+		t.Fatalf("large reordered parents ignored child structure: %#v", alignment.Summary)
+	}
+}
+
+func TestNestedPairScoringBoundsExactChildAssignments(t *testing.T) {
+	children := func(reverse bool) []SpanGroup {
+		groups := make([]SpanGroup, 0, nestedScoreVertexLimit/2+1)
+		for i := 0; i < nestedScoreVertexLimit/2+1; i++ {
+			child := exactSpan("", "client", "", fmt.Sprintf("child-%02d", i), "")
+			if reverse {
+				groups = append([]SpanGroup{child}, groups...)
+			} else {
+				groups = append(groups, child)
+			}
+		}
+		return groups
+	}
+	left := resolveSpanGroup(exactSpan("", "internal", "", "parent", "", children(false)...))[0]
+	right := resolveSpanGroup(exactSpan("", "internal", "", "parent", "", children(true)...))[0]
+	want := shallowAlignedSpanMatchScore(left, right) + childOverlapScore(left, right)
+	if got := alignedSpanMatchScore(left, right); got != want {
+		t.Fatalf("large nested candidate used recursive exact scoring: got %d, want bounded score %d", got, want)
+	}
+}
+
+func TestNestedPairScoringRetainsPartialDescendantOverlap(t *testing.T) {
+	parent := func(shared, unique string) alignedSpan {
+		children := make([]SpanGroup, 0, nestedScoreVertexLimit/2+1)
+		for i := 0; i < nestedScoreVertexLimit/2+1; i++ {
+			marker := fmt.Sprintf("%s-%02d", unique, i)
+			if i < 4 {
+				marker = fmt.Sprintf("%s-%02d", shared, i)
+			}
+			children = append(children, exactSpan("", "internal", "", "branch", "", exactSpan("", "client", "", marker, "")))
+		}
+		return resolveSpanGroup(exactSpan("", "server", "", "parent", "", children...))[0]
+	}
+	left := parent("shared", "left")
+	closer := parent("shared", "right")
+	farther := parent("other", "farther")
+	if got, want := alignedSpanMatchScore(left, closer), alignedSpanMatchScore(left, farther); got <= want {
+		t.Fatalf("bounded descendant score did not prefer partial deeper overlap: %d <= %d", got, want)
+	}
+}
+
+func TestLargeSiblingAlignmentUsesPartialChildOverlap(t *testing.T) {
+	const count = optimalAssignmentVertexLimit/2 + 1
+	leftParents := make([]SpanGroup, 0, count)
+	rightParents := make([]SpanGroup, 0, count)
+	for i := 0; i < count; i++ {
+		marker := exactSpan("", "client", "", fmt.Sprintf("marker-%03d", i), "")
+		left := exactSpan("", "internal", "", "parent", "", marker, exactSpan("", "client", "", "left-only", ""))
+		right := exactSpan("", "internal", "", "parent", "", marker, exactSpan("", "client", "", "right-only", ""))
+		leftParents = append(leftParents, left)
+		rightParents = append([]SpanGroup{right}, rightParents...)
+	}
+	root := func(children []SpanGroup) *ScenarioShape {
+		return shapeOf("profile", exactSpan("", "server", "", "root", "", children...))
+	}
+	alignment := AlignShapes(root(leftParents), root(rightParents))
+	if alignment.Summary.Matched != 1+count*2 || alignment.Summary.LeftOnly != count || alignment.Summary.RightOnly != count {
+		t.Fatalf("large parents ignored partial child overlap: %#v", alignment.Summary)
+	}
+}
+
+func TestLargeTraceAlignmentUsesPartialDescendantOverlap(t *testing.T) {
+	const count = optimalAssignmentVertexLimit/2 + 1
+	left := &ScenarioShape{ExactCounts: true}
+	right := &ScenarioShape{ExactCounts: true}
+	for i := 0; i < count; i++ {
+		marker := exactSpan("", "client", "", fmt.Sprintf("marker-%03d", i), "")
+		trace := func(side string) TraceGroup {
+			return TraceGroup{Count: 1, ExactCount: true, Coverage: "complete", Roots: []SpanGroup{exactSpan("", "server", "", "root", "", marker, exactSpan("", "client", "", side, ""))}}
+		}
+		left.Traces = append(left.Traces, trace("left-only"))
+		right.Traces = append([]TraceGroup{trace("right-only")}, right.Traces...)
+	}
+	alignment := AlignShapes(left, right)
+	if alignment.Summary.TraceMatched != count || alignment.Summary.Matched != count*2 || alignment.Summary.LeftOnly != count || alignment.Summary.RightOnly != count {
+		t.Fatalf("large traces ignored partial descendant overlap: %#v", alignment.Summary)
+	}
+}
+
 func TestNormalizeSpanNameCollapsesRouteParameters(t *testing.T) {
 	tests := map[string]string{
 		"GET /api/articles/<slug>":    "get api/articles/*",
@@ -91,6 +366,39 @@ func TestAlignShapesPairsReorderedDuplicateSiblingsByDetails(t *testing.T) {
 		if row.Kind == "matched" && len(row.Diffs) != 0 {
 			t.Fatalf("equivalent sibling pair was reported as different: %#v", row)
 		}
+	}
+}
+
+func TestAlignShapesBreaksScoreTiesIndependentlyOfSiblingOrder(t *testing.T) {
+	leftChildren := []SpanGroup{
+		exactSpan("", "client", "", "request", ""),
+		exactSpan("", "client", "ok", "request", "200"),
+	}
+	rightChildren := []SpanGroup{
+		exactSpan("", "client", "", "request", "500"),
+		exactSpan("", "client", "error", "request", ""),
+	}
+	root := func(children ...SpanGroup) SpanGroup {
+		return exactSpan("", "server", "", "root", "", children...)
+	}
+	pairings := func(alignment *ShapeAlignment) string {
+		pairs := []string{}
+		for _, row := range alignment.Traces[0].Spans {
+			if row.Depth != 1 || row.Left == nil || row.Right == nil {
+				continue
+			}
+			pairs = append(pairs, strings.Join([]string{
+				row.Left.Status, row.Left.HTTPStatus,
+				row.Right.Status, row.Right.HTTPStatus,
+				strings.Join(row.Diffs, ","),
+			}, "/"))
+		}
+		return strings.Join(pairs, "|")
+	}
+	forward := pairings(AlignShapes(shapeOf("left", root(leftChildren...)), shapeOf("right", root(rightChildren...))))
+	reversed := pairings(AlignShapes(shapeOf("left", root(leftChildren...)), shapeOf("right", root(rightChildren[1], rightChildren[0]))))
+	if forward != reversed {
+		t.Fatalf("score-tied sibling assignment depended on right order: %q != %q", forward, reversed)
 	}
 }
 
