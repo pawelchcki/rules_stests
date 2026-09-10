@@ -434,10 +434,14 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		if e.Name == "span-batch" {
 			probes := probeSpans(changed)
 			expected, present := matchingWorkloadSpans(baseline, changed)
-			preserved = len(probes) == 4 && len(incomingProbeTraces(probes)) == 4 && expected > 0 && present == expected
+			expectedMetrics, presentMetrics := matchingMetricStreams(baseline, changed)
+			expectedLogs, presentLogs := matchingLogStreams(baseline, changed, nil)
+			preserved = len(probes) == 4 && len(incomingProbeTraces(probes)) == 4 && expected > 0 && present == expected && presentMetrics == expectedMetrics && presentLogs == expectedLogs
 		} else {
 			expected, present := matchingLogStreams(baseline, changed, nil)
-			preserved = preserved && expected > 0 && present == expected
+			expectedSpans, presentSpans := matchingWorkloadSpans(baseline, changed)
+			expectedMetrics, presentMetrics := matchingMetricStreams(baseline, changed)
+			preserved = preserved && expected > 0 && present == expected && presentSpans == expectedSpans && presentMetrics == expectedMetrics
 		}
 		check(prior > 1, actual == 1 && preserved, fmt.Sprintf("maximum %s batch %d -> %d; records %d -> %d", signal, prior, actual, len(before), len(after)))
 		if o.Status == "gap" {
@@ -454,7 +458,9 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		}
 	case "exemplars-always-on":
 		eligible, preserved, after := unsampledExemplars(baseline, changed)
-		check(eligible > 0 && len(baseline.Spans) == 0, len(changed.Spans) == 0 && preserved == eligible && after > 0, fmt.Sprintf("control metric streams preserved %d/%d; AlwaysOn exemplars for those streams %d; exported spans %d", preserved, eligible, after, len(changed.Spans)))
+		expectedMetrics, presentMetrics := matchingMetricStreams(baseline, changed)
+		expectedLogs, presentLogs := matchingLogStreams(baseline, changed, nil)
+		check(eligible > 0 && len(baseline.Spans) == 0, len(changed.Spans) == 0 && preserved == eligible && after > 0 && presentMetrics == expectedMetrics && presentLogs == expectedLogs, fmt.Sprintf("eligible control points preserved %d/%d; all metric points %d/%d and logs %d/%d preserved; AlwaysOn exemplars %d; exported spans %d", preserved, eligible, presentMetrics, expectedMetrics, presentLogs, expectedLogs, after, len(changed.Spans)))
 	case "request-headers":
 		before, after := probeSpans(baseline), probeSpans(changed)
 		beforeRequests, afterRequests := incomingProbeTraces(before), incomingProbeTraces(after)
@@ -467,7 +473,11 @@ func evaluate(e experiment, baseline, changed capture) observation {
 				malformed++
 			}
 		}
-		check(len(before) == 4 && len(beforeRequests) == 4, len(after) == 4 && len(afterRequests) == 4 && captured == 4, fmt.Sprintf("distinct probe requests %d -> %d; server spans %d -> %d; exact header arrays %d/4", len(beforeRequests), len(afterRequests), len(before), len(after), captured))
+		expectedSpans, presentSpans := matchingWorkloadSpans(baseline, changed)
+		expectedMetrics, presentMetrics := matchingMetricStreams(baseline, changed)
+		expectedLogs, presentLogs := matchingLogStreams(baseline, changed, nil)
+		preserved := expectedSpans > 0 && presentSpans == expectedSpans && presentMetrics == expectedMetrics && presentLogs == expectedLogs
+		check(len(before) == 4 && len(beforeRequests) == 4, len(after) == 4 && len(afterRequests) == 4 && captured == 4 && preserved, fmt.Sprintf("distinct probe requests %d -> %d; server spans %d -> %d; exact header arrays %d/4; workload spans %d/%d, metrics %d/%d, logs %d/%d preserved", len(beforeRequests), len(afterRequests), len(before), len(after), captured, presentSpans, expectedSpans, presentMetrics, expectedMetrics, presentLogs, expectedLogs))
 		if o.Status == "gap" {
 			if captured != 4 {
 				o.Violations = append(o.Violations, fmt.Sprintf("header-arrays=%d", captured))
@@ -535,13 +545,20 @@ func evaluate(e experiment, baseline, changed capture) observation {
 			before, after = baseline.Logs, changed.Logs
 			expected, present = matchingLengthLimitedLogStreams(baseline, changed, 8)
 			attributeExpected, attributePresent, attributeMissing = preservedLongLogAttributes(baseline, changed, 8)
-			preserved = expected > 0 && present == expected && attributeExpected > 0 && attributePresent == attributeExpected
+			expectedSpans, presentSpans := matchingWorkloadSpans(baseline, changed)
+			expectedMetrics, presentMetrics := matchingMetricStreams(baseline, changed)
+			preserved = expected > 0 && present == expected && attributeExpected > 0 && attributePresent == attributeExpected && presentSpans == expectedSpans && presentMetrics == expectedMetrics
 		} else {
 			expectedTraces := incomingProbeTraces(probeSpans(baseline))
 			presentTraces := incomingServerTraces(after)
 			expected, present = matchingLengthLimitedWorkloadSpans(baseline, changed, 8)
 			attributeExpected, attributePresent, attributeMissing = preservedLongSpanAttributes(baseline, changed, 8)
-			preserved = len(expectedTraces) == 4 && len(presentTraces) == len(expectedTraces) && expected > 0 && present == expected && attributeExpected > 0 && attributePresent == attributeExpected
+			expectedMetrics, presentMetrics := matchingMetricStreams(baseline, changed)
+			expectedLogs, presentLogs := matchingLogStreams(baseline, changed, nil)
+			if e.Name == "attribute-length" {
+				expectedLogs, presentLogs = matchingLengthLimitedLogStreams(baseline, changed, 8)
+			}
+			preserved = len(expectedTraces) == 4 && len(presentTraces) == len(expectedTraces) && expected > 0 && present == expected && attributeExpected > 0 && attributePresent == attributeExpected && presentMetrics == expectedMetrics && presentLogs == expectedLogs
 		}
 		check(maxLength(before) > 8, len(after) > 0 && maxLength(after) == 8 && preserved, fmt.Sprintf("maximum string attribute length %d -> %d; cap 8; baseline record identities preserved %d/%d; long attributes preserved %d/%d", maxLength(before), maxLength(after), present, expected, attributePresent, attributeExpected))
 		violations := map[string]bool{}
@@ -568,25 +585,40 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		if e.Name == "event-attributes" {
 			before, after, cap = events(baseline), events(changed), 1
 			expected, present = limitedEventRecords(baseline, changed, cap)
-			preserved = expected == 0 || present == expected
+			allExpected, allPresent := matchingCountLimitedEvents(baseline, changed, cap)
+			preserved = (expected == 0 || present == expected) && allPresent == allExpected
 		}
 		if e.Name == "log-count" {
 			before, after, cap = baseline.Logs, changed.Logs, 1
 			expected, present = limitedCountLogStreamRecords(baseline, changed, cap)
-			preserved = expected == 0 || present == expected
+			allExpected, allPresent := matchingCountLimitedLogStreams(baseline, changed, cap)
+			preserved = (expected == 0 || present == expected) && allPresent == allExpected
 		} else if e.Name != "event-attributes" {
 			expectedProbes, presentProbes := limitedProbeRequests(baseline, changed, cap)
 			expected, present = matchingCountLimitedWorkloadSpans(baseline, changed)
 			preserved = expectedProbes > 0 && presentProbes == expectedProbes && expected > 0 && present == expected
 		}
+		expectedSpans, presentSpans := matchingWorkloadSpans(baseline, changed)
+		if e.Name == "attribute-count" {
+			expectedSpans, presentSpans = matchingCountLimitedWorkloadSpans(baseline, changed)
+		}
+		expectedMetrics, presentMetrics := matchingMetricStreams(baseline, changed)
+		expectedLogs, presentLogs := matchingLogStreams(baseline, changed, nil)
+		if e.Name == "log-count" || e.Name == "attribute-count" {
+			expectedLogs, presentLogs = matchingCountLimitedLogStreams(baseline, changed, cap)
+		}
+		preserved = preserved && presentSpans == expectedSpans && presentMetrics == expectedMetrics && presentLogs == expectedLogs
 		prerequisite := maxAttributes(before) > cap
 		if e.Name == "attribute-count" || e.Name == "event-attributes" || e.Name == "log-count" {
 			prerequisite = prerequisite && expected > 0
 		}
-		check(prerequisite, len(after) > 0 && maxAttributes(after) == cap && dropped(after, "dropped_attributes_count") > 0 && preserved, fmt.Sprintf("maximum attributes %d -> %d; cap %d; dropped %d; baseline record identities preserved %d/%d", maxAttributes(before), maxAttributes(after), cap, dropped(after, "dropped_attributes_count"), present, expected))
+		check(prerequisite, len(after) > 0 && maxAttributes(after) == cap && dropped(after, "dropped_attributes_count") > 0 && preserved, fmt.Sprintf("maximum attributes %d -> %d; cap %d; dropped %d; affected records %d/%d; workload spans %d/%d, metrics %d/%d, logs %d/%d preserved", maxAttributes(before), maxAttributes(after), cap, dropped(after, "dropped_attributes_count"), present, expected, presentSpans, expectedSpans, presentMetrics, expectedMetrics, presentLogs, expectedLogs))
 	case "events":
 		expected, present := suppressedEventRecords(baseline, changed)
-		preserved := expected == 0 || present == expected
+		expectedSpans, presentSpans := matchingWorkloadSpans(baseline, changed)
+		expectedMetrics, presentMetrics := matchingMetricStreams(baseline, changed)
+		expectedLogs, presentLogs := matchingLogStreams(baseline, changed, nil)
+		preserved := (expected == 0 || present == expected) && presentSpans == expectedSpans && presentMetrics == expectedMetrics && presentLogs == expectedLogs
 		check(len(events(baseline)) > 0, len(changed.Spans) > 0 && len(events(changed)) == 0 && dropped(changed.Spans, "dropped_events_count") > 0 && preserved, fmt.Sprintf("events %d -> %d; dropped %d; workload requests preserved %d/%d", len(events(baseline)), len(events(changed)), dropped(changed.Spans, "dropped_events_count"), present, expected))
 	case "exemplars":
 		before, preserved, remaining := suppressedExemplars(baseline, changed)
@@ -600,7 +632,11 @@ func evaluate(e experiment, baseline, changed capture) observation {
 	case "histogram":
 		before, converted := convertedHistograms(baseline, changed)
 		remaining := len(metricObjects(changed, "histogram"))
-		check(before > 0, converted == before && remaining == 0, fmt.Sprintf("baseline histogram identities converted %d/%d; remaining explicit exports %d", converted, before, remaining))
+		expectedMetrics, presentMetrics := matchingNonHistogramMetricStreams(baseline, changed)
+		expectedSpans, presentSpans := matchingWorkloadSpans(baseline, changed)
+		expectedLogs, presentLogs := matchingLogStreams(baseline, changed, nil)
+		preserved := presentMetrics == expectedMetrics && presentSpans == expectedSpans && presentLogs == expectedLogs
+		check(before > 0, converted == before && remaining == 0 && preserved, fmt.Sprintf("baseline histogram identities converted %d/%d; non-histogram points %d/%d, workload spans %d/%d, logs %d/%d preserved; remaining explicit exports %d", converted, before, presentMetrics, expectedMetrics, presentSpans, expectedSpans, presentLogs, expectedLogs, remaining))
 	default:
 		panic("unknown experiment: " + e.Name)
 	}
@@ -1022,6 +1058,43 @@ func logLengthStreamID(stream logStream, limit int) string {
 	return string(encoded)
 }
 
+func matchingCountLimitedLogStreams(before, after capture, limit int) (int, int) {
+	eligible := map[string]int{}
+	for _, stream := range captureLogStreams(before) {
+		if id := logCountStreamID(stream, limit); id != "" {
+			eligible[id]++
+		}
+	}
+	preserved := map[string]int{}
+	for _, stream := range captureLogStreams(after) {
+		if id := logCountStreamID(stream, limit); id != "" && preserved[id] < eligible[id] {
+			preserved[id]++
+		}
+	}
+	return countIdentities(eligible), countIdentities(preserved)
+}
+
+func logCountStreamID(stream logStream, limit int) string {
+	recordID := stableLogRecordID(stream.Record, false)
+	if recordID == "" {
+		return ""
+	}
+	scopeName, _ := field(stream.Scope, "name").(string)
+	scopeVersion, _ := field(stream.Scope, "version").(string)
+	attributeID := attributeSetID(stream.Record, nil)
+	if len(attributes(stream.Record)) > limit || number(field(stream.Record, "dropped_attributes_count")) > 0 {
+		attributeID = "<count-limited>"
+	}
+	parts := []string{
+		recordID, scopeName, scopeVersion, stream.Schema, stream.ResourceSchema,
+		attributeSetID(stream.Scope, nil),
+		attributeSetID(stream.Resource, resourceAttributeIgnores(nil)),
+		attributeID,
+	}
+	encoded, _ := json.Marshal(parts)
+	return string(encoded)
+}
+
 func logStreamIDWithRecordAttributes(stream logStream, ignoredResourceAttributes map[string]bool, includeRecordAttributes bool) string {
 	recordID := stableLogRecordID(stream.Record, includeRecordAttributes)
 	if recordID == "" {
@@ -1125,6 +1198,36 @@ func limitedEventRecords(before, after capture, limit int) (int, int) {
 	return countIdentities(eligible), countIdentities(preserved)
 }
 
+func matchingCountLimitedEvents(before, after capture, limit int) (int, int) {
+	identities := func(c capture) map[string]int {
+		items := map[string]int{}
+		for _, parent := range identifiedSpans(c) {
+			for _, event := range objects(parent.Record, "events") {
+				name, _ := field(event, "name").(string)
+				if name == "" {
+					continue
+				}
+				attributeID := attributeSetID(event, nil)
+				if len(attributes(event)) > limit || number(field(event, "dropped_attributes_count")) > 0 {
+					attributeID = "<count-limited>"
+				}
+				encoded, _ := json.Marshal([]string{parent.ID, name, attributeID})
+				items[string(encoded)]++
+			}
+		}
+		return items
+	}
+	eligible := identities(before)
+	preserved := map[string]int{}
+	for id, count := range identities(after) {
+		if count > eligible[id] {
+			count = eligible[id]
+		}
+		preserved[id] = count
+	}
+	return countIdentities(eligible), countIdentities(preserved)
+}
+
 func identifiedSpans(c capture) []identifiedRecord {
 	groups := map[string][]object{}
 	for _, stream := range captureSpanStreams(c) {
@@ -1202,6 +1305,29 @@ func matchingMetricStreamsIgnoring(before, after capture, ignoredResourceAttribu
 		for _, point := range objects(stream.Metric, "data_points") {
 			id := controlMetricPointID(stream, point, ignoredResourceAttributes)
 			if eligible[id] {
+				preserved[id] = true
+			}
+		}
+	}
+	return len(eligible), len(preserved)
+}
+
+func matchingNonHistogramMetricStreams(before, after capture) (int, int) {
+	eligible := map[string]bool{}
+	for _, stream := range captureMetricStreams(before) {
+		if len(objects(stream.Metric, "histogram")) > 0 {
+			continue
+		}
+		for _, point := range objects(stream.Metric, "data_points") {
+			if id := controlMetricPointID(stream, point, nil); id != "" {
+				eligible[id] = true
+			}
+		}
+	}
+	preserved := map[string]bool{}
+	for _, stream := range captureMetricStreams(after) {
+		for _, point := range objects(stream.Metric, "data_points") {
+			if id := controlMetricPointID(stream, point, nil); eligible[id] {
 				preserved[id] = true
 			}
 		}

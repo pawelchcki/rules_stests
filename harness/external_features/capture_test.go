@@ -329,10 +329,10 @@ func TestExperimentsRequireBaselineAndRejectIgnoredSettings(t *testing.T) {
 			case "event-attributes":
 				parent := item()
 				parent["name"] = "INSERT"
-				parent["events"] = []any{object{"name": "exception", "attributes": []any{attr("first", "value")}, "droppedAttributesCount": float64(2)}}
+				parent["events"] = []any{object{"name": "exception", "attributes": []any{attr("first", "long baseline attribute")}, "droppedAttributesCount": float64(2)}}
 				changed.Spans = []object{parent}
 			case "log-count":
-				changed.Logs = []object{{"body": object{"stringValue": "workload log"}, "attributes": []any{attr("first", "value")}, "dropped_attributes_count": float64(2)}}
+				changed.Logs = []object{{"body": object{"stringValue": "workload log"}, "attributes": []any{attr("first", "long baseline attribute")}, "dropped_attributes_count": float64(2)}}
 			case "exemplars":
 				changed.Metrics = []object{{"name": "probe.metric", "histogram": object{"dataPoints": []any{object{"count": "1"}}}}}
 				changed.Spans = syntheticProbeSpans()
@@ -1148,6 +1148,138 @@ func TestExemplarSuppressionPreservesUnaffectedSignals(t *testing.T) {
 		if got := evaluate(experiment{Name: "exemplars"}, base, candidate); got.Status == "pass" {
 			t.Fatal("exemplar suppression passed after dropping an unaffected signal")
 		}
+	}
+}
+
+func TestBatchAndHeaderExperimentsPreserveOtherSignals(t *testing.T) {
+	complete := func() capture {
+		return capture{
+			Spans:   syntheticProbeSpans(),
+			Metrics: []object{{"name": "requests", "sum": object{"dataPoints": []any{object{"attributes": []any{attr("route", "tags")}}}}}},
+			Logs:    []object{{"body": object{"stringValue": "workload log"}}},
+		}
+	}
+	spanBase := complete()
+	spanBase.Records = []object{batchRecord("traces", "spans", spanBase.Spans)}
+	spanChanged := complete()
+	for _, span := range spanChanged.Spans {
+		spanChanged.Records = append(spanChanged.Records, batchRecord("traces", "spans", []object{span}))
+	}
+	if got := evaluate(experiment{Name: "span-batch"}, spanBase, spanChanged); got.Status != "pass" {
+		t.Fatalf("complete span-batch capture did not pass: %+v", got)
+	}
+	for _, candidate := range []capture{
+		{Records: spanChanged.Records, Spans: spanChanged.Spans, Metrics: spanChanged.Metrics},
+		{Records: spanChanged.Records, Spans: spanChanged.Spans, Logs: spanChanged.Logs},
+	} {
+		if got := evaluate(experiment{Name: "span-batch"}, spanBase, candidate); got.Status == "pass" {
+			t.Fatal("span-batch passed after dropping an unaffected signal")
+		}
+	}
+
+	logBase := complete()
+	logBase.Logs = append(logBase.Logs, object{"body": object{"stringValue": "second workload log"}})
+	logBase.Records = []object{batchRecord("logs", "log_records", logBase.Logs)}
+	logChanged := complete()
+	logChanged.Logs = append(logChanged.Logs, object{"body": object{"stringValue": "second workload log"}})
+	for _, record := range logChanged.Logs {
+		logChanged.Records = append(logChanged.Records, batchRecord("logs", "log_records", []object{record}))
+	}
+	for _, candidate := range []capture{
+		{Records: logChanged.Records, Logs: logChanged.Logs, Metrics: logChanged.Metrics},
+		{Records: logChanged.Records, Logs: logChanged.Logs, Spans: logChanged.Spans},
+	} {
+		if got := evaluate(experiment{Name: "log-batch"}, logBase, candidate); got.Status == "pass" {
+			t.Fatal("log-batch passed after dropping an unaffected signal")
+		}
+	}
+
+	headerBase := complete()
+	registration := object{"name": "POST /api/users", "kind": float64(2), "trace_id": fmt.Sprintf("%032x", 20), "attributes": []any{attr("http.route", "/api/users")}}
+	headerBase.Spans = append(headerBase.Spans, registration)
+	headerChanged := complete()
+	headerChanged.Spans = append(headerChanged.Spans, registration)
+	for _, span := range probeSpans(headerChanged) {
+		span["attributes"] = append(span["attributes"].([]any), object{"key": "http.request.header.x_probe_feature", "value": object{"arrayValue": object{"values": []any{object{"stringValue": "visible"}}}}})
+	}
+	if got := evaluate(experiment{Name: "request-headers"}, headerBase, headerChanged); got.Status != "pass" {
+		t.Fatalf("complete header capture did not pass: %+v", got)
+	}
+	for _, candidate := range []capture{
+		{Spans: headerChanged.Spans[:4], Metrics: headerChanged.Metrics, Logs: headerChanged.Logs},
+		{Spans: headerChanged.Spans, Logs: headerChanged.Logs},
+		{Spans: headerChanged.Spans, Metrics: headerChanged.Metrics},
+	} {
+		if got := evaluate(experiment{Name: "request-headers"}, headerBase, candidate); got.Status == "pass" {
+			t.Fatal("header capture passed after dropping unaffected workload telemetry")
+		}
+	}
+}
+
+func TestAlwaysOnPreservesAllControlMetricsAndLogs(t *testing.T) {
+	eligible := object{"name": "duration", "histogram": object{"dataPoints": []any{object{"attributes": []any{attr("route", "tags")}}}}}
+	excluded := object{"name": "active", "sum": object{"dataPoints": []any{object{"attributes": []any{attr("route", "users")}, "exemplars": []any{object{"timeUnixNano": "1"}}}}}}
+	withExemplar := object{"name": "duration", "histogram": object{"dataPoints": []any{object{"attributes": []any{attr("route", "tags")}, "exemplars": []any{object{"timeUnixNano": "2"}}}}}}
+	base := capture{Metrics: []object{eligible, excluded}, Logs: []object{{"body": object{"stringValue": "workload log"}}}}
+	complete := capture{Metrics: []object{withExemplar, excluded}, Logs: base.Logs}
+	if got := evaluate(experiment{Name: "exemplars-always-on"}, base, complete); got.Status != "pass" {
+		t.Fatalf("complete AlwaysOn capture did not pass: %+v", got)
+	}
+	for _, candidate := range []capture{{Metrics: []object{withExemplar}, Logs: complete.Logs}, {Metrics: complete.Metrics}} {
+		if got := evaluate(experiment{Name: "exemplars-always-on"}, base, candidate); got.Status == "pass" {
+			t.Fatal("AlwaysOn passed after dropping control telemetry")
+		}
+	}
+}
+
+func TestCountEventAndHistogramExperimentsPreserveOtherSignals(t *testing.T) {
+	metric := object{"name": "requests", "sum": object{"dataPoints": []any{object{"attributes": []any{attr("route", "tags")}}}}}
+	logRecord := object{"body": object{"stringValue": "workload log"}}
+
+	logBase := capture{Spans: syntheticProbeSpans(), Metrics: []object{metric}, Logs: []object{
+		{"body": object{"stringValue": "limited"}, "attributes": []any{attr("first", "one"), attr("second", "two")}},
+		{"body": object{"stringValue": "ordinary"}, "attributes": []any{attr("first", "one")}},
+	}}
+	logChanged := capture{Spans: syntheticProbeSpans(), Metrics: []object{metric}, Logs: []object{
+		{"body": object{"stringValue": "limited"}, "attributes": []any{attr("first", "one")}, "dropped_attributes_count": float64(1)},
+		{"body": object{"stringValue": "ordinary"}, "attributes": []any{attr("first", "one")}},
+	}}
+	if got := evaluate(experiment{Name: "log-count"}, logBase, logChanged); got.Status != "pass" {
+		t.Fatalf("complete log-count capture did not pass: %+v", got)
+	}
+	droppedOrdinary := logChanged
+	droppedOrdinary.Logs = droppedOrdinary.Logs[:1]
+	if got := evaluate(experiment{Name: "log-count"}, logBase, droppedOrdinary); got.Status == "pass" {
+		t.Fatal("log-count passed after dropping an unaffected log")
+	}
+
+	server := object{"name": "POST /api/users", "kind": float64(2), "trace_id": fmt.Sprintf("%032x", 20), "attributes": []any{attr("http.route", "/api/users")}}
+	parent := object{"name": "INSERT", "kind": float64(3), "trace_id": fmt.Sprintf("%032x", 20), "attributes": []any{attr("db.system", "sqlite")}}
+	event := object{"name": "exception", "attributes": []any{attr("first", "one"), attr("second", "two")}}
+	parent["events"] = []any{event}
+	eventBase := capture{Spans: []object{server, parent}, Metrics: []object{metric}, Logs: []object{logRecord}}
+	cappedParent := object{"name": "INSERT", "kind": float64(3), "trace_id": fmt.Sprintf("%032x", 20), "attributes": []any{attr("db.system", "sqlite")}, "events": []any{object{"name": "exception", "attributes": []any{attr("first", "one")}, "dropped_attributes_count": float64(1)}}}
+	eventChanged := capture{Spans: []object{server, cappedParent}, Metrics: []object{metric}, Logs: []object{logRecord}}
+	if got := evaluate(experiment{Name: "event-attributes"}, eventBase, eventChanged); got.Status != "pass" {
+		t.Fatalf("complete event-attribute capture did not pass: %+v", got)
+	}
+	if got := evaluate(experiment{Name: "event-attributes"}, eventBase, capture{Spans: []object{cappedParent}}); got.Status == "pass" {
+		t.Fatal("event-attribute limit passed after dropping unaffected telemetry")
+	}
+	suppressedParent := object{"name": "INSERT", "kind": float64(3), "trace_id": fmt.Sprintf("%032x", 20), "attributes": []any{attr("db.system", "sqlite")}, "dropped_events_count": float64(1)}
+	if got := evaluate(experiment{Name: "events"}, eventBase, capture{Spans: []object{suppressedParent}}); got.Status == "pass" {
+		t.Fatal("event suppression passed after dropping eventless workload telemetry")
+	}
+
+	histogram := object{"name": "duration", "histogram": object{"dataPoints": []any{object{"attributes": []any{attr("route", "tags")}}}}}
+	exponential := object{"name": "duration", "exponentialHistogram": object{"dataPoints": []any{object{"attributes": []any{attr("route", "tags")}}}}}
+	histogramBase := capture{Spans: syntheticProbeSpans(), Metrics: []object{histogram, metric}, Logs: []object{logRecord}}
+	histogramChanged := capture{Spans: syntheticProbeSpans(), Metrics: []object{exponential, metric}, Logs: []object{logRecord}}
+	if got := evaluate(experiment{Name: "histogram"}, histogramBase, histogramChanged); got.Status != "pass" {
+		t.Fatalf("complete histogram conversion did not pass: %+v", got)
+	}
+	if got := evaluate(experiment{Name: "histogram"}, histogramBase, capture{Metrics: []object{exponential}}); got.Status == "pass" {
+		t.Fatal("histogram conversion passed after dropping unaffected telemetry")
 	}
 }
 
