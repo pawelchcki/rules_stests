@@ -136,49 +136,87 @@ tools/       maintainer and report scripts
 
 ## Reading the report
 
-`//report:assemble` renders `feature-parity-report.html`, a single self-contained
-page whose front end lives in `report/report/web/`. Start with **Instrumentation
-status** and select one implementation. The default is the first implementation
-with a passing receipt, or the first listed implementation if none passed.
+`//report:assemble` renders `feature-parity-report.html`, one self-contained HTML
+artifact. Its default destination is **Implementation health**: feature categories
+form the matrix rows and tested implementation configurations form the columns.
+Filter by language, configuration/version, category, defined-check coverage,
+verification result, upstream support, evidence basis, or feature text.
 
-- **Verified here**: the listed assertion passed with accepted evidence from this build.
-- **Documented gap**: the report explicitly records an implementation gap.
-- **Unknown**: this report has no accepted proof for the feature.
-- **Not applicable**: the profile explicitly marks the feature as inapplicable.
+Three dimensions remain independent:
 
-Select a count to reveal its feature list. Categories start collapsed, with
-Traces, Metrics, and Logs first. “No implementation gaps recorded” does not mean
-full support: unknowns remain separate, and the current assembler does not
-populate documented gaps. Upstream support and language maturity are secondary
-reference information under **Upstream & feature details**.
-
-**Test coverage** preserves the selected implementation and describes which
-scenarios have telemetry checks and how detailed those checks are. **Trace
-structure specified** means a saved scenario shape exists; **Shared telemetry
-checks only** means the shared capture contract is defined. The independent
-**Result in this build** column uses receipts: **Passed**, **Expected failure**,
-or **No result for this build**. Scenarios outside the profile's declared set
-say **Not in this test suite** and do not count as missing tests.
+- **Checks defined** comes from normalized proof plans, including plans for
+  unavailable runners. Expand a cell for assertions, evidence basis and sources,
+  supporting RealWorld/framework fixtures, and associated scenario executions.
+- **Results from this build** shows receipt-backed verification alongside passed,
+  expected-failure, and no-result execution counts. These describe authored
+  checks, not completeness against the entire specification. An expected failure
+  retains its scenario reason; individual feature outcomes remain unknown unless
+  accepted evidence independently establishes them.
+- **Upstream support claims** retain their recorded language scope. They do not
+  certify a particular framework, version, or configuration. Failure attribution,
+  undocumented gaps, and specification-interpretation evidence are unavailable
+  or unrecorded, never evidence of zero defects.
 
 Only an executable proof plan backed by accepted current-revision receipts can
-produce verification. Expected failures never verify features. Profiles without
-receipts remain visibly unverified, even with saved shapes or upstream support
-claims. Assembly still rejects partial receipt sets; a profile producing no
-receipts must be explicitly declared unavailable. Assertions, evidence methods,
-and receipt hashes are available in expandable details and **Evidence**.
+produce verification. Assembly rejects revision, digest, and receipt-completeness
+failures before decoding captures for comparison. Profiles without receipts must
+be explicitly declared unavailable; their planned checks do not verify features.
+Configurations remain separate. Aggregation across applications would require a
+later evidence-model change. Health retains existing evidence across all signals.
 
-**Compare traces** compares saved trace expectations. Trace groups match on their
-root span, then spans match on kind and normalized name, with route parameters
-collapsed so `api/articles/<slug>` and `api/articles/{slug}` align. Scope is shown
-but never used for pairing. Groups start collapsed; left-only and right-only
-structures have the same neutral styling. Differences carry no quality verdict.
+**RealWorld parity** compares instrumentation of the same application and workload.
+Start with the implementation/scenario overview, select two configurations, then
+expand scenario differences, trace groups, span trees, and field-value variants.
+The default source is **Captured telemetry**. **Saved expectations** is a separate,
+visibly labelled source; missing captures explain availability and never trigger
+an automatic source change. Available one-sided captures remain inspectable.
+Each capture shows its revision and scenario outcome. Differences are neutral and
+never change health results. The scenario/check-coverage table lives here too;
+scenarios outside a configuration's declared suite are excluded, not missing tests.
 
-Only the active view is shown. Existing hash routes (`#overview`, `#coverage`,
-`#compare`, `#features`, `#receipts`, `#glossary`) and feature/comparison filters
-remain supported. Add `profile=<profile-id>` to select an implementation in
-status, coverage, or feature details. Feature links without `profile` retain
-all-implementation scope. Filtered feature links reveal their matching details;
-browser back/forward restores view and filter selections.
+Captured protobuf JSON and OTLP JSON use a common report projection that preserves
+value types and 64-bit integers. It includes resource and scope metadata, schema
+URLs, span names/kinds/status, attributes, events, links, flags, and dropped counts.
+Structural correspondence uses root structure, span kind, normalized name, and
+child structure; scope does not determine pairing. Repeated structures retain
+all occurrence references and value multiplicities. Pairing is structural, not
+proof that two occurrences represent the same request.
+
+**Semantic differences** excludes literal trace/span/link IDs and absolute
+timestamps while retaining parent/link relationships. **Raw fields and timing**
+includes IDs and timestamps; every occurrence also exposes them in its detail.
+Protocol JSON spellings/defaults are normalized, while attribute names and typed
+values are not rewritten. Attribute ordering is insignificant; array and event
+order is preserved. Missing parents mark partial traces. Duplicate identities,
+cycles, or unreadable trace data produce diagnostics without fabricated topology.
+Captured datasets are stored once and comparisons reference their occurrences;
+expanded trace and field detail is rendered on demand. This pass compares traces,
+not metrics or logs.
+
+**Evidence** and **Glossary** are secondary destinations. Health and parity retain
+independent filters in navigation, with shareable feature-cell and trace/span
+links. Browser back/forward restores selections. `#health` and `#parity` are the
+primary routes. Legacy feature/status/language routes enter health; coverage and
+comparison routes enter parity. Legacy `#compare` links retain saved-expectation
+semantics. Existing profile, scenario, feature, and comparison filters still work.
+
+Run report and assembly regression tests with:
+
+```sh
+bazel test --config=local //report:report_test //report:assemble_test
+```
+
+The report test emits `captured-report.html` in its undeclared outputs: an
+800-span fixture for browser checks. With Playwright available to Node, run:
+
+```sh
+node report/browser_test.cjs bazel-testlogs/report/report_test/test.outputs/captured-report.html
+```
+
+The browser checks cover navigation, independent filters, history, legacy/deep
+links, keyboard controls, escaping, lazy rendering, source selection, side swaps,
+and missing-capture inspection. `PLAYWRIGHT_CHROMIUM_EXECUTABLE` can select an
+existing Chromium installation.
 
 ## Remote execution
 

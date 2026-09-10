@@ -293,6 +293,7 @@ func run(matrixPath, metadataPath, outputPath, profileList, scenarioList, revisi
 		return receipts[i].Scenario < receipts[j].Scenario
 	})
 	model.Receipts = receipts
+	report.AddReportProjections(&model, plans, captures)
 	html, err := report.RenderHTML(model)
 	if err != nil {
 		return err
