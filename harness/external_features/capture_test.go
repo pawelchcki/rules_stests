@@ -236,8 +236,11 @@ func TestExperimentsRequireBaselineAndRejectIgnoredSettings(t *testing.T) {
 			case "exemplars-always-on":
 				base.Spans = nil
 				base.Metrics = []object{{"name": "probe.metric", "histogram": object{"dataPoints": []any{object{"count": "1"}}}}}
-			case "request-headers", "propagation-none":
+			case "request-headers":
 				base.Spans = syntheticProbeSpans()
+			case "propagation-none":
+				base.Spans = syntheticProbeSpans()
+				base.Logs[0]["body"] = object{"stringValue": "workload log"}
 			case "span-length", "attribute-length":
 				base.Spans = syntheticProbeSpans()
 			case "attribute-count":
@@ -290,6 +293,7 @@ func TestExperimentsRequireBaselineAndRejectIgnoredSettings(t *testing.T) {
 					s["trace_id"] = fmt.Sprintf("%032x", i+10)
 					s["parent_span_id"] = ""
 				}
+				changed.Logs[0]["body"] = object{"stringValue": "workload log"}
 			case "resource":
 				changed.Spans = syntheticProbeSpans()
 				changed.Resources = []object{{"attributes": []any{attr("probe.external", "visible"), attr("service.name", "external-probe")}}}
@@ -686,6 +690,16 @@ func TestLengthLimitsPreserveBaselineRecords(t *testing.T) {
 	if preserved, missing := evaluate(experiment{Name: "log-length"}, logBaseline, unrelatedLog).signature(), evaluate(experiment{Name: "log-length"}, twoLogs, oneLog).signature(); preserved == missing {
 		t.Fatalf("missing log identity kept the reviewed gap signature: %q", missing)
 	}
+	mixedLogs := capture{Logs: []object{
+		{"body": object{"stringValue": "limited"}, "attributes": []any{attr("request", "long workload attribute")}},
+		{"body": object{"stringValue": "ordinary"}, "attributes": []any{attr("request", "short")}},
+	}}
+	onlyLimited := capture{Logs: []object{
+		{"body": object{"stringValue": "limited"}, "attributes": []any{attr("request", "long wor")}},
+	}}
+	if got := evaluate(experiment{Name: "log-length"}, mixedLogs, onlyLimited); got.Status == "pass" {
+		t.Fatal("correctly capped log masked the loss of an unaffected log")
+	}
 	arrayValue := object{"arrayValue": object{"values": []any{object{"stringValue": "long array member"}}}}
 	arraySpan := capture{Spans: []object{{"attributes": []any{attr("scalar", "12345678"), object{"key": "array", "value": arrayValue}}}}}
 	if got := evaluate(experiment{Name: "span-length"}, baselineCapture(), arraySpan); got.Status == "pass" {
@@ -906,6 +920,43 @@ func TestPropagationCannotPassWithWrongOrMissingParents(t *testing.T) {
 	}
 }
 
+func TestPropagationPreservesTheRestOfTheWorkload(t *testing.T) {
+	registration := object{
+		"name": "POST /api/users", "kind": float64(2), "trace_id": fmt.Sprintf("%032x", 20),
+		"attributes": []any{attr("http.route", "/api/users"), attr("http.method", "POST")},
+	}
+	base := capture{
+		Spans:   append(syntheticProbeSpans(), registration),
+		Metrics: baselineCapture().Metrics,
+		Logs:    []object{{"body": object{"stringValue": "workload log"}}},
+	}
+	changed := capture{
+		Spans:   syntheticProbeSpans(),
+		Metrics: base.Metrics,
+		Logs:    base.Logs,
+	}
+	for i, span := range changed.Spans {
+		span["trace_id"] = fmt.Sprintf("%032x", i+10)
+		span["parent_span_id"] = ""
+	}
+	e := experiment{Name: "propagation-none"}
+	for _, drop := range []string{"registration spans", "metrics", "logs"} {
+		candidate := changed
+		switch drop {
+		case "registration spans":
+		case "metrics":
+			candidate.Spans = append(candidate.Spans, registration)
+			candidate.Metrics = nil
+		case "logs":
+			candidate.Spans = append(candidate.Spans, registration)
+			candidate.Logs = nil
+		}
+		if got := evaluate(e, base, candidate); got.Status == "pass" {
+			t.Fatalf("propagation-none passed after dropping %s", drop)
+		}
+	}
+}
+
 func TestAlwaysOnExemplarsRequireUnsampledControl(t *testing.T) {
 	e := experiment{Name: "exemplars-always-on"}
 	base := baselineCapture()
@@ -1017,7 +1068,8 @@ func TestProcessPortOwnership(t *testing.T) {
 		{"tcp", "0100007F", true},
 		{"tcp", "00000000", true},
 		{"tcp", "0200007F", false},
-		{"tcp6", "00000000000000000000000000000000", true},
+		{"tcp6", "00000000000000000000000000000000", false},
+		{"tcp6", "0000000000000000FFFF00000100007F", true},
 		{"tcp6", "00000000000000000000000001000000", false},
 	} {
 		if got := conflictsWithProbeAddress(test.network, test.address); got != test.want {

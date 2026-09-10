@@ -408,7 +408,12 @@ func conflictsWithProbeAddress(network, encoded string) bool {
 	case "tcp":
 		return encoded == "0100007F" || encoded == "00000000"
 	case "tcp6":
-		return encoded == strings.Repeat("0", 32) || encoded == "0000000000000000FFFF00000100007F"
+		// The probe connects to 127.0.0.1 and separately requires the child
+		// to own an IPv4 listener. A coexisting [::] socket may be IPV6_V6ONLY,
+		// which /proc/net/tcp6 does not expose, so wildcard text alone is not
+		// evidence that the IPv4 application port is shared. An explicitly
+		// IPv4-mapped loopback listener does conflict with the probe address.
+		return encoded == "0000000000000000FFFF00000100007F"
 	default:
 		return false
 	}

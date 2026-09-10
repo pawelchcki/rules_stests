@@ -497,7 +497,13 @@ func evaluate(e experiment, baseline, changed capture) observation {
 				roots[id] = true
 			}
 		}
-		check(len(before) == 4 && len(continued) == 4, len(after) == 4 && len(roots) == 4, fmt.Sprintf("incoming traces continued %d/4; independent roots with propagation disabled %d/4", len(continued), len(roots)))
+		expectedSpans, presentSpans := matchingWorkloadSpans(baseline, changed)
+		expectedMetrics, presentMetrics := matchingMetricStreams(baseline, changed)
+		expectedLogs, presentLogs := matchingLogStreams(baseline, changed, nil)
+		preserved := expectedSpans > 0 && presentSpans == expectedSpans &&
+			(len(baseline.Metrics) == 0 || (expectedMetrics > 0 && presentMetrics == expectedMetrics)) &&
+			(len(baseline.Logs) == 0 || (expectedLogs > 0 && presentLogs == expectedLogs))
+		check(len(before) == 4 && len(continued) == 4, len(after) == 4 && len(roots) == 4 && preserved, fmt.Sprintf("incoming traces continued %d/4; independent roots with propagation disabled %d/4; workload spans %d/%d, metrics %d/%d, logs %d/%d preserved", len(continued), len(roots), presentSpans, expectedSpans, presentMetrics, expectedMetrics, presentLogs, expectedLogs))
 	case "resource":
 		ok := len(changed.Resources) > 0
 		expected, present := preservedProbeRequests(baseline, changed)
@@ -527,7 +533,7 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		attributeExpected, attributePresent, attributeMissing := 0, 0, 0
 		if e.Name == "log-length" {
 			before, after = baseline.Logs, changed.Logs
-			expected, present = limitedLogStreamRecords(baseline, changed, 8)
+			expected, present = matchingLengthLimitedLogStreams(baseline, changed, 8)
 			attributeExpected, attributePresent, attributeMissing = preservedLongLogAttributes(baseline, changed, 8)
 			preserved = expected > 0 && present == expected && attributeExpected > 0 && attributePresent == attributeExpected
 		} else {
@@ -789,16 +795,16 @@ func headerArray(s object) bool {
 	return exact
 }
 
-func limitedLogStreamRecords(before, after capture, limit int) (int, int) {
+func matchingLengthLimitedLogStreams(before, after capture, limit int) (int, int) {
 	eligible := map[string]int{}
 	for _, stream := range captureLogStreams(before) {
-		if id := logLimitStreamID(stream); id != "" && maxLength([]object{stream.Record}) > limit {
+		if id := logLengthStreamID(stream, limit); id != "" {
 			eligible[id]++
 		}
 	}
 	preserved := map[string]int{}
 	for _, stream := range captureLogStreams(after) {
-		if id := logLimitStreamID(stream); id != "" && preserved[id] < eligible[id] {
+		if id := logLengthStreamID(stream, limit); id != "" && preserved[id] < eligible[id] {
 			preserved[id]++
 		}
 	}
@@ -949,6 +955,23 @@ func logStreamID(stream logStream, ignoredResourceAttributes map[string]bool) st
 
 func logLimitStreamID(stream logStream) string {
 	return logStreamIDWithRecordAttributes(stream, nil, false)
+}
+
+func logLengthStreamID(stream logStream, limit int) string {
+	recordID := stableLogRecordID(stream.Record, false)
+	if recordID == "" {
+		return ""
+	}
+	scopeName, _ := field(stream.Scope, "name").(string)
+	scopeVersion, _ := field(stream.Scope, "version").(string)
+	parts := []string{
+		recordID, scopeName, scopeVersion, stream.Schema, stream.ResourceSchema,
+		attributeSetID(stream.Scope, nil),
+		attributeSetID(stream.Resource, resourceAttributeIgnores(nil)),
+		attributeSetIDWithStringLimit(stream.Record, limit),
+	}
+	encoded, _ := json.Marshal(parts)
+	return string(encoded)
 }
 
 func logStreamIDWithRecordAttributes(stream logStream, ignoredResourceAttributes map[string]bool, includeRecordAttributes bool) string {
@@ -1274,6 +1297,22 @@ func attributeSetID(container object, ignored map[string]bool) string {
 			continue
 		}
 		encoded, _ := json.Marshal([]any{key, normalizedJSONValue(field(attribute, "value"))})
+		values = append(values, string(encoded))
+	}
+	sort.Strings(values)
+	encoded, _ := json.Marshal(values)
+	return string(encoded)
+}
+
+func attributeSetIDWithStringLimit(container object, limit int) string {
+	var values []string
+	for _, attribute := range attributes(container) {
+		key, _ := field(attribute, "key").(string)
+		if key == "" {
+			continue
+		}
+		value, _ := normalizeStringValues(field(attribute, "value"), limit)
+		encoded, _ := json.Marshal([]any{key, normalizedJSONValue(value)})
 		values = append(values, string(encoded))
 	}
 	sort.Strings(values)
