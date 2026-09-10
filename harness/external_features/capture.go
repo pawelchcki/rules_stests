@@ -504,7 +504,7 @@ func evaluate(e experiment, baseline, changed capture) observation {
 			expectedTraces := incomingProbeTraces(probeSpans(baseline))
 			presentTraces := incomingServerTraces(after)
 			expected, present = len(expectedTraces), len(presentTraces)
-			attributeExpected, attributePresent, attributeMissing = preservedLongAttributes(before, after, 8, incomingSpanIdentity)
+			attributeExpected, attributePresent, attributeMissing = preservedLongSpanAttributes(baseline, changed, 8)
 			preserved = expected > 0 && present == expected && attributeExpected > 0 && attributePresent == attributeExpected
 		}
 		check(maxLength(before) > 8, len(after) > 0 && maxLength(after) == 8 && preserved, fmt.Sprintf("maximum string attribute length %d -> %d; cap 8; baseline record identities preserved %d/%d; long attributes preserved %d/%d", maxLength(before), maxLength(after), present, expected, attributePresent, attributeExpected))
@@ -771,25 +771,31 @@ func identifiedLogRecords(c capture) []identifiedRecord {
 	return records
 }
 
-func incomingSpanIdentity(span object) string {
-	id, _ := field(span, "trace_id").(string)
-	if incomingTrace(id) {
-		return id
-	}
-	return ""
+func preservedLongSpanAttributes(before, after capture, limit int) (int, int, int) {
+	return preservedLongIdentifiedAttributes(identifiedIncomingSpans(before), identifiedIncomingSpans(after), limit)
 }
 
-func preservedLongAttributes(before, after []object, limit int, recordID func(object) string) (int, int, int) {
-	identify := func(records []object) []identifiedRecord {
-		identified := make([]identifiedRecord, 0, len(records))
-		for _, record := range records {
-			if id := recordID(record); id != "" {
-				identified = append(identified, identifiedRecord{Record: record, ID: id})
-			}
+func identifiedIncomingSpans(c capture) []identifiedRecord {
+	groups := map[string][]object{}
+	for _, span := range c.Spans {
+		traceID, _ := field(span, "trace_id").(string)
+		name, _ := field(span, "name").(string)
+		if !incomingTrace(traceID) || name == "" {
+			continue
 		}
-		return identified
+		encoded, _ := json.Marshal([]any{traceID, normalizeExternalStatePath(name), number(field(span, "kind"))})
+		groups[string(encoded)] = append(groups[string(encoded)], span)
 	}
-	return preservedLongIdentifiedAttributes(identify(before), identify(after), limit)
+	var identified []identifiedRecord
+	for stableID, spans := range groups {
+		sort.SliceStable(spans, func(i, j int) bool {
+			return fmt.Sprint(field(spans[i], "start_time_unix_nano")) < fmt.Sprint(field(spans[j], "start_time_unix_nano"))
+		})
+		for ordinal, span := range spans {
+			identified = append(identified, identifiedRecord{Record: span, ID: fmt.Sprintf("%s\x00%d", stableID, ordinal)})
+		}
+	}
+	return identified
 }
 
 func preservedLongIdentifiedAttributes(before, after []identifiedRecord, limit int) (int, int, int) {

@@ -655,6 +655,20 @@ func TestLengthLimitsPreserveBaselineRecords(t *testing.T) {
 	}
 }
 
+func TestLengthLimitsPreserveIndividualSpanContext(t *testing.T) {
+	span := func(name, value string) object {
+		return object{
+			"name": name, "kind": float64(3), "traceId": fmt.Sprintf("%032x", 1),
+			"attributes": []any{attr("payload", value)},
+		}
+	}
+	baseline := capture{Spans: []object{span("SELECT", "long payload"), span("INSERT", "long payload")}}
+	changed := capture{Spans: []object{span("SELECT", "long pay"), span("SELECT", "long pay")}}
+	if expected, present, _ := preservedLongSpanAttributes(baseline, changed, 8); expected != 2 || present != 1 {
+		t.Fatalf("one span supplied another span's capped attribute: %d/%d", present, expected)
+	}
+}
+
 func TestCountLimitsPreserveBaselineRecords(t *testing.T) {
 	spanBaseline := baselineCapture()
 	spanBaseline.Spans = syntheticProbeSpans()
