@@ -126,6 +126,10 @@ func TestExperimentsRequireBaselineAndRejectIgnoredSettings(t *testing.T) {
 				base.Metrics = []object{{"name": "probe.metric", "histogram": object{"dataPoints": []any{object{"count": "1"}}}}}
 			case "request-headers", "propagation-none":
 				base.Spans = syntheticProbeSpans()
+			case "span-length", "attribute-length":
+				base.Spans = syntheticProbeSpans()
+			case "log-length":
+				base.Logs[0]["body"] = object{"stringValue": "workload log"}
 			}
 			if got := evaluate(e, base, base); got.Status != "gap" {
 				t.Fatalf("ignored setting passed: %+v", got)
@@ -167,9 +171,17 @@ func TestExperimentsRequireBaselineAndRejectIgnoredSettings(t *testing.T) {
 			case "sampler", "sampler-arg":
 				changed.Spans = nil
 			case "span-length", "attribute-length":
-				changed.Spans = []object{{"attributes": []any{attr("first", "12345678")}}}
+				changed.Spans = syntheticProbeSpans()
+				for _, span := range changed.Spans {
+					span["attributes"] = []any{attr("http.user_agent", "12345678")}
+				}
 			case "log-length":
-				changed.Logs = []object{{"attributes": []any{attr("first", "12345678")}}}
+				changed.Logs = []object{{
+					"body": object{"stringValue": "workload log"},
+					"attributes": []any{
+						attr("first", "12345678"), attr("second", "12345678"), attr("third", "12345678"),
+					},
+				}}
 			case "attribute-count":
 				changed.Spans = []object{{"attributes": []any{attr("first", "value"), attr("second", "value")}, "dropped_attributes_count": float64(1)}}
 			case "events":
@@ -396,6 +408,13 @@ func TestLengthLimitsPreserveBaselineRecords(t *testing.T) {
 	unrelatedSpan := capture{Spans: []object{{"kind": float64(2), "attributes": []any{attr("unrelated", "12345678")}}}}
 	if got := evaluate(experiment{Name: "span-length"}, spanBaseline, unrelatedSpan); got.Status == "pass" {
 		t.Fatal("unrelated span stood in for missing workload requests")
+	}
+	missingAttribute := capture{Spans: syntheticProbeSpans()}
+	for _, span := range missingAttribute.Spans {
+		span["attributes"] = []any{attr("unrelated", "12345678")}
+	}
+	if got := evaluate(experiment{Name: "span-length"}, spanBaseline, missingAttribute); got.Status == "pass" {
+		t.Fatal("unrelated capped attributes stood in for dropped long baseline attributes")
 	}
 
 	logBaseline := capture{Logs: []object{{"body": object{"stringValue": "workload log"}, "attributes": []any{attr("request", "long workload attribute")}}}}

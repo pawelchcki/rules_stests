@@ -395,17 +395,20 @@ func evaluate(e experiment, baseline, changed capture) observation {
 	case "span-length", "attribute-length", "log-length":
 		before, after := baseline.Spans, changed.Spans
 		preserved, expected, present := true, 0, 0
+		attributeExpected, attributePresent := 0, 0
 		if e.Name == "log-length" {
 			before, after = baseline.Logs, changed.Logs
 			expected, present = limitedLogRecords(before, after, 8)
-			preserved = expected == 0 || present == expected
+			attributeExpected, attributePresent = preservedLongAttributes(before, after, 8, logRecordIdentity)
+			preserved = expected > 0 && present == expected && attributeExpected > 0 && attributePresent == attributeExpected
 		} else {
 			expectedTraces := incomingProbeTraces(probeSpans(baseline))
 			presentTraces := incomingServerTraces(after)
 			expected, present = len(expectedTraces), len(presentTraces)
-			preserved = expected == 0 || present == expected
+			attributeExpected, attributePresent = preservedLongAttributes(before, after, 8, incomingSpanIdentity)
+			preserved = expected > 0 && present == expected && attributeExpected > 0 && attributePresent == attributeExpected
 		}
-		check(maxLength(before) > 8, len(after) > 0 && maxLength(after) == 8 && preserved, fmt.Sprintf("maximum string attribute length %d -> %d; cap 8; baseline record identities preserved %d/%d", maxLength(before), maxLength(after), present, expected))
+		check(maxLength(before) > 8, len(after) > 0 && maxLength(after) == 8 && preserved, fmt.Sprintf("maximum string attribute length %d -> %d; cap 8; baseline record identities preserved %d/%d; long attributes preserved %d/%d", maxLength(before), maxLength(after), present, expected, attributePresent, attributeExpected))
 		violations := map[string]bool{}
 		for _, item := range after {
 			for _, a := range attributes(item) {
@@ -419,6 +422,9 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		}
 		if present != expected {
 			o.Violations = append(o.Violations, fmt.Sprintf("records=%d/%d", present, expected))
+		}
+		if attributePresent != attributeExpected {
+			o.Violations = append(o.Violations, fmt.Sprintf("attributes=%d/%d", attributePresent, attributeExpected))
 		}
 		sort.Strings(o.Violations)
 	case "attribute-count", "event-attributes", "log-count":
@@ -562,6 +568,45 @@ func limitedLogRecords(before, after []object, limit int) (int, int) {
 		present += count
 	}
 	return expected, present
+}
+
+func incomingSpanIdentity(span object) string {
+	id, _ := field(span, "trace_id").(string)
+	if incomingTrace(id) {
+		return id
+	}
+	return ""
+}
+
+func preservedLongAttributes(before, after []object, limit int, recordID func(object) string) (int, int) {
+	eligible := map[string]int{}
+	for _, record := range before {
+		id := recordID(record)
+		if id == "" {
+			continue
+		}
+		for _, attribute := range attributes(record) {
+			key, _ := field(attribute, "key").(string)
+			if key != "" && maxStringValueLength(field(attribute, "value")) > limit {
+				eligible[id+"\x00"+key]++
+			}
+		}
+	}
+	preserved := map[string]int{}
+	for _, record := range after {
+		id := recordID(record)
+		if id == "" {
+			continue
+		}
+		for _, attribute := range attributes(record) {
+			key, _ := field(attribute, "key").(string)
+			identity := id + "\x00" + key
+			if _, valid := stringValue(field(attribute, "value")); valid && preserved[identity] < eligible[identity] {
+				preserved[identity]++
+			}
+		}
+	}
+	return countIdentities(eligible), countIdentities(preserved)
 }
 
 func matchingLogRecords(before, after []object) (int, int) {

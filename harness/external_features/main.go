@@ -168,8 +168,10 @@ func run(app, launcher, expected string, discover bool, args []string) error {
 var errPortInUse = errors.New("application port already in use")
 
 func collect(app, launcher string, args []string, sink, out string, e experiment) ([]byte, error) {
+	attempt := 0
 	return retryPortConflicts(func() ([]byte, error) {
-		return collectOnce(app, launcher, args, sink, out, e)
+		attempt++
+		return collectOnce(app, launcher, args, sink, out, e, attempt)
 	})
 }
 
@@ -185,7 +187,7 @@ func retryPortConflicts(attempt func() ([]byte, error)) ([]byte, error) {
 	return nil, fmt.Errorf("application port unavailable after three attempts: %w", err)
 }
 
-func collectOnce(app, launcher string, args []string, sink, out string, e experiment) ([]byte, error) {
+func collectOnce(app, launcher string, args []string, sink, out string, e experiment, attempt int) ([]byte, error) {
 	if _, err := request("POST", sink+"/reset", nil); err != nil {
 		return nil, err
 	}
@@ -221,7 +223,7 @@ func collectOnce(app, launcher string, args []string, sink, out string, e experi
 	var launchArgs []string
 	for _, arg := range args {
 		if arg == "--" {
-			launchArgs = append(launchArgs, "--instance=external-"+e.Name)
+			launchArgs = append(launchArgs, fmt.Sprintf("--instance=external-%s-%d", e.Name, attempt))
 			keys := make([]string, 0, len(env))
 			for key := range env {
 				keys = append(keys, key)
