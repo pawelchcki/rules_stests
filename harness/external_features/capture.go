@@ -495,8 +495,8 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		attributeExpected, attributePresent, attributeMissing := 0, 0, 0
 		if e.Name == "log-length" {
 			before, after = baseline.Logs, changed.Logs
-			expected, present = limitedLogRecords(before, after, 8)
-			attributeExpected, attributePresent, attributeMissing = preservedLongAttributes(before, after, 8, logRecordIdentity)
+			expected, present = limitedLogStreamRecords(baseline, changed, 8)
+			attributeExpected, attributePresent, attributeMissing = preservedLongLogAttributes(baseline, changed, 8)
 			preserved = expected > 0 && present == expected && attributeExpected > 0 && attributePresent == attributeExpected
 		} else {
 			expectedTraces := incomingProbeTraces(probeSpans(baseline))
@@ -534,7 +534,7 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		}
 		if e.Name == "log-count" {
 			before, after, cap = baseline.Logs, changed.Logs, 1
-			expected, present = limitedCountLogRecords(before, after, cap)
+			expected, present = limitedCountLogStreamRecords(baseline, changed, cap)
 			preserved = expected == 0 || present == expected
 		} else if e.Name != "event-attributes" {
 			expected, present = limitedProbeRequests(baseline, changed, cap)
@@ -659,17 +659,17 @@ func headerArray(s object) bool {
 	return exact
 }
 
-func limitedLogRecords(before, after []object, limit int) (int, int) {
+func limitedLogStreamRecords(before, after capture, limit int) (int, int) {
 	eligible := map[string]int{}
-	for _, record := range before {
-		if body, ok := stringValue(field(record, "body")); ok && body != "" && maxLength([]object{record}) > limit {
-			eligible[body]++
+	for _, stream := range captureLogStreams(before) {
+		if id := logStreamID(stream, nil); id != "" && maxLength([]object{stream.Record}) > limit {
+			eligible[id]++
 		}
 	}
 	preserved := map[string]int{}
-	for _, record := range after {
-		if body, ok := stringValue(field(record, "body")); ok && preserved[body] < eligible[body] {
-			preserved[body]++
+	for _, stream := range captureLogStreams(after) {
+		if id := logStreamID(stream, nil); id != "" && preserved[id] < eligible[id] {
+			preserved[id]++
 		}
 	}
 	expected, present := 0, 0
@@ -682,6 +682,25 @@ func limitedLogRecords(before, after []object, limit int) (int, int) {
 	return expected, present
 }
 
+func preservedLongLogAttributes(before, after capture, limit int) (int, int, int) {
+	return preservedLongIdentifiedAttributes(identifiedLogRecords(before), identifiedLogRecords(after), limit)
+}
+
+type identifiedRecord struct {
+	Record object
+	ID     string
+}
+
+func identifiedLogRecords(c capture) []identifiedRecord {
+	var records []identifiedRecord
+	for _, stream := range captureLogStreams(c) {
+		if id := logStreamID(stream, nil); id != "" {
+			records = append(records, identifiedRecord{Record: stream.Record, ID: id})
+		}
+	}
+	return records
+}
+
 func incomingSpanIdentity(span object) string {
 	id, _ := field(span, "trace_id").(string)
 	if incomingTrace(id) {
@@ -691,18 +710,27 @@ func incomingSpanIdentity(span object) string {
 }
 
 func preservedLongAttributes(before, after []object, limit int, recordID func(object) string) (int, int, int) {
-	eligible, originals := map[string]int{}, map[string]int{}
-	for _, record := range before {
-		id := recordID(record)
-		if id == "" {
-			continue
+	identify := func(records []object) []identifiedRecord {
+		identified := make([]identifiedRecord, 0, len(records))
+		for _, record := range records {
+			if id := recordID(record); id != "" {
+				identified = append(identified, identifiedRecord{Record: record, ID: id})
+			}
 		}
-		for _, attribute := range attributes(record) {
+		return identified
+	}
+	return preservedLongIdentifiedAttributes(identify(before), identify(after), limit)
+}
+
+func preservedLongIdentifiedAttributes(before, after []identifiedRecord, limit int) (int, int, int) {
+	eligible, originals := map[string]int{}, map[string]int{}
+	for _, identified := range before {
+		for _, attribute := range attributes(identified.Record) {
 			key, _ := field(attribute, "key").(string)
 			value := field(attribute, "value")
 			cappedID, valid := normalizedStringValueID(value, limit)
 			if key != "" && valid && maxStringValueLength(value) > limit {
-				prefix := id + "\x00" + key + "\x00"
+				prefix := identified.ID + "\x00" + key + "\x00"
 				originalID, _ := normalizedStringValueID(value, -1)
 				eligible[prefix+cappedID]++
 				originals[prefix+originalID]++
@@ -710,15 +738,11 @@ func preservedLongAttributes(before, after []object, limit int, recordID func(ob
 		}
 	}
 	preserved, uncapped := map[string]int{}, map[string]int{}
-	for _, record := range after {
-		id := recordID(record)
-		if id == "" {
-			continue
-		}
-		for _, attribute := range attributes(record) {
+	for _, identified := range after {
+		for _, attribute := range attributes(identified.Record) {
 			key, _ := field(attribute, "key").(string)
 			valueID, valid := normalizedStringValueID(field(attribute, "value"), -1)
-			identity := id + "\x00" + key + "\x00" + valueID
+			identity := identified.ID + "\x00" + key + "\x00" + valueID
 			if valid && preserved[identity] < eligible[identity] {
 				preserved[identity]++
 			} else if valid && uncapped[identity] < originals[identity] {
@@ -807,17 +831,18 @@ func logRecordIdentity(record object) string {
 	return body
 }
 
-func limitedCountLogRecords(before, after []object, limit int) (int, int) {
+func limitedCountLogStreamRecords(before, after capture, limit int) (int, int) {
 	eligible := map[string]int{}
-	for _, record := range before {
-		if body, ok := stringValue(field(record, "body")); ok && body != "" && len(attributes(record)) > limit {
-			eligible[body]++
+	for _, stream := range captureLogStreams(before) {
+		if id := logStreamID(stream, nil); id != "" && len(attributes(stream.Record)) > limit {
+			eligible[id]++
 		}
 	}
 	preserved := map[string]int{}
-	for _, record := range after {
-		if body, ok := stringValue(field(record, "body")); ok && preserved[body] < eligible[body] && len(attributes(record)) == limit && number(field(record, "dropped_attributes_count")) > 0 {
-			preserved[body]++
+	for _, stream := range captureLogStreams(after) {
+		id := logStreamID(stream, nil)
+		if id != "" && preserved[id] < eligible[id] && len(attributes(stream.Record)) == limit && number(field(stream.Record, "dropped_attributes_count")) > 0 {
+			preserved[id]++
 		}
 	}
 	expected, present := 0, 0
@@ -832,21 +857,19 @@ func limitedCountLogRecords(before, after []object, limit int) (int, int) {
 
 func limitedEventRecords(before, after capture, limit int) (int, int) {
 	eligible := map[string]int{}
-	for _, span := range before.Spans {
-		spanName, _ := field(span, "name").(string)
-		for _, event := range objects(span, "events") {
+	for _, parent := range identifiedSpans(before) {
+		for _, event := range objects(parent.Record, "events") {
 			eventName, _ := field(event, "name").(string)
-			if spanName != "" && eventName != "" && len(attributes(event)) > limit {
-				eligible[spanName+"\x00"+eventName]++
+			if eventName != "" && len(attributes(event)) > limit {
+				eligible[parent.ID+"\x00"+eventName]++
 			}
 		}
 	}
 	preserved := map[string]int{}
-	for _, span := range after.Spans {
-		spanName, _ := field(span, "name").(string)
-		for _, event := range objects(span, "events") {
+	for _, parent := range identifiedSpans(after) {
+		for _, event := range objects(parent.Record, "events") {
 			eventName, _ := field(event, "name").(string)
-			key := spanName + "\x00" + eventName
+			key := parent.ID + "\x00" + eventName
 			if preserved[key] < eligible[key] && len(attributes(event)) == limit && number(field(event, "dropped_attributes_count")) > 0 {
 				preserved[key]++
 			}
@@ -855,18 +878,40 @@ func limitedEventRecords(before, after capture, limit int) (int, int) {
 	return countIdentities(eligible), countIdentities(preserved)
 }
 
+func identifiedSpans(c capture) []identifiedRecord {
+	groups := map[string][]object{}
+	for _, span := range c.Spans {
+		name, _ := field(span, "name").(string)
+		if name == "" {
+			continue
+		}
+		parts := []any{name, number(field(span, "kind")), attributeSetID(span, nil)}
+		encoded, _ := json.Marshal(parts)
+		groups[string(encoded)] = append(groups[string(encoded)], span)
+	}
+	var identified []identifiedRecord
+	for stableID, spans := range groups {
+		sort.SliceStable(spans, func(i, j int) bool {
+			return fmt.Sprint(field(spans[i], "start_time_unix_nano")) < fmt.Sprint(field(spans[j], "start_time_unix_nano"))
+		})
+		for ordinal, span := range spans {
+			identified = append(identified, identifiedRecord{Record: span, ID: fmt.Sprintf("%s\x00%d", stableID, ordinal)})
+		}
+	}
+	return identified
+}
+
 func suppressedEventRecords(before, after capture) (int, int) {
 	eligible := map[string]int{}
-	for _, span := range before.Spans {
-		if name, ok := field(span, "name").(string); ok && name != "" && len(objects(span, "events")) > 0 {
-			eligible[name]++
+	for _, parent := range identifiedSpans(before) {
+		if len(objects(parent.Record, "events")) > 0 {
+			eligible[parent.ID]++
 		}
 	}
 	preserved := map[string]int{}
-	for _, span := range after.Spans {
-		name, _ := field(span, "name").(string)
-		if preserved[name] < eligible[name] && len(objects(span, "events")) == 0 && number(field(span, "dropped_events_count")) > 0 {
-			preserved[name]++
+	for _, parent := range identifiedSpans(after) {
+		if preserved[parent.ID] < eligible[parent.ID] && len(objects(parent.Record, "events")) == 0 && number(field(parent.Record, "dropped_events_count")) > 0 {
+			preserved[parent.ID]++
 		}
 	}
 	return countIdentities(eligible), countIdentities(preserved)
@@ -898,19 +943,33 @@ func matchingMetricStreams(before, after capture) (int, int) {
 func matchingMetricStreamsIgnoring(before, after capture, ignoredResourceAttributes map[string]bool) (int, int) {
 	eligible := map[string]bool{}
 	for _, stream := range captureMetricStreams(before) {
-		id, kind := metricIDIgnoring(stream, ignoredResourceAttributes), metricDataType(stream.Metric)
-		if id != "" && kind != "" && len(objects(stream.Metric, "data_points")) > 0 {
-			eligible[id+"\x00"+kind] = true
+		for _, point := range objects(stream.Metric, "data_points") {
+			if id := controlMetricPointID(stream, point, ignoredResourceAttributes); id != "" {
+				eligible[id] = true
+			}
 		}
 	}
 	preserved := map[string]bool{}
 	for _, stream := range captureMetricStreams(after) {
-		id := metricIDIgnoring(stream, ignoredResourceAttributes) + "\x00" + metricDataType(stream.Metric)
-		if eligible[id] && len(objects(stream.Metric, "data_points")) > 0 {
-			preserved[id] = true
+		for _, point := range objects(stream.Metric, "data_points") {
+			id := controlMetricPointID(stream, point, ignoredResourceAttributes)
+			if eligible[id] {
+				preserved[id] = true
+			}
 		}
 	}
 	return len(eligible), len(preserved)
+}
+
+func controlMetricPointID(stream metricStream, point object, ignoredResourceAttributes map[string]bool) string {
+	id, kind := metricIDIgnoring(stream, ignoredResourceAttributes), metricDataType(stream.Metric)
+	if id == "" || kind == "" {
+		return ""
+	}
+	if name, _ := field(stream.Metric, "name").(string); name == "system.network.connections" {
+		return id + "\x00" + kind
+	}
+	return id + "\x00" + kind + "\x00" + metricPointAttributeSetID(point)
 }
 
 func metricID(stream metricStream) string {

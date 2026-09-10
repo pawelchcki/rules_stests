@@ -114,6 +114,39 @@ func TestDecodePreservesLogStreamContext(t *testing.T) {
 	}
 }
 
+func TestLogLimitsPreserveStreamContext(t *testing.T) {
+	baselineRecord := func() object {
+		return object{"body": object{"stringValue": "shared log"}, "attributes": []any{attr("first", "long baseline attribute"), attr("second", "another long attribute")}}
+	}
+	cappedCount := func() object {
+		return object{"body": object{"stringValue": "shared log"}, "attributes": []any{attr("first", "long baseline attribute")}, "droppedAttributesCount": float64(1)}
+	}
+	cappedLength := func() object {
+		return object{"body": object{"stringValue": "shared log"}, "attributes": []any{attr("first", "long bas"), attr("second", "another ")}}
+	}
+	baseOne, baseTwo := baselineRecord(), baselineRecord()
+	baseline := capture{Logs: []object{baseOne, baseTwo}, LogStreams: []logStream{
+		{Record: baseOne, Scope: object{"name": "scope.one"}},
+		{Record: baseTwo, Scope: object{"name": "scope.two"}},
+	}}
+	countOne, countDuplicate := cappedCount(), cappedCount()
+	countChanged := capture{Logs: []object{countOne, countDuplicate}, LogStreams: []logStream{
+		{Record: countOne, Scope: object{"name": "scope.one"}},
+		{Record: countDuplicate, Scope: object{"name": "scope.one"}},
+	}}
+	if got := evaluate(experiment{Name: "log-count"}, baseline, countChanged); got.Status == "pass" {
+		t.Fatal("one log stream stood in for another in the count-limit check")
+	}
+	lengthOne, lengthDuplicate := cappedLength(), cappedLength()
+	lengthChanged := capture{Logs: []object{lengthOne, lengthDuplicate}, LogStreams: []logStream{
+		{Record: lengthOne, Scope: object{"name": "scope.one"}},
+		{Record: lengthDuplicate, Scope: object{"name": "scope.one"}},
+	}}
+	if got := evaluate(experiment{Name: "log-length"}, baseline, lengthChanged); got.Status == "pass" {
+		t.Fatal("one log stream stood in for another in the length-limit check")
+	}
+}
+
 func attr(key, value string) any { return object{"key": key, "value": object{"stringValue": value}} }
 func item() object {
 	return object{"attributes": []any{attr("first", "long baseline attribute"), attr("second", "another long attribute"), attr("third", "third attribute")}}
@@ -461,6 +494,52 @@ func TestMetricChangesPreserveInstrumentIdentity(t *testing.T) {
 	changed = capture{Metrics: []object{convertedA}, MetricStreams: []metricStream{{Metric: convertedA, Scope: object{"name": "scope.one"}}}}
 	if got := evaluate(experiment{Name: "histogram"}, baseline, changed); got.Status == "pass" {
 		t.Fatal("one converted data point stood in for a missing histogram series")
+	}
+}
+
+func TestControlMetricsPreserveDataPointIdentities(t *testing.T) {
+	point := func(route string) object { return object{"attributes": []any{attr("route", route)}} }
+	metric := func(name string, points ...object) object {
+		values := make([]any, len(points))
+		for i, point := range points {
+			values[i] = point
+		}
+		return object{"name": name, "sum": object{"dataPoints": values}}
+	}
+	baselineMetric := metric("request.count", point("a"), point("b"))
+	changedMetric := metric("request.count", point("a"))
+	baseline := capture{Metrics: []object{baselineMetric}, MetricStreams: []metricStream{{Metric: baselineMetric}}}
+	changed := capture{Metrics: []object{changedMetric}, MetricStreams: []metricStream{{Metric: changedMetric}}}
+	if expected, present := matchingMetricStreams(baseline, changed); expected != 2 || present != 1 {
+		t.Fatalf("metric data-point loss was not detected: %d/%d", present, expected)
+	}
+	beforeConnections := metric("system.network.connections", point("SYN_SENT"))
+	afterConnections := metric("system.network.connections", point("ESTABLISHED"))
+	before := capture{Metrics: []object{beforeConnections}, MetricStreams: []metricStream{{Metric: beforeConnections}}}
+	after := capture{Metrics: []object{afterConnections}, MetricStreams: []metricStream{{Metric: afterConnections}}}
+	if expected, present := matchingMetricStreams(before, after); expected != 1 || present != 1 {
+		t.Fatalf("transient connection states split one observer stream: %d/%d", present, expected)
+	}
+}
+
+func TestEventLimitsPreserveParentOccurrences(t *testing.T) {
+	event := func() object {
+		return object{"name": "exception", "attributes": []any{attr("type", "conflict"), attr("message", "duplicate")}}
+	}
+	parent := func(start string, events ...object) object {
+		values := make([]any, len(events))
+		for i, event := range events {
+			values[i] = event
+		}
+		return object{"name": "INSERT", "kind": float64(3), "startTimeUnixNano": start, "attributes": []any{attr("db.system", "sqlite")}, "events": values}
+	}
+	baseline := capture{Spans: []object{parent("1", event()), parent("2", event())}}
+	capped := func() object {
+		return object{"name": "exception", "attributes": []any{attr("type", "conflict")}, "droppedAttributesCount": float64(1)}
+	}
+	changed := capture{Spans: []object{parent("3", capped(), capped()), parent("4")}}
+	if expected, present := limitedEventRecords(baseline, changed, 1); expected != 2 || present != 1 {
+		t.Fatalf("one event parent stood in for another: %d/%d", present, expected)
 	}
 }
 
