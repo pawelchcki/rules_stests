@@ -1090,42 +1090,40 @@ func shallowTraceMatchScore(left, right resolvedTrace) (int, bool) {
 		}
 		return score
 	}
-	matchedSides, detail := 0, 0
+	scoredLeft, scoredRight := left.roots, right.roots
+	var matchedRight []int
 	if len(left.roots)+len(right.roots) <= nestedScoreVertexLimit {
-		matchedRight, _ := maximumCardinalityPairs(left.roots, right.roots, rootScore)
-		for leftIndex, rightIndex := range matchedRight {
-			if rightIndex < 0 {
-				continue
-			}
-			matchedSides += 2
-			detail += rootScore(left.roots[leftIndex], right.roots[rightIndex]) * 2
-		}
+		matchedRight, _ = maximumCardinalityPairs(scoredLeft, scoredRight, rootScore)
 	} else {
-		// Large root sets retain linear memory by aggregating the best score
-		// from both orientations. Every root contributes, while a single
-		// shared root can no longer hide the remaining set.
-		bestScores := func(from, to []alignedSpan) {
-			for _, source := range from {
-				best, found := 0, false
-				for _, target := range to {
-					score := rootScore(source, target)
-					if score >= 0 && (!found || score > best) {
-						best, found = score, true
-					}
-				}
-				if found {
-					matchedSides++
-					detail += best
-				}
-			}
-		}
-		bestScores(left.roots, right.roots)
-		bestScores(right.roots, left.roots)
+		// Force the linear-memory solver beyond the nested cutoff, even when
+		// the root set is still small enough for the outer exact threshold.
+		// Canonical ordering keeps equal-score assignments independent of the
+		// authored root order.
+		scoredLeft = append([]alignedSpan(nil), left.roots...)
+		scoredRight = append([]alignedSpan(nil), right.roots...)
+		sort.SliceStable(scoredLeft, func(i, j int) bool {
+			return canonicalAlignmentSpanKey(scoredLeft[i]) < canonicalAlignmentSpanKey(scoredLeft[j])
+		})
+		sort.SliceStable(scoredRight, func(i, j int) bool {
+			return canonicalAlignmentSpanKey(scoredRight[i]) < canonicalAlignmentSpanKey(scoredRight[j])
+		})
+		matchedRight, _ = linearMemoryMaximumCardinalityPairs(len(scoredLeft), len(scoredRight), func(leftIndex, rightIndex int) (int, bool) {
+			score := rootScore(scoredLeft[leftIndex], scoredRight[rightIndex])
+			return score, score >= 0
+		})
 	}
-	if matchedSides == 0 {
+	matched, detail := 0, 0
+	for leftIndex, rightIndex := range matchedRight {
+		if rightIndex < 0 {
+			continue
+		}
+		matched++
+		detail += rootScore(scoredLeft[leftIndex], scoredRight[rightIndex])
+	}
+	if matched == 0 {
 		return 0, false
 	}
-	best := matchedSides*50000 + detail - (len(left.roots)+len(right.roots)-matchedSides)*10000
+	best := matched*100000 + detail - (len(left.roots)+len(right.roots)-2*matched)*10000
 	if left.card == right.card {
 		best += 100
 	}

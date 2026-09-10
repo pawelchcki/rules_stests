@@ -85,6 +85,25 @@ func TestLargeMultiRootTraceAlignmentScoresEveryRoot(t *testing.T) {
 	}
 }
 
+func TestShallowTraceScoreRetainsLargeRootMultiplicity(t *testing.T) {
+	trace := func(ok, failed int) resolvedTrace {
+		result := resolvedTrace{card: "", coverage: "complete"}
+		for range ok {
+			result.roots = append(result.roots, resolveSpanGroup(exactSpan("", "server", "ok", "root", ""))[0])
+		}
+		for range failed {
+			result.roots = append(result.roots, resolveSpanGroup(exactSpan("", "server", "error", "root", ""))[0])
+		}
+		return result
+	}
+	mostlyOK, mostlyFailed := trace(16, 1), trace(1, 16)
+	same, compatible := shallowTraceMatchScore(mostlyOK, mostlyOK)
+	crossed, crossedCompatible := shallowTraceMatchScore(mostlyOK, mostlyFailed)
+	if !compatible || !crossedCompatible || same <= crossed {
+		t.Fatalf("large root multiplicity did not affect one-to-one score: same=%d crossed=%d", same, crossed)
+	}
+}
+
 func TestLargePairingPreservesMaximumCardinality(t *testing.T) {
 	count := optimalAssignmentVertexLimit/2 + 1
 	matched, _ := maximumWeightMaximumCardinalityPairs(count, count, func(left, right int) (int, bool) {
