@@ -219,7 +219,7 @@ func baselineCapture() capture {
 	return capture{
 		Records: []object{{"request": object{"content_encoding": "identity"}}},
 		Spans:   []object{s}, Logs: []object{item()}, Resources: []object{item()},
-		Metrics: []object{{"name": "probe.metric", "histogram": object{"dataPoints": []any{object{"count": "1", "exemplars": []any{object{"timeUnixNano": "1"}}}}}}},
+		Metrics: []object{{"name": "probe.metric", "histogram": object{"dataPoints": []any{object{"count": "1", "exemplars": []any{object{"timeUnixNano": "1", "value": object{"asInt": "1"}}}}}}}},
 	}
 }
 
@@ -498,6 +498,29 @@ func TestWorkloadSpanIdentityRejectsInvalidTraceIDs(t *testing.T) {
 	}
 }
 
+func TestWorkloadSpanIdentityRejectsInvalidSpanStructure(t *testing.T) {
+	baseline := capture{Spans: syntheticProbeSpans()}
+	for name, mutate := range map[string]func(object){
+		"zero span id": func(span object) { span["span_id"] = strings.Repeat("0", 16) },
+		"duplicate span id": func(span object) {
+			span["trace_id"] = field(baseline.Spans[1], "trace_id")
+			span["span_id"] = field(baseline.Spans[1], "span_id")
+		},
+		"zero start": func(span object) { span["start_time_unix_nano"] = "0" },
+		"reversed timestamps": func(span object) {
+			span["start_time_unix_nano"], span["end_time_unix_nano"] = "200", "100"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := capture{Spans: syntheticProbeSpans()}
+			mutate(changed.Spans[0])
+			if expected, present := matchingWorkloadSpans(baseline, changed); expected == present {
+				t.Fatalf("invalid span structure was preserved: %d/%d", present, expected)
+			}
+		})
+	}
+}
+
 func TestWorkloadSpanIdentityPreservesFlagsAndEvents(t *testing.T) {
 	baseline := capture{Spans: syntheticProbeSpans()}
 	changed := capture{Spans: syntheticProbeSpans()}
@@ -546,8 +569,8 @@ func TestWorkloadSpanIdentityPreservesTopologyAndMultiplicity(t *testing.T) {
 		propagationChanged.Spans[index]["parent_span_id"] = ""
 		propagationChanged.Spans[index]["flags"] = float64(1)
 		traceID := field(propagationBaseline.Spans[index], "trace_id")
-		propagationBaseline.Spans = append(propagationBaseline.Spans, object{"name": "SELECT", "kind": float64(3), "trace_id": traceID, "parent_span_id": baselineParentID, "attributes": []any{attr("db.system", "sqlite")}})
-		propagationChanged.Spans = append(propagationChanged.Spans, object{"name": "SELECT", "kind": float64(3), "trace_id": traceID, "parent_span_id": changedParentID, "attributes": []any{attr("db.system", "sqlite")}})
+		propagationBaseline.Spans = append(propagationBaseline.Spans, object{"name": "SELECT", "kind": float64(3), "trace_id": traceID, "span_id": fmt.Sprintf("%016x", index+101), "parent_span_id": baselineParentID, "start_time_unix_nano": fmt.Sprintf("%d", index*100+1000), "end_time_unix_nano": fmt.Sprintf("%d", index*100+1001), "attributes": []any{attr("db.system", "sqlite")}})
+		propagationChanged.Spans = append(propagationChanged.Spans, object{"name": "SELECT", "kind": float64(3), "trace_id": traceID, "span_id": fmt.Sprintf("%016x", index+111), "parent_span_id": changedParentID, "start_time_unix_nano": fmt.Sprintf("%d", index*100+2000), "end_time_unix_nano": fmt.Sprintf("%d", index*100+2001), "attributes": []any{attr("db.system", "sqlite")}})
 	}
 	if expected, present := matchingWorkloadSpansIgnoringParents(propagationBaseline, propagationChanged); expected != 8 || present != 8 {
 		t.Fatalf("valid local topology changed under propagation normalization: %d/%d", present, expected)
@@ -1163,7 +1186,7 @@ func TestComparisonRecomputesAndRejectsTamperedEvidence(t *testing.T) {
 func syntheticProbeSpans() []object {
 	var out []object
 	for i := 1; i <= 4; i++ {
-		out = append(out, object{"name": "GET api/tags", "kind": float64(2), "trace_id": fmt.Sprintf("%032x", i), "parent_span_id": "00f067aa0ba902b7", "attributes": []any{attr("http.route", "api/tags"), attr("http.user_agent", "external-feature-probe-long-user-agent")}})
+		out = append(out, object{"name": "GET api/tags", "kind": float64(2), "trace_id": fmt.Sprintf("%032x", i), "span_id": fmt.Sprintf("%016x", i), "parent_span_id": "00f067aa0ba902b7", "start_time_unix_nano": fmt.Sprintf("%d", i*100), "end_time_unix_nano": fmt.Sprintf("%d", i*100+1), "attributes": []any{attr("http.route", "api/tags"), attr("http.user_agent", "external-feature-probe-long-user-agent")}})
 	}
 	return out
 }
@@ -1387,6 +1410,11 @@ func TestTraceBasedExemplarsCannotProveAlwaysOn(t *testing.T) {
 	if got := evaluate(experiment{Name: "exemplars-always-on"}, control, configured); got.Status == "pass" {
 		t.Fatal("an unmatched metric stream supplied AlwaysOn exemplar evidence")
 	}
+	invalidMetric := object{"name": "duration", "histogram": object{"dataPoints": []any{object{"count": "1", "exemplars": []any{object{"timeUnixNano": "1"}}}}}}
+	invalid := capture{Metrics: []object{invalidMetric}, MetricStreams: []metricStream{{Metric: invalidMetric, Scope: object{"name": "control.scope"}}}}
+	if got := evaluate(experiment{Name: "exemplars-always-on"}, control, invalid); got.Status == "pass" {
+		t.Fatal("timestamp-only exemplar supplied AlwaysOn measurement evidence")
+	}
 }
 
 func TestExemplarSuppressionPreservesUnaffectedSignals(t *testing.T) {
@@ -1457,7 +1485,7 @@ func TestBatchAndHeaderExperimentsPreserveOtherSignals(t *testing.T) {
 	}
 
 	headerBase := complete()
-	registration := object{"name": "POST /api/users", "kind": float64(2), "trace_id": fmt.Sprintf("%032x", 20), "attributes": []any{attr("http.route", "/api/users")}}
+	registration := object{"name": "POST /api/users", "kind": float64(2), "trace_id": fmt.Sprintf("%032x", 20), "span_id": fmt.Sprintf("%016x", 20), "start_time_unix_nano": "2000", "end_time_unix_nano": "2001", "attributes": []any{attr("http.route", "/api/users")}}
 	headerBase.Spans = append(headerBase.Spans, registration)
 	headerChanged := complete()
 	headerChanged.Spans = append(headerChanged.Spans, registration)
@@ -1480,8 +1508,8 @@ func TestBatchAndHeaderExperimentsPreserveOtherSignals(t *testing.T) {
 
 func TestAlwaysOnPreservesAllControlMetricsAndLogs(t *testing.T) {
 	eligible := object{"name": "duration", "histogram": object{"dataPoints": []any{object{"attributes": []any{attr("route", "tags")}}}}}
-	excluded := object{"name": "active", "sum": object{"dataPoints": []any{object{"attributes": []any{attr("route", "users")}, "exemplars": []any{object{"timeUnixNano": "1"}}}}}}
-	withExemplar := object{"name": "duration", "histogram": object{"dataPoints": []any{object{"attributes": []any{attr("route", "tags")}, "exemplars": []any{object{"timeUnixNano": "2"}}}}}}
+	excluded := object{"name": "active", "sum": object{"dataPoints": []any{object{"attributes": []any{attr("route", "users")}, "exemplars": []any{object{"timeUnixNano": "1", "value": object{"asInt": "1"}}}}}}}
+	withExemplar := object{"name": "duration", "histogram": object{"dataPoints": []any{object{"attributes": []any{attr("route", "tags")}, "exemplars": []any{object{"timeUnixNano": "2", "value": object{"asDouble": float64(1)}}}}}}}
 	base := capture{Metrics: []object{eligible, excluded}, Logs: []object{{"body": object{"stringValue": "workload log"}}}}
 	complete := capture{Metrics: []object{withExemplar, excluded}, Logs: base.Logs}
 	if got := evaluate(experiment{Name: "exemplars-always-on"}, base, complete); got.Status != "pass" {
@@ -1515,17 +1543,17 @@ func TestCountEventAndHistogramExperimentsPreserveOtherSignals(t *testing.T) {
 		t.Fatal("log-count passed after dropping an unaffected log")
 	}
 
-	server := object{"name": "POST /api/users", "kind": float64(2), "trace_id": fmt.Sprintf("%032x", 20), "attributes": []any{attr("http.route", "/api/users")}}
-	parent := object{"name": "INSERT", "kind": float64(3), "trace_id": fmt.Sprintf("%032x", 20), "attributes": []any{attr("db.system", "sqlite")}}
+	server := object{"name": "POST /api/users", "kind": float64(2), "trace_id": fmt.Sprintf("%032x", 20), "span_id": fmt.Sprintf("%016x", 20), "start_time_unix_nano": "2000", "end_time_unix_nano": "2001", "attributes": []any{attr("http.route", "/api/users")}}
+	parent := object{"name": "INSERT", "kind": float64(3), "trace_id": fmt.Sprintf("%032x", 20), "span_id": fmt.Sprintf("%016x", 21), "start_time_unix_nano": "2100", "end_time_unix_nano": "2101", "attributes": []any{attr("db.system", "sqlite")}}
 	event := object{"name": "exception", "attributes": []any{attr("first", "one"), attr("second", "two")}}
 	parent["events"] = []any{event}
 	eventBase := capture{Spans: []object{server, parent}, Metrics: []object{metric}, Logs: []object{logRecord}}
-	cappedParent := object{"name": "INSERT", "kind": float64(3), "trace_id": fmt.Sprintf("%032x", 20), "attributes": []any{attr("db.system", "sqlite")}, "events": []any{object{"name": "exception", "attributes": []any{attr("first", "one")}, "dropped_attributes_count": float64(1)}}}
+	cappedParent := object{"name": "INSERT", "kind": float64(3), "trace_id": fmt.Sprintf("%032x", 20), "span_id": fmt.Sprintf("%016x", 21), "start_time_unix_nano": "2100", "end_time_unix_nano": "2101", "attributes": []any{attr("db.system", "sqlite")}, "events": []any{object{"name": "exception", "attributes": []any{attr("first", "one")}, "dropped_attributes_count": float64(1)}}}
 	eventChanged := capture{Spans: []object{server, cappedParent}, Metrics: []object{metric}, Logs: []object{logRecord}}
 	if got := evaluate(experiment{Name: "event-attributes"}, eventBase, eventChanged); got.Status != "pass" {
 		t.Fatalf("complete event-attribute capture did not pass: %+v", got)
 	}
-	duplicatedEventParent := object{"name": "INSERT", "kind": float64(3), "trace_id": fmt.Sprintf("%032x", 20), "attributes": []any{attr("db.system", "sqlite")}, "events": []any{
+	duplicatedEventParent := object{"name": "INSERT", "kind": float64(3), "trace_id": fmt.Sprintf("%032x", 20), "span_id": fmt.Sprintf("%016x", 21), "start_time_unix_nano": "2100", "end_time_unix_nano": "2101", "attributes": []any{attr("db.system", "sqlite")}, "events": []any{
 		object{"name": "exception", "attributes": []any{attr("first", "one")}, "dropped_attributes_count": float64(1)},
 		object{"name": "exception", "attributes": []any{attr("first", "one")}, "dropped_attributes_count": float64(1)},
 	}}

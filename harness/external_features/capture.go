@@ -768,7 +768,7 @@ func matchingWorkloadSpansIgnoring(before, after capture, ignoredResourceAttribu
 func matchingWorkloadSpansIgnoringParents(before, after capture) (int, int) {
 	eligible := workloadSpanIdentitiesWithParentID(before, nil, workloadSpanIDForPropagation, spanParentRelationshipIDForPropagation)
 	actual := workloadSpanIdentitiesWithParentID(after, nil, workloadSpanIDForPropagation, spanParentRelationshipIDForPropagation)
-	return matchingIdentityCounts(eligible, actual)
+	return matchingWorkloadIdentityCounts(eligible, actual, after)
 }
 
 func matchingWorkloadSpansIgnoringEvents(before, after capture) (int, int) {
@@ -788,7 +788,46 @@ func matchingCountLimitedWorkloadSpans(before, after capture) (int, int) {
 func matchingWorkloadSpansWithID(before, after capture, ignoredResourceAttributes map[string]bool, identify func(object) string, includeParent bool) (int, int) {
 	eligible := workloadSpanIdentitiesWithID(before, ignoredResourceAttributes, identify, includeParent)
 	actual := workloadSpanIdentitiesWithID(after, ignoredResourceAttributes, identify, includeParent)
-	return matchingIdentityCounts(eligible, actual)
+	return matchingWorkloadIdentityCounts(eligible, actual, after)
+}
+
+func matchingWorkloadIdentityCounts(eligible, actual map[string]int, changed capture) (int, int) {
+	expected, present := matchingIdentityCounts(eligible, actual)
+	if !validWorkloadSpanStructure(changed) && present == expected {
+		present = expected + 1
+	}
+	return expected, present
+}
+
+func validWorkloadSpanStructure(c capture) bool {
+	traceIDs := map[string]bool{}
+	for _, stream := range captureSpanStreams(c) {
+		if !isProbeServerSpan(stream.Span) {
+			continue
+		}
+		traceID, _ := field(stream.Span, "trace_id").(string)
+		if !validTrace(traceID) {
+			return false
+		}
+		traceIDs[traceID] = true
+	}
+	spanIDs := map[string]bool{}
+	for _, stream := range captureSpanStreams(c) {
+		span := stream.Span
+		traceID, _ := field(span, "trace_id").(string)
+		if !traceIDs[traceID] {
+			continue
+		}
+		spanID, _ := field(span, "span_id").(string)
+		key := traceID + "\x00" + spanID
+		start, startValid := otlpNumber(field(span, "start_time_unix_nano"))
+		end, endValid := otlpNumber(field(span, "end_time_unix_nano"))
+		if !validSpan(spanID) || spanIDs[key] || !startValid || !endValid || start <= 0 || end < start {
+			return false
+		}
+		spanIDs[key] = true
+	}
+	return true
 }
 
 func workloadSpanIdentities(c capture, ignoredResourceAttributes map[string]bool) map[string]int {
@@ -2080,12 +2119,26 @@ func unsampledExemplars(before, after capture) (int, int, int) {
 	for _, stream := range captureMetricStreams(after) {
 		for _, point := range objects(stream.Metric, "data_points") {
 			id := metricPointID(stream, point, nil)
-			exemplars := len(objects(point, "exemplars"))
-			if eligible[id] && exemplars > 0 {
+			exemplars, valid := validExemplarCount(point)
+			if eligible[id] && valid && exemplars > 0 {
 				preserved[id] = true
 				count += exemplars
 			}
 		}
 	}
 	return len(eligible), len(preserved), count
+}
+
+func validExemplarCount(point object) (int, bool) {
+	exemplars := objects(point, "exemplars")
+	for _, exemplar := range exemplars {
+		timestamp, timestampValid := otlpNumber(field(exemplar, "time_unix_nano"))
+		value, _ := field(exemplar, "value").(map[string]any)
+		_, intValid := otlpNumber(field(value, "as_int"))
+		_, doubleValid := otlpNumber(field(value, "as_double"))
+		if !timestampValid || timestamp <= 0 || (!intValid && !doubleValid) {
+			return 0, false
+		}
+	}
+	return len(exemplars), true
 }
