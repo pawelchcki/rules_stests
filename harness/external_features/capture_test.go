@@ -130,6 +130,8 @@ func TestExperimentsRequireBaselineAndRejectIgnoredSettings(t *testing.T) {
 				base.Spans = syntheticProbeSpans()
 			case "log-length":
 				base.Logs[0]["body"] = object{"stringValue": "workload log"}
+			case "sampler", "sampler-arg":
+				base.Logs[0]["body"] = object{"stringValue": "workload log"}
 			}
 			if got := evaluate(e, base, base); got.Status != "gap" {
 				t.Fatalf("ignored setting passed: %+v", got)
@@ -170,16 +172,17 @@ func TestExperimentsRequireBaselineAndRejectIgnoredSettings(t *testing.T) {
 				changed = capture{}
 			case "sampler", "sampler-arg":
 				changed.Spans = nil
+				changed.Logs[0]["body"] = object{"stringValue": "workload log"}
 			case "span-length", "attribute-length":
 				changed.Spans = syntheticProbeSpans()
 				for _, span := range changed.Spans {
-					span["attributes"] = []any{attr("http.user_agent", "12345678")}
+					span["attributes"] = []any{attr("http.user_agent", "external")}
 				}
 			case "log-length":
 				changed.Logs = []object{{
 					"body": object{"stringValue": "workload log"},
 					"attributes": []any{
-						attr("first", "12345678"), attr("second", "12345678"), attr("third", "12345678"),
+						attr("first", "long bas"), attr("second", "another "), attr("third", "third at"),
 					},
 				}}
 			case "attribute-count":
@@ -438,11 +441,17 @@ func TestLengthLimitsPreserveBaselineRecords(t *testing.T) {
 	arrayBaseline := capture{Spans: syntheticProbeSpans()}
 	arrayChanged := capture{Spans: syntheticProbeSpans()}
 	for i := range arrayBaseline.Spans {
-		arrayBaseline.Spans[i]["attributes"] = append(arrayBaseline.Spans[i]["attributes"].([]any), object{"key": "array", "value": object{"arrayValue": object{"values": []any{object{"stringValue": "long array member"}}}}})
-		arrayChanged.Spans[i]["attributes"] = []any{attr("http.user_agent", "12345678"), object{"key": "array", "value": object{"arrayValue": object{"values": []any{object{"stringValue": "12345678"}}}}}}
+		arrayBaseline.Spans[i]["attributes"] = append(arrayBaseline.Spans[i]["attributes"].([]any), object{"key": "array", "value": object{"arrayValue": object{"values": []any{object{"stringValue": "long array member"}, object{"stringValue": "second long member"}}}}})
+		arrayChanged.Spans[i]["attributes"] = []any{attr("http.user_agent", "external"), object{"key": "array", "value": object{"arrayValue": object{"values": []any{object{"stringValue": "long arr"}, object{"stringValue": "second l"}}}}}}
 	}
 	if got := evaluate(experiment{Name: "span-length"}, arrayBaseline, arrayChanged); got.Status != "pass" {
 		t.Fatalf("correctly truncated string arrays were not preserved: %+v", got)
+	}
+	for _, span := range arrayChanged.Spans {
+		span["attributes"] = []any{attr("http.user_agent", "external"), object{"key": "array", "value": object{"arrayValue": object{"values": []any{object{"stringValue": "long arr"}}}}}}
+	}
+	if got := evaluate(experiment{Name: "span-length"}, arrayBaseline, arrayChanged); got.Status == "pass" {
+		t.Fatal("a dropped long array member was credited as preserved")
 	}
 }
 
@@ -452,6 +461,14 @@ func TestCountLimitsPreserveBaselineRecords(t *testing.T) {
 	unrelatedSpan := capture{Spans: []object{{"kind": float64(2), "attributes": []any{attr("first", "value"), attr("second", "value")}, "droppedAttributesCount": float64(1)}}}
 	if got := evaluate(experiment{Name: "attribute-count"}, spanBaseline, unrelatedSpan); got.Status == "pass" {
 		t.Fatal("unrelated span stood in for missing count-limited requests")
+	}
+	for _, span := range spanBaseline.Spans {
+		span["attributes"] = append(span["attributes"].([]any), attr("second", "value"), attr("third", "value"))
+	}
+	uncappedProbes := capture{Spans: syntheticProbeSpans()}
+	uncappedProbes.Spans = append(uncappedProbes.Spans, object{"kind": float64(2), "attributes": []any{attr("first", "value"), attr("second", "value")}, "droppedAttributesCount": float64(1)})
+	if got := evaluate(experiment{Name: "attribute-count"}, spanBaseline, uncappedProbes); got.Status == "pass" {
+		t.Fatal("an unrelated capped span stood in for uncapped probe requests")
 	}
 
 	logBaseline := capture{Logs: []object{{"body": object{"stringValue": "workload log"}, "attributes": []any{attr("first", "value"), attr("second", "value")}}}}
@@ -468,6 +485,24 @@ func TestCountLimitsPreserveBaselineRecords(t *testing.T) {
 	suppressedEvent := capture{Spans: []object{{"name": "SELECT", "droppedEventsCount": float64(1)}}}
 	if got := evaluate(experiment{Name: "events"}, eventBaseline, suppressedEvent); got.Status == "pass" {
 		t.Fatal("unrelated span stood in for the baseline event-bearing span")
+	}
+}
+
+func TestSamplerPreservesMetricAndLogIdentities(t *testing.T) {
+	metric := object{"name": "workload.metric", "histogram": object{"dataPoints": []any{object{"count": "1"}}}}
+	baseline := capture{
+		Spans:   syntheticProbeSpans(),
+		Metrics: []object{metric},
+		Logs:    []object{{"body": object{"stringValue": "workload log"}}},
+	}
+	preserved := capture{Metrics: []object{metric}, Logs: []object{{"body": object{"stringValue": "workload log"}}}}
+	if got := evaluate(experiment{Name: "sampler"}, baseline, preserved); got.Status != "pass" {
+		t.Fatalf("sampler rejected preserved metric and log identities: %+v", got)
+	}
+	unrelatedMetric := object{"name": "unrelated.metric", "histogram": object{"dataPoints": []any{object{"count": "1"}}}}
+	unrelated := capture{Metrics: []object{unrelatedMetric}, Logs: []object{{"body": object{"stringValue": "unrelated log"}}}}
+	if got := evaluate(experiment{Name: "sampler"}, baseline, unrelated); got.Status == "pass" {
+		t.Fatal("unrelated metrics and logs stood in for sampler control signals")
 	}
 }
 

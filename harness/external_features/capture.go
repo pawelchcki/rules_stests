@@ -218,28 +218,54 @@ func maxStringValueLength(v any) int {
 	}
 	return n
 }
-func hasStringValue(v any) bool {
+func normalizedStringValueID(v any, limit int) (string, bool) {
+	normalized, found := normalizeStringValues(v, limit)
+	encoded, _ := json.Marshal(normalized)
+	return string(encoded), found
+}
+func normalizeStringValues(v any, limit int) (any, bool) {
 	switch v := v.(type) {
 	case map[string]any:
+		if len(v) == 1 {
+			for key, child := range v {
+				if canonical(key) == "value" {
+					return normalizeStringValues(child, limit)
+				}
+			}
+		}
+		normalized := make(map[string]any, len(v))
+		found := false
 		for key, child := range v {
 			if canonical(key) == canonical("string_value") {
-				if _, ok := child.(string); ok {
-					return true
+				value, ok := child.(string)
+				if ok {
+					runes := []rune(value)
+					if limit >= 0 && len(runes) > limit {
+						value = string(runes[:limit])
+					}
+					found = true
+					normalized[canonical(key)] = value
+				} else {
+					normalized[canonical(key)] = child
 				}
 				continue
 			}
-			if hasStringValue(child) {
-				return true
-			}
+			normalizedChild, childFound := normalizeStringValues(child, limit)
+			normalized[canonical(key)] = normalizedChild
+			found = found || childFound
 		}
+		return normalized, found
 	case []any:
-		for _, child := range v {
-			if hasStringValue(child) {
-				return true
-			}
+		normalized := make([]any, len(v))
+		found := false
+		for i, child := range v {
+			var childFound bool
+			normalized[i], childFound = normalizeStringValues(child, limit)
+			found = found || childFound
 		}
+		return normalized, found
 	}
-	return false
+	return v, false
 }
 func dropped(items []object, key string) int {
 	n := 0
@@ -413,22 +439,25 @@ func evaluate(e experiment, baseline, changed capture) observation {
 	case "disabled":
 		check(len(baseline.Spans) > 0, len(changed.Records) == 0, fmt.Sprintf("export requests %d -> %d", len(baseline.Records), len(changed.Records)))
 	case "sampler", "sampler-arg":
-		otherSignalsAlive := (len(baseline.Metrics) == 0 || len(changed.Metrics) > 0) && (len(baseline.Logs) == 0 || len(changed.Logs) > 0)
+		expectedMetrics, presentMetrics := matchingMetricStreams(baseline, changed)
+		expectedLogs, presentLogs := matchingLogRecords(baseline.Logs, changed.Logs)
+		otherSignalsAlive := (len(baseline.Metrics) == 0 || (expectedMetrics > 0 && presentMetrics == expectedMetrics)) &&
+			(len(baseline.Logs) == 0 || (expectedLogs > 0 && presentLogs == expectedLogs))
 		check(len(baseline.Spans) > 0, len(changed.Spans) == 0 && otherSignalsAlive, fmt.Sprintf("spans %d -> %d; other baseline signals still exported: %t", len(baseline.Spans), len(changed.Spans), otherSignalsAlive))
 	case "span-length", "attribute-length", "log-length":
 		before, after := baseline.Spans, changed.Spans
 		preserved, expected, present := true, 0, 0
-		attributeExpected, attributePresent := 0, 0
+		attributeExpected, attributePresent, attributeMissing := 0, 0, 0
 		if e.Name == "log-length" {
 			before, after = baseline.Logs, changed.Logs
 			expected, present = limitedLogRecords(before, after, 8)
-			attributeExpected, attributePresent = preservedLongAttributes(before, after, 8, logRecordIdentity)
+			attributeExpected, attributePresent, attributeMissing = preservedLongAttributes(before, after, 8, logRecordIdentity)
 			preserved = expected > 0 && present == expected && attributeExpected > 0 && attributePresent == attributeExpected
 		} else {
 			expectedTraces := incomingProbeTraces(probeSpans(baseline))
 			presentTraces := incomingServerTraces(after)
 			expected, present = len(expectedTraces), len(presentTraces)
-			attributeExpected, attributePresent = preservedLongAttributes(before, after, 8, incomingSpanIdentity)
+			attributeExpected, attributePresent, attributeMissing = preservedLongAttributes(before, after, 8, incomingSpanIdentity)
 			preserved = expected > 0 && present == expected && attributeExpected > 0 && attributePresent == attributeExpected
 		}
 		check(maxLength(before) > 8, len(after) > 0 && maxLength(after) == 8 && preserved, fmt.Sprintf("maximum string attribute length %d -> %d; cap 8; baseline record identities preserved %d/%d; long attributes preserved %d/%d", maxLength(before), maxLength(after), present, expected, attributePresent, attributeExpected))
@@ -446,7 +475,7 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		if present != expected {
 			o.Violations = append(o.Violations, fmt.Sprintf("records=%d/%d", present, expected))
 		}
-		if attributePresent != attributeExpected {
+		if attributeMissing > 0 {
 			o.Violations = append(o.Violations, fmt.Sprintf("attributes=%d/%d", attributePresent, attributeExpected))
 		}
 		sort.Strings(o.Violations)
@@ -463,7 +492,7 @@ func evaluate(e experiment, baseline, changed capture) observation {
 			expected, present = limitedCountLogRecords(before, after, cap)
 			preserved = expected == 0 || present == expected
 		} else if e.Name != "event-attributes" {
-			expected, present = preservedProbeRequests(baseline, changed)
+			expected, present = limitedProbeRequests(baseline, changed, cap)
 			preserved = expected == 0 || present == expected
 		}
 		check(maxAttributes(before) > cap, len(after) > 0 && maxAttributes(after) == cap && dropped(after, "dropped_attributes_count") > 0 && preserved, fmt.Sprintf("maximum attributes %d -> %d; cap %d; dropped %d; baseline record identities preserved %d/%d", maxAttributes(before), maxAttributes(after), cap, dropped(after, "dropped_attributes_count"), present, expected))
@@ -538,6 +567,17 @@ func preservedProbeRequests(before, after capture) (int, int) {
 	present := incomingServerTraces(after.Spans)
 	return len(expected), len(present)
 }
+func limitedProbeRequests(before, after capture, limit int) (int, int) {
+	expected := incomingProbeTraces(probeSpans(before))
+	present := map[string]bool{}
+	for _, span := range after.Spans {
+		id, _ := field(span, "trace_id").(string)
+		if number(field(span, "kind")) == 2 && expected[id] && len(attributes(span)) == limit && number(field(span, "dropped_attributes_count")) > 0 {
+			present[id] = true
+		}
+	}
+	return len(expected), len(present)
+}
 func validTrace(id string) bool {
 	decoded, err := hex.DecodeString(id)
 	return err == nil && len(decoded) == 16 && id != strings.Repeat("0", 32)
@@ -601,8 +641,8 @@ func incomingSpanIdentity(span object) string {
 	return ""
 }
 
-func preservedLongAttributes(before, after []object, limit int, recordID func(object) string) (int, int) {
-	eligible := map[string]int{}
+func preservedLongAttributes(before, after []object, limit int, recordID func(object) string) (int, int, int) {
+	eligible, originals := map[string]int{}, map[string]int{}
 	for _, record := range before {
 		id := recordID(record)
 		if id == "" {
@@ -610,12 +650,17 @@ func preservedLongAttributes(before, after []object, limit int, recordID func(ob
 		}
 		for _, attribute := range attributes(record) {
 			key, _ := field(attribute, "key").(string)
-			if key != "" && maxStringValueLength(field(attribute, "value")) > limit {
-				eligible[id+"\x00"+key]++
+			value := field(attribute, "value")
+			cappedID, valid := normalizedStringValueID(value, limit)
+			if key != "" && valid && maxStringValueLength(value) > limit {
+				prefix := id + "\x00" + key + "\x00"
+				originalID, _ := normalizedStringValueID(value, -1)
+				eligible[prefix+cappedID]++
+				originals[prefix+originalID]++
 			}
 		}
 	}
-	preserved := map[string]int{}
+	preserved, uncapped := map[string]int{}, map[string]int{}
 	for _, record := range after {
 		id := recordID(record)
 		if id == "" {
@@ -623,13 +668,17 @@ func preservedLongAttributes(before, after []object, limit int, recordID func(ob
 		}
 		for _, attribute := range attributes(record) {
 			key, _ := field(attribute, "key").(string)
-			identity := id + "\x00" + key
-			if hasStringValue(field(attribute, "value")) && preserved[identity] < eligible[identity] {
+			valueID, valid := normalizedStringValueID(field(attribute, "value"), -1)
+			identity := id + "\x00" + key + "\x00" + valueID
+			if valid && preserved[identity] < eligible[identity] {
 				preserved[identity]++
+			} else if valid && uncapped[identity] < originals[identity] {
+				uncapped[identity]++
 			}
 		}
 	}
-	return countIdentities(eligible), countIdentities(preserved)
+	expected, present, retainedUncapped := countIdentities(eligible), countIdentities(preserved), countIdentities(uncapped)
+	return expected, present, expected - present - retainedUncapped
 }
 
 func matchingLogRecords(before, after []object) (int, int) {
@@ -748,6 +797,24 @@ func captureMetricStreams(c capture) []metricStream {
 		streams = append(streams, metricStream{Metric: metric})
 	}
 	return streams
+}
+
+func matchingMetricStreams(before, after capture) (int, int) {
+	eligible := map[string]bool{}
+	for _, stream := range captureMetricStreams(before) {
+		id, kind := metricID(stream), metricDataType(stream.Metric)
+		if id != "" && kind != "" && len(objects(stream.Metric, "data_points")) > 0 {
+			eligible[id+"\x00"+kind] = true
+		}
+	}
+	preserved := map[string]bool{}
+	for _, stream := range captureMetricStreams(after) {
+		id := metricID(stream) + "\x00" + metricDataType(stream.Metric)
+		if eligible[id] && len(objects(stream.Metric, "data_points")) > 0 {
+			preserved[id] = true
+		}
+	}
+	return len(eligible), len(preserved)
 }
 
 func metricID(stream metricStream) string {
