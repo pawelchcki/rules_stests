@@ -1105,6 +1105,9 @@ func workloadSpanIDIgnoringEvents(span object) string {
 }
 
 func workloadSpanIDIgnoringHeader(span object) string {
+	if !isPropagationProbeServerSpan(span) {
+		return workloadSpanID(span)
+	}
 	normalized := make(object, len(span))
 	for key, value := range span {
 		normalized[key] = value
@@ -1325,6 +1328,15 @@ func spanEventSetIDWithValue(span object, normalize func(any) any) string {
 		eventIDs = append(eventIDs, string(encoded))
 	}
 	encoded, _ := json.Marshal(eventIDs)
+	return string(encoded)
+}
+
+func eventTimestampID(parent, event object) string {
+	eventTime, eventTimeValid := otlpTimestamp(field(event, "time_unix_nano"))
+	start, startValid := otlpTimestamp(field(parent, "start_time_unix_nano"))
+	end, endValid := otlpTimestamp(field(parent, "end_time_unix_nano"))
+	insideParent := eventTimeValid && startValid && endValid && eventTime.Cmp(start) >= 0 && eventTime.Cmp(end) <= 0
+	encoded, _ := json.Marshal([]bool{eventTimeValid && eventTime.Sign() > 0, insideParent})
 	return string(encoded)
 }
 
@@ -1960,7 +1972,7 @@ func limitedEventRecords(before, after capture, limit int) (int, int) {
 		for _, event := range objects(parent.Record, "events") {
 			eventName, _ := field(event, "name").(string)
 			if eventName != "" && len(attributes(event)) > limit {
-				key := parent.ID + "\x00" + eventName
+				key := parent.ID + "\x00" + eventName + "\x00" + eventTimestampID(parent.Record, event)
 				eligible[key] = append(eligible[key], event)
 			}
 		}
@@ -1969,7 +1981,7 @@ func limitedEventRecords(before, after capture, limit int) (int, int) {
 	for _, parent := range identifiedSpans(after) {
 		for _, event := range objects(parent.Record, "events") {
 			eventName, _ := field(event, "name").(string)
-			key := parent.ID + "\x00" + eventName
+			key := parent.ID + "\x00" + eventName + "\x00" + eventTimestampID(parent.Record, event)
 			if preserved[key] < len(eligible[key]) && len(attributes(event)) == limit {
 				for index := preserved[key]; index < len(eligible[key]); index++ {
 					if accurateDroppedAttributeCount(eligible[key][index], event) && attributeMultisetSubset(event, eligible[key][index]) {
@@ -1999,7 +2011,7 @@ func matchingCountLimitedEvents(before, after capture, limit int) (int, int) {
 					attributeID = "<count-limited>"
 					droppedID = "<count-limited>"
 				}
-				encoded, _ := json.Marshal([]string{parent.ID, name, attributeID, droppedID})
+				encoded, _ := json.Marshal([]string{parent.ID, name, eventTimestampID(parent.Record, event), attributeID, droppedID})
 				items[string(encoded)]++
 			}
 		}
@@ -2333,7 +2345,7 @@ func metricMeasurementID(metric, point object) string {
 	case "histogram":
 		count, countValid := finiteOTLPNumber(field(point, "count"))
 		total, bucketsValid, hasBuckets := bucketCountEvidence(field(point, "bucket_counts"))
-		return fmt.Sprintf("histogram:count=%t:positive=%t:buckets=%t:total=%t:layout=%s:sum=%s:min=%s:max=%s", countValid, count > 0, hasBuckets && bucketsValid, !hasBuckets || total == count, histogramBucketLayoutID(metric, point), optionalNumberState(field(point, "sum")), optionalNumberState(field(point, "min")), optionalNumberState(field(point, "max")))
+		return fmt.Sprintf("histogram:count=%t:positive=%t:buckets=%t:total=%t:layout=%s:extrema=%t:sum=%s:min=%s:max=%s", countValid, count > 0, hasBuckets && bucketsValid, !hasBuckets || total == count, histogramBucketLayoutID(metric, point), metricExtremaValid(point), optionalNumberState(field(point, "sum")), optionalNumberState(field(point, "min")), optionalNumberState(field(point, "max")))
 	case "exponentialhistogram":
 		return fmt.Sprintf("exponential-histogram:valid=%t:sum=%s:min=%s:max=%s", validExponentialHistogramPoint(point), optionalNumberState(field(point, "sum")), optionalNumberState(field(point, "min")), optionalNumberState(field(point, "max")))
 	case "summary":
@@ -2826,6 +2838,12 @@ func optionalFiniteNumber(value any) (float64, bool) {
 		return 0, true
 	}
 	return finiteOTLPNumber(value)
+}
+
+func metricExtremaValid(point object) bool {
+	minimum, minimumValid := optionalFiniteNumber(field(point, "min"))
+	maximum, maximumValid := optionalFiniteNumber(field(point, "max"))
+	return minimumValid && maximumValid && (field(point, "min") == nil || field(point, "max") == nil || minimum <= maximum)
 }
 
 func otlpNumber(value any) (float64, bool) {

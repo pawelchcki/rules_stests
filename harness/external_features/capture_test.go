@@ -2062,11 +2062,12 @@ func TestPropagationPreservesUntaggedReadinessSpanContext(t *testing.T) {
 }
 
 func TestExplicitHistogramIdentityPreservesBucketLayout(t *testing.T) {
-	point := object{"count": "2", "explicitBounds": []any{float64(1)}, "bucketCounts": []any{"1", "1"}}
+	point := object{"count": "2", "explicitBounds": []any{float64(1)}, "bucketCounts": []any{"1", "1"}, "min": float64(1), "max": float64(2)}
 	metric := object{"name": "request.duration", "histogram": object{"dataPoints": []any{point}}}
 	for name, changedPoint := range map[string]object{
-		"bounds":  {"count": "2", "explicitBounds": []any{float64(2)}, "bucketCounts": []any{"1", "1"}},
-		"buckets": {"count": "2", "explicitBounds": []any{float64(1)}, "bucketCounts": []any{"2", "0"}},
+		"bounds":  {"count": "2", "explicitBounds": []any{float64(2)}, "bucketCounts": []any{"1", "1"}, "min": float64(1), "max": float64(2)},
+		"buckets": {"count": "2", "explicitBounds": []any{float64(1)}, "bucketCounts": []any{"2", "0"}, "min": float64(1), "max": float64(2)},
+		"extrema": {"count": "2", "explicitBounds": []any{float64(1)}, "bucketCounts": []any{"1", "1"}, "min": float64(2), "max": float64(1)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			changed := object{"name": "request.duration", "histogram": object{"dataPoints": []any{changedPoint}}}
@@ -2074,6 +2075,38 @@ func TestExplicitHistogramIdentityPreservesBucketLayout(t *testing.T) {
 				t.Fatalf("histogram layout change was accepted: %d/%d", present, expected)
 			}
 		})
+	}
+}
+
+func TestHeaderNormalizationIsLimitedToTaggedProbeServers(t *testing.T) {
+	baseline := capture{Spans: syntheticProbeSpans()}
+	changed := capture{Spans: syntheticProbeSpans()}
+	registration := object{
+		"name": "POST /api/users", "kind": float64(2),
+		"trace_id": field(baseline.Spans[0], "trace_id"), "span_id": fmt.Sprintf("%016x", 60),
+		"start_time_unix_nano": "100", "end_time_unix_nano": "101",
+		"attributes": []any{attr("http.route", "/api/users")},
+	}
+	changedRegistration := cloneObject(registration)
+	changedRegistration["attributes"] = append(changedRegistration["attributes"].([]any), object{
+		"key": "http.request.header.x_probe_feature", "value": object{"arrayValue": object{"values": []any{object{"stringValue": "visible"}}}},
+	})
+	baseline.Spans = append(baseline.Spans, registration)
+	changed.Spans = append(changed.Spans, changedRegistration)
+	if expected, present := matchingWorkloadSpansIgnoringHeader(baseline, changed); expected != 5 || present != 4 {
+		t.Fatalf("header on an unrelated server span was ignored: %d/%d", present, expected)
+	}
+}
+
+func TestEventLimitIdentityPreservesTimestampValidity(t *testing.T) {
+	event := object{"name": "exception", "timeUnixNano": "150", "attributes": []any{attr("type", "conflict"), attr("message", "duplicate")}}
+	parent := object{"name": "INSERT", "kind": float64(3), "startTimeUnixNano": "100", "endTimeUnixNano": "200", "events": []any{event}}
+	baseline := capture{Spans: []object{parent}}
+	changedEvent := object{"name": "exception", "timeUnixNano": "0", "attributes": []any{attr("type", "conflict")}, "droppedAttributesCount": float64(1)}
+	changedParent := cloneObject(parent)
+	changedParent["events"] = []any{changedEvent}
+	if expected, present := limitedEventRecords(baseline, capture{Spans: []object{changedParent}}, 1); expected != 1 || present != 0 {
+		t.Fatalf("invalid limited-event timestamp was accepted: %d/%d", present, expected)
 	}
 }
 
