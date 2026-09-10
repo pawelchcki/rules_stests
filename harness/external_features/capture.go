@@ -18,6 +18,7 @@ type metricStream struct {
 	Metric                 object
 	Resource, Scope        object
 	ResourceSchema, Schema string
+	Group                  int
 }
 type spanStream struct {
 	Span                   object
@@ -84,6 +85,7 @@ func decodeCapture(data []byte) (capture, error) {
 		return capture{}, err
 	}
 	c := capture{Records: records}
+	metricGroupOffset := 0
 	for _, r := range records {
 		p := field(r, "payload")
 		signal, _ := field(r, "signal").(string)
@@ -102,6 +104,16 @@ func decodeCapture(data []byte) (capture, error) {
 			}
 		case "metrics":
 			streams := metricStreams(p)
+			maxGroup := -1
+			for index := range streams {
+				streams[index].Group += metricGroupOffset
+				if streams[index].Group > maxGroup {
+					maxGroup = streams[index].Group
+				}
+			}
+			if maxGroup >= metricGroupOffset {
+				metricGroupOffset = maxGroup + 1
+			}
 			c.MetricStreams = append(c.MetricStreams, streams...)
 			for _, stream := range streams {
 				c.Metrics = append(c.Metrics, stream.Metric)
@@ -129,6 +141,7 @@ func signalResources(payload any, signal string) []object {
 
 func metricStreams(payload any) []metricStream {
 	var streams []metricStream
+	group := 0
 	for _, resourceMetrics := range objects(payload, "resource_metrics") {
 		resource, _ := field(resourceMetrics, "resource").(map[string]any)
 		resourceSchema, _ := field(resourceMetrics, "schema_url").(string)
@@ -136,8 +149,9 @@ func metricStreams(payload any) []metricStream {
 			scope, _ := field(scopeMetrics, "scope").(map[string]any)
 			schema, _ := field(scopeMetrics, "schema_url").(string)
 			for _, metric := range objects(scopeMetrics, "metrics") {
-				streams = append(streams, metricStream{Metric: metric, Resource: resource, Scope: scope, ResourceSchema: resourceSchema, Schema: schema})
+				streams = append(streams, metricStream{Metric: metric, Resource: resource, Scope: scope, ResourceSchema: resourceSchema, Schema: schema, Group: group})
 			}
+			group++
 		}
 	}
 	return streams
@@ -892,6 +906,15 @@ func isProbeServerSpan(span object) bool {
 	return strings.Contains(route, "api/tags") || strings.Contains(route, "api/users") || strings.Contains(name, "api/tags") || strings.Contains(name, "api/users")
 }
 
+func isPropagationProbeServerSpan(span object) bool {
+	if number(field(span, "kind")) != 2 {
+		return false
+	}
+	route := attributeValue(span, "http.route")
+	name, _ := field(span, "name").(string)
+	return strings.Contains(route, "api/tags") || strings.Contains(name, "api/tags")
+}
+
 func spanParentRelationshipID(c capture, child spanStream, ignoredResourceAttributes map[string]bool) string {
 	parentID, _ := field(child.Span, "parent_span_id").(string)
 	if parentID == "" {
@@ -906,14 +929,14 @@ func spanParentRelationshipID(c capture, child spanStream, ignoredResourceAttrib
 			return "local\x00" + workloadSpanShapeID(candidate.Span) + "\x00" + spanContextID(candidate, ignoredResourceAttributes)
 		}
 	}
-	if isProbeServerSpan(child.Span) {
+	if isPropagationProbeServerSpan(child.Span) {
 		return "remote-probe\x00" + parentID
 	}
 	return "remote"
 }
 
 func spanParentRelationshipIDForPropagation(c capture, child spanStream, ignoredResourceAttributes map[string]bool) string {
-	if isProbeServerSpan(child.Span) {
+	if isPropagationProbeServerSpan(child.Span) {
 		return "propagation-probe"
 	}
 	parentID, _ := field(child.Span, "parent_span_id").(string)
@@ -927,7 +950,7 @@ func spanParentRelationshipIDForPropagation(c capture, child spanStream, ignored
 	for _, candidate := range captureSpanStreams(c) {
 		if field(candidate.Span, "trace_id") == traceID && field(candidate.Span, "span_id") == parentID {
 			shapeID := workloadSpanShapeID(candidate.Span)
-			if isProbeServerSpan(candidate.Span) {
+			if isPropagationProbeServerSpan(candidate.Span) {
 				normalized := make(object, len(candidate.Span))
 				for key, value := range candidate.Span {
 					if canonical(key) != canonical("flags") {
@@ -959,7 +982,7 @@ func spanContextID(stream spanStream, ignoredResourceAttributes map[string]bool)
 	parts := []string{
 		scopeName, scopeVersion, stream.Schema, stream.ResourceSchema,
 		containerAttributeContextID(stream.Scope, nil),
-		containerAttributeContextID(stream.Resource, resourceAttributeIgnores(ignoredResourceAttributes)),
+		resourceAttributeContextID(stream.Resource, ignoredResourceAttributes),
 	}
 	encoded, _ := json.Marshal(parts)
 	return string(encoded)
@@ -999,7 +1022,7 @@ func workloadSpanIDIgnoringHeader(span object) string {
 }
 
 func workloadSpanIDForPropagation(span object) string {
-	if !isProbeServerSpan(span) {
+	if !isPropagationProbeServerSpan(span) {
 		return workloadSpanID(span)
 	}
 	normalized := make(object, len(span))
@@ -1567,7 +1590,7 @@ func logLengthStreamID(stream logStream, limit int) string {
 	parts := []string{
 		recordID, scopeName, scopeVersion, stream.Schema, stream.ResourceSchema,
 		containerAttributeContextID(stream.Scope, nil),
-		containerAttributeContextID(stream.Resource, resourceAttributeIgnores(nil)),
+		resourceAttributeContextID(stream.Resource, nil),
 		attributeSetIDWithStringLimit(stream.Record, limit),
 		fmt.Sprint(number(field(stream.Record, "dropped_attributes_count"))),
 	}
@@ -1597,7 +1620,7 @@ func logCountStreamID(stream logStream, limit int) string {
 	parts := []string{
 		recordID, scopeName, scopeVersion, stream.Schema, stream.ResourceSchema,
 		containerAttributeContextID(stream.Scope, nil),
-		containerAttributeContextID(stream.Resource, resourceAttributeIgnores(nil)),
+		resourceAttributeContextID(stream.Resource, nil),
 		attributeID,
 		droppedID,
 	}
@@ -1615,7 +1638,7 @@ func logStreamIDWithRecordAttributes(stream logStream, ignoredResourceAttributes
 	parts := []string{
 		recordID, scopeName, scopeVersion, stream.Schema, stream.ResourceSchema,
 		containerAttributeContextID(stream.Scope, nil),
-		containerAttributeContextID(stream.Resource, resourceAttributeIgnores(ignoredResourceAttributes)),
+		resourceAttributeContextID(stream.Resource, ignoredResourceAttributes),
 	}
 	if includeDroppedAttributes {
 		parts = append(parts, fmt.Sprint(number(field(stream.Record, "dropped_attributes_count"))))
@@ -1684,7 +1707,7 @@ func logCorrelationIDForPropagation(c capture, record object, ignoredResourceAtt
 	}
 	probeTrace := false
 	for _, stream := range workloadSpanStreams(c) {
-		if field(stream.Span, "trace_id") == traceID {
+		if field(stream.Span, "trace_id") == traceID && isPropagationProbeServerSpan(stream.Span) {
 			probeTrace = true
 			break
 		}
@@ -1961,19 +1984,24 @@ func identifiedSpans(c capture) []identifiedRecord {
 }
 
 func suppressedEventRecords(before, after capture) (int, int) {
-	eligible := map[string]int{}
+	eligible := map[string][]object{}
 	for _, parent := range identifiedSpans(before) {
 		if len(objects(parent.Record, "events")) > 0 {
-			eligible[parent.ID]++
+			eligible[parent.ID] = append(eligible[parent.ID], parent.Record)
 		}
 	}
 	preserved := map[string]int{}
 	for _, parent := range identifiedSpans(after) {
-		if preserved[parent.ID] < eligible[parent.ID] && len(objects(parent.Record, "events")) == 0 && number(field(parent.Record, "dropped_events_count")) > 0 {
-			preserved[parent.ID]++
+		for _, baseline := range eligible[parent.ID][preserved[parent.ID]:] {
+			removed := len(objects(baseline, "events")) - len(objects(parent.Record, "events"))
+			if removed > 0 && len(objects(parent.Record, "events")) == 0 &&
+				number(field(parent.Record, "dropped_events_count")) == number(field(baseline, "dropped_events_count"))+float64(removed) {
+				preserved[parent.ID]++
+				break
+			}
 		}
 	}
-	return countIdentities(eligible), countIdentities(preserved)
+	return countObjectGroups(eligible), countIdentities(preserved)
 }
 
 func countIdentities(items map[string]int) int {
@@ -2038,21 +2066,22 @@ func matchingNonHistogramMetricStreams(before, after capture) (int, int) {
 
 func controlMetricIdentities(c capture, ignoredResourceAttributes map[string]bool, nonHistogramOnly, rejectDuplicates, includeExemplars bool) map[string]int {
 	identities := map[string]int{}
+	seenByGroup := map[string]bool{}
 	for _, stream := range captureMetricStreams(c) {
 		if nonHistogramOnly && (len(objects(stream.Metric, "histogram")) > 0 || len(objects(stream.Metric, "exponential_histogram")) > 0) {
 			continue
 		}
-		seen := map[string]bool{}
 		for _, point := range objects(stream.Metric, "data_points") {
 			id := controlMetricPointIDWithExemplars(stream, point, ignoredResourceAttributes, includeExemplars)
 			if id == "" {
 				continue
 			}
 			identities[id] = 1
-			if rejectDuplicates && !transientMetricPoints(stream) && seen[id] {
+			groupedID := fmt.Sprintf("%d\x00%s", stream.Group, id)
+			if rejectDuplicates && !transientMetricPoints(stream) && seenByGroup[groupedID] {
 				identities[id+"\x00duplicate"] = 1
 			}
-			seen[id] = true
+			seenByGroup[groupedID] = true
 		}
 	}
 	return identities
@@ -2112,7 +2141,7 @@ func metricIDIgnoring(stream metricStream, ignoredResourceAttributes map[string]
 	parts := []string{
 		name, unit, description, scopeName, scopeVersion, stream.Schema, stream.ResourceSchema,
 		containerAttributeContextID(stream.Scope, nil),
-		containerAttributeContextID(stream.Resource, resourceAttributeIgnores(ignoredResourceAttributes)),
+		resourceAttributeContextID(stream.Resource, ignoredResourceAttributes),
 	}
 	encoded, _ := json.Marshal(parts)
 	return string(encoded)
@@ -2344,36 +2373,89 @@ func normalizeExternalStatePath(value string) string {
 	return prefix + "/rules_stests/external-<case>/state/" + suffix
 }
 
-func resourceAttributeIgnores(additional map[string]bool) map[string]bool {
-	ignored := map[string]bool{
-		"process.command_args": true,
-		"process.pid":          true,
-		"service.instance.id":  true,
-	}
-	for key := range additional {
-		ignored[key] = true
-	}
-	return ignored
-}
-
 func containerAttributeContextID(container object, ignored map[string]bool) string {
 	encoded, _ := json.Marshal([]any{attributeSetID(container, ignored), number(field(container, "dropped_attributes_count"))})
 	return string(encoded)
 }
 
+func resourceAttributeContextID(container object, ignored map[string]bool) string {
+	encoded, _ := json.Marshal([]any{attributeSetIDWithValue(container, ignored, normalizeResourceAttributeValue), number(field(container, "dropped_attributes_count"))})
+	return string(encoded)
+}
+
 func attributeSetID(container object, ignored map[string]bool) string {
+	return attributeSetIDWithValue(container, ignored, func(_ string, value any) any {
+		return normalizedJSONValue(value)
+	})
+}
+
+func attributeSetIDWithValue(container object, ignored map[string]bool, normalize func(string, any) any) string {
 	var values []string
 	for _, attribute := range attributes(container) {
 		key, _ := field(attribute, "key").(string)
 		if key == "" || ignored[key] {
 			continue
 		}
-		encoded, _ := json.Marshal([]any{key, normalizedJSONValue(field(attribute, "value"))})
+		encoded, _ := json.Marshal([]any{key, normalize(key, field(attribute, "value"))})
 		values = append(values, string(encoded))
 	}
 	sort.Strings(values)
 	encoded, _ := json.Marshal(values)
 	return string(encoded)
+}
+
+func normalizeResourceAttributeValue(key string, value any) any {
+	switch key {
+	case "process.pid":
+		if validPositiveIntegerAnyValue(value) {
+			return object{"int_value": "<positive-integer>"}
+		}
+	case "process.command_args":
+		if validStringArrayAnyValue(value) {
+			return object{"array_value": "<string-array>"}
+		}
+	case "service.instance.id":
+		if text, ok := stringValue(value); ok && text != "" {
+			return object{"string_value": "<non-empty>"}
+		}
+	}
+	return normalizedJSONValue(value)
+}
+
+func validPositiveIntegerAnyValue(value any) bool {
+	wrapper, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	if nested := field(wrapper, "value"); nested != nil {
+		return validPositiveIntegerAnyValue(nested)
+	}
+	number, valid := otlpNumber(field(wrapper, "int_value"))
+	return valid && number > 0 && math.Trunc(number) == number
+}
+
+func validStringArrayAnyValue(value any) bool {
+	wrapper, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	if nested := field(wrapper, "value"); nested != nil {
+		return validStringArrayAnyValue(nested)
+	}
+	array, ok := field(wrapper, "array_value").(map[string]any)
+	if !ok {
+		return false
+	}
+	values, ok := field(array, "values").([]any)
+	if !ok || len(values) == 0 {
+		return false
+	}
+	for _, value := range values {
+		if _, ok := stringValue(value); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func attributeSetIDWithStringLimit(container object, limit int) string {

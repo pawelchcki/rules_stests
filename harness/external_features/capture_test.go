@@ -1601,7 +1601,7 @@ func TestMetricIdentityIncludesStableStreamAttributes(t *testing.T) {
 	base := metricStream{
 		Metric:   metric,
 		Scope:    object{"name": "scope", "attributes": []any{attr("scope.key", "one")}},
-		Resource: object{"attributes": []any{attr("deployment.environment", "prod"), attr("process.pid", "1")}},
+		Resource: object{"attributes": []any{attr("deployment.environment", "prod"), object{"key": "process.pid", "value": object{"intValue": "1"}}}},
 	}
 	changedScope := base
 	changedScope.Scope = object{"name": "scope", "attributes": []any{attr("scope.key", "two")}}
@@ -1609,12 +1609,12 @@ func TestMetricIdentityIncludesStableStreamAttributes(t *testing.T) {
 		t.Fatal("scope attributes were omitted from metric identity")
 	}
 	changedResource := base
-	changedResource.Resource = object{"attributes": []any{attr("deployment.environment", "staging"), attr("process.pid", "1")}}
+	changedResource.Resource = object{"attributes": []any{attr("deployment.environment", "staging"), object{"key": "process.pid", "value": object{"intValue": "1"}}}}
 	if metricID(base) == metricID(changedResource) {
 		t.Fatal("stable resource attributes were omitted from metric identity")
 	}
 	volatileResource := base
-	volatileResource.Resource = object{"attributes": []any{attr("deployment.environment", "prod"), attr("process.pid", "2")}}
+	volatileResource.Resource = object{"attributes": []any{attr("deployment.environment", "prod"), object{"key": "process.pid", "value": object{"intValue": "2"}}}}
 	if metricID(base) != metricID(volatileResource) {
 		t.Fatal("volatile process ID split one metric stream across captures")
 	}
@@ -1886,5 +1886,99 @@ func TestCountLimitRequiresAccurateDroppedAttributeCounts(t *testing.T) {
 	changed.Spans[0]["droppedAttributesCount"] = float64(99)
 	if expected, present := limitedGlobalCountSpanRecords(baseline, changed, 2); expected != 4 || present != 3 {
 		t.Fatalf("inaccurate dropped count was accepted: %d/%d", present, expected)
+	}
+}
+
+func TestPropagationPreservesRegistrationSpanContext(t *testing.T) {
+	registration := object{
+		"name": "POST /api/users", "kind": float64(2),
+		"trace_id": fmt.Sprintf("%032x", 20), "span_id": fmt.Sprintf("%016x", 20),
+		"parent_span_id": "00f067aa0ba902b7", "flags": float64(1), "trace_state": "vendor=baseline",
+		"attributes": []any{attr("http.route", "/api/users")},
+	}
+	changedRegistration := cloneObject(registration)
+	changedRegistration["flags"] = float64(0)
+	changedRegistration["trace_state"] = "vendor=changed"
+	baseline := capture{Spans: []object{registration}}
+	changed := capture{Spans: []object{changedRegistration}}
+	if expected, present := matchingWorkloadSpansIgnoringParents(baseline, changed); expected != 1 || present != 0 {
+		t.Fatalf("propagation normalization hid registration context changes: %d/%d", present, expected)
+	}
+}
+
+func TestControlMetricsRejectSiblingMetricDuplicates(t *testing.T) {
+	decode := func(data string) capture {
+		decoded, err := decodeCapture([]byte(data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return decoded
+	}
+	metric := `{"name":"queue.depth","gauge":{"dataPoints":[{"value":{"asInt":"1"}}]}}`
+	baseline := decode(`[{"signal":"metrics","payload":{"resourceMetrics":[{"scopeMetrics":[{"metrics":[` + metric + `]}]}]}}]`)
+	duplicated := decode(`[{"signal":"metrics","payload":{"resourceMetrics":[{"scopeMetrics":[{"metrics":[` + metric + `,` + metric + `]}]}]}}]`)
+	if expected, present := matchingMetricStreams(baseline, duplicated); expected != 1 || present != 2 {
+		t.Fatalf("duplicate metric objects in one scope were accepted: %d/%d", present, expected)
+	}
+	repeatedExport := decode(`[
+		{"signal":"metrics","payload":{"resourceMetrics":[{"scopeMetrics":[{"metrics":[` + metric + `]}]}]}},
+		{"signal":"metrics","payload":{"resourceMetrics":[{"scopeMetrics":[{"metrics":[` + metric + `]}]}]}}
+	]`)
+	if expected, present := matchingMetricStreams(baseline, repeatedExport); expected != 1 || present != 1 {
+		t.Fatalf("ordinary repeated exports were treated as duplicates: %d/%d", present, expected)
+	}
+}
+
+func TestEventSuppressionRequiresAccurateDroppedCount(t *testing.T) {
+	baselineParent := object{
+		"name": "INSERT", "kind": float64(3), "attributes": []any{attr("db.system", "sqlite")},
+		"events": []any{object{"name": "exception"}}, "dropped_events_count": float64(2),
+	}
+	changedParent := cloneObject(baselineParent)
+	delete(changedParent, "events")
+	changedParent["dropped_events_count"] = float64(3)
+	if expected, present := suppressedEventRecords(capture{Spans: []object{baselineParent}}, capture{Spans: []object{changedParent}}); expected != 1 || present != 1 {
+		t.Fatalf("accurate dropped-event count was rejected: %d/%d", present, expected)
+	}
+	changedParent["dropped_events_count"] = float64(99)
+	if expected, present := suppressedEventRecords(capture{Spans: []object{baselineParent}}, capture{Spans: []object{changedParent}}); expected != 1 || present != 0 {
+		t.Fatalf("inaccurate dropped-event count was accepted: %d/%d", present, expected)
+	}
+}
+
+func TestVolatileResourceAttributesPreservePresenceAndType(t *testing.T) {
+	resource := func(pid any, args any, instance any) object {
+		return object{"attributes": []any{
+			object{"key": "process.pid", "value": pid},
+			object{"key": "process.command_args", "value": args},
+			object{"key": "service.instance.id", "value": instance},
+		}}
+	}
+	validArgs := func(values ...any) object { return object{"arrayValue": object{"values": values}} }
+	baseline := spanStream{Span: syntheticProbeSpans()[0], Resource: resource(
+		object{"intValue": "123"}, validArgs(object{"stringValue": "server"}, object{"stringValue": "--port=123"}), object{"stringValue": "instance-one"},
+	)}
+	changed := baseline
+	changed.Resource = resource(
+		object{"value": object{"int_value": "456"}}, validArgs(object{"stringValue": "worker"}), object{"value": object{"string_value": "instance-two"}},
+	)
+	if spanContextID(baseline, nil) != spanContextID(changed, nil) {
+		t.Fatal("valid volatile resource values were not normalized")
+	}
+
+	malformed := map[string]object{
+		"pid":       resource(object{"stringValue": "123"}, validArgs(object{"stringValue": "server"}), object{"stringValue": "instance"}),
+		"arguments": resource(object{"intValue": "123"}, validArgs(object{"intValue": "1"}), object{"stringValue": "instance"}),
+		"instance":  resource(object{"intValue": "123"}, validArgs(object{"stringValue": "server"}), object{"stringValue": ""}),
+		"missing":   object{"attributes": []any{object{"key": "process.pid", "value": object{"intValue": "123"}}}},
+	}
+	for name, candidate := range malformed {
+		t.Run(name, func(t *testing.T) {
+			changed := baseline
+			changed.Resource = candidate
+			if spanContextID(baseline, nil) == spanContextID(changed, nil) {
+				t.Fatal("missing or malformed volatile resource attribute was ignored")
+			}
+		})
 	}
 }
