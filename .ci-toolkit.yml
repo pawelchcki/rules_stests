@@ -33,7 +33,10 @@ automations:
           artifact: opentelemetry-proof-report.html
           expected:
             media_type: text/html
-            max_bytes: 5242880
+            # The self-contained report embeds its proof evidence and is
+            # currently about 10 MiB. Keep a bounded ceiling with room for the
+            # report matrix to grow.
+            max_bytes: 20971520
 
     actions:
       - id: publish-report
