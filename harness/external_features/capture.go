@@ -539,9 +539,9 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		} else {
 			expectedTraces := incomingProbeTraces(probeSpans(baseline))
 			presentTraces := incomingServerTraces(after)
-			expected, present = len(expectedTraces), len(presentTraces)
+			expected, present = matchingLengthLimitedWorkloadSpans(baseline, changed, 8)
 			attributeExpected, attributePresent, attributeMissing = preservedLongSpanAttributes(baseline, changed, 8)
-			preserved = expected > 0 && present == expected && attributeExpected > 0 && attributePresent == attributeExpected
+			preserved = len(expectedTraces) == 4 && len(presentTraces) == len(expectedTraces) && expected > 0 && present == expected && attributeExpected > 0 && attributePresent == attributeExpected
 		}
 		check(maxLength(before) > 8, len(after) > 0 && maxLength(after) == 8 && preserved, fmt.Sprintf("maximum string attribute length %d -> %d; cap 8; baseline record identities preserved %d/%d; long attributes preserved %d/%d", maxLength(before), maxLength(after), present, expected, attributePresent, attributeExpected))
 		violations := map[string]bool{}
@@ -575,8 +575,9 @@ func evaluate(e experiment, baseline, changed capture) observation {
 			expected, present = limitedCountLogStreamRecords(baseline, changed, cap)
 			preserved = expected == 0 || present == expected
 		} else if e.Name != "event-attributes" {
-			expected, present = limitedProbeRequests(baseline, changed, cap)
-			preserved = expected > 0 && present == expected
+			expectedProbes, presentProbes := limitedProbeRequests(baseline, changed, cap)
+			expected, present = matchingCountLimitedWorkloadSpans(baseline, changed)
+			preserved = expectedProbes > 0 && presentProbes == expectedProbes && expected > 0 && present == expected
 		}
 		prerequisite := maxAttributes(before) > cap
 		if e.Name == "attribute-count" || e.Name == "event-attributes" || e.Name == "log-count" {
@@ -589,7 +590,13 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		check(len(events(baseline)) > 0, len(changed.Spans) > 0 && len(events(changed)) == 0 && dropped(changed.Spans, "dropped_events_count") > 0 && preserved, fmt.Sprintf("events %d -> %d; dropped %d; workload requests preserved %d/%d", len(events(baseline)), len(events(changed)), dropped(changed.Spans, "dropped_events_count"), present, expected))
 	case "exemplars":
 		before, preserved, remaining := suppressedExemplars(baseline, changed)
-		check(before > 0, preserved == before && remaining == 0, fmt.Sprintf("exemplar-bearing metric identities preserved %d/%d; remaining exemplars %d", preserved, before, remaining))
+		expectedMetrics, presentMetrics := matchingMetricStreams(baseline, changed)
+		expectedSpans, presentSpans := matchingWorkloadSpans(baseline, changed)
+		expectedLogs, presentLogs := matchingLogStreams(baseline, changed, nil)
+		signalsPreserved := expectedMetrics > 0 && presentMetrics == expectedMetrics &&
+			(len(baseline.Spans) == 0 || (expectedSpans > 0 && presentSpans == expectedSpans)) &&
+			(len(baseline.Logs) == 0 || (expectedLogs > 0 && presentLogs == expectedLogs))
+		check(before > 0, preserved == before && remaining == 0 && signalsPreserved, fmt.Sprintf("exemplar-bearing metric identities preserved %d/%d; all metric points %d/%d, workload spans %d/%d, logs %d/%d preserved; remaining exemplars %d", preserved, before, presentMetrics, expectedMetrics, presentSpans, expectedSpans, presentLogs, expectedLogs, remaining))
 	case "histogram":
 		before, converted := convertedHistograms(baseline, changed)
 		remaining := len(metricObjects(changed, "histogram"))
@@ -660,9 +667,23 @@ func matchingWorkloadSpans(before, after capture) (int, int) {
 }
 
 func matchingWorkloadSpansIgnoring(before, after capture, ignoredResourceAttributes map[string]bool) (int, int) {
-	eligible := workloadSpanIdentities(before, ignoredResourceAttributes)
+	return matchingWorkloadSpansWithID(before, after, ignoredResourceAttributes, workloadSpanID)
+}
+
+func matchingLengthLimitedWorkloadSpans(before, after capture, limit int) (int, int) {
+	return matchingWorkloadSpansWithID(before, after, nil, func(span object) string {
+		return workloadSpanIDWithStringLimit(span, limit)
+	})
+}
+
+func matchingCountLimitedWorkloadSpans(before, after capture) (int, int) {
+	return matchingWorkloadSpansWithID(before, after, nil, workloadSpanShapeID)
+}
+
+func matchingWorkloadSpansWithID(before, after capture, ignoredResourceAttributes map[string]bool, identify func(object) string) (int, int) {
+	eligible := workloadSpanIdentitiesWithID(before, ignoredResourceAttributes, identify)
 	preserved := map[string]int{}
-	for id, count := range workloadSpanIdentities(after, ignoredResourceAttributes) {
+	for id, count := range workloadSpanIdentitiesWithID(after, ignoredResourceAttributes, identify) {
 		if count > eligible[id] {
 			count = eligible[id]
 		}
@@ -672,6 +693,10 @@ func matchingWorkloadSpansIgnoring(before, after capture, ignoredResourceAttribu
 }
 
 func workloadSpanIdentities(c capture, ignoredResourceAttributes map[string]bool) map[string]int {
+	return workloadSpanIdentitiesWithID(c, ignoredResourceAttributes, workloadSpanID)
+}
+
+func workloadSpanIdentitiesWithID(c capture, ignoredResourceAttributes map[string]bool, identify func(object) string) map[string]int {
 	traceIDs := map[string]bool{}
 	for _, stream := range captureSpanStreams(c) {
 		span := stream.Span
@@ -679,7 +704,8 @@ func workloadSpanIdentities(c capture, ignoredResourceAttributes map[string]bool
 			continue
 		}
 		route := attributeValue(span, "http.route")
-		if strings.Contains(route, "api/tags") || strings.Contains(route, "api/users") {
+		name, _ := field(span, "name").(string)
+		if strings.Contains(route, "api/tags") || strings.Contains(route, "api/users") || strings.Contains(name, "api/tags") || strings.Contains(name, "api/users") {
 			if traceID, ok := field(span, "trace_id").(string); ok && traceID != "" {
 				traceIDs[traceID] = true
 			}
@@ -690,7 +716,7 @@ func workloadSpanIdentities(c capture, ignoredResourceAttributes map[string]bool
 		span := stream.Span
 		traceID, _ := field(span, "trace_id").(string)
 		if traceIDs[traceID] {
-			if id := workloadSpanID(span); id != "" {
+			if id := identify(span); id != "" {
 				id += "\x00" + spanContextID(stream, ignoredResourceAttributes)
 				identities[id]++
 			}
@@ -723,6 +749,22 @@ func spanContextID(stream spanStream, ignoredResourceAttributes map[string]bool)
 }
 
 func workloadSpanID(span object) string {
+	return workloadSpanIDWithValue(span, func(value any) any {
+		if text, ok := stringValue(value); ok {
+			return object{"string_value": normalizeExternalStatePath(text)}
+		}
+		return value
+	})
+}
+
+func workloadSpanIDWithStringLimit(span object, limit int) string {
+	return workloadSpanIDWithValue(span, func(value any) any {
+		normalized, _ := normalizeStringValues(value, limit)
+		return normalized
+	})
+}
+
+func workloadSpanIDWithValue(span object, normalize func(any) any) string {
 	name, _ := field(span, "name").(string)
 	if name == "" {
 		return ""
@@ -741,15 +783,21 @@ func workloadSpanID(span object) string {
 		if !stableKeys[key] {
 			continue
 		}
-		value := field(attribute, "value")
-		if text, ok := stringValue(value); ok {
-			value = object{"string_value": normalizeExternalStatePath(text)}
-		}
+		value := normalize(field(attribute, "value"))
 		encoded, _ := json.Marshal([]any{key, normalizedJSONValue(value)})
 		values = append(values, string(encoded))
 	}
 	sort.Strings(values)
 	encoded, _ := json.Marshal([]any{name, number(field(span, "kind")), values})
+	return string(encoded)
+}
+
+func workloadSpanShapeID(span object) string {
+	name, _ := field(span, "name").(string)
+	if name == "" {
+		return ""
+	}
+	encoded, _ := json.Marshal([]any{normalizeExternalStatePath(name), number(field(span, "kind"))})
 	return string(encoded)
 }
 func limitedProbeRequests(before, after capture, limit int) (int, int) {
