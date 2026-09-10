@@ -339,10 +339,11 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		ok := len(changed.Resources) > 0
 		beforeProbes, afterProbes := probeSpans(baseline), probeSpans(changed)
 		expectedRequests, presentRequests := preservedProbeRequests(baseline, changed)
+		expectedWorkloadSpans, presentWorkloadSpans := matchingWorkloadSpans(baseline, changed)
 		ignoredResourceAttributes := map[string]bool{"service.name": true}
 		expectedMetrics, presentMetrics := matchingMetricStreamsIgnoring(baseline, changed, ignoredResourceAttributes)
 		expectedLogs, presentLogs := matchingLogStreams(baseline, changed, ignoredResourceAttributes)
-		preserved := (len(baseline.Spans) == 0 || len(changed.Spans) > 0) &&
+		preserved := (len(baseline.Spans) == 0 || (expectedWorkloadSpans > 0 && presentWorkloadSpans == expectedWorkloadSpans)) &&
 			(len(baseline.Logs) == 0 || (expectedLogs > 0 && presentLogs == expectedLogs)) &&
 			(len(baseline.Metrics) == 0 || (expectedMetrics > 0 && presentMetrics == expectedMetrics)) &&
 			(len(beforeProbes) == 0 || (len(afterProbes) == len(beforeProbes) && presentRequests == expectedRequests))
@@ -470,10 +471,11 @@ func evaluate(e experiment, baseline, changed capture) observation {
 	case "resource":
 		ok := len(changed.Resources) > 0
 		expected, present := preservedProbeRequests(baseline, changed)
+		expectedWorkloadSpans, presentWorkloadSpans := matchingWorkloadSpans(baseline, changed)
 		ignoredResourceAttributes := map[string]bool{"probe.external": true, "process.owner": true, "service.name": true}
 		expectedMetrics, presentMetrics := matchingMetricStreamsIgnoring(baseline, changed, ignoredResourceAttributes)
 		expectedLogs, presentLogs := matchingLogStreams(baseline, changed, ignoredResourceAttributes)
-		preserved := (len(baseline.Spans) == 0 || len(changed.Spans) > 0) &&
+		preserved := (len(baseline.Spans) == 0 || (expectedWorkloadSpans > 0 && presentWorkloadSpans == expectedWorkloadSpans)) &&
 			(len(baseline.Logs) == 0 || (expectedLogs > 0 && presentLogs == expectedLogs)) &&
 			(len(baseline.Metrics) == 0 || (expectedMetrics > 0 && presentMetrics == expectedMetrics)) &&
 			(expected == 0 || present == expected)
@@ -541,7 +543,7 @@ func evaluate(e experiment, baseline, changed capture) observation {
 			preserved = expected > 0 && present == expected
 		}
 		prerequisite := maxAttributes(before) > cap
-		if e.Name == "attribute-count" {
+		if e.Name == "attribute-count" || e.Name == "event-attributes" || e.Name == "log-count" {
 			prerequisite = prerequisite && expected > 0
 		}
 		check(prerequisite, len(after) > 0 && maxAttributes(after) == cap && dropped(after, "dropped_attributes_count") > 0 && preserved, fmt.Sprintf("maximum attributes %d -> %d; cap %d; dropped %d; baseline record identities preserved %d/%d", maxAttributes(before), maxAttributes(after), cap, dropped(after, "dropped_attributes_count"), present, expected))
@@ -616,6 +618,74 @@ func preservedProbeRequests(before, after capture) (int, int) {
 	present := incomingServerTraces(after.Spans)
 	return len(expected), len(present)
 }
+
+func matchingWorkloadSpans(before, after capture) (int, int) {
+	eligible := workloadSpanIdentities(before)
+	preserved := map[string]int{}
+	for id, count := range workloadSpanIdentities(after) {
+		if count > eligible[id] {
+			count = eligible[id]
+		}
+		preserved[id] = count
+	}
+	return countIdentities(eligible), countIdentities(preserved)
+}
+
+func workloadSpanIdentities(c capture) map[string]int {
+	traceIDs := map[string]bool{}
+	for _, span := range c.Spans {
+		if number(field(span, "kind")) != 2 {
+			continue
+		}
+		route := attributeValue(span, "http.route")
+		if strings.Contains(route, "api/tags") || strings.Contains(route, "api/users") {
+			if traceID, ok := field(span, "trace_id").(string); ok && traceID != "" {
+				traceIDs[traceID] = true
+			}
+		}
+	}
+	identities := map[string]int{}
+	for _, span := range c.Spans {
+		traceID, _ := field(span, "trace_id").(string)
+		if traceIDs[traceID] {
+			if id := workloadSpanID(span); id != "" {
+				identities[id]++
+			}
+		}
+	}
+	return identities
+}
+
+func workloadSpanID(span object) string {
+	name, _ := field(span, "name").(string)
+	if name == "" {
+		return ""
+	}
+	name = normalizeExternalStatePath(name)
+	stableKeys := map[string]bool{
+		"db.name": true, "db.namespace": true, "db.operation": true, "db.operation.name": true,
+		"db.query.text": true, "db.sql.table": true, "db.statement": true, "db.system": true, "db.system.name": true,
+		"http.method": true, "http.request.method": true, "http.response.status_code": true,
+		"http.route": true, "http.status_code": true, "http.target": true,
+		"url.path": true, "user_agent.original": true, "http.user_agent": true,
+	}
+	var values []string
+	for _, attribute := range attributes(span) {
+		key, _ := field(attribute, "key").(string)
+		if !stableKeys[key] {
+			continue
+		}
+		value := field(attribute, "value")
+		if text, ok := stringValue(value); ok {
+			value = object{"string_value": normalizeExternalStatePath(text)}
+		}
+		encoded, _ := json.Marshal([]any{key, normalizedJSONValue(value)})
+		values = append(values, string(encoded))
+	}
+	sort.Strings(values)
+	encoded, _ := json.Marshal([]any{name, number(field(span, "kind")), values})
+	return string(encoded)
+}
 func limitedProbeRequests(before, after capture, limit int) (int, int) {
 	expected := incomingProbeTraces(probeSpans(before))
 	present := map[string]bool{}
@@ -662,13 +732,13 @@ func headerArray(s object) bool {
 func limitedLogStreamRecords(before, after capture, limit int) (int, int) {
 	eligible := map[string]int{}
 	for _, stream := range captureLogStreams(before) {
-		if id := logStreamID(stream, nil); id != "" && maxLength([]object{stream.Record}) > limit {
+		if id := logLimitStreamID(stream); id != "" && maxLength([]object{stream.Record}) > limit {
 			eligible[id]++
 		}
 	}
 	preserved := map[string]int{}
 	for _, stream := range captureLogStreams(after) {
-		if id := logStreamID(stream, nil); id != "" && preserved[id] < eligible[id] {
+		if id := logLimitStreamID(stream); id != "" && preserved[id] < eligible[id] {
 			preserved[id]++
 		}
 	}
@@ -694,7 +764,7 @@ type identifiedRecord struct {
 func identifiedLogRecords(c capture) []identifiedRecord {
 	var records []identifiedRecord
 	for _, stream := range captureLogStreams(c) {
-		if id := logStreamID(stream, nil); id != "" {
+		if id := logLimitStreamID(stream); id != "" {
 			records = append(records, identifiedRecord{Record: stream.Record, ID: id})
 		}
 	}
@@ -798,7 +868,15 @@ func matchingLogStreams(before, after capture, ignoredResourceAttributes map[str
 }
 
 func logStreamID(stream logStream, ignoredResourceAttributes map[string]bool) string {
-	recordID := logRecordIdentity(stream.Record)
+	return logStreamIDWithRecordAttributes(stream, ignoredResourceAttributes, true)
+}
+
+func logLimitStreamID(stream logStream) string {
+	return logStreamIDWithRecordAttributes(stream, nil, false)
+}
+
+func logStreamIDWithRecordAttributes(stream logStream, ignoredResourceAttributes map[string]bool, includeRecordAttributes bool) string {
+	recordID := stableLogRecordID(stream.Record, includeRecordAttributes)
 	if recordID == "" {
 		return ""
 	}
@@ -808,6 +886,28 @@ func logStreamID(stream logStream, ignoredResourceAttributes map[string]bool) st
 		recordID, scopeName, scopeVersion, stream.Schema, stream.ResourceSchema,
 		attributeSetID(stream.Scope, nil),
 		attributeSetID(stream.Resource, resourceAttributeIgnores(ignoredResourceAttributes)),
+	}
+	encoded, _ := json.Marshal(parts)
+	return string(encoded)
+}
+
+func stableLogRecordID(record object, includeAttributes bool) string {
+	body := logRecordIdentity(record)
+	if body == "" {
+		return ""
+	}
+	stable := object{}
+	for key, value := range record {
+		switch canonical(key) {
+		case "attributes", "body", "droppedattributescount", "flags", "observedtimeunixnano", "spanid", "timeunixnano", "traceid":
+			continue
+		default:
+			stable[canonical(key)] = normalizedJSONValue(value)
+		}
+	}
+	parts := []any{body, stable}
+	if includeAttributes {
+		parts = append(parts, attributeSetID(record, nil))
 	}
 	encoded, _ := json.Marshal(parts)
 	return string(encoded)
@@ -834,13 +934,13 @@ func logRecordIdentity(record object) string {
 func limitedCountLogStreamRecords(before, after capture, limit int) (int, int) {
 	eligible := map[string]int{}
 	for _, stream := range captureLogStreams(before) {
-		if id := logStreamID(stream, nil); id != "" && len(attributes(stream.Record)) > limit {
+		if id := logLimitStreamID(stream); id != "" && len(attributes(stream.Record)) > limit {
 			eligible[id]++
 		}
 	}
 	preserved := map[string]int{}
 	for _, stream := range captureLogStreams(after) {
-		id := logStreamID(stream, nil)
+		id := logLimitStreamID(stream)
 		if id != "" && preserved[id] < eligible[id] && len(attributes(stream.Record)) == limit && number(field(stream.Record, "dropped_attributes_count")) > 0 {
 			preserved[id]++
 		}

@@ -114,6 +114,29 @@ func TestDecodePreservesLogStreamContext(t *testing.T) {
 	}
 }
 
+func TestLogIdentityIncludesStableRecordFields(t *testing.T) {
+	record := func(source string) object {
+		return object{
+			"body": object{"stringValue": "shared log"}, "severityText": "WARN", "severityNumber": float64(13),
+			"attributes": []any{attr("source", source)}, "timeUnixNano": "123", "traceId": "volatile",
+		}
+	}
+	one, two := record("one"), record("two")
+	baseline := capture{Logs: []object{one, two}, LogStreams: []logStream{{Record: one}, {Record: two}}}
+	duplicate := record("one")
+	changed := capture{Logs: []object{one, duplicate}, LogStreams: []logStream{{Record: one}, {Record: duplicate}}}
+	if expected, present := matchingLogStreams(baseline, changed, nil); expected != 2 || present != 1 {
+		t.Fatalf("one stable log record stood in for another: %d/%d", present, expected)
+	}
+	timestampOnly := record("one")
+	timestampOnly["timeUnixNano"] = "456"
+	timestampOnly["traceId"] = "other"
+	timestampOnly["flags"] = float64(0)
+	if logStreamID(logStream{Record: one}, nil) != logStreamID(logStream{Record: timestampOnly}, nil) {
+		t.Fatal("volatile log correlation fields split one record across captures")
+	}
+}
+
 func TestLogLimitsPreserveStreamContext(t *testing.T) {
 	baselineRecord := func() object {
 		return object{"body": object{"stringValue": "shared log"}, "attributes": []any{attr("first", "long baseline attribute"), attr("second", "another long attribute")}}
@@ -167,6 +190,7 @@ func TestExperimentsRequireBaselineAndRejectIgnoredSettings(t *testing.T) {
 			base := baselineCapture()
 			switch e.Name {
 			case "default-service", "resource":
+				base.Spans = syntheticProbeSpans()
 				base.Logs[0]["body"] = object{"stringValue": "workload log"}
 			case "span-batch":
 				base.Spans = syntheticProbeSpans()
@@ -189,6 +213,11 @@ func TestExperimentsRequireBaselineAndRejectIgnoredSettings(t *testing.T) {
 				}
 			case "log-length":
 				base.Logs[0]["body"] = object{"stringValue": "workload log"}
+			case "log-count":
+				base.Logs[0]["body"] = object{"stringValue": "workload log"}
+			case "event-attributes":
+				base.Spans[0]["name"] = "INSERT"
+				objects(base.Spans[0], "events")[0]["name"] = "exception"
 			case "sampler", "sampler-arg":
 				base.Logs[0]["body"] = object{"stringValue": "workload log"}
 			}
@@ -198,6 +227,7 @@ func TestExperimentsRequireBaselineAndRejectIgnoredSettings(t *testing.T) {
 			changed := baselineCapture()
 			switch e.Name {
 			case "default-service":
+				changed.Spans = syntheticProbeSpans()
 				changed.Resources = []object{{"attributes": []any{attr("service.name", "unknown_service:probe")}}}
 				changed.Logs[0]["body"] = object{"stringValue": "workload log"}
 			case "span-batch":
@@ -227,6 +257,7 @@ func TestExperimentsRequireBaselineAndRejectIgnoredSettings(t *testing.T) {
 					s["parent_span_id"] = ""
 				}
 			case "resource":
+				changed.Spans = syntheticProbeSpans()
 				changed.Resources = []object{{"attributes": []any{attr("probe.external", "visible"), attr("service.name", "external-probe")}}}
 				changed.Logs[0]["body"] = object{"stringValue": "workload log"}
 			case "disabled":
@@ -255,9 +286,12 @@ func TestExperimentsRequireBaselineAndRejectIgnoredSettings(t *testing.T) {
 			case "events":
 				changed.Spans = []object{{"dropped_events_count": float64(1)}}
 			case "event-attributes":
-				changed.Spans = []object{{"events": []any{object{"attributes": []any{attr("first", "value")}, "droppedAttributesCount": float64(2)}}}}
+				parent := item()
+				parent["name"] = "INSERT"
+				parent["events"] = []any{object{"name": "exception", "attributes": []any{attr("first", "value")}, "droppedAttributesCount": float64(2)}}
+				changed.Spans = []object{parent}
 			case "log-count":
-				changed.Logs = []object{{"attributes": []any{attr("first", "value")}, "dropped_attributes_count": float64(2)}}
+				changed.Logs = []object{{"body": object{"stringValue": "workload log"}, "attributes": []any{attr("first", "value")}, "dropped_attributes_count": float64(2)}}
 			case "exemplars":
 				changed.Metrics = []object{{"name": "probe.metric", "histogram": object{"dataPoints": []any{object{"count": "1"}}}}}
 			case "histogram":
@@ -290,7 +324,15 @@ func TestLimitsCheckEveryRecordAndExactCap(t *testing.T) {
 		}
 		baseline := baselineCapture()
 		c := baselineCapture()
-		if name == "attribute-count" {
+		if name == "log-count" {
+			baseline.Logs[0]["body"] = object{"stringValue": "workload log"}
+			c.Logs[0]["body"] = object{"stringValue": "workload log"}
+		} else if name == "event-attributes" {
+			baseline.Spans[0]["name"] = "INSERT"
+			objects(baseline.Spans[0], "events")[0]["name"] = "exception"
+			c.Spans[0]["name"] = "INSERT"
+			objects(c.Spans[0], "events")[0]["name"] = "exception"
+		} else if name == "attribute-count" {
 			baseline.Spans = syntheticProbeSpans()
 			for _, span := range baseline.Spans {
 				span["attributes"] = append(span["attributes"].([]any), attr("second", "value"), attr("third", "value"))
@@ -525,6 +567,23 @@ func TestControlMetricsPreserveDataPointIdentities(t *testing.T) {
 	}
 }
 
+func TestResourceChecksPreserveRegistrationSpans(t *testing.T) {
+	server := func(traceID string, status int) object {
+		return object{
+			"name": "POST /api/users", "kind": float64(2), "traceId": traceID,
+			"attributes": []any{attr("http.route", "/api/users"), attr("http.method", "POST"), object{"key": "http.status_code", "value": object{"intValue": float64(status)}}},
+		}
+	}
+	database := func(traceID string) object {
+		return object{"name": "INSERT", "kind": float64(3), "traceId": traceID, "attributes": []any{attr("db.system", "sqlite")}}
+	}
+	baseline := capture{Spans: []object{server("baseline-one", 201), database("baseline-one"), server("baseline-two", 409), database("baseline-two")}}
+	changed := capture{Spans: []object{server("changed-one", 201), database("changed-one"), database("changed-one")}}
+	if expected, present := matchingWorkloadSpans(baseline, changed); expected != 4 || present != 3 {
+		t.Fatalf("lost registration span was not detected: %d/%d", present, expected)
+	}
+}
+
 func TestEventLimitsPreserveParentOccurrences(t *testing.T) {
 	event := func() object {
 		return object{"name": "exception", "attributes": []any{attr("type", "conflict"), attr("message", "duplicate")}}
@@ -615,6 +674,11 @@ func TestCountLimitsPreserveBaselineRecords(t *testing.T) {
 	cappedUnrelated := capture{Spans: []object{{"kind": float64(2), "attributes": []any{attr("first", "value"), attr("second", "value")}, "droppedAttributesCount": float64(1)}}}
 	if got := evaluate(experiment{Name: "attribute-count"}, noProbeBaseline, cappedUnrelated); got.Status != "not_exercised" {
 		t.Fatalf("attribute-count without baseline probe evidence was %s", got.Status)
+	}
+	unnamedLogBaseline := capture{Logs: []object{{"attributes": []any{attr("first", "value"), attr("second", "value")}}}}
+	cappedUnrelatedLog := capture{Logs: []object{{"body": object{"stringValue": "unrelated"}, "attributes": []any{attr("first", "value")}, "droppedAttributesCount": float64(1)}}}
+	if got := evaluate(experiment{Name: "log-count"}, unnamedLogBaseline, cappedUnrelatedLog); got.Status != "not_exercised" {
+		t.Fatalf("log-count without identifiable baseline logs was %s", got.Status)
 	}
 
 	logBaseline := capture{Logs: []object{{"body": object{"stringValue": "workload log"}, "attributes": []any{attr("first", "value"), attr("second", "value")}}}}
@@ -740,7 +804,7 @@ func TestComparisonRecomputesAndRejectsTamperedEvidence(t *testing.T) {
 func syntheticProbeSpans() []object {
 	var out []object
 	for i := 1; i <= 4; i++ {
-		out = append(out, object{"kind": float64(2), "trace_id": fmt.Sprintf("%032x", i), "parent_span_id": "00f067aa0ba902b7", "attributes": []any{attr("http.user_agent", "external-feature-probe-long-user-agent")}})
+		out = append(out, object{"name": "GET api/tags", "kind": float64(2), "trace_id": fmt.Sprintf("%032x", i), "parent_span_id": "00f067aa0ba902b7", "attributes": []any{attr("http.route", "api/tags"), attr("http.user_agent", "external-feature-probe-long-user-agent")}})
 	}
 	return out
 }
