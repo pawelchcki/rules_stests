@@ -18,6 +18,7 @@ const MAX_HEADER_COUNT: usize = 128;
 const MAX_JSON_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_PROTOBUF_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_VALIDATION_SOURCE_BYTES: usize = 256 * 1024;
+const MAX_DATADOG_VALIDATION_SOURCE_BYTES: usize = 4 * 1024 * 1024;
 
 pub(crate) struct Request {
     pub(crate) method: String,
@@ -158,6 +159,11 @@ pub(crate) fn read_request(connection: &OwnedFd) -> Result<Request, RequestError
     {
         return Err("Transfer-Encoding is not supported".to_string().into());
     }
+    for name in ["content-length", "content-type", "host"] {
+        if headers.iter().filter(|header| header.name == name).count() > 1 {
+            return Err(format!("{name} header must be unique").into());
+        }
+    }
     let content_length = headers
         .iter()
         .find(|header| header.name == "content-length")
@@ -175,8 +181,20 @@ pub(crate) fn read_request(connection: &OwnedFd) -> Result<Request, RequestError
         .find(|header| header.name == "content-type")
         .and_then(|header| header.value.split(';').next())
         .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"));
-    let max_body_bytes = if method == "POST" && path == "/validate" {
-        MAX_VALIDATION_SOURCE_BYTES
+    let max_body_bytes = if method == "POST" && path.split('?').next() == Some("/validate") {
+        if path.split_once('?').is_some_and(|(_, query)| {
+            query
+                .split('&')
+                .filter_map(|pair| pair.split_once('='))
+                .find(|(key, _)| *key == "protocol")
+                .is_some_and(|(_, value)| value == "datadog")
+        }) {
+            MAX_DATADOG_VALIDATION_SOURCE_BYTES
+        } else {
+            MAX_VALIDATION_SOURCE_BYTES
+        }
+    } else if (method == "POST" || method == "PUT") && path.starts_with("/v0.") {
+        MAX_JSON_REQUEST_BYTES
     } else if method == "POST" && path.starts_with("/v1/") {
         if json_content_type {
             MAX_JSON_REQUEST_BYTES
@@ -188,7 +206,9 @@ pub(crate) fn read_request(connection: &OwnedFd) -> Result<Request, RequestError
     };
     if content_length > max_body_bytes {
         return Err(RequestError::payload_too_large(
-            if max_body_bytes == MAX_VALIDATION_SOURCE_BYTES {
+            if max_body_bytes == MAX_VALIDATION_SOURCE_BYTES
+                || max_body_bytes == MAX_DATADOG_VALIDATION_SOURCE_BYTES
+            {
                 "Scheme validation source exceeds limit".to_string()
             } else {
                 "request body exceeds limit".to_string()
@@ -233,7 +253,7 @@ pub(crate) fn respond(connection: &OwnedFd, status: u16, content_type: &str, bod
     // some cannot even decode a plain-text refusal, so the reason has to reach
     // the log or a rejected batch looks like a batch that never happened.
     if status >= 400 {
-        crate::platform::write_stderr(b"otel_sink: rejected request with ");
+        crate::platform::write_stderr(b"telemetry_sink: rejected request with ");
         crate::platform::write_stderr(status.to_string().as_bytes());
         crate::platform::write_stderr(b": ");
         crate::platform::write_stderr(&body[..body.len().min(400)]);

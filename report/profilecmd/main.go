@@ -16,7 +16,7 @@ func (values *repeated) String() string         { return fmt.Sprint([]string(*va
 func (values *repeated) Set(value string) error { *values = append(*values, value); return nil }
 
 func main() {
-	var profilePath, registryPath, captureShapesPath, outputPath, manifestPath, profileID, programPath string
+	var profilePath, registryPath, captureShapesPath, outputPath, manifestPath, profileID, programPath, family, wireVersion string
 	var implementationPaths, proofRulePaths, libraryPaths, importNames, signals, scenarios, shapeSpecs repeated
 	flag.StringVar(&profilePath, "profile", "", "Scheme profile")
 	flag.StringVar(&registryPath, "registry", "", "standard registry JSON")
@@ -32,6 +32,8 @@ func main() {
 	flag.Var(&signals, "signal", "required signal (repeatable)")
 	flag.Var(&scenarios, "scenario", "valid workload scenario (repeatable)")
 	flag.Var(&shapeSpecs, "shape", "scenario,path exact shape (repeatable)")
+	flag.StringVar(&family, "family", "", "telemetry family")
+	flag.StringVar(&wireVersion, "wire-version", "", "intake wire version")
 	flag.Parse()
 	profile, err := os.ReadFile(profilePath)
 	if err != nil {
@@ -62,9 +64,12 @@ func main() {
 		}
 		implementations = append(implementations, string(contents))
 	}
-	plan, err := report.CompileNormalizedProfile(string(profile), implementations, registry, rules, captureShapes, scenarios)
+	plan, err := report.CompileTelemetryProfile(string(profile), implementations, registry, rules, captureShapes, scenarios)
 	if err != nil {
 		fail(err)
+	}
+	if plan.Family != family || plan.WireVersion != wireVersion {
+		fail(fmt.Errorf("profile family/wire version does not match target"))
 	}
 	if plan.Profile != profileID {
 		fail(fmt.Errorf("profile id %q does not match target id %q", plan.Profile, profileID))
@@ -116,6 +121,10 @@ func main() {
 			shapes[parts[0]] = string(contents)
 		}
 		document := struct {
+			Family         string            `json:"family,omitempty"`
+			WireVersion    string            `json:"wireVersion,omitempty"`
+			Application    string            `json:"application,omitempty"`
+			ShapeNamespace string            `json:"shapeNamespace,omitempty"`
 			SchemaVersion  int               `json:"schemaVersion"`
 			Profile        string            `json:"profile"`
 			Signals        []string          `json:"signals"`
@@ -124,7 +133,7 @@ func main() {
 			Libraries      []string          `json:"libraries"`
 			Imports        []string          `json:"imports"`
 			ScenarioShapes map[string]string `json:"scenarioShapes"`
-		}{1, profileID, signals, string(encoded), string(program), libraries, importNames, shapes}
+		}{plan.Family, plan.WireVersion, plan.Application, plan.ShapeNamespace, plan.SchemaVersion, profileID, signals, string(encoded), string(program), libraries, importNames, shapes}
 		manifest, marshalErr := json.Marshal(document)
 		if marshalErr != nil {
 			fail(marshalErr)

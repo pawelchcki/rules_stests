@@ -2,7 +2,7 @@
 
 Portable RealWorld conformance suites for telemetry implementations, built on
 [`rules_itest`](https://github.com/hermeticbuild/rules_itest). The repository
-ships an executable OpenTelemetry proof corpus, test harness, and reference
+ships independent OpenTelemetry and Datadog proof corpora, a test harness, and reference
 applications for Python, Ruby, and Go.
 
 ## Plug in an implementation
@@ -106,13 +106,60 @@ bazel run @rules_stests//tools:assemble_otel_report
 `REPORT_RULESET_SOURCE_ROOT` must name the immutable dependency commit selected
 by the consumer. See [`examples/plugin_agent`](examples/plugin_agent).
 
+## Datadog tracing
+
+The Python fixtures inject dd-trace-py 4.14.0 from the digest-pinned Datadog
+package using `PYTHONPATH`. Bazel materializes the package; application processes
+receive the injection and exporter environment. The default wire format is v0.5
+MessagePack; each app also has a separate v0.4 MessagePack `tags` profile.
+
+```bash
+bazel test //fixtures:datadog_suite
+```
+
+For a custom service, use `datadog_python_injection(aiohttp = True)` for aiohttp (the default for Django is
+`datadog_python_injection()`) and
+`datadog_env(service = "aiohttp-datadog")`, declare a dependency on
+`@rules_stests//harness:telemetry_sink_service`, and attach tests with:
+
+```starlark
+realworld_service_tests(
+    name = "my_datadog",
+    service = ":my_datadog_service",
+    telemetry_profile = "@rules_stests//corpus:python-aiohttp-datadog-v4-14-0-v05",
+    telemetry_sink = "@rules_stests//harness:telemetry_sink_service",
+    scenarios = REALWORLD_BASE_HURL_CASES + ["propagation_datadog"],
+)
+```
+
+Load `REALWORLD_BASE_HURL_CASES` from `@rules_stests//rules:hurl_test.bzl`.
+The exporter and driver must select the same sink service. Both sink service
+targets run `telemetry_sink` and accept both protocols. Existing
+`otel_sink_service`, OTel flags, and `{otel_rootfs}` remain supported;
+`instrumentation_injection` uses `{instrumentation_rootfs}` without OTel defaults.
+
+Datadog dump, stats, reset, validation, and candidate operations use
+`?protocol=datadog`; unqualified operations retain OTLP behavior. The Datadog
+corpus asserts native intake metadata, IDs, completion, propagation, HTTP
+classification, and exact parent/child trees. Shapes retain native service,
+operation, resource, error, and selected tags/metrics. SQL resources, including stable literals, remain exact. Temporary database
+paths are explicitly normalized; runtime IDs and timestamps stay in captures.
+
+Set `TELEMETRY_TEST_REVISION` to the current 40-character commit to emit Datadog
+schema-v2 receipts under test outputs `datadog/receipts`. Shape candidates are
+under `datadog/shape`; candidate suites have the `_shape_candidates` suffix and
+are manual targets. OTel receipts retain schema v1 and accept
+`OTEL_TEST_REVISION` as a fallback. Datadog evidence stays outside the OTel HTML
+report; Datadog HTML reporting is deferred.
+
 ## Public API
 
 `rules/defs.bzl` exports `REALWORLD_APPS`, `REALWORLD_HURL_CASES`, `corpus_service`, `oci_rootfs`,
 `otel_injection`, `python_auto_injection`, `ruby_auto_injection`, `otlp_env`,
 `realworld_service_tests`, `realworld_app_suite`, `realworld_hurl_test_suite`,
 `otel_realworld_profile`, `otel_standard_registry`, and
-`otel_report_manifest`.
+`otel_report_manifest`. Datadog adds `datadog_python_injection`, `datadog_env`,
+`datadog_realworld_profile`, `instrumentation_injection`, and `TelemetryProfileInfo`.
 
 `corpus_service` is independent of RealWorld. A service built by Bazel can use
 `corpus_service(name = "queue", exe = "//queue:server", args = [...])` without
@@ -126,7 +173,7 @@ convenience wrapper; fixtures and examples declare services explicitly.
 ```text
 rules/       public Starlark API
 corpus/      portable Scheme specifications and checked-in shapes
-harness/     rootfs launcher, Hurl driver, and OTLP validation sink
+harness/     rootfs launcher, Hurl driver, and dual-protocol telemetry sink
 fixtures/    reference declarations, apps, and agent image sources
 report/      proof plans, receipts, and HTML report assembly
 examples/    independently analyzed consumer modules

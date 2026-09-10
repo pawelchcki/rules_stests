@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -149,5 +150,100 @@ func TestRemoveDanglingSymlinksPreservesReadOnlyEmptyTarget(t *testing.T) {
 	}
 	if err := os.Chmod(target, 0o755); err != nil {
 		t.Fatalf("make target removable: %v", err)
+	}
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func declaredZstd(t *testing.T) string {
+	t.Helper()
+	tool := os.Getenv("ZSTD_TOOL")
+	if tool != "" {
+		if runfiles := os.Getenv("TEST_SRCDIR"); runfiles != "" && !filepath.IsAbs(tool) {
+			if candidate := filepath.Join(runfiles, tool); fileExists(candidate) {
+				return candidate
+			}
+		}
+		absolute, err := filepath.Abs(tool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return absolute
+	}
+	if os.Getenv("TEST_SRCDIR") != "" {
+		t.Fatal("Bazel test must declare ZSTD_TOOL")
+	}
+	tool, err := exec.LookPath("zstd")
+	if err != nil {
+		t.Fatal("standalone extractor test requires zstd: ", err)
+	}
+	return tool
+}
+
+func TestZstdLayerExtractionAndCorruption(t *testing.T) {
+	tool := declaredZstd(t)
+	for _, mediaType := range []string{"application/vnd.oci.image.layer.v1.tar+zstd", "application/vnd.datadog.package.layer.v1.tar+zstd"} {
+		for _, name := range []string{"sitecustomize.py", "../escape"} {
+			t.Run(mediaType+"/"+name, func(t *testing.T) {
+				var archive bytes.Buffer
+				writer := tar.NewWriter(&archive)
+				if err := writer.WriteHeader(&tar.Header{Name: name, Mode: 0o444, Size: 4}); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := writer.Write([]byte("hook")); err != nil {
+					t.Fatal(err)
+				}
+				if err := writer.Close(); err != nil {
+					t.Fatal(err)
+				}
+				command := exec.Command(tool, "--compress", "--stdout", "--quiet", "--check")
+				command.Stdin = &archive
+				compressed, err := command.Output()
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, corrupt := range []bool{false, true} {
+					payload := append([]byte(nil), compressed...)
+					if corrupt {
+						// Break the checksum, after tar's end marker: extraction
+						// must still wait for and reject decoder failure.
+						payload[len(payload)-1] ^= 1
+					}
+					layout := t.TempDir()
+					digest := fmt.Sprintf("sha256:%x", sha256.Sum256(payload))
+					blob, err := blobPath(layout, digest)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := os.MkdirAll(filepath.Dir(blob), 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(blob, payload, 0o444); err != nil {
+						t.Fatal(err)
+					}
+					layer := descriptor{Digest: digest, MediaType: mediaType, Size: int64(len(payload))}
+					root := t.TempDir()
+					err = extractLayer(layout, layer, root, tool)
+					if corrupt || name == "../escape" {
+						if err == nil {
+							t.Fatalf("accepted unsafe/corrupt layer: name=%s corrupt=%v", name, corrupt)
+						}
+						continue
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+					if got, err := os.ReadFile(filepath.Join(root, name)); err != nil || string(got) != "hook" {
+						t.Fatalf("extracted payload = %q, %v", got, err)
+					}
+					if err := extractLayer(layout, layer, root); err == nil || !strings.Contains(err.Error(), "declared zstd tool") {
+						t.Fatalf("undeclared decoder error = %v", err)
+					}
+				}
+			})
+		}
 	}
 }

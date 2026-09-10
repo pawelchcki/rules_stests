@@ -4,6 +4,7 @@
 extern crate alloc;
 
 mod data;
+mod datadog;
 mod http;
 mod otlp;
 mod otlp_json;

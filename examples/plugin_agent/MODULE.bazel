@@ -15,6 +15,8 @@ use_repo(
     corpus_images,
     "aiohttp_realworld",
     "aiohttp_realworld_linux_amd64",
+    "datadog_python",
+    "datadog_python_linux_amd64",
     "django_ninja_realworld",
     "django_ninja_realworld_linux_amd64",
     "gin_realworld",

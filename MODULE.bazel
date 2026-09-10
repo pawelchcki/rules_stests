@@ -121,6 +121,18 @@ crate.annotation(
     rustc_flags = ["-Copt-level=3"],
     version = "0.12.23",
 )
+crate.annotation(
+    crate = "talc",
+    repositories = ["crates"],
+    rustc_flags = ["-Copt-level=3"],
+    version = "4.4.3",
+)
+crate.annotation(
+    crate = "spin",
+    repositories = ["crates"],
+    rustc_flags = ["-Copt-level=3"],
+    version = "0.9.9",
+)
 use_repo(crate, "crates")
 
 corpus_images = use_extension("//bazel:oci_deps.bzl", "oci_deps")
@@ -128,6 +140,8 @@ use_repo(
     corpus_images,
     "aiohttp_realworld",
     "aiohttp_realworld_linux_amd64",
+    "datadog_python",
+    "datadog_python_linux_amd64",
     "django_ninja_realworld",
     "django_ninja_realworld_linux_amd64",
     "gin_realworld",
@@ -214,3 +228,7 @@ filegroup(
     strip_prefix = "realworld-5d510ce6ec41bb97723e92fbd8d3e3458a381c09/specs/api",
     urls = ["https://github.com/realworld-apps/realworld/archive/5d510ce6ec41bb97723e92fbd8d3e3458a381c09.tar.gz"],
 )
+
+compression_toolchains = use_extension("@aspect_bazel_lib//lib:extensions.bzl", "toolchains")
+use_repo(compression_toolchains, "zstd_toolchains")
+register_toolchains("@zstd_toolchains//:all")
