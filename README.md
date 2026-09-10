@@ -260,6 +260,11 @@ instrumented shards prove telemetry profiles and shapes. Manual candidate
 targets support profile authoring, while the report suite produces uncached CI
 receipts.
 
+`//fixtures:external_features_test` compares SDK configuration effects across
+all four fixtures, preserving both passing observations and specific known
+discrepancies. It adds 22 feature IDs beyond the Scheme proof corpus; see
+[the results and reproduction commands](corpus/EXTERNAL_FEATURES.md).
+
 ## Further reading
 
 See [`corpus/README.md`](corpus/README.md) for the specification model,

@@ -3,6 +3,9 @@
 `corpus/` is portable Scheme plus one Starlark registry. It has no dependency
 on the fixture applications, harness, or report implementation.
 
+For additional externally observable configuration coverage and reproduced
+cross-language discrepancies, see [External feature experiments](EXTERNAL_FEATURES.md).
+
 ## Library map
 
 ```text

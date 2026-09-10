@@ -33,6 +33,8 @@ automations:
           artifact: opentelemetry-proof-report.html
           expected:
             media_type: text/html
+            # The provider schema caps public artifacts at 5 MiB; the report
+            # renderer's size regression test enforces the same ceiling.
             max_bytes: 5242880
 
     actions:

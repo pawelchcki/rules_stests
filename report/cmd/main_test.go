@@ -1,9 +1,13 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -199,14 +203,28 @@ func TestRunRendersDeclaredMembershipAndReceiptOutcomes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			const marker = `<script type="application/json" id="report-data">`
-			_, embedded, ok := strings.Cut(string(html), marker)
+			_, embedded, ok := strings.Cut(string(html), `id="report-data">`)
 			if !ok {
 				t.Fatal("missing embedded report")
 			}
 			embedded, _, _ = strings.Cut(embedded, "</script>")
+			compressed, err := base64.StdEncoding.DecodeString(embedded)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reader, err := gzip.NewReader(bytes.NewReader(compressed))
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := io.ReadAll(reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := reader.Close(); err != nil {
+				t.Fatal(err)
+			}
 			var model report.ReportModel
-			if err := json.Unmarshal([]byte(embedded), &model); err != nil {
+			if err := json.Unmarshal(decoded, &model); err != nil {
 				t.Fatal(err)
 			}
 			for _, cell := range model.Coverage {

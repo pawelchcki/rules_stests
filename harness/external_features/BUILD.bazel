@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_test")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["expected.json"])
+
+go_binary(
+    name = "probe",
+    srcs = ["main.go", "capture.go", "cases.go"],
+)
+
+go_test(
+    name = "probe_test",
+    srcs = ["main.go", "capture.go", "cases.go", "capture_test.go"],
+    args = ["$(rlocationpath //report:data/spec-compliance-matrix.md)"] + [
+        "$(rlocationpath //corpus:otel/proofs/{}.scm)".format(name)
+        for name in ["traces", "metrics", "logs", "resource", "exporters", "environment", "propagation"]
+    ],
+    data = ["//report:data/spec-compliance-matrix.md"] + [
+        "//corpus:otel/proofs/{}.scm".format(name)
+        for name in ["traces", "metrics", "logs", "resource", "exporters", "environment", "propagation"]
+    ],
+    deps = ["//report:lib"],
+)

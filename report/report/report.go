@@ -2,7 +2,9 @@ package report
 
 import (
 	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -360,8 +362,16 @@ func RenderHTML(model ReportModel) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("marshal report model: %w", err)
 	}
-	safe := strings.ReplaceAll(string(data), "</", "<\\/")
-	return []byte(strings.Replace(reportHTML, "__REPORT_DATA__", safe, 1)), nil
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	if _, err := writer.Write(data); err != nil {
+		return nil, fmt.Errorf("compress report model: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return nil, fmt.Errorf("finish report model compression: %w", err)
+	}
+	payload := base64.StdEncoding.EncodeToString(compressed.Bytes())
+	return []byte(strings.Replace(reportHTML, "__REPORT_DATA__", payload, 1)), nil
 }
 
 func decodeStrict(data []byte, destination any) error {
