@@ -218,6 +218,29 @@ func maxStringValueLength(v any) int {
 	}
 	return n
 }
+func hasStringValue(v any) bool {
+	switch v := v.(type) {
+	case map[string]any:
+		for key, child := range v {
+			if canonical(key) == canonical("string_value") {
+				if _, ok := child.(string); ok {
+					return true
+				}
+				continue
+			}
+			if hasStringValue(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range v {
+			if hasStringValue(child) {
+				return true
+			}
+		}
+	}
+	return false
+}
 func dropped(items []object, key string) int {
 	n := 0
 	for _, o := range items {
@@ -601,7 +624,7 @@ func preservedLongAttributes(before, after []object, limit int, recordID func(ob
 		for _, attribute := range attributes(record) {
 			key, _ := field(attribute, "key").(string)
 			identity := id + "\x00" + key
-			if _, valid := stringValue(field(attribute, "value")); valid && preserved[identity] < eligible[identity] {
+			if hasStringValue(field(attribute, "value")) && preserved[identity] < eligible[identity] {
 				preserved[identity]++
 			}
 		}

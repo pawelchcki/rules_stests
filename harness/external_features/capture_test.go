@@ -435,6 +435,15 @@ func TestLengthLimitsPreserveBaselineRecords(t *testing.T) {
 	if got := evaluate(experiment{Name: "span-length"}, baselineCapture(), arraySpan); got.Status == "pass" {
 		t.Fatal("oversized string array member was ignored")
 	}
+	arrayBaseline := capture{Spans: syntheticProbeSpans()}
+	arrayChanged := capture{Spans: syntheticProbeSpans()}
+	for i := range arrayBaseline.Spans {
+		arrayBaseline.Spans[i]["attributes"] = append(arrayBaseline.Spans[i]["attributes"].([]any), object{"key": "array", "value": object{"arrayValue": object{"values": []any{object{"stringValue": "long array member"}}}}})
+		arrayChanged.Spans[i]["attributes"] = []any{attr("http.user_agent", "12345678"), object{"key": "array", "value": object{"arrayValue": object{"values": []any{object{"stringValue": "12345678"}}}}}}
+	}
+	if got := evaluate(experiment{Name: "span-length"}, arrayBaseline, arrayChanged); got.Status != "pass" {
+		t.Fatalf("correctly truncated string arrays were not preserved: %+v", got)
+	}
 }
 
 func TestCountLimitsPreserveBaselineRecords(t *testing.T) {
