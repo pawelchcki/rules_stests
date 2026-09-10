@@ -214,7 +214,7 @@ func baselineCapture() capture {
 	return capture{
 		Records: []object{{"request": object{"content_encoding": "identity"}}},
 		Spans:   []object{s}, Logs: []object{item()}, Resources: []object{item()},
-		Metrics: []object{{"name": "probe.metric", "histogram": object{"dataPoints": []any{object{"exemplars": []any{object{"timeUnixNano": "1"}}}}}}},
+		Metrics: []object{{"name": "probe.metric", "histogram": object{"dataPoints": []any{object{"count": "1", "exemplars": []any{object{"timeUnixNano": "1"}}}}}}},
 	}
 }
 
@@ -469,11 +469,35 @@ func TestWorkloadSpanIdentityPreservesStatus(t *testing.T) {
 	}
 }
 
+func TestWorkloadSpanIdentityPreservesFlagsAndEvents(t *testing.T) {
+	baseline := capture{Spans: syntheticProbeSpans()}
+	changed := capture{Spans: syntheticProbeSpans()}
+	baseline.Spans[0]["flags"] = float64(1)
+	changed.Spans[0]["flags"] = float64(0)
+	if expected, present := matchingWorkloadSpans(baseline, changed); expected != 4 || present != 3 {
+		t.Fatalf("span flag corruption was not detected: %d/%d", present, expected)
+	}
+
+	baseline = capture{Spans: syntheticProbeSpans()}
+	changed = capture{Spans: syntheticProbeSpans()}
+	baseline.Spans[0]["events"] = []any{object{"name": "exception", "attributes": []any{attr("type", "conflict")}}}
+	if expected, present := matchingWorkloadSpans(baseline, changed); expected != 4 || present != 3 {
+		t.Fatalf("span event loss was not detected: %d/%d", present, expected)
+	}
+	if expected, present := matchingWorkloadSpansIgnoringEvents(baseline, changed); expected != 4 || present != 4 {
+		t.Fatalf("event-specific matching did not ignore its intended transformation: %d/%d", present, expected)
+	}
+}
+
 func TestWorkloadSpanIdentityPreservesTopologyAndMultiplicity(t *testing.T) {
 	baseline := capture{Spans: syntheticProbeSpans()}
 	detached := capture{Spans: syntheticProbeSpans()}
+	for _, span := range baseline.Spans {
+		span["flags"] = float64(257)
+	}
 	for _, span := range detached.Spans {
 		span["parent_span_id"] = ""
+		span["flags"] = float64(1)
 	}
 	if expected, present := matchingWorkloadSpans(baseline, detached); expected != 4 || present != 0 {
 		t.Fatalf("detached server spans were not detected: %d/%d", present, expected)
@@ -483,6 +507,9 @@ func TestWorkloadSpanIdentityPreservesTopologyAndMultiplicity(t *testing.T) {
 	}
 
 	duplicated := capture{Spans: syntheticProbeSpans()}
+	for _, span := range duplicated.Spans {
+		span["flags"] = float64(257)
+	}
 	duplicated.Spans = append(duplicated.Spans, duplicated.Spans[0])
 	if expected, present := matchingWorkloadSpans(baseline, duplicated); expected != 4 || present != 5 {
 		t.Fatalf("duplicate workload span was not rejected: %d/%d", present, expected)
@@ -704,6 +731,14 @@ func TestMetricChangesPreserveInstrumentIdentity(t *testing.T) {
 	changed = capture{Metrics: []object{convertedA}, MetricStreams: []metricStream{{Metric: convertedA, Scope: object{"name": "scope.one"}}}}
 	if got := evaluate(experiment{Name: "histogram"}, baseline, changed); got.Status == "pass" {
 		t.Fatal("one converted data point stood in for a missing histogram series")
+	}
+	zeroCount := object{"name": "multi.metric", "exponentialHistogram": object{"dataPoints": []any{
+		object{"attributes": []any{attr("route", "a")}, "count": "0"},
+		object{"attributes": []any{attr("route", "b")}, "count": "0"},
+	}}}
+	changed = capture{Metrics: []object{zeroCount}, MetricStreams: []metricStream{{Metric: zeroCount, Scope: object{"name": "scope.one"}}}}
+	if got := evaluate(experiment{Name: "histogram"}, baseline, changed); got.Status == "pass" {
+		t.Fatal("zero-count exponential histograms supplied conversion evidence")
 	}
 }
 
@@ -1414,8 +1449,8 @@ func TestCountEventAndHistogramExperimentsPreserveOtherSignals(t *testing.T) {
 		t.Fatal("event suppression passed after dropping eventless workload telemetry")
 	}
 
-	histogram := object{"name": "duration", "histogram": object{"dataPoints": []any{object{"attributes": []any{attr("route", "tags")}}}}}
-	exponential := object{"name": "duration", "exponentialHistogram": object{"dataPoints": []any{object{"attributes": []any{attr("route", "tags")}}}}}
+	histogram := object{"name": "duration", "histogram": object{"dataPoints": []any{object{"attributes": []any{attr("route", "tags")}, "count": "1"}}}}
+	exponential := object{"name": "duration", "exponentialHistogram": object{"dataPoints": []any{object{"attributes": []any{attr("route", "tags")}, "count": "1"}}}}
 	histogramBase := capture{Spans: syntheticProbeSpans(), Metrics: []object{histogram, metric}, Logs: []object{logRecord}}
 	histogramChanged := capture{Spans: syntheticProbeSpans(), Metrics: []object{exponential, metric}, Logs: []object{logRecord}}
 	if got := evaluate(experiment{Name: "histogram"}, histogramBase, histogramChanged); got.Status != "pass" {

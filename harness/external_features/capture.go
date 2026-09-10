@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -519,7 +520,7 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		}
 		expectedSpans, presentSpans := matchingWorkloadSpansIgnoringParents(baseline, changed)
 		expectedMetrics, presentMetrics := matchingMetricStreams(baseline, changed)
-		expectedLogs, presentLogs := matchingLogStreams(baseline, changed, nil)
+		expectedLogs, presentLogs := matchingLogStreamsIgnoringCorrelation(baseline, changed)
 		preserved := expectedSpans > 0 && presentSpans == expectedSpans &&
 			(len(baseline.Metrics) == 0 || (expectedMetrics > 0 && presentMetrics == expectedMetrics)) &&
 			(len(baseline.Logs) == 0 || (expectedLogs > 0 && presentLogs == expectedLogs))
@@ -653,6 +654,8 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		expectedSpans, presentSpans := matchingWorkloadSpans(baseline, changed)
 		if e.Name == "attribute-count" {
 			expectedSpans, presentSpans = matchingCountLimitedWorkloadSpans(baseline, changed)
+		} else if e.Name == "event-attributes" {
+			expectedSpans, presentSpans = matchingWorkloadSpansIgnoringEvents(baseline, changed)
 		}
 		expectedMetrics, presentMetrics := matchingMetricStreams(baseline, changed)
 		expectedLogs, presentLogs := matchingLogStreams(baseline, changed, nil)
@@ -667,7 +670,7 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		check(prerequisite, len(after) > 0 && maxAttributes(after) == cap && dropped(after, "dropped_attributes_count") > 0 && preserved, fmt.Sprintf("maximum attributes %d -> %d; cap %d; dropped %d; affected records %d/%d; affected logs %d/%d; affected events %d/%d; workload spans %d/%d, metrics %d/%d, logs %d/%d preserved", maxAttributes(before), maxAttributes(after), cap, dropped(after, "dropped_attributes_count"), present, expected, affectedLogsPresent, affectedLogsExpected, affectedEventsPresent, affectedEventsExpected, presentSpans, expectedSpans, presentMetrics, expectedMetrics, presentLogs, expectedLogs))
 	case "events":
 		expected, present := suppressedEventRecords(baseline, changed)
-		expectedSpans, presentSpans := matchingWorkloadSpans(baseline, changed)
+		expectedSpans, presentSpans := matchingWorkloadSpansIgnoringEvents(baseline, changed)
 		expectedMetrics, presentMetrics := matchingMetricStreams(baseline, changed)
 		expectedLogs, presentLogs := matchingLogStreams(baseline, changed, nil)
 		preserved := (expected == 0 || present == expected) && presentSpans == expectedSpans && presentMetrics == expectedMetrics && presentLogs == expectedLogs
@@ -759,7 +762,11 @@ func matchingWorkloadSpansIgnoring(before, after capture, ignoredResourceAttribu
 }
 
 func matchingWorkloadSpansIgnoringParents(before, after capture) (int, int) {
-	return matchingWorkloadSpansWithID(before, after, nil, workloadSpanID, false)
+	return matchingWorkloadSpansWithID(before, after, nil, workloadSpanIDForPropagation, false)
+}
+
+func matchingWorkloadSpansIgnoringEvents(before, after capture) (int, int) {
+	return matchingWorkloadSpansWithID(before, after, nil, workloadSpanIDIgnoringEvents, true)
 }
 
 func matchingLengthLimitedWorkloadSpans(before, after capture, limit int) (int, int) {
@@ -860,7 +867,25 @@ func workloadSpanID(span object) string {
 			return object{"string_value": normalizeExternalStatePath(text)}
 		}
 		return value
-	})
+	}, true, true)
+}
+
+func workloadSpanIDIgnoringEvents(span object) string {
+	return workloadSpanIDWithValue(span, func(value any) any {
+		if text, ok := stringValue(value); ok {
+			return object{"string_value": normalizeExternalStatePath(text)}
+		}
+		return value
+	}, false, true)
+}
+
+func workloadSpanIDForPropagation(span object) string {
+	return workloadSpanIDWithValue(span, func(value any) any {
+		if text, ok := stringValue(value); ok {
+			return object{"string_value": normalizeExternalStatePath(text)}
+		}
+		return value
+	}, true, false)
 }
 
 func workloadSpanIDWithStringLimit(span object, limit int) string {
@@ -889,7 +914,12 @@ func workloadSpanIDWithStringLimit(span object, limit int) string {
 		values = append(values, string(encoded))
 	}
 	sort.Strings(values)
-	encoded, _ := json.Marshal([]any{normalizeExternalStatePath(name), number(field(span, "kind")), spanStatusID(span), values})
+	eventsID := spanEventSetIDWithValue(span, func(value any) any {
+		value = mapStringValues(value, normalizeExternalStatePath)
+		value, _ = normalizeStringValues(value, limit)
+		return value
+	})
+	encoded, _ := json.Marshal([]any{normalizeExternalStatePath(name), number(field(span, "kind")), number(field(span, "flags")), spanStatusID(span), eventsID, values})
 	return string(encoded)
 }
 
@@ -901,7 +931,7 @@ var lengthLimitedSpanAttributeIgnores = map[string]bool{
 	"server.port":       true,
 }
 
-func workloadSpanIDWithValue(span object, normalize func(any) any) string {
+func workloadSpanIDWithValue(span object, normalize func(any) any, includeEvents, includeFlags bool) string {
 	name, _ := field(span, "name").(string)
 	if name == "" {
 		return ""
@@ -925,7 +955,15 @@ func workloadSpanIDWithValue(span object, normalize func(any) any) string {
 		values = append(values, string(encoded))
 	}
 	sort.Strings(values)
-	encoded, _ := json.Marshal([]any{name, number(field(span, "kind")), spanStatusID(span), values})
+	eventsID := ""
+	if includeEvents {
+		eventsID = spanEventSetIDWithValue(span, normalize)
+	}
+	flags := float64(0)
+	if includeFlags {
+		flags = number(field(span, "flags"))
+	}
+	encoded, _ := json.Marshal([]any{name, number(field(span, "kind")), flags, spanStatusID(span), eventsID, values})
 	return string(encoded)
 }
 
@@ -934,7 +972,32 @@ func workloadSpanShapeID(span object) string {
 	if name == "" {
 		return ""
 	}
-	encoded, _ := json.Marshal([]any{normalizeExternalStatePath(name), number(field(span, "kind")), spanStatusID(span)})
+	encoded, _ := json.Marshal([]any{normalizeExternalStatePath(name), number(field(span, "kind")), number(field(span, "flags")), spanStatusID(span)})
+	return string(encoded)
+}
+
+func spanEventSetIDWithValue(span object, normalize func(any) any) string {
+	var eventIDs []string
+	for _, event := range objects(span, "events") {
+		name, _ := field(event, "name").(string)
+		if name == "" {
+			continue
+		}
+		var values []string
+		for _, attribute := range attributes(event) {
+			key, _ := field(attribute, "key").(string)
+			if key == "" {
+				continue
+			}
+			encoded, _ := json.Marshal([]any{key, normalizedJSONValue(normalize(field(attribute, "value")))})
+			values = append(values, string(encoded))
+		}
+		sort.Strings(values)
+		encoded, _ := json.Marshal([]any{name, values})
+		eventIDs = append(eventIDs, string(encoded))
+	}
+	sort.Strings(eventIDs)
+	encoded, _ := json.Marshal(eventIDs)
 	return string(encoded)
 }
 
@@ -1843,7 +1906,7 @@ func convertedHistograms(before, after capture) (int, int) {
 			continue
 		}
 		for _, point := range objects(stream.Metric, "data_points") {
-			if id := metricSeriesID(stream, point); id != "" {
+			if id := metricSeriesID(stream, point); id != "" && positiveOTLPNumber(field(point, "count")) {
 				eligible[id] = true
 			}
 		}
@@ -1855,12 +1918,24 @@ func convertedHistograms(before, after capture) (int, int) {
 		}
 		for _, point := range objects(stream.Metric, "data_points") {
 			id := metricSeriesID(stream, point)
-			if eligible[id] {
+			if eligible[id] && positiveOTLPNumber(field(point, "count")) {
 				converted[id] = true
 			}
 		}
 	}
 	return len(eligible), len(converted)
+}
+
+func positiveOTLPNumber(value any) bool {
+	switch value := value.(type) {
+	case float64:
+		return value > 0
+	case string:
+		number, err := strconv.ParseFloat(value, 64)
+		return err == nil && number > 0
+	default:
+		return false
+	}
 }
 
 // Active-request metrics may record against a sampled remote parent before
