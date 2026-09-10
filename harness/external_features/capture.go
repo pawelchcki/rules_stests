@@ -417,6 +417,9 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		for v := range violations {
 			o.Violations = append(o.Violations, v)
 		}
+		if present != expected {
+			o.Violations = append(o.Violations, fmt.Sprintf("records=%d/%d", present, expected))
+		}
 		sort.Strings(o.Violations)
 	case "attribute-count", "event-attributes", "log-count":
 		before, after, cap := baseline.Spans, changed.Spans, 2
@@ -547,7 +550,7 @@ func limitedLogRecords(before, after []object, limit int) (int, int) {
 	}
 	preserved := map[string]int{}
 	for _, record := range after {
-		if body, ok := stringValue(field(record, "body")); ok && preserved[body] < eligible[body] && maxLength([]object{record}) == limit {
+		if body, ok := stringValue(field(record, "body")); ok && preserved[body] < eligible[body] {
 			preserved[body]++
 		}
 	}
@@ -688,12 +691,58 @@ func metricID(stream metricStream) string {
 	description, _ := field(stream.Metric, "description").(string)
 	scopeName, _ := field(stream.Scope, "name").(string)
 	scopeVersion, _ := field(stream.Scope, "version").(string)
-	resourceKeys := []string{"service.name", "service.namespace", "telemetry.sdk.language", "telemetry.sdk.name", "telemetry.sdk.version"}
-	parts := []string{name, unit, description, scopeName, scopeVersion, stream.Schema, stream.ResourceSchema}
-	for _, key := range resourceKeys {
-		parts = append(parts, attributeValue(stream.Resource, key))
+	parts := []string{
+		name, unit, description, scopeName, scopeVersion, stream.Schema, stream.ResourceSchema,
+		attributeSetID(stream.Scope, nil),
+		attributeSetID(stream.Resource, map[string]bool{
+			"process.command_args": true,
+			"process.pid":          true,
+			"service.instance.id":  true,
+		}),
 	}
-	return strings.Join(parts, "\x00")
+	encoded, _ := json.Marshal(parts)
+	return string(encoded)
+}
+
+func attributeSetID(container object, ignored map[string]bool) string {
+	var values []string
+	for _, attribute := range attributes(container) {
+		key, _ := field(attribute, "key").(string)
+		if key == "" || ignored[key] {
+			continue
+		}
+		encoded, _ := json.Marshal([]any{key, normalizedJSONValue(field(attribute, "value"))})
+		values = append(values, string(encoded))
+	}
+	sort.Strings(values)
+	encoded, _ := json.Marshal(values)
+	return string(encoded)
+}
+
+func normalizedJSONValue(value any) any {
+	switch value := value.(type) {
+	case map[string]any:
+		if len(value) == 1 {
+			for key, child := range value {
+				if canonical(key) == "value" {
+					return normalizedJSONValue(child)
+				}
+			}
+		}
+		normalized := make(map[string]any, len(value))
+		for key, child := range value {
+			normalized[canonical(key)] = normalizedJSONValue(child)
+		}
+		return normalized
+	case []any:
+		normalized := make([]any, len(value))
+		for index, child := range value {
+			normalized[index] = normalizedJSONValue(child)
+		}
+		return normalized
+	default:
+		return value
+	}
 }
 
 func metricDataType(metric object) string {

@@ -403,6 +403,14 @@ func TestLengthLimitsPreserveBaselineRecords(t *testing.T) {
 	if got := evaluate(experiment{Name: "log-length"}, logBaseline, unrelatedLog); got.Status == "pass" {
 		t.Fatal("unrelated log stood in for the baseline log record")
 	}
+	twoLogs := capture{Logs: []object{
+		{"body": object{"stringValue": "first"}, "attributes": []any{attr("request", "long workload attribute")}},
+		{"body": object{"stringValue": "second"}, "attributes": []any{attr("request", "long workload attribute")}},
+	}}
+	oneLog := capture{Logs: []object{{"body": object{"stringValue": "first"}, "attributes": []any{attr("request", "12345678")}}}}
+	if preserved, missing := evaluate(experiment{Name: "log-length"}, logBaseline, unrelatedLog).signature(), evaluate(experiment{Name: "log-length"}, twoLogs, oneLog).signature(); preserved == missing {
+		t.Fatalf("missing log identity kept the reviewed gap signature: %q", missing)
+	}
 	arrayValue := object{"arrayValue": object{"values": []any{object{"stringValue": "long array member"}}}}
 	arraySpan := capture{Spans: []object{{"attributes": []any{attr("scalar", "12345678"), object{"key": "array", "value": arrayValue}}}}}
 	if got := evaluate(experiment{Name: "span-length"}, baselineCapture(), arraySpan); got.Status == "pass" {
@@ -615,9 +623,12 @@ func TestProcessPortOwnership(t *testing.T) {
 	}
 	defer listener.Close()
 	port := listener.Addr().(*net.TCPAddr).Port
-	owned, err := processOwnsTCPPort(os.Getpid(), port)
+	owned, err := processExclusivelyOwnsTCPPort(os.Getpid(), port)
 	if err != nil || !owned {
 		t.Fatalf("current process listener not recognized: owned=%t err=%v", owned, err)
+	}
+	if exclusivelyOwnsSocketInodes(map[string]bool{"child": true, "foreign": true}, map[string]bool{"child": true}) {
+		t.Fatal("a child listener was treated as exclusive beside a foreign SO_REUSEPORT listener")
 	}
 }
 
@@ -651,5 +662,29 @@ func TestTraceBasedExemplarsCannotProveAlwaysOn(t *testing.T) {
 	configured := capture{Metrics: []object{configuredMetric}, MetricStreams: []metricStream{{Metric: configuredMetric, Scope: object{"name": "other.scope"}}}}
 	if got := evaluate(experiment{Name: "exemplars-always-on"}, control, configured); got.Status == "pass" {
 		t.Fatal("an unmatched metric stream supplied AlwaysOn exemplar evidence")
+	}
+}
+
+func TestMetricIdentityIncludesStableStreamAttributes(t *testing.T) {
+	metric := object{"name": "shared.metric", "histogram": object{"dataPoints": []any{object{"count": "1"}}}}
+	base := metricStream{
+		Metric:   metric,
+		Scope:    object{"name": "scope", "attributes": []any{attr("scope.key", "one")}},
+		Resource: object{"attributes": []any{attr("deployment.environment", "prod"), attr("process.pid", "1")}},
+	}
+	changedScope := base
+	changedScope.Scope = object{"name": "scope", "attributes": []any{attr("scope.key", "two")}}
+	if metricID(base) == metricID(changedScope) {
+		t.Fatal("scope attributes were omitted from metric identity")
+	}
+	changedResource := base
+	changedResource.Resource = object{"attributes": []any{attr("deployment.environment", "staging"), attr("process.pid", "1")}}
+	if metricID(base) == metricID(changedResource) {
+		t.Fatal("stable resource attributes were omitted from metric identity")
+	}
+	volatileResource := base
+	volatileResource.Resource = object{"attributes": []any{attr("deployment.environment", "prod"), attr("process.pid", "2")}}
+	if metricID(base) != metricID(volatileResource) {
+		t.Fatal("volatile process ID split one metric stream across captures")
 	}
 }

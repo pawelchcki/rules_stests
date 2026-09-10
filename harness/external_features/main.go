@@ -272,7 +272,7 @@ func collectOnce(app, launcher string, args []string, sink, out string, e experi
 			io.Copy(io.Discard, response.Body)
 			response.Body.Close()
 			if response.StatusCode == 200 || response.StatusCode == 500 {
-				owned, err := processOwnsTCPPort(cmd.Process.Pid, port)
+				owned, err := processExclusivelyOwnsTCPPort(cmd.Process.Pid, port)
 				if err != nil {
 					return nil, err
 				}
@@ -329,7 +329,7 @@ func collectOnce(app, launcher string, args []string, sink, out string, e experi
 	return request("GET", sink+"/dump", nil)
 }
 
-func processOwnsTCPPort(pid, port int) (bool, error) {
+func processExclusivelyOwnsTCPPort(pid, port int) (bool, error) {
 	inodes := map[string]bool{}
 	readTable := false
 	for _, name := range []string{"tcp", "tcp6"} {
@@ -360,18 +360,31 @@ func processOwnsTCPPort(pid, port int) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	owned := map[string]bool{}
 	for _, entry := range entries {
 		target, err := os.Readlink(fmt.Sprintf("/proc/%d/fd/%s", pid, entry.Name()))
 		if err != nil {
 			continue
 		}
 		if inode, ok := strings.CutPrefix(target, "socket:["); ok {
-			if inode, ok = strings.CutSuffix(inode, "]"); ok && inodes[inode] {
-				return true, nil
+			if inode, ok = strings.CutSuffix(inode, "]"); ok {
+				owned[inode] = true
 			}
 		}
 	}
-	return false, nil
+	return exclusivelyOwnsSocketInodes(inodes, owned), nil
+}
+
+func exclusivelyOwnsSocketInodes(listening, owned map[string]bool) bool {
+	if len(listening) == 0 {
+		return false
+	}
+	for inode := range listening {
+		if !owned[inode] {
+			return false
+		}
+	}
+	return true
 }
 
 func classifyProcessExit(cause error, log *os.File) error {
