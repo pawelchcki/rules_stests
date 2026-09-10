@@ -154,6 +154,11 @@ func TestLogIdentityIncludesStableRecordFields(t *testing.T) {
 	if logStreamID(logStream{Record: one}, nil) != logStreamID(logStream{Record: timestampOnly}, nil) {
 		t.Fatal("volatile log correlation fields split one record across captures")
 	}
+	single := capture{Logs: []object{one}}
+	duplicatedCapture := capture{Logs: []object{one, one}}
+	if expected, present := matchingLogStreams(single, duplicatedCapture, nil); expected != 1 || present != 2 {
+		t.Fatalf("duplicate log occurrence was not rejected: %d/%d", present, expected)
+	}
 }
 
 func TestLogLimitsPreserveStreamContext(t *testing.T) {
@@ -504,6 +509,28 @@ func TestWorkloadSpanIdentityPreservesTopologyAndMultiplicity(t *testing.T) {
 	}
 	if expected, present := matchingWorkloadSpansIgnoringParents(baseline, detached); expected != 4 || present != 4 {
 		t.Fatalf("propagation-specific matching did not ignore the intended parent change: %d/%d", present, expected)
+	}
+
+	propagationBaseline := capture{Spans: syntheticProbeSpans()}
+	propagationChanged := capture{Spans: syntheticProbeSpans()}
+	for index := range propagationBaseline.Spans {
+		baselineParentID := fmt.Sprintf("%016x", index+1)
+		changedParentID := fmt.Sprintf("%016x", index+11)
+		propagationBaseline.Spans[index]["span_id"] = baselineParentID
+		propagationBaseline.Spans[index]["flags"] = float64(257)
+		propagationChanged.Spans[index]["span_id"] = changedParentID
+		propagationChanged.Spans[index]["parent_span_id"] = ""
+		propagationChanged.Spans[index]["flags"] = float64(1)
+		traceID := field(propagationBaseline.Spans[index], "trace_id")
+		propagationBaseline.Spans = append(propagationBaseline.Spans, object{"name": "SELECT", "kind": float64(3), "trace_id": traceID, "parent_span_id": baselineParentID, "attributes": []any{attr("db.system", "sqlite")}})
+		propagationChanged.Spans = append(propagationChanged.Spans, object{"name": "SELECT", "kind": float64(3), "trace_id": traceID, "parent_span_id": changedParentID, "attributes": []any{attr("db.system", "sqlite")}})
+	}
+	if expected, present := matchingWorkloadSpansIgnoringParents(propagationBaseline, propagationChanged); expected != 8 || present != 8 {
+		t.Fatalf("valid local topology changed under propagation normalization: %d/%d", present, expected)
+	}
+	propagationChanged.Spans[4]["parent_span_id"] = ""
+	if expected, present := matchingWorkloadSpansIgnoringParents(propagationBaseline, propagationChanged); expected != 8 || present != 7 {
+		t.Fatalf("corrupted local parent was not detected under propagation normalization: %d/%d", present, expected)
 	}
 
 	duplicated := capture{Spans: syntheticProbeSpans()}
@@ -944,6 +971,23 @@ func TestCountLimitsPreserveBaselineRecords(t *testing.T) {
 	}
 	if got := evaluate(experiment{Name: "attribute-count"}, withRegistration, cappedProbes); got.Status == "pass" {
 		t.Fatal("capped probe spans masked a missing registration span")
+	}
+	affectedChildBaseline := capture{Spans: syntheticProbeSpans()}
+	for _, span := range affectedChildBaseline.Spans {
+		span["attributes"] = append(span["attributes"].([]any), attr("second", "value"), attr("third", "value"))
+	}
+	affectedChildBaseline.Spans = append(affectedChildBaseline.Spans, object{
+		"name": "INSERT", "kind": float64(3), "trace_id": fmt.Sprintf("%032x", 1),
+		"attributes": []any{attr("first", "value"), attr("second", "value"), attr("third", "value")},
+	})
+	affectedChildChanged := capture{Spans: syntheticProbeSpans()}
+	for _, span := range affectedChildChanged.Spans {
+		span["attributes"] = []any{attr("first", "value"), attr("second", "value")}
+		span["dropped_attributes_count"] = float64(1)
+	}
+	affectedChildChanged.Spans = append(affectedChildChanged.Spans, object{"name": "INSERT", "kind": float64(3), "trace_id": fmt.Sprintf("%032x", 1)})
+	if got := evaluate(experiment{Name: "attribute-count"}, affectedChildBaseline, affectedChildChanged); got.Status == "pass" {
+		t.Fatal("capped probes masked an affected child span without cap/drop evidence")
 	}
 	noProbeBaseline := capture{Spans: []object{{"kind": float64(2), "attributes": []any{attr("first", "value"), attr("second", "value"), attr("third", "value")}}}}
 	cappedUnrelated := capture{Spans: []object{{"kind": float64(2), "attributes": []any{attr("first", "value"), attr("second", "value")}, "droppedAttributesCount": float64(1)}}}

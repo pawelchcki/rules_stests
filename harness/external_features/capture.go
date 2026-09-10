@@ -627,6 +627,7 @@ func evaluate(e experiment, baseline, changed capture) observation {
 	case "attribute-count", "event-attributes", "log-count":
 		before, after, cap := baseline.Spans, changed.Spans, 2
 		preserved, expected, present := true, 0, 0
+		affectedSpansExpected, affectedSpansPresent := 0, 0
 		affectedLogsExpected, affectedLogsPresent := 0, 0
 		affectedEventsExpected, affectedEventsPresent := 0, 0
 		if e.Name == "event-attributes" {
@@ -647,9 +648,10 @@ func evaluate(e experiment, baseline, changed capture) observation {
 			before = append(append(append([]object{}, baseline.Spans...), baseline.Logs...), events(baseline)...)
 			after = append(append(append([]object{}, changed.Spans...), changed.Logs...), events(changed)...)
 			affectedLogsExpected, affectedLogsPresent = limitedCountLogStreamRecords(baseline, changed, cap)
+			affectedSpansExpected, affectedSpansPresent = limitedGlobalCountSpanRecords(baseline, changed, cap)
 			affectedEventsExpected, affectedEventsPresent = limitedGlobalCountEventRecords(baseline, changed, cap)
 			expectedEvents, presentEvents := matchingGlobalCountLimitedEvents(baseline, changed, cap)
-			preserved = preserved && affectedLogsPresent == affectedLogsExpected && affectedEventsPresent == affectedEventsExpected && presentEvents == expectedEvents
+			preserved = preserved && affectedSpansPresent == affectedSpansExpected && affectedLogsPresent == affectedLogsExpected && affectedEventsPresent == affectedEventsExpected && presentEvents == expectedEvents
 		}
 		expectedSpans, presentSpans := matchingWorkloadSpans(baseline, changed)
 		if e.Name == "attribute-count" {
@@ -667,7 +669,7 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		if e.Name == "attribute-count" || e.Name == "event-attributes" || e.Name == "log-count" {
 			prerequisite = prerequisite && expected > 0
 		}
-		check(prerequisite, len(after) > 0 && maxAttributes(after) == cap && dropped(after, "dropped_attributes_count") > 0 && preserved, fmt.Sprintf("maximum attributes %d -> %d; cap %d; dropped %d; affected records %d/%d; affected logs %d/%d; affected events %d/%d; workload spans %d/%d, metrics %d/%d, logs %d/%d preserved", maxAttributes(before), maxAttributes(after), cap, dropped(after, "dropped_attributes_count"), present, expected, affectedLogsPresent, affectedLogsExpected, affectedEventsPresent, affectedEventsExpected, presentSpans, expectedSpans, presentMetrics, expectedMetrics, presentLogs, expectedLogs))
+		check(prerequisite, len(after) > 0 && maxAttributes(after) == cap && dropped(after, "dropped_attributes_count") > 0 && preserved, fmt.Sprintf("maximum attributes %d -> %d; cap %d; dropped %d; affected records %d/%d; affected spans %d/%d; affected logs %d/%d; affected events %d/%d; workload spans %d/%d, metrics %d/%d, logs %d/%d preserved", maxAttributes(before), maxAttributes(after), cap, dropped(after, "dropped_attributes_count"), present, expected, affectedSpansPresent, affectedSpansExpected, affectedLogsPresent, affectedLogsExpected, affectedEventsPresent, affectedEventsExpected, presentSpans, expectedSpans, presentMetrics, expectedMetrics, presentLogs, expectedLogs))
 	case "events":
 		expected, present := suppressedEventRecords(baseline, changed)
 		expectedSpans, presentSpans := matchingWorkloadSpansIgnoringEvents(baseline, changed)
@@ -762,7 +764,9 @@ func matchingWorkloadSpansIgnoring(before, after capture, ignoredResourceAttribu
 }
 
 func matchingWorkloadSpansIgnoringParents(before, after capture) (int, int) {
-	return matchingWorkloadSpansWithID(before, after, nil, workloadSpanIDForPropagation, false)
+	eligible := workloadSpanIdentitiesWithParentID(before, nil, workloadSpanIDForPropagation, spanParentRelationshipIDForPropagation)
+	actual := workloadSpanIdentitiesWithParentID(after, nil, workloadSpanIDForPropagation, spanParentRelationshipIDForPropagation)
+	return matchingIdentityCounts(eligible, actual)
 }
 
 func matchingWorkloadSpansIgnoringEvents(before, after capture) (int, int) {
@@ -790,35 +794,54 @@ func workloadSpanIdentities(c capture, ignoredResourceAttributes map[string]bool
 }
 
 func workloadSpanIdentitiesWithID(c capture, ignoredResourceAttributes map[string]bool, identify func(object) string, includeParent bool) map[string]int {
+	var parentID func(capture, spanStream, map[string]bool) string
+	if includeParent {
+		parentID = spanParentRelationshipID
+	}
+	return workloadSpanIdentitiesWithParentID(c, ignoredResourceAttributes, identify, parentID)
+}
+
+func workloadSpanIdentitiesWithParentID(c capture, ignoredResourceAttributes map[string]bool, identify func(object) string, parentID func(capture, spanStream, map[string]bool) string) map[string]int {
+	identities := map[string]int{}
+	for _, stream := range workloadSpanStreams(c) {
+		span := stream.Span
+		if id := identify(span); id != "" {
+			id += "\x00" + spanContextID(stream, ignoredResourceAttributes)
+			if parentID != nil {
+				id += "\x00" + parentID(c, stream, ignoredResourceAttributes)
+			}
+			identities[id]++
+		}
+	}
+	return identities
+}
+
+func workloadSpanStreams(c capture) []spanStream {
 	traceIDs := map[string]bool{}
 	for _, stream := range captureSpanStreams(c) {
-		span := stream.Span
-		if number(field(span, "kind")) != 2 {
-			continue
-		}
-		route := attributeValue(span, "http.route")
-		name, _ := field(span, "name").(string)
-		if strings.Contains(route, "api/tags") || strings.Contains(route, "api/users") || strings.Contains(name, "api/tags") || strings.Contains(name, "api/users") {
-			if traceID, ok := field(span, "trace_id").(string); ok && traceID != "" {
+		if isProbeServerSpan(stream.Span) {
+			if traceID, ok := field(stream.Span, "trace_id").(string); ok && traceID != "" {
 				traceIDs[traceID] = true
 			}
 		}
 	}
-	identities := map[string]int{}
+	var streams []spanStream
 	for _, stream := range captureSpanStreams(c) {
-		span := stream.Span
-		traceID, _ := field(span, "trace_id").(string)
+		traceID, _ := field(stream.Span, "trace_id").(string)
 		if traceIDs[traceID] {
-			if id := identify(span); id != "" {
-				id += "\x00" + spanContextID(stream, ignoredResourceAttributes)
-				if includeParent {
-					id += "\x00" + spanParentRelationshipID(c, stream, ignoredResourceAttributes)
-				}
-				identities[id]++
-			}
+			streams = append(streams, stream)
 		}
 	}
-	return identities
+	return streams
+}
+
+func isProbeServerSpan(span object) bool {
+	if number(field(span, "kind")) != 2 {
+		return false
+	}
+	route := attributeValue(span, "http.route")
+	name, _ := field(span, "name").(string)
+	return strings.Contains(route, "api/tags") || strings.Contains(route, "api/users") || strings.Contains(name, "api/tags") || strings.Contains(name, "api/users")
 }
 
 func spanParentRelationshipID(c capture, child spanStream, ignoredResourceAttributes map[string]bool) string {
@@ -833,6 +856,36 @@ func spanParentRelationshipID(c capture, child spanStream, ignoredResourceAttrib
 	for _, candidate := range captureSpanStreams(c) {
 		if field(candidate.Span, "trace_id") == traceID && field(candidate.Span, "span_id") == parentID {
 			return "local\x00" + workloadSpanShapeID(candidate.Span) + "\x00" + spanContextID(candidate, ignoredResourceAttributes)
+		}
+	}
+	return "remote"
+}
+
+func spanParentRelationshipIDForPropagation(c capture, child spanStream, ignoredResourceAttributes map[string]bool) string {
+	if isProbeServerSpan(child.Span) {
+		return "propagation-probe"
+	}
+	parentID, _ := field(child.Span, "parent_span_id").(string)
+	if parentID == "" {
+		return "root"
+	}
+	if !validSpan(parentID) {
+		return "invalid"
+	}
+	traceID, _ := field(child.Span, "trace_id").(string)
+	for _, candidate := range captureSpanStreams(c) {
+		if field(candidate.Span, "trace_id") == traceID && field(candidate.Span, "span_id") == parentID {
+			shapeID := workloadSpanShapeID(candidate.Span)
+			if isProbeServerSpan(candidate.Span) {
+				normalized := make(object, len(candidate.Span))
+				for key, value := range candidate.Span {
+					if canonical(key) != canonical("flags") {
+						normalized[key] = value
+					}
+				}
+				shapeID = workloadSpanShapeID(normalized)
+			}
+			return "local\x00" + shapeID + "\x00" + spanContextID(candidate, ignoredResourceAttributes)
 		}
 	}
 	return "remote"
@@ -880,12 +933,16 @@ func workloadSpanIDIgnoringEvents(span object) string {
 }
 
 func workloadSpanIDForPropagation(span object) string {
-	return workloadSpanIDWithValue(span, func(value any) any {
-		if text, ok := stringValue(value); ok {
-			return object{"string_value": normalizeExternalStatePath(text)}
+	if !isProbeServerSpan(span) {
+		return workloadSpanID(span)
+	}
+	normalized := make(object, len(span))
+	for key, value := range span {
+		if canonical(key) != canonical("flags") {
+			normalized[key] = value
 		}
-		return value
-	}, true, false)
+	}
+	return workloadSpanID(normalized)
 }
 
 func workloadSpanIDWithStringLimit(span object, limit int) string {
@@ -1262,14 +1319,7 @@ func matchingLogStreamsWithID(before, after capture, ignoredResourceAttributes m
 		return items
 	}
 	eligible := identities(before)
-	preserved := map[string]int{}
-	for id, count := range identities(after) {
-		if count > eligible[id] {
-			count = eligible[id]
-		}
-		preserved[id] = count
-	}
-	return countIdentities(eligible), countIdentities(preserved)
+	return matchingIdentityCounts(eligible, identities(after))
 }
 
 func logStreamID(stream logStream, ignoredResourceAttributes map[string]bool) string {
@@ -1428,6 +1478,26 @@ func limitedCountLogStreamRecords(before, after capture, limit int) (int, int) {
 		present += count
 	}
 	return expected, present
+}
+
+func limitedGlobalCountSpanRecords(before, after capture, limit int) (int, int) {
+	identity := func(c capture, stream spanStream) string {
+		return workloadSpanShapeID(stream.Span) + "\x00" + spanContextID(stream, nil) + "\x00" + spanParentRelationshipID(c, stream, nil)
+	}
+	eligible := map[string]int{}
+	for _, stream := range workloadSpanStreams(before) {
+		if len(attributes(stream.Span)) > limit {
+			eligible[identity(before, stream)]++
+		}
+	}
+	preserved := map[string]int{}
+	for _, stream := range workloadSpanStreams(after) {
+		id := identity(after, stream)
+		if preserved[id] < eligible[id] && len(attributes(stream.Span)) == limit && number(field(stream.Span, "dropped_attributes_count")) > 0 {
+			preserved[id]++
+		}
+	}
+	return countIdentities(eligible), countIdentities(preserved)
 }
 
 func limitedGlobalCountEventRecords(before, after capture, limit int) (int, int) {
