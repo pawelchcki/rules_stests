@@ -491,6 +491,15 @@ func evaluate(e experiment, baseline, changed capture) observation {
 			if len(after) != 4 {
 				o.Violations = append(o.Violations, fmt.Sprintf("probe-spans=%d", len(after)))
 			}
+			if presentSpans != expectedSpans {
+				o.Violations = append(o.Violations, fmt.Sprintf("workload-spans=%d/%d", presentSpans, expectedSpans))
+			}
+			if presentMetrics != expectedMetrics {
+				o.Violations = append(o.Violations, fmt.Sprintf("metrics=%d/%d", presentMetrics, expectedMetrics))
+			}
+			if presentLogs != expectedLogs {
+				o.Violations = append(o.Violations, fmt.Sprintf("logs=%d/%d", presentLogs, expectedLogs))
+			}
 			sort.Strings(o.Violations)
 		}
 	case "propagation-none":
@@ -577,6 +586,28 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		}
 		if attributeMissing > 0 {
 			o.Violations = append(o.Violations, fmt.Sprintf("attributes=%d/%d", attributePresent, attributeExpected))
+		}
+		if e.Name == "log-length" {
+			expectedSpans, presentSpans := matchingWorkloadSpans(baseline, changed)
+			expectedMetrics, presentMetrics := matchingMetricStreams(baseline, changed)
+			if presentSpans != expectedSpans {
+				o.Violations = append(o.Violations, fmt.Sprintf("workload-spans=%d/%d", presentSpans, expectedSpans))
+			}
+			if presentMetrics != expectedMetrics {
+				o.Violations = append(o.Violations, fmt.Sprintf("metrics=%d/%d", presentMetrics, expectedMetrics))
+			}
+		} else {
+			expectedMetrics, presentMetrics := matchingMetricStreams(baseline, changed)
+			expectedLogs, presentLogs := matchingLogStreams(baseline, changed, nil)
+			if e.Name == "attribute-length" {
+				expectedLogs, presentLogs = matchingLengthLimitedLogStreams(baseline, changed, 8)
+			}
+			if presentMetrics != expectedMetrics {
+				o.Violations = append(o.Violations, fmt.Sprintf("metrics=%d/%d", presentMetrics, expectedMetrics))
+			}
+			if presentLogs != expectedLogs {
+				o.Violations = append(o.Violations, fmt.Sprintf("logs=%d/%d", presentLogs, expectedLogs))
+			}
 		}
 		sort.Strings(o.Violations)
 	case "attribute-count", "event-attributes", "log-count":

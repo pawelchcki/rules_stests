@@ -444,6 +444,32 @@ func TestKnownGapCannotHideAdditionalViolations(t *testing.T) {
 	if got := evaluate(e, baselineCapture(), changed).signature(); got == "gap:request=32" {
 		t.Fatal("known gap hid a new violation")
 	}
+
+	metric := object{"name": "requests", "sum": object{"dataPoints": []any{object{"attributes": []any{attr("route", "tags")}}}}}
+	logBaseline := capture{
+		Spans:   syntheticProbeSpans(),
+		Metrics: []object{metric},
+		Logs:    []object{{"body": object{"stringValue": "workload log"}, "attributes": []any{attr("request", strings.Repeat("r", 32))}}},
+	}
+	logGap := capture{Spans: syntheticProbeSpans(), Metrics: []object{metric}, Logs: logBaseline.Logs}
+	stableLogGap := evaluate(e, logBaseline, logGap).signature()
+	logLoss := capture{Logs: logGap.Logs}
+	if loss := evaluate(e, logBaseline, logLoss).signature(); loss == stableLogGap {
+		t.Fatalf("known log-length gap hid signal loss: %q", loss)
+	}
+
+	headerBase := capture{
+		Spans:   append(syntheticProbeSpans(), object{"name": "POST /api/users", "kind": float64(2), "trace_id": fmt.Sprintf("%032x", 20), "attributes": []any{attr("http.route", "/api/users")}}),
+		Metrics: []object{metric},
+		Logs:    []object{{"body": object{"stringValue": "workload log"}}},
+	}
+	headerGap := capture{Spans: append([]object{}, headerBase.Spans...), Metrics: headerBase.Metrics, Logs: headerBase.Logs}
+	stableHeaderGap := evaluate(experiment{Name: "request-headers"}, headerBase, headerGap).signature()
+	headerLoss := headerGap
+	headerLoss.Spans = headerLoss.Spans[:4]
+	if loss := evaluate(experiment{Name: "request-headers"}, headerBase, headerLoss).signature(); loss == stableHeaderGap {
+		t.Fatalf("known header gap hid workload loss: %q", loss)
+	}
 }
 
 func TestGapSignaturesPreserveFailureModes(t *testing.T) {
