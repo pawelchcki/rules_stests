@@ -223,7 +223,16 @@ fn run(
 }
 
 fn contract_message(error_output: &[u8]) -> Option<String> {
-    let framed = error_output.strip_prefix(CONTRACT_FRAME_PREFIX)?;
+    let (framed, suffix, marker) =
+        if let Some(framed) = error_output.strip_prefix(CONTRACT_FRAME_PREFIX) {
+            (framed, CONTRACT_FRAME_SUFFIX, CONTRACT_ASSERTION_MARKER)
+        } else {
+            (
+                error_output.strip_prefix(b"[[DATADOG-CONTRACT-V2:")?,
+                b"Datadog contract sentinel".as_slice(),
+                "Datadog contract assertion:",
+            )
+        };
     let separator = framed
         .windows(CONTRACT_FRAME_SEPARATOR.len())
         .position(|window| window == CONTRACT_FRAME_SEPARATOR)?;
@@ -242,12 +251,9 @@ fn contract_message(error_output: &[u8]) -> Option<String> {
         return None;
     }
     let (message, remainder) = payload.split_at(message_end);
-    let trailing = remainder.strip_prefix(CONTRACT_FRAME_SUFFIX)?;
+    let trailing = remainder.strip_prefix(suffix)?;
     if !trailing.iter().all(u8::is_ascii_whitespace) {
         return None;
     }
-    Some(format!(
-        "{CONTRACT_ASSERTION_MARKER} {}",
-        core::str::from_utf8(message).ok()?
-    ))
+    Some(format!("{marker} {}", core::str::from_utf8(message).ok()?))
 }

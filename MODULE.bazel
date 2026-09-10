@@ -121,6 +121,18 @@ crate.annotation(
     rustc_flags = ["-Copt-level=3"],
     version = "0.12.23",
 )
+crate.annotation(
+    crate = "talc",
+    repositories = ["crates"],
+    rustc_flags = ["-Copt-level=3"],
+    version = "4.4.3",
+)
+crate.annotation(
+    crate = "spin",
+    repositories = ["crates"],
+    rustc_flags = ["-Copt-level=3"],
+    version = "0.9.9",
+)
 use_repo(crate, "crates")
 
 corpus_images = use_extension("//bazel:oci_deps.bzl", "oci_deps")

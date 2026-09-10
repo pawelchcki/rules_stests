@@ -41,6 +41,7 @@ REALWORLD_HURL_CASES = REALWORLD_UPSTREAM_HURL_CASES + sorted(REALWORLD_LOCAL_HU
 # Stak requires libraries to be defined before a program imports them. Keep this
 # list dependency ordered; it is shared by profile manifests and the sink probe.
 OTEL_CORE_LIBRARIES = [
+    "telemetry/contract-error.scm",
     "otel/base.scm",
     "otel/text.scm",
     "otel/identifiers.scm",

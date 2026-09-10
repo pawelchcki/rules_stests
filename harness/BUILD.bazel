@@ -10,9 +10,10 @@ load("//corpus:registry.bzl", "OTEL_CORE_LIBRARIES")
 package(default_visibility = ["//visibility:public"])
 
 rust_binary(
-    name = "otel_sink",
+    name = "telemetry_sink",
     srcs = [
         "otel_sink/data.rs",
+        "otel_sink/datadog.rs",
         "otel_sink/http.rs",
         "otel_sink/main.rs",
         "otel_sink/otlp.rs",
@@ -43,6 +44,18 @@ rust_binary(
         "-Clink-arg=-nostartfiles",
     ],
     deps = all_crate_deps(normal = True),
+)
+
+alias(name = "otel_sink", actual = ":telemetry_sink")
+
+corpus_service(
+    name = "telemetry_sink_service",
+    args = ["--port", "$${PORT}", "--output", "$${TMPDIR}/telemetry-sink.json"],
+    autoassign_port = True,
+    exe = ":telemetry_sink",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/healthz",
+    so_reuseport_aware = True,
+    shutdown_timeout = "2s",
 )
 
 genrule(
@@ -78,7 +91,7 @@ corpus_service(
         "$${TMPDIR}/otel-sink.json",
     ],
     autoassign_port = True,
-    exe = ":otel_sink",
+    exe = ":telemetry_sink",
     http_health_check_address = "http://127.0.0.1:$${PORT}/healthz",
     so_reuseport_aware = True,
     shutdown_timeout = "2s",
@@ -217,4 +230,22 @@ oci_rootfs(
 oci_rootfs(
     name = "datadog_python_rootfs",
     image = "@datadog_python_linux_amd64",
+)
+
+go_binary(
+    name = "datadog_sink_probe",
+    srcs = ["datadog_sink_probe.go"],
+)
+
+service_test(
+    name = "datadog_sink_test",
+    timeout = "long",
+    args = [
+        "--service-suffix=//harness:telemetry_sink_service",
+        "--assertions=$(rootpath //corpus:datadog/capture/shapes.scm)",
+        "--contract-errors=$(rootpath //corpus:telemetry/contract-error.scm)",
+    ],
+    data = ["//corpus:datadog/capture/shapes.scm", "//corpus:telemetry/contract-error.scm"],
+    services = [":telemetry_sink_service"],
+    test = ":datadog_sink_probe",
 )

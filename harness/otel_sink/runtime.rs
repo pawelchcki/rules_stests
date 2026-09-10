@@ -5,8 +5,14 @@ use core::arch::{asm, global_asm};
 use core::ffi::{CStr, c_char};
 use core::panic::PanicInfo;
 
+// Native dictionary expansion creates many small strings and map nodes. A
+// segregated allocator avoids a full-heap scan for every allocation/free while
+// retaining the sink's original fixed 64 MiB memory ceiling.
+static mut HEAP: [core::mem::MaybeUninit<u8>; 67108864] =
+    [core::mem::MaybeUninit::uninit(); 67108864];
 #[global_allocator]
-static ALLOCATOR: emballoc::Allocator<67108864> = emballoc::Allocator::new();
+static ALLOCATOR: talc::Talck<spin::Mutex<()>, talc::ErrOnOom> =
+    talc::Talc::new(talc::ErrOnOom).lock();
 
 global_asm!(
     r#"
@@ -22,6 +28,17 @@ _start:
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rust_start(stack: *const usize) -> ! {
+    // SAFETY: this is the process entry point, before any allocation. HEAP is
+    // exclusively owned by ALLOCATOR from this claim until process exit.
+    if unsafe {
+        ALLOCATOR
+            .lock()
+            .claim(talc::Span::from_array(&raw mut HEAP))
+    }
+    .is_err()
+    {
+        die(b"unable to initialize telemetry sink heap\n");
+    }
     let argc = unsafe { *stack };
     let argv = unsafe { core::slice::from_raw_parts(stack.add(1), argc) };
     let mut port = 4318u16;
@@ -38,12 +55,12 @@ unsafe extern "C" fn rust_start(stack: *const usize) -> ! {
             output = CString::new(value).unwrap_or_else(|_| die(b"invalid --output\n"));
             index += 2;
         } else {
-            die(b"usage: otel_sink [--port PORT] [--output FILE]\n");
+            die(b"usage: telemetry_sink [--port PORT] [--output FILE]\n");
         }
     }
 
     if let Err(error) = server::serve(port, output.as_c_str()) {
-        write_stderr(b"otel_sink: ");
+        write_stderr(b"telemetry_sink: ");
         write_stderr(error.as_bytes());
         write_stderr(b"\n");
         rustix::runtime::exit_group(1)
@@ -72,7 +89,7 @@ fn die(message: &[u8]) -> ! {
 
 #[panic_handler]
 fn panic(info: &PanicInfo<'_>) -> ! {
-    write_stderr(b"otel_sink panic: ");
+    write_stderr(b"telemetry_sink panic: ");
     struct PanicWriter;
     impl core::fmt::Write for PanicWriter {
         fn write_str(&mut self, text: &str) -> core::fmt::Result {
