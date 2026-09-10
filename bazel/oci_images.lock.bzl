@@ -46,3 +46,9 @@ OCI_IMAGES = {
 
 OTEL_RUBY_PUBLISHED = OTEL_RUBY.tree != "unpublished"
 RUBY_IMAGES_PUBLISHED = OTEL_RUBY_PUBLISHED and OCI_IMAGES["rails_realworld"].tree != "unpublished"
+
+DATADOG_PYTHON = struct(
+    repository = "install.datadoghq.com/apm-library-python-package",
+    digest = "sha256:8276af62a8236cb92a3bd64710271b5f2a537cb586e4633d92f1742f3c4ff3a0",
+    version = "4.14.0-1",
+)

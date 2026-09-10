@@ -111,6 +111,8 @@ go_binary(
 
 go_test(
     name = "oci_rootfs_extract_test",
+    data = ["@zstd_toolchains//:resolved_toolchain"],
+    env = {"ZSTD_TOOL": "$(rlocationpath @zstd_toolchains//:resolved_toolchain)"},
     srcs = ["oci_rootfs_extract_test.go"],
     embed = [":oci_rootfs_extract_lib"],
 )
@@ -210,4 +212,9 @@ oci_rootfs(
     image = "@otel_ruby_linux_amd64",
     single_payload = True,
     tags = [] if OTEL_RUBY_PUBLISHED else ["manual"],
+)
+
+oci_rootfs(
+    name = "datadog_python_rootfs",
+    image = "@datadog_python_linux_amd64",
 )
