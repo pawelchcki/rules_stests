@@ -404,7 +404,8 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		preserved := len(after) >= 2
 		if e.Name == "span-batch" {
 			probes := probeSpans(changed)
-			preserved = len(probes) == 4 && len(incomingProbeTraces(probes)) == 4
+			expected, present := matchingWorkloadSpans(baseline, changed)
+			preserved = len(probes) == 4 && len(incomingProbeTraces(probes)) == 4 && expected > 0 && present == expected
 		} else {
 			expected, present := matchingLogStreams(baseline, changed, nil)
 			preserved = preserved && expected > 0 && present == expected
@@ -762,13 +763,22 @@ type identifiedRecord struct {
 }
 
 func identifiedLogRecords(c capture) []identifiedRecord {
-	var records []identifiedRecord
+	groups := map[string][]object{}
 	for _, stream := range captureLogStreams(c) {
 		if id := logLimitStreamID(stream); id != "" {
-			records = append(records, identifiedRecord{Record: stream.Record, ID: id})
+			groups[id] = append(groups[id], stream.Record)
 		}
 	}
-	return records
+	var identified []identifiedRecord
+	for stableID, records := range groups {
+		sort.SliceStable(records, func(i, j int) bool {
+			return fmt.Sprint(field(records[i], "time_unix_nano")) < fmt.Sprint(field(records[j], "time_unix_nano"))
+		})
+		for ordinal, record := range records {
+			identified = append(identified, identifiedRecord{Record: record, ID: fmt.Sprintf("%s\x00%d", stableID, ordinal)})
+		}
+	}
+	return identified
 }
 
 func preservedLongSpanAttributes(before, after capture, limit int) (int, int, int) {

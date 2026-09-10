@@ -170,6 +170,21 @@ func TestLogLimitsPreserveStreamContext(t *testing.T) {
 	}
 }
 
+func TestLogLengthPreservesIndividualRecordContext(t *testing.T) {
+	record := func(timestamp string, values ...string) object {
+		attributes := make([]any, len(values))
+		for i, value := range values {
+			attributes[i] = attr("payload", value)
+		}
+		return object{"body": object{"stringValue": "shared log"}, "timeUnixNano": timestamp, "attributes": attributes}
+	}
+	baseline := capture{Logs: []object{record("1", "long payload"), record("2", "long payload")}}
+	changed := capture{Logs: []object{record("3", "long pay", "long pay"), record("4")}}
+	if expected, present, _ := preservedLongLogAttributes(baseline, changed, 8); expected != 2 || present != 1 {
+		t.Fatalf("one log record supplied another record's capped attribute: %d/%d", present, expected)
+	}
+}
+
 func attr(key, value string) any { return object{"key": key, "value": object{"stringValue": value}} }
 func item() object {
 	return object{"attributes": []any{attr("first", "long baseline attribute"), attr("second", "another long attribute"), attr("third", "third attribute")}}
@@ -581,6 +596,16 @@ func TestResourceChecksPreserveRegistrationSpans(t *testing.T) {
 	changed := capture{Spans: []object{server("changed-one", 201), database("changed-one"), database("changed-one")}}
 	if expected, present := matchingWorkloadSpans(baseline, changed); expected != 4 || present != 3 {
 		t.Fatalf("lost registration span was not detected: %d/%d", present, expected)
+	}
+	probes := syntheticProbeSpans()
+	batchBaseline := capture{Spans: append(append([]object{}, probes...), baseline.Spans...)}
+	batchBaseline.Records = []object{batchRecord("traces", "spans", batchBaseline.Spans)}
+	batchChanged := capture{Spans: syntheticProbeSpans()}
+	for _, span := range batchChanged.Spans {
+		batchChanged.Records = append(batchChanged.Records, batchRecord("traces", "spans", []object{span}))
+	}
+	if got := evaluate(experiment{Name: "span-batch"}, batchBaseline, batchChanged); got.Status == "pass" {
+		t.Fatal("singleton probe batches hid lost registration spans")
 	}
 }
 
