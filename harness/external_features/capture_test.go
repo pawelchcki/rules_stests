@@ -331,7 +331,7 @@ func TestExperimentsRequireBaselineAndRejectIgnoredSettings(t *testing.T) {
 				changed.Spans = syntheticProbeSpans()
 				for _, span := range changed.Spans {
 					span["attributes"] = append([]any(nil), span["attributes"].([]any)[:2]...)
-					span["dropped_attributes_count"] = float64(1)
+					span["dropped_attributes_count"] = float64(2)
 				}
 				changed.Logs[0]["attributes"] = []any{attr("first", "long baseline attribute"), attr("second", "another long attribute")}
 				changed.Logs[0]["dropped_attributes_count"] = float64(1)
@@ -1800,4 +1800,91 @@ func cloneObject(value object) object {
 	var cloned object
 	_ = json.Unmarshal(data, &cloned)
 	return cloned
+}
+
+func TestStreamContextsPreserveResourceAndScopeDropCounters(t *testing.T) {
+	span := syntheticProbeSpans()[0]
+	baseSpan := spanStream{Span: span, Scope: object{"droppedAttributesCount": float64(0)}, Resource: object{"droppedAttributesCount": float64(0)}}
+	changedSpan := baseSpan
+	changedSpan.Scope = object{"droppedAttributesCount": float64(1)}
+	if spanContextID(baseSpan, nil) == spanContextID(changedSpan, nil) {
+		t.Fatal("span scope dropped-attribute count was omitted")
+	}
+	metric := object{"name": "queue.depth", "gauge": object{"dataPoints": []any{object{"value": object{"asInt": "1"}}}}}
+	baseMetric := metricStream{Metric: metric, Resource: object{"droppedAttributesCount": float64(0)}}
+	changedMetric := baseMetric
+	changedMetric.Resource = object{"droppedAttributesCount": float64(1)}
+	if metricID(baseMetric) == metricID(changedMetric) {
+		t.Fatal("metric resource dropped-attribute count was omitted")
+	}
+	baseLog := logStream{Record: object{"body": object{"stringValue": "workload"}}, Scope: object{"droppedAttributesCount": float64(0)}}
+	changedLog := baseLog
+	changedLog.Scope = object{"droppedAttributesCount": float64(1)}
+	if logStreamID(baseLog, nil) == logStreamID(changedLog, nil) {
+		t.Fatal("log scope dropped-attribute count was omitted")
+	}
+}
+
+func TestSignalIdentitiesValidateTimestamps(t *testing.T) {
+	baselineSpans := capture{Spans: syntheticProbeSpans()}
+	changedSpans := capture{Spans: syntheticProbeSpans()}
+	baselineSpans.Spans[0]["events"] = []any{object{"name": "exception", "timeUnixNano": "100"}}
+	changedSpans.Spans[0]["events"] = []any{object{"name": "exception", "timeUnixNano": "0"}}
+	if expected, present := matchingWorkloadSpans(baselineSpans, changedSpans); expected != 4 || present != 3 {
+		t.Fatalf("invalid event timestamp was accepted: %d/%d", present, expected)
+	}
+
+	baselineLog := object{"body": object{"stringValue": "workload"}, "timeUnixNano": "10", "observedTimeUnixNano": "11"}
+	changedLog := object{"body": object{"stringValue": "workload"}, "timeUnixNano": "10", "observedTimeUnixNano": "9"}
+	if expected, present := matchingLogStreams(capture{Logs: []object{baselineLog}}, capture{Logs: []object{changedLog}}, nil); expected != 1 || present != 0 {
+		t.Fatalf("invalid log timestamp ordering was accepted: %d/%d", present, expected)
+	}
+
+	metric := func(start, end string) object {
+		return object{"name": "queue.depth", "gauge": object{"dataPoints": []any{object{"value": object{"asInt": "1"}, "startTimeUnixNano": start, "timeUnixNano": end}}}}
+	}
+	if expected, present := matchingMetricStreams(capture{Metrics: []object{metric("5", "10")}}, capture{Metrics: []object{metric("11", "10")}}); expected != 1 || present != 0 {
+		t.Fatalf("invalid metric time window was accepted: %d/%d", present, expected)
+	}
+}
+
+func TestOrdinaryWorkloadIdentityPreservesInjectedRemoteParent(t *testing.T) {
+	baseline := capture{Spans: syntheticProbeSpans()}
+	changed := capture{Spans: syntheticProbeSpans()}
+	changed.Spans[0]["parent_span_id"] = "1111111111111111"
+	if expected, present := matchingWorkloadSpans(baseline, changed); expected != 4 || present != 3 {
+		t.Fatalf("wrong injected remote parent was accepted: %d/%d", present, expected)
+	}
+}
+
+func TestPropagationOnlyNormalizesProbeTraceLogCorrelation(t *testing.T) {
+	baselineProbe := syntheticProbeSpans()[0]
+	changedProbe := cloneObject(baselineProbe)
+	changedProbe["trace_id"] = fmt.Sprintf("%032x", 10)
+	changedProbe["span_id"] = fmt.Sprintf("%016x", 10)
+	changedProbe["parent_span_id"] = ""
+	registration := object{"name": "INSERT", "kind": float64(3), "trace_id": fmt.Sprintf("%032x", 20), "span_id": fmt.Sprintf("%016x", 20), "start_time_unix_nano": "20", "end_time_unix_nano": "21"}
+	probeLog := func(span object) object {
+		return object{"body": object{"stringValue": "probe"}, "trace_id": field(span, "trace_id"), "span_id": field(span, "span_id")}
+	}
+	registrationLog := object{"body": object{"stringValue": "registration"}, "trace_id": field(registration, "trace_id"), "span_id": field(registration, "span_id")}
+	baseline := capture{Spans: []object{baselineProbe, registration}, Logs: []object{probeLog(baselineProbe), registrationLog}}
+	changed := capture{Spans: []object{changedProbe, registration}, Logs: []object{probeLog(changedProbe), object{"body": object{"stringValue": "registration"}}}}
+	if expected, present := matchingLogStreamsForPropagation(baseline, changed); expected != 2 || present != 1 {
+		t.Fatalf("unaffected registration correlation loss was accepted: %d/%d", present, expected)
+	}
+}
+
+func TestCountLimitRequiresAccurateDroppedAttributeCounts(t *testing.T) {
+	baseline := capture{Spans: syntheticProbeSpans()}
+	changed := capture{Spans: syntheticProbeSpans()}
+	for i := range baseline.Spans {
+		baseline.Spans[i]["attributes"] = append(baseline.Spans[i]["attributes"].([]any), attr("second", "value"), attr("third", "value"))
+		changed.Spans[i]["attributes"] = append([]any(nil), changed.Spans[i]["attributes"].([]any)[:2]...)
+		changed.Spans[i]["droppedAttributesCount"] = float64(2)
+	}
+	changed.Spans[0]["droppedAttributesCount"] = float64(99)
+	if expected, present := limitedGlobalCountSpanRecords(baseline, changed, 2); expected != 4 || present != 3 {
+		t.Fatalf("inaccurate dropped count was accepted: %d/%d", present, expected)
+	}
 }

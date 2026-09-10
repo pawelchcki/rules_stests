@@ -521,7 +521,7 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		}
 		expectedSpans, presentSpans := matchingWorkloadSpansIgnoringParents(baseline, changed)
 		expectedMetrics, presentMetrics := matchingMetricStreams(baseline, changed)
-		expectedLogs, presentLogs := matchingLogStreamsIgnoringCorrelation(baseline, changed)
+		expectedLogs, presentLogs := matchingLogStreamsForPropagation(baseline, changed)
 		preserved := expectedSpans > 0 && presentSpans == expectedSpans &&
 			(len(baseline.Metrics) == 0 || (expectedMetrics > 0 && presentMetrics == expectedMetrics)) &&
 			(len(baseline.Logs) == 0 || (expectedLogs > 0 && presentLogs == expectedLogs))
@@ -906,6 +906,9 @@ func spanParentRelationshipID(c capture, child spanStream, ignoredResourceAttrib
 			return "local\x00" + workloadSpanShapeID(candidate.Span) + "\x00" + spanContextID(candidate, ignoredResourceAttributes)
 		}
 	}
+	if isProbeServerSpan(child.Span) {
+		return "remote-probe\x00" + parentID
+	}
 	return "remote"
 }
 
@@ -955,8 +958,8 @@ func spanContextID(stream spanStream, ignoredResourceAttributes map[string]bool)
 	scopeVersion, _ := field(stream.Scope, "version").(string)
 	parts := []string{
 		scopeName, scopeVersion, stream.Schema, stream.ResourceSchema,
-		attributeSetID(stream.Scope, nil),
-		attributeSetID(stream.Resource, resourceAttributeIgnores(ignoredResourceAttributes)),
+		containerAttributeContextID(stream.Scope, nil),
+		containerAttributeContextID(stream.Resource, resourceAttributeIgnores(ignoredResourceAttributes)),
 	}
 	encoded, _ := json.Marshal(parts)
 	return string(encoded)
@@ -1193,7 +1196,11 @@ func spanEventSetIDWithValue(span object, normalize func(any) any) string {
 			values = append(values, string(encoded))
 		}
 		sort.Strings(values)
-		encoded, _ := json.Marshal([]any{name, number(field(event, "dropped_attributes_count")), values})
+		eventTime, eventTimeValid := finiteOTLPNumber(field(event, "time_unix_nano"))
+		start, startValid := finiteOTLPNumber(field(span, "start_time_unix_nano"))
+		end, endValid := finiteOTLPNumber(field(span, "end_time_unix_nano"))
+		insideParent := eventTimeValid && startValid && endValid && eventTime >= start && eventTime <= end
+		encoded, _ := json.Marshal([]any{name, eventTimeValid && eventTime > 0, insideParent, number(field(event, "dropped_attributes_count")), values})
 		eventIDs = append(eventIDs, string(encoded))
 	}
 	sort.Strings(eventIDs)
@@ -1321,7 +1328,7 @@ func headerArray(s object) bool {
 func matchingLengthLimitedLogStreams(before, after capture, limit int) (int, int) {
 	return matchingLogStreamsWithID(before, after, nil, func(stream logStream) string {
 		return logLengthStreamID(stream, limit)
-	}, true)
+	}, logCorrelationID)
 }
 
 func preservedLongLogAttributes(before, after capture, limit int) (int, int, int) {
@@ -1507,16 +1514,22 @@ func captureLogStreams(c capture) []logStream {
 func matchingLogStreams(before, after capture, ignoredResourceAttributes map[string]bool) (int, int) {
 	return matchingLogStreamsWithID(before, after, ignoredResourceAttributes, func(stream logStream) string {
 		return logStreamID(stream, ignoredResourceAttributes)
-	}, true)
+	}, logCorrelationID)
 }
 
 func matchingLogStreamsIgnoringCorrelation(before, after capture) (int, int) {
 	return matchingLogStreamsWithID(before, after, nil, func(stream logStream) string {
 		return logStreamID(stream, nil)
-	}, false)
+	}, nil)
 }
 
-func matchingLogStreamsWithID(before, after capture, ignoredResourceAttributes map[string]bool, identify func(logStream) string, includeCorrelation bool) (int, int) {
+func matchingLogStreamsForPropagation(before, after capture) (int, int) {
+	return matchingLogStreamsWithID(before, after, nil, func(stream logStream) string {
+		return logStreamID(stream, nil)
+	}, logCorrelationIDForPropagation)
+}
+
+func matchingLogStreamsWithID(before, after capture, ignoredResourceAttributes map[string]bool, identify func(logStream) string, correlationID func(capture, object, map[string]bool) string) (int, int) {
 	identities := func(c capture) map[string]int {
 		items := map[string]int{}
 		for _, stream := range captureLogStreams(c) {
@@ -1524,8 +1537,8 @@ func matchingLogStreamsWithID(before, after capture, ignoredResourceAttributes m
 			if id == "" {
 				continue
 			}
-			if includeCorrelation {
-				encoded, _ := json.Marshal([]string{id, logCorrelationID(c, stream.Record, ignoredResourceAttributes)})
+			if correlationID != nil {
+				encoded, _ := json.Marshal([]string{id, correlationID(c, stream.Record, ignoredResourceAttributes)})
 				id = string(encoded)
 			}
 			items[id]++
@@ -1553,8 +1566,8 @@ func logLengthStreamID(stream logStream, limit int) string {
 	scopeVersion, _ := field(stream.Scope, "version").(string)
 	parts := []string{
 		recordID, scopeName, scopeVersion, stream.Schema, stream.ResourceSchema,
-		attributeSetID(stream.Scope, nil),
-		attributeSetID(stream.Resource, resourceAttributeIgnores(nil)),
+		containerAttributeContextID(stream.Scope, nil),
+		containerAttributeContextID(stream.Resource, resourceAttributeIgnores(nil)),
 		attributeSetIDWithStringLimit(stream.Record, limit),
 		fmt.Sprint(number(field(stream.Record, "dropped_attributes_count"))),
 	}
@@ -1565,7 +1578,7 @@ func logLengthStreamID(stream logStream, limit int) string {
 func matchingCountLimitedLogStreams(before, after capture, limit int) (int, int) {
 	return matchingLogStreamsWithID(before, after, nil, func(stream logStream) string {
 		return logCountStreamID(stream, limit)
-	}, true)
+	}, logCorrelationID)
 }
 
 func logCountStreamID(stream logStream, limit int) string {
@@ -1583,8 +1596,8 @@ func logCountStreamID(stream logStream, limit int) string {
 	}
 	parts := []string{
 		recordID, scopeName, scopeVersion, stream.Schema, stream.ResourceSchema,
-		attributeSetID(stream.Scope, nil),
-		attributeSetID(stream.Resource, resourceAttributeIgnores(nil)),
+		containerAttributeContextID(stream.Scope, nil),
+		containerAttributeContextID(stream.Resource, resourceAttributeIgnores(nil)),
 		attributeID,
 		droppedID,
 	}
@@ -1601,8 +1614,8 @@ func logStreamIDWithRecordAttributes(stream logStream, ignoredResourceAttributes
 	scopeVersion, _ := field(stream.Scope, "version").(string)
 	parts := []string{
 		recordID, scopeName, scopeVersion, stream.Schema, stream.ResourceSchema,
-		attributeSetID(stream.Scope, nil),
-		attributeSetID(stream.Resource, resourceAttributeIgnores(ignoredResourceAttributes)),
+		containerAttributeContextID(stream.Scope, nil),
+		containerAttributeContextID(stream.Resource, resourceAttributeIgnores(ignoredResourceAttributes)),
 	}
 	if includeDroppedAttributes {
 		parts = append(parts, fmt.Sprint(number(field(stream.Record, "dropped_attributes_count"))))
@@ -1626,10 +1639,19 @@ func stableLogRecordID(record object, includeAttributes bool) string {
 		}
 	}
 	parts := []any{body, stable}
+	parts = append(parts, logTimestampID(record))
 	if includeAttributes {
 		parts = append(parts, attributeSetID(record, nil))
 	}
 	encoded, _ := json.Marshal(parts)
+	return string(encoded)
+}
+
+func logTimestampID(record object) string {
+	eventTime, eventValid := finiteOTLPNumber(field(record, "time_unix_nano"))
+	observedTime, observedValid := finiteOTLPNumber(field(record, "observed_time_unix_nano"))
+	ordered := !eventValid || !observedValid || observedTime >= eventTime
+	encoded, _ := json.Marshal([]bool{eventValid && eventTime > 0, observedValid && observedTime > 0, ordered})
 	return string(encoded)
 }
 
@@ -1651,6 +1673,32 @@ func logCorrelationID(c capture, record object, ignoredResourceAttributes map[st
 		}
 	}
 	encoded, _ := json.Marshal([]any{state, target, number(field(record, "flags"))})
+	return string(encoded)
+}
+
+func logCorrelationIDForPropagation(c capture, record object, ignoredResourceAttributes map[string]bool) string {
+	traceID, _ := field(record, "trace_id").(string)
+	spanID, _ := field(record, "span_id").(string)
+	if !validTrace(traceID) || !validSpan(spanID) {
+		return logCorrelationID(c, record, ignoredResourceAttributes)
+	}
+	probeTrace := false
+	for _, stream := range workloadSpanStreams(c) {
+		if field(stream.Span, "trace_id") == traceID {
+			probeTrace = true
+			break
+		}
+	}
+	if !probeTrace {
+		return logCorrelationID(c, record, ignoredResourceAttributes)
+	}
+	for _, stream := range captureSpanStreams(c) {
+		if field(stream.Span, "trace_id") == traceID && field(stream.Span, "span_id") == spanID {
+			encoded, _ := json.Marshal([]any{"probe-matched", workloadSpanIDForPropagation(stream.Span), spanContextID(stream, ignoredResourceAttributes), number(field(record, "flags"))})
+			return string(encoded)
+		}
+	}
+	encoded, _ := json.Marshal([]any{"probe-unmatched", number(field(record, "flags"))})
 	return string(encoded)
 }
 
@@ -1696,9 +1744,9 @@ func limitedCountLogStreamRecords(before, after capture, limit int) (int, int) {
 	preserved := map[string]int{}
 	for _, stream := range captureLogStreams(after) {
 		id := logLimitStreamID(stream)
-		if id != "" && preserved[id] < len(eligible[id]) && len(attributes(stream.Record)) == limit && number(field(stream.Record, "dropped_attributes_count")) > 0 {
+		if id != "" && preserved[id] < len(eligible[id]) && len(attributes(stream.Record)) == limit {
 			for index := preserved[id]; index < len(eligible[id]); index++ {
-				if attributeMultisetSubset(stream.Record, eligible[id][index]) {
+				if accurateDroppedAttributeCount(eligible[id][index], stream.Record) && attributeMultisetSubset(stream.Record, eligible[id][index]) {
 					eligible[id][preserved[id]], eligible[id][index] = eligible[id][index], eligible[id][preserved[id]]
 					preserved[id]++
 					break
@@ -1728,11 +1776,19 @@ func limitedGlobalCountSpanRecords(before, after capture, limit int) (int, int) 
 		}
 	}
 	preserved := map[string]int{}
+	expectedDropped := map[string]float64{}
 	for _, stream := range workloadSpanStreams(after) {
 		id := identity(after, stream)
-		if preserved[id] < len(eligible[id]) && len(attributes(stream.Span)) == limit && number(field(stream.Span, "dropped_attributes_count")) > 0 {
+		dropped := number(field(stream.Span, "dropped_attributes_count"))
+		if len(attributes(stream.Span)) == limit && dropped > 0 && (expectedDropped[id] == 0 || dropped < expectedDropped[id]) {
+			expectedDropped[id] = dropped
+		}
+	}
+	for _, stream := range workloadSpanStreams(after) {
+		id := identity(after, stream)
+		if preserved[id] < len(eligible[id]) && len(attributes(stream.Span)) == limit {
 			for index := preserved[id]; index < len(eligible[id]); index++ {
-				if spanAttributeMultisetSubset(stream.Span, eligible[id][index]) {
+				if consistentDroppedAttributeCount(eligible[id][index], stream.Span, expectedDropped[id]) && spanAttributeMultisetSubset(stream.Span, eligible[id][index]) {
 					eligible[id][preserved[id]], eligible[id][index] = eligible[id][index], eligible[id][preserved[id]]
 					preserved[id]++
 					break
@@ -1753,7 +1809,7 @@ func limitedGlobalCountEventRecords(before, after capture, limit int) (int, int)
 	}
 	preserved := 0
 	for _, event := range identifiedGlobalEvents(after, identifyParent) {
-		if baseline := eligible[event.ID]; baseline != nil && len(attributes(event.Record)) == limit && number(field(event.Record, "dropped_attributes_count")) > 0 && attributeMultisetSubset(event.Record, baseline) {
+		if baseline := eligible[event.ID]; baseline != nil && len(attributes(event.Record)) == limit && accurateDroppedAttributeCount(baseline, event.Record) && attributeMultisetSubset(event.Record, baseline) {
 			preserved++
 		}
 	}
@@ -1776,9 +1832,9 @@ func limitedEventRecords(before, after capture, limit int) (int, int) {
 		for _, event := range objects(parent.Record, "events") {
 			eventName, _ := field(event, "name").(string)
 			key := parent.ID + "\x00" + eventName
-			if preserved[key] < len(eligible[key]) && len(attributes(event)) == limit && number(field(event, "dropped_attributes_count")) > 0 {
+			if preserved[key] < len(eligible[key]) && len(attributes(event)) == limit {
 				for index := preserved[key]; index < len(eligible[key]); index++ {
-					if attributeMultisetSubset(event, eligible[key][index]) {
+					if accurateDroppedAttributeCount(eligible[key][index], event) && attributeMultisetSubset(event, eligible[key][index]) {
 						eligible[key][preserved[key]], eligible[key][index] = eligible[key][index], eligible[key][preserved[key]]
 						preserved[key]++
 						break
@@ -1819,6 +1875,23 @@ func attributeMultisetSubset(candidate, baseline object) bool {
 	return attributeMultisetSubsetWithValue(candidate, baseline, func(_ string, value any) any {
 		return normalizedJSONValue(value)
 	})
+}
+
+func accurateDroppedAttributeCount(baseline, candidate object) bool {
+	removed := len(attributes(baseline)) - len(attributes(candidate))
+	if removed <= 0 {
+		return false
+	}
+	return number(field(candidate, "dropped_attributes_count")) == number(field(baseline, "dropped_attributes_count"))+float64(removed)
+}
+
+// SDKs count rejected setter attempts, which can exceed the number of
+// baseline-visible attributes removed. Repeated equivalent workload requests
+// must nevertheless agree, and the count must cover every visible removal.
+func consistentDroppedAttributeCount(baseline, candidate object, expected float64) bool {
+	removed := len(attributes(baseline)) - len(attributes(candidate))
+	reported := number(field(candidate, "dropped_attributes_count"))
+	return removed > 0 && reported == expected && reported >= number(field(baseline, "dropped_attributes_count"))+float64(removed)
 }
 
 func spanAttributeMultisetSubset(candidate, baseline object) bool {
@@ -1995,13 +2068,23 @@ func controlMetricPointIDWithExemplars(stream metricStream, point object, ignore
 		return ""
 	}
 	if transientMetricPoints(stream) {
-		return fmt.Sprintf("%s\x00%s\x00%v", id, metricType, number(field(point, "flags")))
+		return fmt.Sprintf("%s\x00%s\x00%v\x00%s\x00%s", id, metricType, number(field(point, "flags")), metricMeasurementID(stream.Metric, point), metricTimestampID(point))
 	}
-	parts := []string{id, metricType, metricPointAttributeSetID(point), metricMeasurementID(stream.Metric, point)}
+	parts := []string{id, metricType, metricPointAttributeSetID(point), metricMeasurementID(stream.Metric, point), metricTimestampID(point)}
 	if includeExemplars {
 		parts = append(parts, metricExemplarSetID(point))
 	}
 	encoded, _ := json.Marshal(parts)
+	return string(encoded)
+}
+
+func metricTimestampID(point object) string {
+	end, endValid := finiteOTLPNumber(field(point, "time_unix_nano"))
+	startValue := field(point, "start_time_unix_nano")
+	start, startValid := finiteOTLPNumber(startValue)
+	startPresent := startValid && start > 0
+	ordered := !startPresent || (endValid && end >= start)
+	encoded, _ := json.Marshal([]bool{endValid && end > 0, startPresent, startValue == nil || startValid, ordered})
 	return string(encoded)
 }
 
@@ -2028,8 +2111,8 @@ func metricIDIgnoring(stream metricStream, ignoredResourceAttributes map[string]
 	scopeVersion, _ := field(stream.Scope, "version").(string)
 	parts := []string{
 		name, unit, description, scopeName, scopeVersion, stream.Schema, stream.ResourceSchema,
-		attributeSetID(stream.Scope, nil),
-		attributeSetID(stream.Resource, resourceAttributeIgnores(ignoredResourceAttributes)),
+		containerAttributeContextID(stream.Scope, nil),
+		containerAttributeContextID(stream.Resource, resourceAttributeIgnores(ignoredResourceAttributes)),
 	}
 	encoded, _ := json.Marshal(parts)
 	return string(encoded)
@@ -2271,6 +2354,11 @@ func resourceAttributeIgnores(additional map[string]bool) map[string]bool {
 		ignored[key] = true
 	}
 	return ignored
+}
+
+func containerAttributeContextID(container object, ignored map[string]bool) string {
+	encoded, _ := json.Marshal([]any{attributeSetID(container, ignored), number(field(container, "dropped_attributes_count"))})
+	return string(encoded)
 }
 
 func attributeSetID(container object, ignored map[string]bool) string {

@@ -238,6 +238,7 @@ realworld_service_tests(
     name = "rails_otel",
     service = ":rails_otel_service",
     profile = "//corpus:ruby-rails-auto-v0-1-0",
+    flaky = True,
     otel_flaky_reason = "rules_itest releases Ruby's autoassigned port before Puma binds, so concurrent remote actions can claim it",
     tags = _RAILS_TAGS,
 )
