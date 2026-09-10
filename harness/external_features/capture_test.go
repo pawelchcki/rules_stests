@@ -348,7 +348,7 @@ func TestExperimentsRequireBaselineAndRejectIgnoredSettings(t *testing.T) {
 				changed.Spans = syntheticProbeSpans()
 				changed.Logs[0]["body"] = object{"stringValue": "workload log"}
 			case "histogram":
-				changed.Metrics = []object{{"name": "probe.metric", "data": object{"exponential_histogram": object{"data_points": []any{object{"count": float64(1)}}}}}}
+				changed.Metrics = []object{{"name": "probe.metric", "data": object{"exponential_histogram": object{"data_points": []any{object{"count": float64(1), "positive": object{"bucket_counts": []any{float64(1)}}}}}}}}
 			default:
 				t.Fatal("missing positive fixture")
 			}
@@ -458,6 +458,19 @@ func TestGlobalAttributeLimitsCoverLogsAndEvents(t *testing.T) {
 	}
 }
 
+func TestSpanLengthDoesNotNormalizeEventAttributes(t *testing.T) {
+	baseline := capture{Spans: syntheticProbeSpans()}
+	changed := capture{Spans: syntheticProbeSpans()}
+	baseline.Spans[0]["events"] = []any{object{"name": "exception", "attributes": []any{attr("message", "long event attribute")}}}
+	changed.Spans[0]["events"] = []any{object{"name": "exception", "attributes": []any{attr("message", "long eve")}}}
+	for _, span := range changed.Spans {
+		span["attributes"] = []any{attr("http.route", "api/tags"), attr("http.user_agent", "external")}
+	}
+	if got := evaluate(experiment{Name: "span-length"}, baseline, changed); got.Status == "pass" {
+		t.Fatal("span-only length limit accepted a truncated event attribute")
+	}
+}
+
 func TestWorkloadSpanIdentityPreservesStatus(t *testing.T) {
 	baseline := capture{Spans: syntheticProbeSpans()}
 	changed := capture{Spans: syntheticProbeSpans()}
@@ -466,11 +479,22 @@ func TestWorkloadSpanIdentityPreservesStatus(t *testing.T) {
 	if expected, present := matchingWorkloadSpans(baseline, changed); expected != 4 || present != 3 {
 		t.Fatalf("span status corruption was not detected: %d/%d", present, expected)
 	}
-	if expected, present := matchingLengthLimitedWorkloadSpans(baseline, changed, 8); expected != 4 || present != 3 {
+	if expected, present := matchingLengthLimitedWorkloadSpans(baseline, changed, 8, true); expected != 4 || present != 3 {
 		t.Fatalf("length-limit identity omitted span status: %d/%d", present, expected)
 	}
 	if expected, present := matchingCountLimitedWorkloadSpans(baseline, changed); expected != 4 || present != 3 {
 		t.Fatalf("count-limit identity omitted span status: %d/%d", present, expected)
+	}
+}
+
+func TestWorkloadSpanIdentityRejectsInvalidTraceIDs(t *testing.T) {
+	baseline := capture{Spans: syntheticProbeSpans()}
+	changed := capture{Spans: syntheticProbeSpans()}
+	for _, span := range changed.Spans {
+		span["trace_id"] = strings.Repeat("0", 32)
+	}
+	if expected, present := matchingWorkloadSpans(baseline, changed); expected != 4 || present != 0 {
+		t.Fatalf("invalid workload trace IDs were preserved: %d/%d", present, expected)
 	}
 }
 
@@ -785,6 +809,10 @@ func TestControlMetricsPreserveDataPointIdentities(t *testing.T) {
 	if expected, present := matchingMetricStreams(baseline, changed); expected != 2 || present != 1 {
 		t.Fatalf("metric data-point loss was not detected: %d/%d", present, expected)
 	}
+	extraMetric := metric("unrelated.count", point("a"))
+	if expected, present := matchingMetricStreams(capture{Metrics: []object{baselineMetric}}, capture{Metrics: []object{baselineMetric, extraMetric}}); expected != 2 || present != 3 {
+		t.Fatalf("unexpected metric identity was not rejected: %d/%d", present, expected)
+	}
 	baselineFlaggedPoint := point("a")
 	baselineFlaggedPoint["flags"] = float64(0)
 	changedFlaggedPoint := point("a")
@@ -816,8 +844,10 @@ func TestResourceChecksPreserveRegistrationSpans(t *testing.T) {
 	database := func(traceID string) object {
 		return object{"name": "INSERT", "kind": float64(3), "traceId": traceID, "attributes": []any{attr("db.system", "sqlite")}}
 	}
-	baseline := capture{Spans: []object{server("baseline-one", 201), database("baseline-one"), server("baseline-two", 409), database("baseline-two")}}
-	changed := capture{Spans: []object{server("changed-one", 201), database("changed-one"), database("changed-one")}}
+	baselineOne, baselineTwo := fmt.Sprintf("%032x", 101), fmt.Sprintf("%032x", 102)
+	changedOne := fmt.Sprintf("%032x", 201)
+	baseline := capture{Spans: []object{server(baselineOne, 201), database(baselineOne), server(baselineTwo, 409), database(baselineTwo)}}
+	changed := capture{Spans: []object{server(changedOne, 201), database(changedOne), database(changedOne)}}
 	if expected, present := matchingWorkloadSpans(baseline, changed); expected != 4 || present != 3 {
 		t.Fatalf("lost registration span was not detected: %d/%d", present, expected)
 	}
@@ -839,6 +869,16 @@ func TestResourceChecksPreserveRegistrationSpans(t *testing.T) {
 	defaultMissing.Resources = []object{{}}
 	if preserved, missing := evaluate(experiment{Name: "default-service"}, defaultBaseline, defaultPreserved).signature(), evaluate(experiment{Name: "default-service"}, defaultBaseline, defaultMissing).signature(); preserved == missing {
 		t.Fatalf("default-service gap hid workload span loss: %q", missing)
+	}
+}
+
+func TestResourceRejectsDuplicateConfiguredKeys(t *testing.T) {
+	baseline := capture{Spans: syntheticProbeSpans(), Resources: []object{{}}}
+	changed := capture{Spans: syntheticProbeSpans(), Resources: []object{{"attributes": []any{
+		attr("probe.external", "visible"), attr("probe.external", "conflict"), attr("service.name", "external-probe"),
+	}}}}
+	if got := evaluate(experiment{Name: "resource"}, baseline, changed); got.Status == "pass" {
+		t.Fatal("resource experiment accepted duplicate configured keys")
 	}
 }
 
@@ -1485,6 +1525,13 @@ func TestCountEventAndHistogramExperimentsPreserveOtherSignals(t *testing.T) {
 	if got := evaluate(experiment{Name: "event-attributes"}, eventBase, eventChanged); got.Status != "pass" {
 		t.Fatalf("complete event-attribute capture did not pass: %+v", got)
 	}
+	duplicatedEventParent := object{"name": "INSERT", "kind": float64(3), "trace_id": fmt.Sprintf("%032x", 20), "attributes": []any{attr("db.system", "sqlite")}, "events": []any{
+		object{"name": "exception", "attributes": []any{attr("first", "one")}, "dropped_attributes_count": float64(1)},
+		object{"name": "exception", "attributes": []any{attr("first", "one")}, "dropped_attributes_count": float64(1)},
+	}}
+	if got := evaluate(experiment{Name: "event-attributes"}, eventBase, capture{Spans: []object{server, duplicatedEventParent}, Metrics: []object{metric}, Logs: []object{logRecord}}); got.Status == "pass" {
+		t.Fatal("event-attribute limit accepted a duplicated configured event")
+	}
 	if got := evaluate(experiment{Name: "event-attributes"}, eventBase, capture{Spans: []object{cappedParent}}); got.Status == "pass" {
 		t.Fatal("event-attribute limit passed after dropping unaffected telemetry")
 	}
@@ -1494,7 +1541,7 @@ func TestCountEventAndHistogramExperimentsPreserveOtherSignals(t *testing.T) {
 	}
 
 	histogram := object{"name": "duration", "histogram": object{"dataPoints": []any{object{"attributes": []any{attr("route", "tags")}, "count": "1"}}}}
-	exponential := object{"name": "duration", "exponentialHistogram": object{"dataPoints": []any{object{"attributes": []any{attr("route", "tags")}, "count": "1"}}}}
+	exponential := object{"name": "duration", "exponentialHistogram": object{"dataPoints": []any{object{"attributes": []any{attr("route", "tags")}, "count": "1", "positive": object{"bucketCounts": []any{"1"}}}}}}
 	histogramBase := capture{Spans: syntheticProbeSpans(), Metrics: []object{histogram, metric}, Logs: []object{logRecord}}
 	histogramChanged := capture{Spans: syntheticProbeSpans(), Metrics: []object{exponential, metric}, Logs: []object{logRecord}}
 	if got := evaluate(experiment{Name: "histogram"}, histogramBase, histogramChanged); got.Status != "pass" {
@@ -1502,6 +1549,11 @@ func TestCountEventAndHistogramExperimentsPreserveOtherSignals(t *testing.T) {
 	}
 	if got := evaluate(experiment{Name: "histogram"}, histogramBase, capture{Metrics: []object{exponential}}); got.Status == "pass" {
 		t.Fatal("histogram conversion passed after dropping unaffected telemetry")
+	}
+	countEight := object{"name": "counted", "histogram": object{"dataPoints": []any{object{"count": "8"}}}}
+	countOne := object{"name": "counted", "exponentialHistogram": object{"dataPoints": []any{object{"count": "1", "positive": object{"bucketCounts": []any{"1"}}}}}}
+	if got := evaluate(experiment{Name: "histogram"}, capture{Metrics: []object{countEight}}, capture{Metrics: []object{countOne}}); got.Status == "pass" {
+		t.Fatal("partial histogram measurements supplied conversion evidence")
 	}
 }
 

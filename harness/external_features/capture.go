@@ -537,7 +537,9 @@ func evaluate(e experiment, baseline, changed capture) observation {
 			(len(baseline.Metrics) == 0 || (expectedMetrics > 0 && presentMetrics == expectedMetrics)) &&
 			(expected == 0 || present == expected)
 		for _, r := range changed.Resources {
-			ok = ok && attributeValue(r, "probe.external") == "visible" && attributeValue(r, "service.name") == "external-probe"
+			probeExternal, probePresent, probeValid := stringAttribute(r, "probe.external")
+			serviceName, servicePresent, serviceValid := stringAttribute(r, "service.name")
+			ok = ok && probePresent && probeValid && probeExternal == "visible" && servicePresent && serviceValid && serviceName == "external-probe"
 		}
 		check(len(baseline.Resources) > 0, ok && preserved, fmt.Sprintf("%d resources must retain probe.external=visible and OTEL_SERVICE_NAME precedence; workload requests preserved %d/%d", len(changed.Resources), present, expected))
 	case "disabled":
@@ -562,7 +564,7 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		} else {
 			expectedTraces := incomingProbeTraces(probeSpans(baseline))
 			presentTraces := incomingServerTraces(after)
-			expected, present = matchingLengthLimitedWorkloadSpans(baseline, changed, 8)
+			expected, present = matchingLengthLimitedWorkloadSpans(baseline, changed, 8, e.Name == "attribute-length")
 			attributeExpected, attributePresent, attributeMissing = preservedLongSpanAttributes(baseline, changed, 8)
 			expectedMetrics, presentMetrics := matchingMetricStreams(baseline, changed)
 			expectedLogs, presentLogs := matchingLogStreams(baseline, changed, nil)
@@ -773,9 +775,9 @@ func matchingWorkloadSpansIgnoringEvents(before, after capture) (int, int) {
 	return matchingWorkloadSpansWithID(before, after, nil, workloadSpanIDIgnoringEvents, true)
 }
 
-func matchingLengthLimitedWorkloadSpans(before, after capture, limit int) (int, int) {
+func matchingLengthLimitedWorkloadSpans(before, after capture, limit int, limitEvents bool) (int, int) {
 	return matchingWorkloadSpansWithID(before, after, nil, func(span object) string {
-		return workloadSpanIDWithStringLimit(span, limit)
+		return workloadSpanIDWithStringLimit(span, limit, limitEvents)
 	}, true)
 }
 
@@ -820,7 +822,7 @@ func workloadSpanStreams(c capture) []spanStream {
 	traceIDs := map[string]bool{}
 	for _, stream := range captureSpanStreams(c) {
 		if isProbeServerSpan(stream.Span) {
-			if traceID, ok := field(stream.Span, "trace_id").(string); ok && traceID != "" {
+			if traceID, ok := field(stream.Span, "trace_id").(string); ok && validTrace(traceID) {
 				traceIDs[traceID] = true
 			}
 		}
@@ -945,7 +947,7 @@ func workloadSpanIDForPropagation(span object) string {
 	return workloadSpanID(normalized)
 }
 
-func workloadSpanIDWithStringLimit(span object, limit int) string {
+func workloadSpanIDWithStringLimit(span object, limit int, limitEvents bool) string {
 	name, _ := field(span, "name").(string)
 	if name == "" {
 		return ""
@@ -973,7 +975,9 @@ func workloadSpanIDWithStringLimit(span object, limit int) string {
 	sort.Strings(values)
 	eventsID := spanEventSetIDWithValue(span, func(value any) any {
 		value = mapStringValues(value, normalizeExternalStatePath)
-		value, _ = normalizeStringValues(value, limit)
+		if limitEvents {
+			value, _ = normalizeStringValues(value, limit)
+		}
 		return value
 	})
 	encoded, _ := json.Marshal([]any{normalizeExternalStatePath(name), number(field(span, "kind")), number(field(span, "flags")), spanStatusID(span), eventsID, values})
@@ -1146,9 +1150,9 @@ func preservedLongSpanAttributes(before, after capture, limit int) (int, int, in
 
 func preservedLongEventAttributes(before, after capture, limit int) (int, int, int) {
 	return preservedLongIdentifiedAttributes(identifiedGlobalEvents(before, func(span object) string {
-		return workloadSpanIDWithStringLimit(span, limit)
+		return workloadSpanIDWithStringLimit(span, limit, true)
 	}), identifiedGlobalEvents(after, func(span object) string {
-		return workloadSpanIDWithStringLimit(span, limit)
+		return workloadSpanIDWithStringLimit(span, limit, true)
 	}), limit)
 }
 
@@ -1156,7 +1160,7 @@ func matchingLengthLimitedEvents(before, after capture, limit int) (int, int) {
 	identities := func(c capture) map[string]int {
 		items := map[string]int{}
 		for _, event := range identifiedGlobalEvents(c, func(span object) string {
-			return workloadSpanIDWithStringLimit(span, limit)
+			return workloadSpanIDWithStringLimit(span, limit, true)
 		}) {
 			items[event.ID+"\x00"+attributeSetIDWithStringLimit(event.Record, limit)]++
 		}
@@ -1559,14 +1563,7 @@ func matchingCountLimitedEvents(before, after capture, limit int) (int, int) {
 		return items
 	}
 	eligible := identities(before)
-	preserved := map[string]int{}
-	for id, count := range identities(after) {
-		if count > eligible[id] {
-			count = eligible[id]
-		}
-		preserved[id] = count
-	}
-	return countIdentities(eligible), countIdentities(preserved)
+	return matchingIdentityCounts(eligible, identities(after))
 }
 
 func identifiedSpans(c capture) []identifiedRecord {
@@ -1652,47 +1649,37 @@ func matchingMetricStreams(before, after capture) (int, int) {
 }
 
 func matchingMetricStreamsIgnoring(before, after capture, ignoredResourceAttributes map[string]bool) (int, int) {
-	eligible := map[string]bool{}
-	for _, stream := range captureMetricStreams(before) {
-		for _, point := range objects(stream.Metric, "data_points") {
-			if id := controlMetricPointID(stream, point, ignoredResourceAttributes); id != "" {
-				eligible[id] = true
-			}
-		}
-	}
-	preserved := map[string]bool{}
-	for _, stream := range captureMetricStreams(after) {
-		for _, point := range objects(stream.Metric, "data_points") {
-			id := controlMetricPointID(stream, point, ignoredResourceAttributes)
-			if eligible[id] {
-				preserved[id] = true
-			}
-		}
-	}
-	return len(eligible), len(preserved)
+	eligible := controlMetricIdentities(before, ignoredResourceAttributes, false, false)
+	actual := controlMetricIdentities(after, ignoredResourceAttributes, false, true)
+	return matchingIdentityCounts(eligible, actual)
 }
 
 func matchingNonHistogramMetricStreams(before, after capture) (int, int) {
-	eligible := map[string]bool{}
-	for _, stream := range captureMetricStreams(before) {
-		if len(objects(stream.Metric, "histogram")) > 0 {
+	eligible := controlMetricIdentities(before, nil, true, false)
+	actual := controlMetricIdentities(after, nil, true, true)
+	return matchingIdentityCounts(eligible, actual)
+}
+
+func controlMetricIdentities(c capture, ignoredResourceAttributes map[string]bool, nonHistogramOnly, rejectDuplicates bool) map[string]int {
+	identities := map[string]int{}
+	for _, stream := range captureMetricStreams(c) {
+		if nonHistogramOnly && (len(objects(stream.Metric, "histogram")) > 0 || len(objects(stream.Metric, "exponential_histogram")) > 0) {
 			continue
 		}
+		seen := map[string]bool{}
 		for _, point := range objects(stream.Metric, "data_points") {
-			if id := controlMetricPointID(stream, point, nil); id != "" {
-				eligible[id] = true
+			id := controlMetricPointID(stream, point, ignoredResourceAttributes)
+			if id == "" {
+				continue
 			}
+			identities[id] = 1
+			if rejectDuplicates && !transientMetricPoints(stream) && seen[id] {
+				identities[id+"\x00duplicate"] = 1
+			}
+			seen[id] = true
 		}
 	}
-	preserved := map[string]bool{}
-	for _, stream := range captureMetricStreams(after) {
-		for _, point := range objects(stream.Metric, "data_points") {
-			if id := controlMetricPointID(stream, point, nil); eligible[id] {
-				preserved[id] = true
-			}
-		}
-	}
-	return len(eligible), len(preserved)
+	return identities
 }
 
 func controlMetricPointID(stream metricStream, point object, ignoredResourceAttributes map[string]bool) string {
@@ -1970,41 +1957,91 @@ func suppressedExemplars(before, after capture) (int, int, int) {
 }
 
 func convertedHistograms(before, after capture) (int, int) {
-	eligible := map[string]bool{}
+	eligible := map[string]float64{}
 	for _, stream := range captureMetricStreams(before) {
 		if len(objects(stream.Metric, "histogram")) == 0 {
 			continue
 		}
 		for _, point := range objects(stream.Metric, "data_points") {
-			if id := metricSeriesID(stream, point); id != "" && positiveOTLPNumber(field(point, "count")) {
-				eligible[id] = true
+			id := metricSeriesID(stream, point)
+			count, valid := otlpNumber(field(point, "count"))
+			if id != "" && valid && count > eligible[id] {
+				eligible[id] = count
 			}
 		}
 	}
-	converted := map[string]bool{}
+	converted := map[string]float64{}
+	invalid := false
 	for _, stream := range captureMetricStreams(after) {
 		if len(objects(stream.Metric, "exponential_histogram")) == 0 {
 			continue
 		}
 		for _, point := range objects(stream.Metric, "data_points") {
 			id := metricSeriesID(stream, point)
-			if eligible[id] && positiveOTLPNumber(field(point, "count")) {
-				converted[id] = true
+			count, _ := otlpNumber(field(point, "count"))
+			if id == "" || !validExponentialHistogramPoint(point) {
+				invalid = true
+				continue
+			}
+			if count > converted[id] {
+				converted[id] = count
 			}
 		}
 	}
-	return len(eligible), len(converted)
+	matched, exact := 0, len(eligible) == len(converted) && !invalid
+	for id, count := range eligible {
+		if converted[id] == count {
+			matched++
+		} else {
+			exact = false
+		}
+	}
+	if !exact && matched == len(eligible) {
+		return len(eligible), len(eligible) + 1
+	}
+	return len(eligible), matched
 }
 
-func positiveOTLPNumber(value any) bool {
+func validExponentialHistogramPoint(point object) bool {
+	count, ok := otlpNumber(field(point, "count"))
+	if !ok || count <= 0 {
+		return false
+	}
+	total, evidence := float64(0), false
+	if zeroCount := field(point, "zero_count"); zeroCount != nil {
+		value, valid := otlpNumber(zeroCount)
+		if !valid {
+			return false
+		}
+		total += value
+		evidence = true
+	}
+	for _, side := range []string{"positive", "negative"} {
+		buckets, _ := field(point, side).(map[string]any)
+		values, _ := field(buckets, "bucket_counts").([]any)
+		if len(values) > 0 {
+			evidence = true
+		}
+		for _, value := range values {
+			bucketCount, valid := otlpNumber(value)
+			if !valid {
+				return false
+			}
+			total += bucketCount
+		}
+	}
+	return evidence && total == count
+}
+
+func otlpNumber(value any) (float64, bool) {
 	switch value := value.(type) {
 	case float64:
-		return value > 0
+		return value, true
 	case string:
 		number, err := strconv.ParseFloat(value, 64)
-		return err == nil && number > 0
+		return number, err == nil
 	default:
-		return false
+		return 0, false
 	}
 }
 
