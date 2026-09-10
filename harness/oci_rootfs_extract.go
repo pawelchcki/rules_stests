@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -38,13 +40,13 @@ func main() {
 }
 
 func run(args []string) error {
-	if len(args) != 3 || (args[2] != "single" && args[2] != "multi") {
-		return errors.New("usage: oci_rootfs_extract <oci-layout> <rootfs> <single|multi>")
+	if (len(args) != 3 && len(args) != 4) || (args[2] != "single" && args[2] != "multi") {
+		return errors.New("usage: oci_rootfs_extract <oci-layout> <rootfs> <single|multi> [zstd-tool]")
 	}
-	return extractOCI(args[0], args[1], args[2] == "single")
+	return extractOCI(args[0], args[1], args[2] == "single", args[3:]...)
 }
 
-func extractOCI(layoutArg, root string, singlePayload bool) error {
+func extractOCI(layoutArg, root string, singlePayload bool, zstdTool ...string) error {
 	layout, err := resolveDirectory(layoutArg)
 	if err != nil {
 		return err
@@ -54,12 +56,12 @@ func extractOCI(layoutArg, root string, singlePayload bool) error {
 		return err
 	}
 	if singlePayload {
-		layers, err = singlePayloadLayer(layout, layers)
+		layers, err = singlePayloadLayer(layout, layers, zstdTool...)
 		if err != nil {
 			return err
 		}
 	}
-	if err := extractFresh(layout, layers, root); err != nil {
+	if err := extractFresh(layout, layers, root, zstdTool...); err != nil {
 		return err
 	}
 	if err := removeDanglingSymlinks(root); err != nil {
@@ -157,14 +159,14 @@ func readLayers(layout string) (string, []descriptor, error) {
 	return idx.Manifests[0].Digest, imageManifest.Layers, nil
 }
 
-func singlePayloadLayer(layout string, layers []descriptor) ([]descriptor, error) {
+func singlePayloadLayer(layout string, layers []descriptor, zstdTool ...string) ([]descriptor, error) {
 	payloadLayers := make([]descriptor, 0, 1)
 	for _, layer := range layers {
 		if layer.Size > 1024 {
 			payloadLayers = append(payloadLayers, layer)
 			continue
 		}
-		if err := verifyEmptyLayer(layout, layer); err != nil {
+		if err := verifyEmptyLayer(layout, layer, zstdTool...); err != nil {
 			return nil, err
 		}
 	}
@@ -174,7 +176,7 @@ func singlePayloadLayer(layout string, layers []descriptor) ([]descriptor, error
 	return payloadLayers, nil
 }
 
-func verifyEmptyLayer(layout string, layer descriptor) error {
+func verifyEmptyLayer(layout string, layer descriptor, zstdTool ...string) (result error) {
 	blob, err := blobPath(layout, layer.Digest)
 	if err != nil {
 		return err
@@ -187,11 +189,15 @@ func verifyEmptyLayer(layout string, layer descriptor) error {
 		return err
 	}
 	defer file.Close()
-	reader, closeReader, err := layerReader(file, layer.MediaType)
+	reader, closeReader, err := layerReader(file, layer.MediaType, zstdTool...)
 	if err != nil {
 		return err
 	}
-	defer closeReader()
+	defer func() {
+		if err := closeReader(); result == nil && err != nil {
+			result = err
+		}
+	}()
 	if _, err := tar.NewReader(reader).Next(); !errors.Is(err, io.EOF) {
 		if err == nil {
 			return fmt.Errorf("small OCI layer %s is not empty", layer.Digest)
@@ -229,7 +235,7 @@ func verifyBlob(path, digest string) error {
 	return nil
 }
 
-func extractFresh(layout string, layers []descriptor, root string) error {
+func extractFresh(layout string, layers []descriptor, root string, zstdTool ...string) error {
 	if err := os.RemoveAll(root); err != nil {
 		return fmt.Errorf("clear old bundle root: %w", err)
 	}
@@ -237,14 +243,14 @@ func extractFresh(layout string, layers []descriptor, root string) error {
 		return fmt.Errorf("create bundle root: %w", err)
 	}
 	for _, layer := range layers {
-		if err := extractLayer(layout, layer, root); err != nil {
+		if err := extractLayer(layout, layer, root, zstdTool...); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func extractLayer(layout string, layer descriptor, root string) error {
+func extractLayer(layout string, layer descriptor, root string, zstdTool ...string) (result error) {
 	blob, err := blobPath(layout, layer.Digest)
 	if err != nil {
 		return err
@@ -259,11 +265,15 @@ func extractLayer(layout string, layer descriptor, root string) error {
 	}
 	defer file.Close()
 
-	reader, closeReader, err := layerReader(file, layer.MediaType)
+	reader, closeReader, err := layerReader(file, layer.MediaType, zstdTool...)
 	if err != nil {
 		return err
 	}
-	defer closeReader()
+	defer func() {
+		if err := closeReader(); result == nil && err != nil {
+			result = err
+		}
+	}()
 
 	tarReader := tar.NewReader(reader)
 	for {
@@ -281,7 +291,7 @@ func extractLayer(layout string, layer descriptor, root string) error {
 	return nil
 }
 
-func layerReader(file *os.File, mediaType string) (io.Reader, func() error, error) {
+func layerReader(file *os.File, mediaType string, zstdTool ...string) (io.Reader, func() error, error) {
 	switch mediaType {
 	case "application/vnd.oci.image.layer.v1.tar+gzip", "application/vnd.docker.image.rootfs.diff.tar.gzip":
 		compressed, err := gzip.NewReader(file)
@@ -289,6 +299,32 @@ func layerReader(file *os.File, mediaType string) (io.Reader, func() error, erro
 			return nil, nil, fmt.Errorf("open gzip layer: %w", err)
 		}
 		return compressed, compressed.Close, nil
+	case "application/vnd.oci.image.layer.v1.tar+zstd", "application/vnd.datadog.package.layer.v1.tar+zstd":
+		if len(zstdTool) != 1 || zstdTool[0] == "" {
+			return nil, nil, errors.New("zstd layer requires a declared zstd tool")
+		}
+		command := exec.Command(zstdTool[0], "--decompress", "--stdout", "--quiet")
+		command.Stdin = file
+		var stderr bytes.Buffer
+		command.Stderr = &stderr
+		output, err := command.StdoutPipe()
+		if err != nil {
+			return nil, nil, fmt.Errorf("open zstd output: %w", err)
+		}
+		if err := command.Start(); err != nil {
+			output.Close()
+			return nil, nil, fmt.Errorf("start declared zstd tool: %w", err)
+		}
+		return output, func() error {
+			// Tar's end marker can precede the frame checksum. Consume the
+			// complete compressed stream and require successful decompression.
+			_, readErr := io.Copy(io.Discard, output)
+			waitErr := command.Wait()
+			if waitErr != nil {
+				return fmt.Errorf("decode zstd layer: %w: %s", waitErr, strings.TrimSpace(stderr.String()))
+			}
+			return readErr
+		}, nil
 	case "application/vnd.oci.image.layer.v1.tar", "application/vnd.docker.image.rootfs.diff.tar":
 		return file, func() error { return nil }, nil
 	default:

@@ -13,6 +13,7 @@ import (
 
 const pythonBootstrap = `
 import asyncio
+import os
 import runpy
 import socketserver
 import sys
@@ -26,6 +27,30 @@ async def create_server_with_reuse_port(self, *args, **kwargs):
     return await original_create_server(self, *args, **kwargs)
 
 asyncio.BaseEventLoop.create_server = create_server_with_reuse_port
+# Datadog's supported aiohttp server integration requires trace_app; its
+# automatic patcher only covers the client. Activate the server middleware
+# from the injection environment, before the application freezes its router.
+if os.environ.get("RULES_STESTS_DATADOG_AIOHTTP_ENABLED") == "true":
+    from aiohttp import web
+    from ddtrace.contrib.aiohttp import trace_app
+
+    original_run_app = web.run_app
+
+    def traced_run_app(app, *args, **kwargs):
+        if asyncio.iscoroutine(app):
+            original_app = app
+
+            async def traced_application():
+                resolved_app = await original_app
+                trace_app(resolved_app, service=os.environ["DD_SERVICE"])
+                return resolved_app
+
+            app = traced_application()
+        else:
+            trace_app(app, service=os.environ["DD_SERVICE"])
+        return original_run_app(app, *args, **kwargs)
+
+    web.run_app = traced_run_app
 entrypoint = sys.argv[1]
 sys.argv = sys.argv[1:]
 runpy.run_path(entrypoint, run_name="__main__")
@@ -34,13 +59,14 @@ runpy.run_path(entrypoint, run_name="__main__")
 // launchConfig is independent of OCI acquisition and extraction. Its rootfs
 // inputs are already materialized Bazel directories.
 type launchConfig struct {
-	runtime    string
-	instance   string
-	rootfs     string
-	otelRootfs string
-	command    string
-	args       []string
-	injection  injection
+	runtime               string
+	instance              string
+	rootfs                string
+	otelRootfs            string
+	instrumentationRootfs string
+	command               string
+	args                  []string
+	injection             injection
 }
 
 func main() {
@@ -64,6 +90,13 @@ func parseLaunchArgs(args []string) (launchConfig, error) {
 		config.otelRootfs = value
 		return nil
 	})
+	flags.Func("instrumentation-rootfs", "optional protocol-neutral instrumentation directory", func(value string) error {
+		if value == "" || config.instrumentationRootfs != "" {
+			return errors.New("--instrumentation-rootfs requires a non-empty value and may be specified only once")
+		}
+		config.instrumentationRootfs = value
+		return nil
+	})
 	var injectionArgs []string
 	for _, name := range []string{"env", "prepend-path", "append-path", "require"} {
 		flags.Func(name, "runtime injection option", func(value string) error {
@@ -81,10 +114,13 @@ func parseLaunchArgs(args []string) (launchConfig, error) {
 		return config, fmt.Errorf("unsafe instance name %q", config.instance)
 	}
 	if config.rootfs == "" || len(flags.Args()) == 0 || flags.Arg(0) == "" {
-		return config, errors.New("usage: app_launcher --runtime=<python|ruby|native> --instance=<name> --rootfs=<directory> [--otel-rootfs=<directory>] -- <command> [arguments...]")
+		return config, errors.New("usage: app_launcher --runtime=<python|ruby|native> --instance=<name> --rootfs=<directory> [--otel-rootfs=<directory> | --instrumentation-rootfs=<directory>] -- <command> [arguments...]")
 	}
 	if config.otelRootfs != "" {
 		injectionArgs = append(injectionArgs, "--otel-rootfs="+config.otelRootfs)
+	}
+	if config.instrumentationRootfs != "" {
+		injectionArgs = append(injectionArgs, "--instrumentation-rootfs="+config.instrumentationRootfs)
 	}
 	parsedInjection, _, err := parseAppArgs(injectionArgs)
 	if err != nil {
@@ -117,11 +153,12 @@ type environmentEdit struct {
 }
 
 type injection struct {
-	otelRootfs  string
-	environment []environmentEdit
-	prependPath []environmentEdit
-	appendPath  []environmentEdit
-	require     []string
+	otelRootfs            string
+	instrumentationRootfs string
+	environment           []environmentEdit
+	prependPath           []environmentEdit
+	appendPath            []environmentEdit
+	require               []string
 }
 
 func parseAppArgs(args []string) (injection, []string, error) {
@@ -143,6 +180,11 @@ func parseAppArgs(args []string) (injection, []string, error) {
 				return injection{}, nil, errors.New("--otel-rootfs may be specified only once")
 			}
 			result.otelRootfs = value
+		case "--instrumentation-rootfs":
+			if result.instrumentationRootfs != "" {
+				return injection{}, nil, errors.New("--instrumentation-rootfs may be specified only once")
+			}
+			result.instrumentationRootfs = value
 		case "--env", "--prepend-path", "--append-path":
 			key, editValue, found := strings.Cut(value, "=")
 			if !found || key == "" {
@@ -167,31 +209,39 @@ func parseAppArgs(args []string) (injection, []string, error) {
 }
 
 func validateInjection(value injection, positionals []string) (injection, []string, error) {
-	if value.otelRootfs == "" {
-		values := append([]string{}, value.require...)
-		for _, edits := range [][]environmentEdit{value.environment, value.prependPath, value.appendPath} {
-			for _, edit := range edits {
-				values = append(values, edit.value)
-			}
+	if value.otelRootfs != "" && value.instrumentationRootfs != "" {
+		return injection{}, nil, errors.New("--otel-rootfs and --instrumentation-rootfs are mutually exclusive")
+	}
+	values := append([]string{}, value.require...)
+	for _, edits := range [][]environmentEdit{value.environment, value.prependPath, value.appendPath} {
+		for _, edit := range edits {
+			values = append(values, edit.value)
 		}
-		for _, candidate := range values {
-			if strings.Contains(candidate, "{otel_rootfs}") {
-				return injection{}, nil, errors.New("{otel_rootfs} used without --otel-rootfs")
-			}
+	}
+	for _, candidate := range values {
+		if value.otelRootfs == "" && strings.Contains(candidate, "{otel_rootfs}") {
+			return injection{}, nil, errors.New("{otel_rootfs} used without --otel-rootfs")
+		}
+		if value.instrumentationRootfs == "" && strings.Contains(candidate, "{instrumentation_rootfs}") {
+			return injection{}, nil, errors.New("{instrumentation_rootfs} used without --instrumentation-rootfs")
 		}
 	}
 	return value, positionals, nil
 }
 
 func resolveInjection(value injection) (injection, string, error) {
-	if value.otelRootfs == "" {
+	rootArg, placeholder := value.otelRootfs, "{otel_rootfs}"
+	if value.instrumentationRootfs != "" {
+		rootArg, placeholder = value.instrumentationRootfs, "{instrumentation_rootfs}"
+	}
+	if rootArg == "" {
 		return value, "", nil
 	}
-	root, err := resolveDirectory(value.otelRootfs)
+	root, err := resolveDirectory(rootArg)
 	if err != nil {
 		return injection{}, "", fmt.Errorf("resolve instrumentation rootfs: %w", err)
 	}
-	replace := func(input string) string { return strings.ReplaceAll(input, "{otel_rootfs}", root) }
+	replace := func(input string) string { return strings.ReplaceAll(input, placeholder, root) }
 	for _, edits := range [][]environmentEdit{value.environment, value.prependPath, value.appendPath} {
 		for index := range edits {
 			edits[index].value = replace(edits[index].value)
@@ -199,6 +249,11 @@ func resolveInjection(value injection) (injection, string, error) {
 	}
 	for index := range value.require {
 		value.require[index] = replace(value.require[index])
+	}
+	// Only the legacy option activates OTel defaults. Neutral instrumentation
+	// obtains its entire exporter configuration from its declared injection.
+	if value.instrumentationRootfs != "" {
+		return value, "", nil
 	}
 	return value, root, nil
 }
@@ -378,7 +433,9 @@ func runAppExec(injection injection, instance, rootArg, relative string, args []
 	if err != nil {
 		return err
 	}
-	environment = applyExecDefaults(environment, instance)
+	if injection.instrumentationRootfs == "" {
+		environment = applyExecDefaults(environment, instance)
+	}
 	if otelRoot != "" {
 		fmt.Fprintf(os.Stderr, "app_launcher: activating instrumentation for %s from %s\n", instance, otelRoot)
 	}
@@ -518,12 +575,19 @@ func applyInjection(environment []string, value injection, otelRoot, instance st
 		environment = appendDefaultEnvironment(environment, present, "OTEL_TRACES_EXPORTER", "console")
 		environment = appendDefaultEnvironment(environment, present, "OTEL_METRICS_EXPORTER", "none")
 		environment = appendDefaultEnvironment(environment, present, "OTEL_LOGS_EXPORTER", "none")
-		if django {
-			environment = appendDefaultEnvironment(environment, present, "DEBUG", "True")
-			environment = appendDefaultEnvironment(environment, present, "DJANGO_SETTINGS_MODULE", "config.settings")
-			database := filepath.Join(os.Getenv("APP_STATE_DIR"), "realworld.sqlite3")
-			environment = appendDefaultEnvironment(environment, present, "DATABASE_URL", "file:"+database)
+	}
+	// sitecustomize executes before entrypoint.py, so every Django launcher
+	// prepares settings and the writable database before starting Python.
+	if django {
+		present := make(map[string]bool, len(environment))
+		for _, entry := range environment {
+			key, _, _ := strings.Cut(entry, "=")
+			present[key] = true
 		}
+		environment = appendDefaultEnvironment(environment, present, "DEBUG", "True")
+		environment = appendDefaultEnvironment(environment, present, "DJANGO_SETTINGS_MODULE", "config.settings")
+		database := filepath.Join(os.Getenv("APP_STATE_DIR"), "realworld.sqlite3")
+		environment = appendDefaultEnvironment(environment, present, "DATABASE_URL", "file:"+database)
 	}
 	for _, path := range value.require {
 		if _, err := os.Stat(path); err != nil {

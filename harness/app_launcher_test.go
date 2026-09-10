@@ -376,3 +376,93 @@ func TestPrepareAppStateClonesSeedOnce(t *testing.T) {
 		t.Fatalf("existing state was overwritten: %q", contents)
 	}
 }
+
+func TestNeutralInjectionPreparesDjangoBeforePythonStartup(t *testing.T) {
+	root := makePythonRoot(t)
+	manage := filepath.Join(root, "opt", "app", "src", "manage.py")
+	if err := os.MkdirAll(filepath.Dir(manage), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manage, nil, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	agent := t.TempDir()
+	if err := os.WriteFile(filepath.Join(agent, "sitecustomize.py"), nil, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	packages := filepath.Join(agent, "ddtrace_pkgs")
+	if err := os.Mkdir(packages, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state := t.TempDir()
+	t.Setenv("APP_STATE_DIR", state)
+	config, err := parseLaunchArgs([]string{
+		"--runtime=python", "--instance=django-datadog", "--rootfs=" + root,
+		"--instrumentation-rootfs=" + agent,
+		"--prepend-path=PYTHONPATH={instrumentation_rootfs}",
+		"--env=DD_SERVICE=django-datadog",
+		"--require={instrumentation_rootfs}/sitecustomize.py",
+		"--require={instrumentation_rootfs}/ddtrace_pkgs", "--", "serve",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, legacyRoot, err := resolveInjection(config.injection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacyRoot != "" {
+		t.Fatalf("neutral injection activated OTel defaults: %s", legacyRoot)
+	}
+	for _, inherited := range [][]string{nil, {"DEBUG=False", "DJANGO_SETTINGS_MODULE=custom.settings", "DATABASE_URL=file:/custom.sqlite3"}} {
+		execution, err := pythonAppExecution(root, parsed, legacyRoot, config.instance, config.command, nil, inherited)
+		if err != nil {
+			t.Fatal(err)
+		}
+		env := strings.Join(execution.environment, "\n")
+		for _, required := range []string{
+			"PYTHONPATH=" + agent + ":" + filepath.Join(root, "opt", "app", "site-packages"),
+			"DD_SERVICE=django-datadog",
+		} {
+			if !strings.Contains(env, required) {
+				t.Errorf("missing %q before Python startup:\n%s", required, env)
+			}
+		}
+		want := inherited
+		if len(want) == 0 {
+			want = []string{"DEBUG=True", "DJANGO_SETTINGS_MODULE=config.settings", "DATABASE_URL=file:" + filepath.Join(state, "realworld.sqlite3")}
+		}
+		for _, entry := range want {
+			if !strings.Contains(env, entry) {
+				t.Errorf("missing Django environment %q before Python startup:\n%s", entry, env)
+			}
+		}
+		if strings.Contains(env, "OTEL_") {
+			t.Fatalf("neutral injection introduced OTel environment:\n%s", env)
+		}
+	}
+	if err := os.Remove(packages); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pythonAppExecution(root, parsed, legacyRoot, config.instance, config.command, nil, nil); err == nil {
+		t.Fatal("accepted incomplete Datadog package layout")
+	}
+}
+
+func TestNeutralInjectionRejectsAmbiguousRootsAndMissingPlaceholders(t *testing.T) {
+	for _, args := range [][]string{
+		{"--instrumentation-rootfs=one", "--instrumentation-rootfs=two"},
+		{"--instrumentation-rootfs=one", "--otel-rootfs=two"},
+		{"--instrumentation-rootfs="},
+		{"--require={instrumentation_rootfs}/sitecustomize.py"},
+		{"--env=PYTHONPATH={instrumentation_rootfs}"},
+		{"--prepend-path=PYTHONPATH={instrumentation_rootfs}"},
+		{"--append-path=PYTHONPATH={instrumentation_rootfs}"},
+		{"--otel-rootfs=one", "--require={instrumentation_rootfs}/hook"},
+		{"--instrumentation-rootfs=one", "--require={otel_rootfs}/hook"},
+	} {
+		if _, _, err := parseAppArgs(args); err == nil {
+			t.Errorf("accepted invalid neutral injection %q", args)
+		}
+	}
+}
