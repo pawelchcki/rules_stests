@@ -297,24 +297,46 @@ func collectOnce(app, launcher string, args []string, sink, out string, e experi
 	if !ready {
 		return nil, fmt.Errorf("application readiness timed out")
 	}
-	if err := workload(base, e.Name); err != nil {
+	verifyOwnership := func() error {
+		owned, shared, err := processTCPPortOwnership(cmd.Process.Pid, port)
+		if err != nil {
+			return err
+		}
+		if !owned || shared {
+			return errPortInUse
+		}
+		return nil
+	}
+	if err := workload(base, e.Name, verifyOwnership); err != nil {
 		return nil, err
 	}
 	// Several complete 500 ms reader periods give both captures measurements.
-	// The process must remain alive throughout the observation window.
-	select {
-	case err := <-done:
-		stopped = true
-		exitErr := classifyProcessExit(err, log)
-		if errors.Is(exitErr, errPortInUse) {
-			return nil, exitErr
+	// The process must remain alive and retain its port throughout the window.
+	deadline := time.NewTimer(2500 * time.Millisecond)
+	defer deadline.Stop()
+	ownershipChecks := time.NewTicker(100 * time.Millisecond)
+	defer ownershipChecks.Stop()
+observation:
+	for {
+		select {
+		case err := <-done:
+			stopped = true
+			exitErr := classifyProcessExit(err, log)
+			if errors.Is(exitErr, errPortInUse) {
+				return nil, exitErr
+			}
+			var startup *startupExit
+			if !errors.As(exitErr, &startup) {
+				return nil, exitErr
+			}
+			return nil, fmt.Errorf("application exited during workload: %v", err)
+		case <-ownershipChecks.C:
+			if err := verifyOwnership(); err != nil {
+				return nil, err
+			}
+		case <-deadline.C:
+			break observation
 		}
-		var startup *startupExit
-		if !errors.As(exitErr, &startup) {
-			return nil, exitErr
-		}
-		return nil, fmt.Errorf("application exited during workload: %v", err)
-	case <-time.After(2500 * time.Millisecond):
 	}
 	syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 	select {
@@ -346,8 +368,8 @@ func processTCPPortOwnership(pid, port int) (bool, bool, error) {
 			if len(fields) < 10 || fields[3] != "0A" {
 				continue
 			}
-			_, encodedPort, ok := strings.Cut(fields[1], ":")
-			if !ok {
+			encodedAddress, encodedPort, ok := strings.Cut(fields[1], ":")
+			if !ok || !conflictsWithProbeAddress(name, encodedAddress) {
 				continue
 			}
 			value, err := strconv.ParseInt(encodedPort, 16, 32)
@@ -377,6 +399,17 @@ func processTCPPortOwnership(pid, port int) (bool, bool, error) {
 	}
 	exclusive, shared := socketOwnership(inodes, owned)
 	return exclusive, shared, nil
+}
+
+func conflictsWithProbeAddress(network, encoded string) bool {
+	switch network {
+	case "tcp":
+		return encoded == "0100007F" || encoded == "00000000"
+	case "tcp6":
+		return encoded == strings.Repeat("0", 32) || encoded == "0000000000000000FFFF00000100007F"
+	default:
+		return false
+	}
 }
 
 func socketOwnership(listening, owned map[string]bool) (bool, bool) {
@@ -455,8 +488,11 @@ func configurationRejection(app string, e experiment, log string) (observation, 
 	return observation{Case: e.Name, Features: e.Features, Status: "startup_rejected", Detail: message}, true
 }
 
-func workload(base, caseName string) error {
+func workload(base, caseName string, verifyOwnership func() error) error {
 	for i := 0; i < 4; i++ {
+		if err := verifyOwnership(); err != nil {
+			return err
+		}
 		req, err := http.NewRequest("GET", base+"/api/tags", nil)
 		if err != nil {
 			return err
@@ -473,11 +509,17 @@ func workload(base, caseName string) error {
 		if resp.StatusCode != 200 {
 			return fmt.Errorf("tags returned %d", resp.StatusCode)
 		}
+		if err := verifyOwnership(); err != nil {
+			return err
+		}
 	}
 	// Duplicate registration emits exception events in Django's SQLite spans
 	// and request error logs without adding instrumentation to any application.
 	body := []byte(`{"user":{"username":"external_probe","email":"external_probe@test.com","password":"password123"}}`)
 	for i := 0; i < 3; i++ {
+		if err := verifyOwnership(); err != nil {
+			return err
+		}
 		req, err := http.NewRequest("POST", base+"/api/users", bytes.NewReader(body))
 		if err != nil {
 			return err
@@ -496,10 +538,16 @@ func workload(base, caseName string) error {
 		if resp.StatusCode != want {
 			return fmt.Errorf("registration %d returned %d, expected %d", i, resp.StatusCode, want)
 		}
+		if err := verifyOwnership(); err != nil {
+			return err
+		}
 	}
 	if caseName == "log-batch" || caseName == "log-batch-control" {
 		// A bounded concurrent burst gives the log processor an opportunity
 		// to batch error records, independent of individual password-hash time.
+		if err := verifyOwnership(); err != nil {
+			return err
+		}
 		results := make(chan error, 8)
 		for i := 0; i < 8; i++ {
 			go func() {
@@ -522,6 +570,9 @@ func workload(base, caseName string) error {
 		}
 		if first != nil {
 			return first
+		}
+		if err := verifyOwnership(); err != nil {
+			return err
 		}
 	}
 	return nil

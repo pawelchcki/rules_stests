@@ -635,6 +635,20 @@ func TestProcessPortOwnership(t *testing.T) {
 	if owned || shared {
 		t.Fatalf("a foreign-only listener was misclassified: owned=%t shared=%t", owned, shared)
 	}
+	for _, test := range []struct {
+		network, address string
+		want             bool
+	}{
+		{"tcp", "0100007F", true},
+		{"tcp", "00000000", true},
+		{"tcp", "0200007F", false},
+		{"tcp6", "00000000000000000000000000000000", true},
+		{"tcp6", "00000000000000000000000001000000", false},
+	} {
+		if got := conflictsWithProbeAddress(test.network, test.address); got != test.want {
+			t.Fatalf("conflict classification for %s/%s: got %t, want %t", test.network, test.address, got, test.want)
+		}
+	}
 }
 
 func TestWorkloadRejectionRequiresExactContextFailure(t *testing.T) {
