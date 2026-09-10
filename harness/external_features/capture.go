@@ -723,6 +723,9 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		expectedLogs, presentLogs := matchingLogStreams(baseline, changed, nil)
 		preserved := presentMetrics == expectedMetrics && presentSpans == expectedSpans && presentLogs == expectedLogs
 		check(before > 0, converted == before && remaining == 0 && preserved, fmt.Sprintf("baseline histogram identities converted %d/%d; non-histogram points %d/%d, workload spans %d/%d, logs %d/%d preserved; remaining explicit exports %d", converted, before, presentMetrics, expectedMetrics, presentSpans, expectedSpans, presentLogs, expectedLogs, remaining))
+		if before == 0 && (len(baseline.Metrics) > 0 || len(baseline.Spans) > 0 || len(baseline.Logs) > 0) && !preserved {
+			o.Status = "gap"
+		}
 	default:
 		panic("unknown experiment: " + e.Name)
 	}
@@ -984,7 +987,13 @@ func isProbeServerSpan(span object) bool {
 }
 
 func isPropagationProbeServerSpan(span object) bool {
-	if number(field(span, "kind")) != 2 {
+	userAgent := attributeValue(span, "http.user_agent")
+	if userAgent == "" {
+		userAgent = attributeValue(span, "user_agent.original")
+	}
+	taggedUserAgent := userAgent != "" && strings.HasPrefix("external-feature-probe-long-user-agent", userAgent)
+	injectedParent := field(span, "parent_span_id") == "00f067aa0ba902b7"
+	if number(field(span, "kind")) != 2 || (!taggedUserAgent && !injectedParent) {
 		return false
 	}
 	route := attributeValue(span, "http.route")
@@ -2313,7 +2322,7 @@ func metricMeasurementID(metric, point object) string {
 	case "histogram":
 		count, countValid := finiteOTLPNumber(field(point, "count"))
 		total, bucketsValid, hasBuckets := bucketCountEvidence(field(point, "bucket_counts"))
-		return fmt.Sprintf("histogram:count=%t:positive=%t:buckets=%t:total=%t:sum=%s:min=%s:max=%s", countValid, count > 0, hasBuckets && bucketsValid, !hasBuckets || total == count, optionalNumberState(field(point, "sum")), optionalNumberState(field(point, "min")), optionalNumberState(field(point, "max")))
+		return fmt.Sprintf("histogram:count=%t:positive=%t:buckets=%t:total=%t:layout=%s:sum=%s:min=%s:max=%s", countValid, count > 0, hasBuckets && bucketsValid, !hasBuckets || total == count, histogramBucketLayoutID(point), optionalNumberState(field(point, "sum")), optionalNumberState(field(point, "min")), optionalNumberState(field(point, "max")))
 	case "exponentialhistogram":
 		return fmt.Sprintf("exponential-histogram:valid=%t:sum=%s:min=%s:max=%s", validExponentialHistogramPoint(point), optionalNumberState(field(point, "sum")), optionalNumberState(field(point, "min")), optionalNumberState(field(point, "max")))
 	case "summary":
@@ -2323,6 +2332,25 @@ func metricMeasurementID(metric, point object) string {
 	default:
 		return kind + ":missing"
 	}
+}
+
+func histogramBucketLayoutID(point object) string {
+	bounds, boundsValid := field(point, "explicit_bounds").([]any)
+	counts, countsValid := field(point, "bucket_counts").([]any)
+	if field(point, "explicit_bounds") == nil {
+		boundsValid = true
+	}
+	if field(point, "bucket_counts") == nil {
+		countsValid = true
+	}
+	encoded, _ := json.Marshal([]any{
+		normalizedJSONValue(field(point, "explicit_bounds")),
+		boundsValid,
+		countsValid,
+		len(counts),
+		boundsValid && countsValid && (len(counts) == 0 || len(counts) == len(bounds)+1),
+	})
+	return string(encoded)
 }
 
 func finiteOTLPNumber(value any) (float64, bool) {
@@ -2721,13 +2749,28 @@ func convertedHistograms(before, after capture) (int, int) {
 
 func validExponentialHistogramPoint(point object) bool {
 	count, ok := otlpNumber(field(point, "count"))
-	if !ok || count <= 0 {
+	if !ok || count <= 0 || math.Trunc(count) != count {
+		return false
+	}
+	scale := number(field(point, "scale"))
+	if math.Trunc(scale) != scale || scale < -10 || scale > 20 {
+		return false
+	}
+	if thresholdValue := field(point, "zero_threshold"); thresholdValue != nil {
+		threshold, valid := finiteOTLPNumber(thresholdValue)
+		if !valid || threshold < 0 {
+			return false
+		}
+	}
+	minimum, minimumValid := optionalFiniteNumber(field(point, "min"))
+	maximum, maximumValid := optionalFiniteNumber(field(point, "max"))
+	if !minimumValid || !maximumValid || (field(point, "min") != nil && field(point, "max") != nil && minimum > maximum) {
 		return false
 	}
 	total, evidence := float64(0), false
 	if zeroCount := field(point, "zero_count"); zeroCount != nil {
 		value, valid := otlpNumber(zeroCount)
-		if !valid {
+		if !valid || value < 0 || math.Trunc(value) != value {
 			return false
 		}
 		total += value
@@ -2741,13 +2784,20 @@ func validExponentialHistogramPoint(point object) bool {
 		}
 		for _, value := range values {
 			bucketCount, valid := otlpNumber(value)
-			if !valid {
+			if !valid || bucketCount < 0 || math.Trunc(bucketCount) != bucketCount {
 				return false
 			}
 			total += bucketCount
 		}
 	}
 	return evidence && total == count
+}
+
+func optionalFiniteNumber(value any) (float64, bool) {
+	if value == nil {
+		return 0, true
+	}
+	return finiteOTLPNumber(value)
 }
 
 func otlpNumber(value any) (float64, bool) {
@@ -2835,7 +2885,14 @@ func validExemplarCount(point object) (int, bool) {
 		value, _ := field(exemplar, "value").(map[string]any)
 		_, intValid := otlpNumber(field(value, "as_int"))
 		_, doubleValid := otlpNumber(field(value, "as_double"))
-		if !timestampValid || timestamp.Sign() <= 0 || (!intValid && !doubleValid) {
+		traceValue, spanValue := field(exemplar, "trace_id"), field(exemplar, "span_id")
+		traceID, traceString := traceValue.(string)
+		spanID, spanString := spanValue.(string)
+		contextValid := traceValue == nil && spanValue == nil
+		if traceString && spanString {
+			contextValid = (traceID == "" && spanID == "") || (validTrace(traceID) && validSpan(spanID))
+		}
+		if !timestampValid || timestamp.Sign() <= 0 || (!intValid && !doubleValid) || !contextValid {
 			return 0, false
 		}
 	}

@@ -2044,6 +2044,94 @@ func TestPropagationPreservesRegistrationSpanContext(t *testing.T) {
 	}
 }
 
+func TestPropagationPreservesUntaggedReadinessSpanContext(t *testing.T) {
+	readiness := object{
+		"name": "GET /api/tags", "kind": float64(2),
+		"trace_id": fmt.Sprintf("%032x", 30), "span_id": fmt.Sprintf("%016x", 30),
+		"parent_span_id": "", "flags": float64(1), "trace_state": "vendor=baseline",
+		"attributes": []any{attr("http.route", "/api/tags"), attr("http.user_agent", "readiness-probe")},
+	}
+	changedReadiness := cloneObject(readiness)
+	changedReadiness["flags"] = float64(0)
+	changedReadiness["trace_state"] = "vendor=changed"
+	baseline := capture{Spans: []object{readiness}}
+	changed := capture{Spans: []object{changedReadiness}}
+	if expected, present := matchingWorkloadSpansIgnoringParents(baseline, changed); expected != 1 || present != 0 {
+		t.Fatalf("propagation normalization hid readiness context changes: %d/%d", present, expected)
+	}
+}
+
+func TestExplicitHistogramIdentityPreservesBucketLayout(t *testing.T) {
+	point := object{"count": "2", "explicitBounds": []any{float64(1)}, "bucketCounts": []any{"1", "1"}}
+	metric := object{"name": "request.duration", "histogram": object{"dataPoints": []any{point}}}
+	for name, changedPoint := range map[string]object{
+		"bounds":  {"count": "2", "explicitBounds": []any{float64(2)}, "bucketCounts": []any{"1", "1"}},
+		"buckets": {"count": "2", "explicitBounds": []any{float64(1)}, "bucketCounts": []any{"2", "0", "0"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := object{"name": "request.duration", "histogram": object{"dataPoints": []any{changedPoint}}}
+			if expected, present := matchingMetricStreams(capture{Metrics: []object{metric}}, capture{Metrics: []object{changed}}); expected != 1 || present != 0 {
+				t.Fatalf("histogram layout change was accepted: %d/%d", present, expected)
+			}
+		})
+	}
+}
+
+func TestExponentialHistogramRequiresValidMappingParameters(t *testing.T) {
+	valid := object{"count": "1", "scale": float64(0), "zeroThreshold": float64(0), "zeroCount": "0", "min": float64(1), "max": float64(1), "positive": object{"bucketCounts": []any{"1"}}}
+	if !validExponentialHistogramPoint(valid) {
+		t.Fatal("valid exponential histogram rejected")
+	}
+	for name, mutate := range map[string]func(object){
+		"scale":           func(point object) { point["scale"] = float64(21) },
+		"threshold":       func(point object) { point["zeroThreshold"] = float64(-1) },
+		"extrema":         func(point object) { point["min"], point["max"] = float64(2), float64(1) },
+		"fractionalCount": func(point object) { point["count"] = float64(1.5) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := cloneObject(valid)
+			mutate(candidate)
+			if validExponentialHistogramPoint(candidate) {
+				t.Fatal("malformed exponential histogram accepted")
+			}
+		})
+	}
+}
+
+func TestHistogramNotExercisedStillRequiresTelemetryPreservation(t *testing.T) {
+	metric := object{"name": "queue.depth", "gauge": object{"dataPoints": []any{object{"value": object{"asInt": "1"}}}}}
+	baseline := capture{Spans: syntheticProbeSpans(), Metrics: []object{metric}, Logs: []object{{"body": object{"stringValue": "workload"}}}}
+	if got := evaluate(experiment{Name: "histogram"}, baseline, capture{}); got.Status != "gap" {
+		t.Fatalf("telemetry loss was masked as not exercised: %+v", got)
+	}
+}
+
+func TestAlwaysOnRejectsMalformedExemplarContext(t *testing.T) {
+	valid := func() object {
+		return object{"exemplars": []any{object{
+			"timeUnixNano": "1", "value": object{"asInt": "1"},
+			"traceId": fmt.Sprintf("%032x", 1), "spanId": fmt.Sprintf("%016x", 1),
+		}}}
+	}
+	if count, ok := validExemplarCount(valid()); !ok || count != 1 {
+		t.Fatal("valid exemplar context rejected")
+	}
+	for name, mutate := range map[string]func(object){
+		"missing span": func(exemplar object) { delete(exemplar, "spanId") },
+		"zero trace":   func(exemplar object) { exemplar["traceId"] = strings.Repeat("0", 32) },
+		"short span":   func(exemplar object) { exemplar["spanId"] = "01" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := valid()
+			exemplar := candidate["exemplars"].([]any)[0].(object)
+			mutate(exemplar)
+			if _, ok := validExemplarCount(candidate); ok {
+				t.Fatal("malformed exemplar context accepted")
+			}
+		})
+	}
+}
+
 func TestControlMetricsRejectSiblingMetricDuplicates(t *testing.T) {
 	decode := func(data string) capture {
 		decoded, err := decodeCapture([]byte(data))
