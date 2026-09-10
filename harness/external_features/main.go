@@ -272,14 +272,15 @@ func collectOnce(app, launcher string, args []string, sink, out string, e experi
 			io.Copy(io.Discard, response.Body)
 			response.Body.Close()
 			if response.StatusCode == 200 || response.StatusCode == 500 {
-				// A concurrently launched fixture can briefly answer on a port this
-				// child lost before the bind failure reaches cmd.Wait. Let the child
-				// settle before accepting either success or a workload-level failure.
-				select {
-				case err := <-done:
-					stopped = true
-					return nil, classifyProcessExit(err, log)
-				case <-time.After(100 * time.Millisecond):
+				owned, err := processOwnsTCPPort(cmd.Process.Pid, port)
+				if err != nil {
+					return nil, err
+				}
+				if !owned {
+					// A concurrent fixture may be answering on the relinquished
+					// port. Wait for this child to bind it or report the conflict.
+					time.Sleep(100 * time.Millisecond)
+					continue
 				}
 				if response.StatusCode == 500 {
 					return nil, &workloadFailure{response.StatusCode}
@@ -326,6 +327,51 @@ func collectOnce(app, launcher string, args []string, sink, out string, e experi
 		stopped = true
 	}
 	return request("GET", sink+"/dump", nil)
+}
+
+func processOwnsTCPPort(pid, port int) (bool, error) {
+	inodes := map[string]bool{}
+	readTable := false
+	for _, name := range []string{"tcp", "tcp6"} {
+		data, err := os.ReadFile(fmt.Sprintf("/proc/%d/net/%s", pid, name))
+		if err != nil {
+			continue
+		}
+		readTable = true
+		for _, line := range strings.Split(string(data), "\n")[1:] {
+			fields := strings.Fields(line)
+			if len(fields) < 10 || fields[3] != "0A" {
+				continue
+			}
+			_, encodedPort, ok := strings.Cut(fields[1], ":")
+			if !ok {
+				continue
+			}
+			value, err := strconv.ParseInt(encodedPort, 16, 32)
+			if err == nil && int(value) == port {
+				inodes[fields[9]] = true
+			}
+		}
+	}
+	if !readTable {
+		return false, fmt.Errorf("read TCP socket table for process %d", pid)
+	}
+	entries, err := os.ReadDir(fmt.Sprintf("/proc/%d/fd", pid))
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		target, err := os.Readlink(fmt.Sprintf("/proc/%d/fd/%s", pid, entry.Name()))
+		if err != nil {
+			continue
+		}
+		if inode, ok := strings.CutPrefix(target, "socket:["); ok {
+			if inode, ok = strings.CutSuffix(inode, "]"); ok && inodes[inode] {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 func classifyProcessExit(cause error, log *os.File) error {

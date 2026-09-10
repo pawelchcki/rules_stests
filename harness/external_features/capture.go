@@ -313,6 +313,9 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		if e.Name == "span-batch" {
 			probes := probeSpans(changed)
 			preserved = len(probes) == 4 && len(incomingProbeTraces(probes)) == 4
+		} else {
+			expected, present := matchingLogRecords(before, after)
+			preserved = preserved && expected > 0 && present == expected
 		}
 		check(prior > 1, actual == 1 && preserved, fmt.Sprintf("maximum %s batch %d -> %d; records %d -> %d", signal, prior, actual, len(before), len(after)))
 		if o.Status == "gap" {
@@ -328,8 +331,8 @@ func evaluate(e experiment, baseline, changed capture) observation {
 			sort.Strings(o.Violations)
 		}
 	case "exemplars-always-on":
-		eligible, after := unsampledExemplars(baseline, changed)
-		check(eligible > 0 && len(baseline.Spans) == 0, len(changed.Spans) == 0 && after > 0, fmt.Sprintf("%d control metric names without exemplars; AlwaysOn exemplars for those names %d; exported spans %d", eligible, after, len(changed.Spans)))
+		eligible, preserved, after := unsampledExemplars(baseline, changed)
+		check(eligible > 0 && len(baseline.Spans) == 0, len(changed.Spans) == 0 && preserved == eligible && after > 0, fmt.Sprintf("control metric streams preserved %d/%d; AlwaysOn exemplars for those streams %d; exported spans %d", preserved, eligible, after, len(changed.Spans)))
 	case "request-headers":
 		before, after := probeSpans(baseline), probeSpans(changed)
 		beforeRequests, afterRequests := incomingProbeTraces(before), incomingProbeTraces(after)
@@ -558,6 +561,40 @@ func limitedLogRecords(before, after []object, limit int) (int, int) {
 	return expected, present
 }
 
+func matchingLogRecords(before, after []object) (int, int) {
+	eligible := map[string]int{}
+	for _, record := range before {
+		if id := logRecordIdentity(record); id != "" {
+			eligible[id]++
+		}
+	}
+	preserved := map[string]int{}
+	for _, record := range after {
+		if id := logRecordIdentity(record); id != "" && preserved[id] < eligible[id] {
+			preserved[id]++
+		}
+	}
+	return countIdentities(eligible), countIdentities(preserved)
+}
+
+func logRecordIdentity(record object) string {
+	body, ok := stringValue(field(record, "body"))
+	if !ok || body == "" {
+		return ""
+	}
+	if strings.HasPrefix(body, "Started ") {
+		if prefix, _, ok := strings.Cut(body, " at "); ok {
+			return prefix
+		}
+	}
+	if strings.HasPrefix(body, "Completed ") {
+		if prefix, _, ok := strings.Cut(body, " in "); ok {
+			return prefix
+		}
+	}
+	return body
+}
+
 func limitedCountLogRecords(before, after []object, limit int) (int, int) {
 	eligible := map[string]int{}
 	for _, record := range before {
@@ -710,25 +747,30 @@ func convertedHistograms(before, after capture) (int, int) {
 // Active-request metrics may record against a sampled remote parent before
 // the server creates its nonrecording span. Exclude such metric names from
 // both sides instead of mistaking their TraceBased exemplars for AlwaysOn.
-func unsampledExemplars(before, after capture) (int, int) {
+func unsampledExemplars(before, after capture) (int, int, int) {
 	eligible := map[string]bool{}
 	excluded := map[string]bool{}
-	for _, m := range before.Metrics {
-		if name, ok := field(m, "name").(string); ok && name != "" && len(objects(m, "data_points")) > 0 {
-			eligible[name] = true
-			if len(objects(m, "exemplars")) > 0 {
-				excluded[name] = true
+	for _, stream := range captureMetricStreams(before) {
+		baseID, kind := metricID(stream), metricDataType(stream.Metric)
+		id := baseID + "\x00" + kind
+		if baseID != "" && kind != "" && len(objects(stream.Metric, "data_points")) > 0 {
+			eligible[id] = true
+			if len(objects(stream.Metric, "exemplars")) > 0 {
+				excluded[id] = true
 			}
 		}
 	}
-	for name := range excluded {
-		delete(eligible, name)
+	for id := range excluded {
+		delete(eligible, id)
 	}
+	preserved := map[string]bool{}
 	count := 0
-	for _, m := range after.Metrics {
-		if name, ok := field(m, "name").(string); ok && eligible[name] {
-			count += len(objects(m, "exemplars"))
+	for _, stream := range captureMetricStreams(after) {
+		id := metricID(stream) + "\x00" + metricDataType(stream.Metric)
+		if eligible[id] && len(objects(stream.Metric, "data_points")) > 0 {
+			preserved[id] = true
+			count += len(objects(stream.Metric, "exemplars"))
 		}
 	}
-	return len(eligible), count
+	return len(eligible), len(preserved), count
 }

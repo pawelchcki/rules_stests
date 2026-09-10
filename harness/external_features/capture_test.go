@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -118,6 +119,7 @@ func TestExperimentsRequireBaselineAndRejectIgnoredSettings(t *testing.T) {
 				base.Records = []object{batchRecord("traces", "spans", base.Spans)}
 			case "log-batch":
 				base.Logs = []object{item(), item()}
+				base.Logs[0]["body"], base.Logs[1]["body"] = object{"stringValue": "first"}, object{"stringValue": "second"}
 				base.Records = []object{batchRecord("logs", "log_records", base.Logs)}
 			case "exemplars-always-on":
 				base.Spans = nil
@@ -140,6 +142,7 @@ func TestExperimentsRequireBaselineAndRejectIgnoredSettings(t *testing.T) {
 				}
 			case "log-batch":
 				changed.Logs = []object{item(), item()}
+				changed.Logs[0]["body"], changed.Logs[1]["body"] = object{"stringValue": "first"}, object{"stringValue": "second"}
 				changed.Records = nil
 				for _, l := range changed.Logs {
 					changed.Records = append(changed.Records, batchRecord("logs", "log_records", []object{l}))
@@ -280,6 +283,28 @@ func TestGapSignaturesPreserveFailureModes(t *testing.T) {
 	jittered.Records = []object{batchRecord("traces", "spans", jittered.Spans[:3])}
 	if unchanged, jitter := evaluate(spanBatch, baseline, baseline).signature(), evaluate(spanBatch, baseline, jittered).signature(); unchanged != jitter {
 		t.Fatalf("batch-count jitter changed the limit-violation signature: %q != %q", unchanged, jitter)
+	}
+	logBatch := experiment{Name: "log-batch"}
+	controlLogs := []object{{"body": object{"stringValue": "first"}}, {"body": object{"stringValue": "second"}}}
+	control := capture{Logs: controlLogs, Records: []object{batchRecord("logs", "log_records", controlLogs)}}
+	unrelatedLogs := []object{{"body": object{"stringValue": "third"}}, {"body": object{"stringValue": "fourth"}}}
+	configuredLogs := capture{Logs: unrelatedLogs}
+	for _, record := range unrelatedLogs {
+		configuredLogs.Records = append(configuredLogs.Records, batchRecord("logs", "log_records", []object{record}))
+	}
+	if got := evaluate(logBatch, control, configuredLogs); got.Status == "pass" {
+		t.Fatal("unrelated singleton logs stood in for the control batch")
+	}
+	volatileControl := []object{
+		{"body": object{"stringValue": "Started POST \"/api/users\" for 127.0.0.1 at 2026-09-10 00:00:00 +0000"}},
+		{"body": object{"stringValue": "Completed 409 Conflict in 141ms (Views: 0.1ms)"}},
+	}
+	volatileChanged := []object{
+		{"body": object{"stringValue": "Started POST \"/api/users\" for 127.0.0.1 at 2026-09-10 00:00:05 +0000"}},
+		{"body": object{"stringValue": "Completed 409 Conflict in 152ms (Views: 0.8ms)"}},
+	}
+	if expected, present := matchingLogRecords(volatileControl, volatileChanged); expected != 2 || present != 2 {
+		t.Fatalf("volatile Rails log fields changed record identity: %d/%d", present, expected)
 	}
 
 	headers := experiment{Name: "request-headers"}
@@ -583,6 +608,19 @@ func TestPortConflictsAreRetried(t *testing.T) {
 	}
 }
 
+func TestProcessPortOwnership(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+	owned, err := processOwnsTCPPort(os.Getpid(), port)
+	if err != nil || !owned {
+		t.Fatalf("current process listener not recognized: owned=%t err=%v", owned, err)
+	}
+}
+
 func TestWorkloadRejectionRequiresExactContextFailure(t *testing.T) {
 	e := experiment{Name: "propagation-none"}
 	log := "opentelemetry/context/__init__.py\nAttributeError: 'NoneType' object has no attribute 'get'"
@@ -604,7 +642,14 @@ func TestTraceBasedExemplarsCannotProveAlwaysOn(t *testing.T) {
 		{"name": "active_requests", "sum": object{"dataPoints": []any{object{"exemplars": []any{object{"timeUnixNano": "1"}}}}}},
 		{"name": "duration", "histogram": object{"dataPoints": []any{object{"count": "1"}}}},
 	}}
-	if n, exemplars := unsampledExemplars(base, base); n != 1 || exemplars != 0 {
-		t.Fatalf("remote parent exemplars credited: %d/%d", n, exemplars)
+	if n, preserved, exemplars := unsampledExemplars(base, base); n != 1 || preserved != 1 || exemplars != 0 {
+		t.Fatalf("remote parent exemplars credited: eligible=%d preserved=%d exemplars=%d", n, preserved, exemplars)
+	}
+	controlMetric := object{"name": "duration", "histogram": object{"dataPoints": []any{object{"count": "1"}}}}
+	configuredMetric := object{"name": "duration", "histogram": object{"dataPoints": []any{object{"count": "1", "exemplars": []any{object{"timeUnixNano": "1"}}}}}}
+	control := capture{Metrics: []object{controlMetric}, MetricStreams: []metricStream{{Metric: controlMetric, Scope: object{"name": "control.scope"}}}}
+	configured := capture{Metrics: []object{configuredMetric}, MetricStreams: []metricStream{{Metric: configuredMetric, Scope: object{"name": "other.scope"}}}}
+	if got := evaluate(experiment{Name: "exemplars-always-on"}, control, configured); got.Status == "pass" {
+		t.Fatal("an unmatched metric stream supplied AlwaysOn exemplar evidence")
 	}
 }
