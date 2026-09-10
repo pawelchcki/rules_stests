@@ -1,11 +1,48 @@
 package report
 
 import (
+	"bytes"
+	"compress/gzip"
+	"encoding/base64"
+	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func decodeRenderedReport(t *testing.T, html []byte) ReportModel {
+	t.Helper()
+	_, payload, found := strings.Cut(string(html), `id="report-data">`)
+	if !found {
+		t.Fatal("missing report payload")
+	}
+	payload, _, found = strings.Cut(payload, "</script>")
+	if !found {
+		t.Fatal("unterminated report payload")
+	}
+	compressed, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		t.Fatalf("decode report payload: %v", err)
+	}
+	reader, err := gzip.NewReader(bytes.NewReader(compressed))
+	if err != nil {
+		t.Fatalf("open report payload: %v", err)
+	}
+	decoded, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("read report payload: %v", err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("close report payload: %v", err)
+	}
+	var model ReportModel
+	if err := json.Unmarshal(decoded, &model); err != nil {
+		t.Fatalf("decode report model: %v", err)
+	}
+	return model
+}
 
 func fixtureModel(t *testing.T, includeScenarioShape bool) (CatalogMetadata, []Feature, []Manifest, []ScenarioShape, map[string]bool) {
 	t.Helper()
@@ -181,10 +218,14 @@ func TestRenderHTMLIsSelfContainedAndEscapesData(t *testing.T) {
 	}
 	text := string(html)
 	if strings.Contains(text, "</script><script>alert") {
-		t.Fatal("embedded JSON can terminate its script element")
+		t.Fatal("embedded model can terminate its script element")
 	}
-	if !strings.Contains(text, "OpenTelemetry implementation report") || !strings.Contains(text, "application/json") {
+	if !strings.Contains(text, "OpenTelemetry implementation report") || !strings.Contains(text, `data-content-encoding="gzip+base64"`) {
 		t.Fatal("missing report shell or embedded model")
+	}
+	decoded := decodeRenderedReport(t, html)
+	if len(decoded.Features) == 0 || decoded.Features[0].Name != features[0].Name {
+		t.Fatal("compressed report model lost feature data")
 	}
 	if strings.Contains(text, "<link rel=") || strings.Contains(text, "<script src=") {
 		t.Fatal("report depends on external assets")
@@ -335,9 +376,8 @@ func TestCoverageDeclaredIsIndependentOfChecks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{`"state":"unavailable","declared":true`, `"state":"unavailable","declared":false`} {
-		if !strings.Contains(string(html), expected) {
-			t.Fatalf("render omitted %s", expected)
-		}
+	rendered := decodeRenderedReport(t, html)
+	if len(rendered.Coverage) != len(model.Coverage) || !rendered.Coverage[0].Declared || rendered.Coverage[2].Declared {
+		t.Fatalf("render omitted scenario membership: %#v", rendered.Coverage)
 	}
 }

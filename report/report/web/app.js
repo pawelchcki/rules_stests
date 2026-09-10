@@ -1,7 +1,18 @@
 'use strict';
+(async () => {
+// The proof model is compressed so a complete, self-contained report remains
+// within the public artifact limit. Modern browsers expose gzip decompression
+// as a streaming primitive, avoiding any external script dependency.
+async function decodeReportData() {
+  const encoded = document.getElementById('report-data').textContent.trim();
+  const binary = atob(encoded);
+  const compressed = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream('gzip'));
+  return JSON.parse(await new Response(stream).text());
+}
+const data = await decodeReportData();
 // The report is a single static page: all state lives in the URL hash so any
 // view can be linked to from another view or shared as-is.
-const data = JSON.parse(document.getElementById('report-data').textContent);
 for (const key of ['manifests', 'shapes', 'coverage', 'comparisons', 'features', 'scenarios']) data[key] = data[key] || [];
 const $ = (id) => document.getElementById(id);
 
@@ -982,3 +993,8 @@ function renderParityScenarios() {
 }
 
 setup();
+})().catch((error) => {
+  console.error(error);
+  const main = document.querySelector('main');
+  if (main) main.innerHTML = '<section class="panel"><h2>Report could not be opened</h2><p>This browser could not decompress the embedded proof model.</p></section>';
+});
