@@ -547,13 +547,24 @@ func workload(base, caseName string, verifyOwnership func() error) error {
 	if caseName == "log-batch" || caseName == "log-batch-control" {
 		// A bounded concurrent burst gives the log processor an opportunity
 		// to batch error records, independent of individual password-hash time.
-		if err := verifyOwnership(); err != nil {
+		if err := logBatchBurst(base, body, verifyOwnership); err != nil {
 			return err
 		}
-		results := make(chan error, 8)
-		for i := 0; i < 8; i++ {
-			go func() {
-				resp, err := client.Post(base+"/api/users", "application/json", bytes.NewReader(body))
+	}
+	return nil
+}
+
+func logBatchBurst(base string, body []byte, verifyOwnership func() error) error {
+	if err := verifyOwnership(); err != nil {
+		return err
+	}
+	results := make(chan error, 8)
+	for i := 0; i < 8; i++ {
+		go func() {
+			err := verifyOwnership()
+			if err == nil {
+				var resp *http.Response
+				resp, err = client.Post(base+"/api/users", "application/json", bytes.NewReader(body))
 				if err == nil {
 					io.Copy(io.Discard, resp.Body)
 					resp.Body.Close()
@@ -561,24 +572,35 @@ func workload(base, caseName string, verifyOwnership func() error) error {
 						err = fmt.Errorf("log batch workload returned HTTP %d", resp.StatusCode)
 					}
 				}
-				results <- err
-			}()
-		}
-		var first error
-		for i := 0; i < 8; i++ {
-			if err := <-results; first == nil {
+			}
+			if err == nil {
+				err = verifyOwnership()
+			}
+			results <- err
+		}()
+	}
+	checks := time.NewTicker(100 * time.Millisecond)
+	defer checks.Stop()
+	var first error
+	for completed := 0; completed < 8; {
+		select {
+		case err := <-results:
+			completed++
+			if first == nil {
+				first = err
+			}
+		case <-checks.C:
+			if err := verifyOwnership(); err != nil && first == nil {
 				first = err
 			}
 		}
-		if first != nil {
-			return first
-		}
-		if err := verifyOwnership(); err != nil {
-			return err
-		}
 	}
-	return nil
+	if first != nil {
+		return first
+	}
+	return verifyOwnership()
 }
+
 func request(method, url string, body []byte) ([]byte, error) {
 	req, err := http.NewRequest(method, url, bytes.NewReader(body))
 	if err != nil {

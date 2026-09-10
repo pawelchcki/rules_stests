@@ -7,11 +7,15 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/pawelchcki/rules_stests/report"
 )
@@ -95,6 +99,21 @@ func TestDecodePreservesMetricStreamContext(t *testing.T) {
 	}
 }
 
+func TestDecodePreservesLogStreamContext(t *testing.T) {
+	data := []byte(`[{"signal":"logs","payload":{"resourceLogs":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"one"}}]},"scopeLogs":[{"scope":{"name":"scope.one"},"logRecords":[{"body":{"stringValue":"shared log"}}]}]},{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"two"}}]},"scopeLogs":[{"scope":{"name":"scope.two"},"logRecords":[{"body":{"stringValue":"shared log"}}]}]}]}}]`)
+	c, err := decodeCapture(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Logs) != 2 || len(c.LogStreams) != 2 || logStreamID(c.LogStreams[0], nil) == logStreamID(c.LogStreams[1], nil) {
+		t.Fatalf("log stream context was flattened: %+v", c.LogStreams)
+	}
+	duplicated := capture{Logs: []object{c.Logs[0], c.Logs[0]}, LogStreams: []logStream{c.LogStreams[0], c.LogStreams[0]}}
+	if expected, present := matchingLogStreams(c, duplicated, nil); expected != 2 || present != 1 {
+		t.Fatalf("one contextual log stream stood in for another: %d/%d", present, expected)
+	}
+}
+
 func attr(key, value string) any { return object{"key": key, "value": object{"stringValue": value}} }
 func item() object {
 	return object{"attributes": []any{attr("first", "long baseline attribute"), attr("second", "another long attribute"), attr("third", "third attribute")}}
@@ -114,6 +133,8 @@ func TestExperimentsRequireBaselineAndRejectIgnoredSettings(t *testing.T) {
 		t.Run(e.Name, func(t *testing.T) {
 			base := baselineCapture()
 			switch e.Name {
+			case "default-service", "resource":
+				base.Logs[0]["body"] = object{"stringValue": "workload log"}
 			case "span-batch":
 				base.Spans = syntheticProbeSpans()
 				base.Records = []object{batchRecord("traces", "spans", base.Spans)}
@@ -128,6 +149,11 @@ func TestExperimentsRequireBaselineAndRejectIgnoredSettings(t *testing.T) {
 				base.Spans = syntheticProbeSpans()
 			case "span-length", "attribute-length":
 				base.Spans = syntheticProbeSpans()
+			case "attribute-count":
+				base.Spans = syntheticProbeSpans()
+				for _, span := range base.Spans {
+					span["attributes"] = append(span["attributes"].([]any), attr("second", "value"), attr("third", "value"))
+				}
 			case "log-length":
 				base.Logs[0]["body"] = object{"stringValue": "workload log"}
 			case "sampler", "sampler-arg":
@@ -140,6 +166,7 @@ func TestExperimentsRequireBaselineAndRejectIgnoredSettings(t *testing.T) {
 			switch e.Name {
 			case "default-service":
 				changed.Resources = []object{{"attributes": []any{attr("service.name", "unknown_service:probe")}}}
+				changed.Logs[0]["body"] = object{"stringValue": "workload log"}
 			case "span-batch":
 				changed.Spans = syntheticProbeSpans()
 				changed.Records = nil
@@ -168,6 +195,7 @@ func TestExperimentsRequireBaselineAndRejectIgnoredSettings(t *testing.T) {
 				}
 			case "resource":
 				changed.Resources = []object{{"attributes": []any{attr("probe.external", "visible"), attr("service.name", "external-probe")}}}
+				changed.Logs[0]["body"] = object{"stringValue": "workload log"}
 			case "disabled":
 				changed = capture{}
 			case "sampler", "sampler-arg":
@@ -186,7 +214,11 @@ func TestExperimentsRequireBaselineAndRejectIgnoredSettings(t *testing.T) {
 					},
 				}}
 			case "attribute-count":
-				changed.Spans = []object{{"attributes": []any{attr("first", "value"), attr("second", "value")}, "dropped_attributes_count": float64(1)}}
+				changed.Spans = syntheticProbeSpans()
+				for _, span := range changed.Spans {
+					span["attributes"] = []any{attr("first", "value"), attr("second", "value")}
+					span["dropped_attributes_count"] = float64(1)
+				}
 			case "events":
 				changed.Spans = []object{{"dropped_events_count": float64(1)}}
 			case "event-attributes":
@@ -223,9 +255,18 @@ func TestLimitsCheckEveryRecordAndExactCap(t *testing.T) {
 				e = candidate
 			}
 		}
+		baseline := baselineCapture()
 		c := baselineCapture()
-		c.Spans = append([]object{{"attributes": []any{attr("short", "12345678")}, "dropped_attributes_count": float64(20)}}, c.Spans...)
-		if got := evaluate(e, baselineCapture(), c); got.Status != "gap" {
+		if name == "attribute-count" {
+			baseline.Spans = syntheticProbeSpans()
+			for _, span := range baseline.Spans {
+				span["attributes"] = append(span["attributes"].([]any), attr("second", "value"), attr("third", "value"))
+			}
+			c.Spans = append(syntheticProbeSpans(), object{"attributes": []any{attr("first", "value"), attr("second", "value")}, "dropped_attributes_count": float64(20)})
+		} else {
+			c.Spans = append([]object{{"attributes": []any{attr("short", "12345678")}, "dropped_attributes_count": float64(20)}}, c.Spans...)
+		}
+		if got := evaluate(e, baseline, c); got.Status != "gap" {
 			t.Fatalf("one good span masked violations: %+v", got)
 		}
 	}
@@ -353,6 +394,10 @@ func TestGapSignaturesPreserveFailureModes(t *testing.T) {
 	if empty, invalid := evaluate(experiment{Name: "default-service"}, capture{Resources: []object{{}}}, emptyService).signature(), evaluate(experiment{Name: "default-service"}, capture{Resources: []object{{}}}, malformedService).signature(); empty == invalid {
 		t.Fatalf("malformed service.name matched an empty string: %q", empty)
 	}
+	wrongExecutable := capture{Resources: []object{{"attributes": []any{attr("service.name", "unknown_service:wrong-binary"), attr("process.executable.name", "probe")}}}}
+	if got := evaluate(experiment{Name: "default-service"}, capture{Resources: []object{{}}}, wrongExecutable); got.Status == "pass" {
+		t.Fatal("incorrect executable suffix was accepted as a default service name")
+	}
 	identityBaseline := capture{Resources: []object{{}}, Spans: syntheticProbeSpans()}
 	duplicatedDefault := capture{Resources: []object{{}}, Spans: syntheticProbeSpans()}
 	duplicatedDefault.Spans[3]["trace_id"] = field(duplicatedDefault.Spans[2], "trace_id")
@@ -402,6 +447,20 @@ func TestMetricChangesPreserveInstrumentIdentity(t *testing.T) {
 	}}
 	if got := evaluate(experiment{Name: "exemplars"}, baseline, changed); got.Status == "pass" {
 		t.Fatal("new metric stream exported exemplars under the SDK-wide filter")
+	}
+	pointA := object{"attributes": []any{attr("route", "a")}, "count": "1", "exemplars": []any{object{"timeUnixNano": "1"}}}
+	pointB := object{"attributes": []any{attr("route", "b")}, "count": "1"}
+	multiPoint := object{"name": "multi.metric", "histogram": object{"dataPoints": []any{pointA, pointB}}}
+	baseline = capture{Metrics: []object{multiPoint}, MetricStreams: []metricStream{{Metric: multiPoint, Scope: object{"name": "scope.one"}}}}
+	onlyB := object{"name": "multi.metric", "histogram": object{"dataPoints": []any{pointB}}}
+	changed = capture{Metrics: []object{onlyB}, MetricStreams: []metricStream{{Metric: onlyB, Scope: object{"name": "scope.one"}}}}
+	if got := evaluate(experiment{Name: "exemplars"}, baseline, changed); got.Status == "pass" {
+		t.Fatal("a different data point stood in for the exemplar-bearing series")
+	}
+	convertedA := object{"name": "multi.metric", "exponentialHistogram": object{"dataPoints": []any{object{"attributes": []any{attr("route", "a")}, "count": "1"}}}}
+	changed = capture{Metrics: []object{convertedA}, MetricStreams: []metricStream{{Metric: convertedA, Scope: object{"name": "scope.one"}}}}
+	if got := evaluate(experiment{Name: "histogram"}, baseline, changed); got.Status == "pass" {
+		t.Fatal("one converted data point stood in for a missing histogram series")
 	}
 }
 
@@ -470,6 +529,11 @@ func TestCountLimitsPreserveBaselineRecords(t *testing.T) {
 	if got := evaluate(experiment{Name: "attribute-count"}, spanBaseline, uncappedProbes); got.Status == "pass" {
 		t.Fatal("an unrelated capped span stood in for uncapped probe requests")
 	}
+	noProbeBaseline := capture{Spans: []object{{"kind": float64(2), "attributes": []any{attr("first", "value"), attr("second", "value"), attr("third", "value")}}}}
+	cappedUnrelated := capture{Spans: []object{{"kind": float64(2), "attributes": []any{attr("first", "value"), attr("second", "value")}, "droppedAttributesCount": float64(1)}}}
+	if got := evaluate(experiment{Name: "attribute-count"}, noProbeBaseline, cappedUnrelated); got.Status != "not_exercised" {
+		t.Fatalf("attribute-count without baseline probe evidence was %s", got.Status)
+	}
 
 	logBaseline := capture{Logs: []object{{"body": object{"stringValue": "workload log"}, "attributes": []any{attr("first", "value"), attr("second", "value")}}}}
 	unrelatedLog := capture{Logs: []object{{"body": object{"stringValue": "unrelated log"}, "attributes": []any{attr("first", "value")}, "droppedAttributesCount": float64(1)}}}
@@ -514,6 +578,41 @@ func TestResourceExperimentPreservesWorkload(t *testing.T) {
 	changed.Resources = []object{{"attributes": []any{attr("probe.external", "visible"), attr("service.name", "external-probe")}}}
 	if got := evaluate(experiment{Name: "resource"}, baseline, changed); got.Status == "pass" {
 		t.Fatal("unrelated resource stood in for missing workload telemetry")
+	}
+	metric := object{"name": "workload.metric", "histogram": object{"dataPoints": []any{object{"count": "1"}}}}
+	baseline = capture{
+		Spans:     syntheticProbeSpans(),
+		Metrics:   []object{metric},
+		Logs:      []object{{"body": object{"stringValue": "workload log"}}},
+		Resources: []object{{}},
+	}
+	unrelatedMetric := object{"name": "unrelated.metric", "histogram": object{"dataPoints": []any{object{"count": "1"}}}}
+	changed = capture{
+		Spans:     syntheticProbeSpans(),
+		Metrics:   []object{unrelatedMetric},
+		Logs:      []object{{"body": object{"stringValue": "unrelated log"}}},
+		Resources: []object{{"attributes": []any{attr("probe.external", "visible"), attr("service.name", "external-probe")}}},
+	}
+	if got := evaluate(experiment{Name: "resource"}, baseline, changed); got.Status == "pass" {
+		t.Fatal("unrelated metrics and logs stood in for resource-run baseline signals")
+	}
+}
+
+func TestLogBatchBurstMonitorsOwnership(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(250 * time.Millisecond)
+		w.WriteHeader(http.StatusConflict)
+	}))
+	defer server.Close()
+	var checks atomic.Int32
+	verify := func() error {
+		if checks.Add(1) >= 10 {
+			return errPortInUse
+		}
+		return nil
+	}
+	if err := logBatchBurst(server.URL, []byte(`{}`), verify); !errors.Is(err, errPortInUse) {
+		t.Fatalf("in-flight ownership loss was not detected: %v", err)
 	}
 }
 
@@ -735,7 +834,7 @@ func TestTraceBasedExemplarsCannotProveAlwaysOn(t *testing.T) {
 		{"name": "active_requests", "sum": object{"dataPoints": []any{object{"exemplars": []any{object{"timeUnixNano": "1"}}}}}},
 		{"name": "duration", "histogram": object{"dataPoints": []any{object{"count": "1"}}}},
 	}}
-	if n, preserved, exemplars := unsampledExemplars(base, base); n != 1 || preserved != 1 || exemplars != 0 {
+	if n, preserved, exemplars := unsampledExemplars(base, base); n != 1 || preserved != 0 || exemplars != 0 {
 		t.Fatalf("remote parent exemplars credited: eligible=%d preserved=%d exemplars=%d", n, preserved, exemplars)
 	}
 	controlMetric := object{"name": "duration", "histogram": object{"dataPoints": []any{object{"count": "1"}}}}
@@ -768,5 +867,25 @@ func TestMetricIdentityIncludesStableStreamAttributes(t *testing.T) {
 	volatileResource.Resource = object{"attributes": []any{attr("deployment.environment", "prod"), attr("process.pid", "2")}}
 	if metricID(base) != metricID(volatileResource) {
 		t.Fatal("volatile process ID split one metric stream across captures")
+	}
+}
+
+func TestMetricPointIdentityNormalizesRandomizedEndpointPorts(t *testing.T) {
+	metric := func(host string) object {
+		return object{"name": "http.server.duration", "histogram": object{"dataPoints": []any{object{
+			"attributes": []any{attr("http.host", host), attr("net.host.name", host), attr("http.method", "GET")},
+		}}}}
+	}
+	baseline := metricStream{Metric: metric("127.0.0.1:12345")}
+	changed := metricStream{Metric: metric("127.0.0.1:54321")}
+	if metricPointID(baseline, objects(baseline.Metric, "data_points")[0], nil) != metricPointID(changed, objects(changed.Metric, "data_points")[0], nil) {
+		t.Fatal("randomized endpoint port split one metric point across captures")
+	}
+	otherHost := metricStream{Metric: metric("localhost:54321")}
+	if metricPointID(baseline, objects(baseline.Metric, "data_points")[0], nil) == metricPointID(otherHost, objects(otherHost.Metric, "data_points")[0], nil) {
+		t.Fatal("endpoint host was omitted from metric point identity")
+	}
+	if got := normalizeEndpointPort("::1"); got != "::1" {
+		t.Fatalf("bare IPv6 address was treated as a host-port pair: %q", got)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -15,10 +16,16 @@ type metricStream struct {
 	Resource, Scope        object
 	ResourceSchema, Schema string
 }
+type logStream struct {
+	Record                 object
+	Resource, Scope        object
+	ResourceSchema, Schema string
+}
 type capture struct {
 	Records                         []object
 	Spans, Logs, Metrics, Resources []object
 	MetricStreams                   []metricStream
+	LogStreams                      []logStream
 }
 
 // The sink preserves both protobuf's snake_case and OTLP JSON's camelCase.
@@ -75,7 +82,11 @@ func decodeCapture(data []byte) (capture, error) {
 		case "traces":
 			c.Spans = append(c.Spans, objects(p, "spans")...)
 		case "logs":
-			c.Logs = append(c.Logs, objects(p, "log_records")...)
+			streams := logStreams(p)
+			c.LogStreams = append(c.LogStreams, streams...)
+			for _, stream := range streams {
+				c.Logs = append(c.Logs, stream.Record)
+			}
 		case "metrics":
 			streams := metricStreams(p)
 			c.MetricStreams = append(c.MetricStreams, streams...)
@@ -113,6 +124,22 @@ func metricStreams(payload any) []metricStream {
 			schema, _ := field(scopeMetrics, "schema_url").(string)
 			for _, metric := range objects(scopeMetrics, "metrics") {
 				streams = append(streams, metricStream{Metric: metric, Resource: resource, Scope: scope, ResourceSchema: resourceSchema, Schema: schema})
+			}
+		}
+	}
+	return streams
+}
+
+func logStreams(payload any) []logStream {
+	var streams []logStream
+	for _, resourceLogs := range objects(payload, "resource_logs") {
+		resource, _ := field(resourceLogs, "resource").(map[string]any)
+		resourceSchema, _ := field(resourceLogs, "schema_url").(string)
+		for _, scopeLogs := range objects(resourceLogs, "scope_logs") {
+			scope, _ := field(scopeLogs, "scope").(map[string]any)
+			schema, _ := field(scopeLogs, "schema_url").(string)
+			for _, record := range objects(scopeLogs, "log_records") {
+				streams = append(streams, logStream{Record: record, Resource: resource, Scope: scope, ResourceSchema: resourceSchema, Schema: schema})
 			}
 		}
 	}
@@ -312,20 +339,31 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		ok := len(changed.Resources) > 0
 		beforeProbes, afterProbes := probeSpans(baseline), probeSpans(changed)
 		expectedRequests, presentRequests := preservedProbeRequests(baseline, changed)
+		ignoredResourceAttributes := map[string]bool{"service.name": true}
+		expectedMetrics, presentMetrics := matchingMetricStreamsIgnoring(baseline, changed, ignoredResourceAttributes)
+		expectedLogs, presentLogs := matchingLogStreams(baseline, changed, ignoredResourceAttributes)
 		preserved := (len(baseline.Spans) == 0 || len(changed.Spans) > 0) &&
-			(len(baseline.Logs) == 0 || len(changed.Logs) > 0) &&
-			(len(baseline.Metrics) == 0 || len(changed.Metrics) > 0) &&
+			(len(baseline.Logs) == 0 || (expectedLogs > 0 && presentLogs == expectedLogs)) &&
+			(len(baseline.Metrics) == 0 || (expectedMetrics > 0 && presentMetrics == expectedMetrics)) &&
 			(len(beforeProbes) == 0 || (len(afterProbes) == len(beforeProbes) && presentRequests == expectedRequests))
 		violations := map[string]bool{}
 		for _, r := range changed.Resources {
 			name, present, valid := stringAttribute(r, "service.name")
-			ok = ok && valid && (name == "unknown_service" || (strings.HasPrefix(name, "unknown_service:") && len(name) > len("unknown_service:")))
-			if !valid || name == "" {
+			executable := attributeValue(r, "process.executable.name")
+			validDefault := valid && (name == "unknown_service" || (strings.HasPrefix(name, "unknown_service:") && len(name) > len("unknown_service:")))
+			if executable != "" {
+				validDefault = valid && name == "unknown_service:"+executable
+			}
+			ok = ok && validDefault
+			if !validDefault {
 				kind := "malformed"
 				if !present {
 					kind = "missing"
 				} else if valid {
-					kind = "empty"
+					kind = "unexpected"
+					if name == "" {
+						kind = "empty"
+					}
 				}
 				violations["service.name="+kind] = true
 			}
@@ -335,9 +373,13 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		}
 		if len(baseline.Logs) > 0 && len(changed.Logs) == 0 {
 			violations["logs-missing"] = true
+		} else if len(baseline.Logs) > 0 && presentLogs != expectedLogs {
+			violations[fmt.Sprintf("logs=%d/%d", presentLogs, expectedLogs)] = true
 		}
 		if len(baseline.Metrics) > 0 && len(changed.Metrics) == 0 {
 			violations["metrics-missing"] = true
+		} else if len(baseline.Metrics) > 0 && presentMetrics != expectedMetrics {
+			violations[fmt.Sprintf("metrics=%d/%d", presentMetrics, expectedMetrics)] = true
 		}
 		if len(beforeProbes) > 0 && len(afterProbes) != len(beforeProbes) {
 			violations[fmt.Sprintf("probe-spans=%d", len(afterProbes))] = true
@@ -363,7 +405,7 @@ func evaluate(e experiment, baseline, changed capture) observation {
 			probes := probeSpans(changed)
 			preserved = len(probes) == 4 && len(incomingProbeTraces(probes)) == 4
 		} else {
-			expected, present := matchingLogRecords(before, after)
+			expected, present := matchingLogStreams(baseline, changed, nil)
 			preserved = preserved && expected > 0 && present == expected
 		}
 		check(prior > 1, actual == 1 && preserved, fmt.Sprintf("maximum %s batch %d -> %d; records %d -> %d", signal, prior, actual, len(before), len(after)))
@@ -428,9 +470,12 @@ func evaluate(e experiment, baseline, changed capture) observation {
 	case "resource":
 		ok := len(changed.Resources) > 0
 		expected, present := preservedProbeRequests(baseline, changed)
+		ignoredResourceAttributes := map[string]bool{"probe.external": true, "process.owner": true, "service.name": true}
+		expectedMetrics, presentMetrics := matchingMetricStreamsIgnoring(baseline, changed, ignoredResourceAttributes)
+		expectedLogs, presentLogs := matchingLogStreams(baseline, changed, ignoredResourceAttributes)
 		preserved := (len(baseline.Spans) == 0 || len(changed.Spans) > 0) &&
-			(len(baseline.Logs) == 0 || len(changed.Logs) > 0) &&
-			(len(baseline.Metrics) == 0 || len(changed.Metrics) > 0) &&
+			(len(baseline.Logs) == 0 || (expectedLogs > 0 && presentLogs == expectedLogs)) &&
+			(len(baseline.Metrics) == 0 || (expectedMetrics > 0 && presentMetrics == expectedMetrics)) &&
 			(expected == 0 || present == expected)
 		for _, r := range changed.Resources {
 			ok = ok && attributeValue(r, "probe.external") == "visible" && attributeValue(r, "service.name") == "external-probe"
@@ -440,7 +485,7 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		check(len(baseline.Spans) > 0, len(changed.Records) == 0, fmt.Sprintf("export requests %d -> %d", len(baseline.Records), len(changed.Records)))
 	case "sampler", "sampler-arg":
 		expectedMetrics, presentMetrics := matchingMetricStreams(baseline, changed)
-		expectedLogs, presentLogs := matchingLogRecords(baseline.Logs, changed.Logs)
+		expectedLogs, presentLogs := matchingLogStreams(baseline, changed, nil)
 		otherSignalsAlive := (len(baseline.Metrics) == 0 || (expectedMetrics > 0 && presentMetrics == expectedMetrics)) &&
 			(len(baseline.Logs) == 0 || (expectedLogs > 0 && presentLogs == expectedLogs))
 		check(len(baseline.Spans) > 0, len(changed.Spans) == 0 && otherSignalsAlive, fmt.Sprintf("spans %d -> %d; other baseline signals still exported: %t", len(baseline.Spans), len(changed.Spans), otherSignalsAlive))
@@ -493,9 +538,13 @@ func evaluate(e experiment, baseline, changed capture) observation {
 			preserved = expected == 0 || present == expected
 		} else if e.Name != "event-attributes" {
 			expected, present = limitedProbeRequests(baseline, changed, cap)
-			preserved = expected == 0 || present == expected
+			preserved = expected > 0 && present == expected
 		}
-		check(maxAttributes(before) > cap, len(after) > 0 && maxAttributes(after) == cap && dropped(after, "dropped_attributes_count") > 0 && preserved, fmt.Sprintf("maximum attributes %d -> %d; cap %d; dropped %d; baseline record identities preserved %d/%d", maxAttributes(before), maxAttributes(after), cap, dropped(after, "dropped_attributes_count"), present, expected))
+		prerequisite := maxAttributes(before) > cap
+		if e.Name == "attribute-count" {
+			prerequisite = prerequisite && expected > 0
+		}
+		check(prerequisite, len(after) > 0 && maxAttributes(after) == cap && dropped(after, "dropped_attributes_count") > 0 && preserved, fmt.Sprintf("maximum attributes %d -> %d; cap %d; dropped %d; baseline record identities preserved %d/%d", maxAttributes(before), maxAttributes(after), cap, dropped(after, "dropped_attributes_count"), present, expected))
 	case "events":
 		expected, present := suppressedEventRecords(baseline, changed)
 		preserved := expected == 0 || present == expected
@@ -697,6 +746,49 @@ func matchingLogRecords(before, after []object) (int, int) {
 	return countIdentities(eligible), countIdentities(preserved)
 }
 
+func captureLogStreams(c capture) []logStream {
+	if len(c.LogStreams) > 0 {
+		return c.LogStreams
+	}
+	streams := make([]logStream, 0, len(c.Logs))
+	for _, record := range c.Logs {
+		streams = append(streams, logStream{Record: record})
+	}
+	return streams
+}
+
+func matchingLogStreams(before, after capture, ignoredResourceAttributes map[string]bool) (int, int) {
+	eligible := map[string]int{}
+	for _, stream := range captureLogStreams(before) {
+		if id := logStreamID(stream, ignoredResourceAttributes); id != "" {
+			eligible[id]++
+		}
+	}
+	preserved := map[string]int{}
+	for _, stream := range captureLogStreams(after) {
+		if id := logStreamID(stream, ignoredResourceAttributes); id != "" && preserved[id] < eligible[id] {
+			preserved[id]++
+		}
+	}
+	return countIdentities(eligible), countIdentities(preserved)
+}
+
+func logStreamID(stream logStream, ignoredResourceAttributes map[string]bool) string {
+	recordID := logRecordIdentity(stream.Record)
+	if recordID == "" {
+		return ""
+	}
+	scopeName, _ := field(stream.Scope, "name").(string)
+	scopeVersion, _ := field(stream.Scope, "version").(string)
+	parts := []string{
+		recordID, scopeName, scopeVersion, stream.Schema, stream.ResourceSchema,
+		attributeSetID(stream.Scope, nil),
+		attributeSetID(stream.Resource, resourceAttributeIgnores(ignoredResourceAttributes)),
+	}
+	encoded, _ := json.Marshal(parts)
+	return string(encoded)
+}
+
 func logRecordIdentity(record object) string {
 	body, ok := stringValue(field(record, "body"))
 	if !ok || body == "" {
@@ -800,16 +892,20 @@ func captureMetricStreams(c capture) []metricStream {
 }
 
 func matchingMetricStreams(before, after capture) (int, int) {
+	return matchingMetricStreamsIgnoring(before, after, nil)
+}
+
+func matchingMetricStreamsIgnoring(before, after capture, ignoredResourceAttributes map[string]bool) (int, int) {
 	eligible := map[string]bool{}
 	for _, stream := range captureMetricStreams(before) {
-		id, kind := metricID(stream), metricDataType(stream.Metric)
+		id, kind := metricIDIgnoring(stream, ignoredResourceAttributes), metricDataType(stream.Metric)
 		if id != "" && kind != "" && len(objects(stream.Metric, "data_points")) > 0 {
 			eligible[id+"\x00"+kind] = true
 		}
 	}
 	preserved := map[string]bool{}
 	for _, stream := range captureMetricStreams(after) {
-		id := metricID(stream) + "\x00" + metricDataType(stream.Metric)
+		id := metricIDIgnoring(stream, ignoredResourceAttributes) + "\x00" + metricDataType(stream.Metric)
 		if eligible[id] && len(objects(stream.Metric, "data_points")) > 0 {
 			preserved[id] = true
 		}
@@ -818,6 +914,10 @@ func matchingMetricStreams(before, after capture) (int, int) {
 }
 
 func metricID(stream metricStream) string {
+	return metricIDIgnoring(stream, nil)
+}
+
+func metricIDIgnoring(stream metricStream, ignoredResourceAttributes map[string]bool) string {
 	name, _ := field(stream.Metric, "name").(string)
 	if name == "" {
 		return ""
@@ -829,14 +929,97 @@ func metricID(stream metricStream) string {
 	parts := []string{
 		name, unit, description, scopeName, scopeVersion, stream.Schema, stream.ResourceSchema,
 		attributeSetID(stream.Scope, nil),
-		attributeSetID(stream.Resource, map[string]bool{
-			"process.command_args": true,
-			"process.pid":          true,
-			"service.instance.id":  true,
-		}),
+		attributeSetID(stream.Resource, resourceAttributeIgnores(ignoredResourceAttributes)),
 	}
 	encoded, _ := json.Marshal(parts)
 	return string(encoded)
+}
+
+func metricPointID(stream metricStream, point object, ignoredResourceAttributes map[string]bool) string {
+	id, kind := metricIDIgnoring(stream, ignoredResourceAttributes), metricDataType(stream.Metric)
+	if id == "" || kind == "" {
+		return ""
+	}
+	return id + "\x00" + kind + "\x00" + metricPointAttributeSetID(point)
+}
+
+func metricSeriesID(stream metricStream, point object) string {
+	id := metricID(stream)
+	if id == "" {
+		return ""
+	}
+	return id + "\x00" + metricPointAttributeSetID(point)
+}
+
+var metricPointAttributeIgnores = map[string]bool{
+	"client.port":       true,
+	"http.server_name":  true,
+	"net.host.port":     true,
+	"net.peer.port":     true,
+	"network.peer.port": true,
+	"server.port":       true,
+}
+
+func metricPointAttributeSetID(point object) string {
+	var values []string
+	for _, attribute := range attributes(point) {
+		key, _ := field(attribute, "key").(string)
+		if key == "" || metricPointAttributeIgnores[key] {
+			continue
+		}
+		value := field(attribute, "value")
+		if key == "http.host" || key == "net.host.name" {
+			if endpoint, ok := stringValue(value); ok {
+				value = object{"string_value": normalizeEndpointPort(endpoint)}
+			}
+		} else if key == "pool.name" {
+			if name, ok := stringValue(value); ok {
+				value = object{"string_value": normalizeExternalStatePath(name)}
+			}
+		}
+		encoded, _ := json.Marshal([]any{key, normalizedJSONValue(value)})
+		values = append(values, string(encoded))
+	}
+	sort.Strings(values)
+	encoded, _ := json.Marshal(values)
+	return string(encoded)
+}
+
+func normalizeEndpointPort(value string) string {
+	host, port, err := net.SplitHostPort(value)
+	if err != nil || port == "" {
+		return value
+	}
+	for _, digit := range port {
+		if digit < '0' || digit > '9' {
+			return value
+		}
+	}
+	return net.JoinHostPort(host, "<port>")
+}
+
+func normalizeExternalStatePath(value string) string {
+	prefix, remainder, found := strings.Cut(value, "/rules_stests/external-")
+	if !found {
+		return value
+	}
+	_, suffix, found := strings.Cut(remainder, "/state/")
+	if !found {
+		return value
+	}
+	return prefix + "/rules_stests/external-<case>/state/" + suffix
+}
+
+func resourceAttributeIgnores(additional map[string]bool) map[string]bool {
+	ignored := map[string]bool{
+		"process.command_args": true,
+		"process.pid":          true,
+		"service.instance.id":  true,
+	}
+	for key := range additional {
+		ignored[key] = true
+	}
+	return ignored
 }
 
 func attributeSetID(container object, ignored map[string]bool) string {
@@ -892,20 +1075,21 @@ func metricDataType(metric object) string {
 func suppressedExemplars(before, after capture) (int, int, int) {
 	eligible := map[string]bool{}
 	for _, stream := range captureMetricStreams(before) {
-		if id, kind := metricID(stream), metricDataType(stream.Metric); id != "" && kind != "" && len(objects(stream.Metric, "data_points")) > 0 && len(objects(stream.Metric, "exemplars")) > 0 {
-			eligible[id+"\x00"+kind] = true
+		for _, point := range objects(stream.Metric, "data_points") {
+			if id := metricPointID(stream, point, nil); id != "" && len(objects(point, "exemplars")) > 0 {
+				eligible[id] = true
+			}
 		}
 	}
 	preserved := map[string]bool{}
 	remaining := 0
 	for _, stream := range captureMetricStreams(after) {
-		id := metricID(stream) + "\x00" + metricDataType(stream.Metric)
-		remaining += len(objects(stream.Metric, "exemplars"))
-		if !eligible[id] {
-			continue
-		}
-		if len(objects(stream.Metric, "data_points")) > 0 {
-			preserved[id] = true
+		for _, point := range objects(stream.Metric, "data_points") {
+			remaining += len(objects(point, "exemplars"))
+			id := metricPointID(stream, point, nil)
+			if eligible[id] {
+				preserved[id] = true
+			}
 		}
 	}
 	return len(eligible), len(preserved), remaining
@@ -914,15 +1098,25 @@ func suppressedExemplars(before, after capture) (int, int, int) {
 func convertedHistograms(before, after capture) (int, int) {
 	eligible := map[string]bool{}
 	for _, stream := range captureMetricStreams(before) {
-		if id := metricID(stream); id != "" && len(objects(stream.Metric, "histogram")) > 0 && len(objects(stream.Metric, "data_points")) > 0 {
-			eligible[id] = true
+		if len(objects(stream.Metric, "histogram")) == 0 {
+			continue
+		}
+		for _, point := range objects(stream.Metric, "data_points") {
+			if id := metricSeriesID(stream, point); id != "" {
+				eligible[id] = true
+			}
 		}
 	}
 	converted := map[string]bool{}
 	for _, stream := range captureMetricStreams(after) {
-		id := metricID(stream)
-		if eligible[id] && len(objects(stream.Metric, "exponential_histogram")) > 0 && len(objects(stream.Metric, "data_points")) > 0 {
-			converted[id] = true
+		if len(objects(stream.Metric, "exponential_histogram")) == 0 {
+			continue
+		}
+		for _, point := range objects(stream.Metric, "data_points") {
+			id := metricSeriesID(stream, point)
+			if eligible[id] {
+				converted[id] = true
+			}
 		}
 	}
 	return len(eligible), len(converted)
@@ -936,24 +1130,32 @@ func unsampledExemplars(before, after capture) (int, int, int) {
 	excluded := map[string]bool{}
 	for _, stream := range captureMetricStreams(before) {
 		baseID, kind := metricID(stream), metricDataType(stream.Metric)
-		id := baseID + "\x00" + kind
-		if baseID != "" && kind != "" && len(objects(stream.Metric, "data_points")) > 0 {
-			eligible[id] = true
-			if len(objects(stream.Metric, "exemplars")) > 0 {
-				excluded[id] = true
-			}
+		streamID := baseID + "\x00" + kind
+		if baseID != "" && kind != "" && len(objects(stream.Metric, "exemplars")) > 0 {
+			excluded[streamID] = true
 		}
 	}
-	for id := range excluded {
-		delete(eligible, id)
+	for _, stream := range captureMetricStreams(before) {
+		streamID := metricID(stream) + "\x00" + metricDataType(stream.Metric)
+		if excluded[streamID] {
+			continue
+		}
+		for _, point := range objects(stream.Metric, "data_points") {
+			if id := metricPointID(stream, point, nil); id != "" {
+				eligible[id] = true
+			}
+		}
 	}
 	preserved := map[string]bool{}
 	count := 0
 	for _, stream := range captureMetricStreams(after) {
-		id := metricID(stream) + "\x00" + metricDataType(stream.Metric)
-		if eligible[id] && len(objects(stream.Metric, "data_points")) > 0 {
-			preserved[id] = true
-			count += len(objects(stream.Metric, "exemplars"))
+		for _, point := range objects(stream.Metric, "data_points") {
+			id := metricPointID(stream, point, nil)
+			exemplars := len(objects(point, "exemplars"))
+			if eligible[id] && exemplars > 0 {
+				preserved[id] = true
+				count += exemplars
+			}
 		}
 	}
 	return len(eligible), len(preserved), count
