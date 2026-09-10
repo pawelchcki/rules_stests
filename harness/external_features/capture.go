@@ -517,7 +517,7 @@ func evaluate(e experiment, baseline, changed capture) observation {
 				roots[id] = true
 			}
 		}
-		expectedSpans, presentSpans := matchingWorkloadSpans(baseline, changed)
+		expectedSpans, presentSpans := matchingWorkloadSpansIgnoringParents(baseline, changed)
 		expectedMetrics, presentMetrics := matchingMetricStreams(baseline, changed)
 		expectedLogs, presentLogs := matchingLogStreams(baseline, changed, nil)
 		preserved := expectedSpans > 0 && presentSpans == expectedSpans &&
@@ -566,15 +566,21 @@ func evaluate(e experiment, baseline, changed capture) observation {
 			expectedMetrics, presentMetrics := matchingMetricStreams(baseline, changed)
 			expectedLogs, presentLogs := matchingLogStreams(baseline, changed, nil)
 			if e.Name == "attribute-length" {
-				before = append(append([]object{}, baseline.Spans...), baseline.Logs...)
-				after = append(append([]object{}, changed.Spans...), changed.Logs...)
+				before = append(append(append([]object{}, baseline.Spans...), baseline.Logs...), events(baseline)...)
+				after = append(append(append([]object{}, changed.Spans...), changed.Logs...), events(changed)...)
 				expectedLogs, presentLogs = matchingLengthLimitedLogStreams(baseline, changed, 8)
 				logAttributeExpected, logAttributePresent, logAttributeMissing := preservedLongLogAttributes(baseline, changed, 8)
 				attributeExpected += logAttributeExpected
 				attributePresent += logAttributePresent
 				attributeMissing += logAttributeMissing
+				expectedEvents, presentEvents := matchingLengthLimitedEvents(baseline, changed, 8)
+				eventAttributeExpected, eventAttributePresent, eventAttributeMissing := preservedLongEventAttributes(baseline, changed, 8)
+				attributeExpected += eventAttributeExpected
+				attributePresent += eventAttributePresent
+				attributeMissing += eventAttributeMissing
+				preserved = expectedEvents == presentEvents
 			}
-			preserved = len(expectedTraces) == 4 && len(presentTraces) == len(expectedTraces) && expected > 0 && present == expected && attributeExpected > 0 && attributePresent == attributeExpected && presentMetrics == expectedMetrics && presentLogs == expectedLogs
+			preserved = preserved && len(expectedTraces) == 4 && len(presentTraces) == len(expectedTraces) && expected > 0 && present == expected && attributeExpected > 0 && attributePresent == attributeExpected && presentMetrics == expectedMetrics && presentLogs == expectedLogs
 		}
 		check(maxLength(before) > 8, len(after) > 0 && maxLength(after) == 8 && preserved, fmt.Sprintf("maximum string attribute length %d -> %d; cap 8; baseline record identities preserved %d/%d; long attributes preserved %d/%d", maxLength(before), maxLength(after), present, expected, attributePresent, attributeExpected))
 		violations := map[string]bool{}
@@ -621,6 +627,7 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		before, after, cap := baseline.Spans, changed.Spans, 2
 		preserved, expected, present := true, 0, 0
 		affectedLogsExpected, affectedLogsPresent := 0, 0
+		affectedEventsExpected, affectedEventsPresent := 0, 0
 		if e.Name == "event-attributes" {
 			before, after, cap = events(baseline), events(changed), 1
 			expected, present = limitedEventRecords(baseline, changed, cap)
@@ -636,10 +643,12 @@ func evaluate(e experiment, baseline, changed capture) observation {
 			expectedProbes, presentProbes := limitedProbeRequests(baseline, changed, cap)
 			expected, present = matchingCountLimitedWorkloadSpans(baseline, changed)
 			preserved = expectedProbes > 0 && presentProbes == expectedProbes && expected > 0 && present == expected
-			before = append(append([]object{}, baseline.Spans...), baseline.Logs...)
-			after = append(append([]object{}, changed.Spans...), changed.Logs...)
+			before = append(append(append([]object{}, baseline.Spans...), baseline.Logs...), events(baseline)...)
+			after = append(append(append([]object{}, changed.Spans...), changed.Logs...), events(changed)...)
 			affectedLogsExpected, affectedLogsPresent = limitedCountLogStreamRecords(baseline, changed, cap)
-			preserved = preserved && affectedLogsPresent == affectedLogsExpected
+			affectedEventsExpected, affectedEventsPresent = limitedGlobalCountEventRecords(baseline, changed, cap)
+			expectedEvents, presentEvents := matchingGlobalCountLimitedEvents(baseline, changed, cap)
+			preserved = preserved && affectedLogsPresent == affectedLogsExpected && affectedEventsPresent == affectedEventsExpected && presentEvents == expectedEvents
 		}
 		expectedSpans, presentSpans := matchingWorkloadSpans(baseline, changed)
 		if e.Name == "attribute-count" {
@@ -655,7 +664,7 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		if e.Name == "attribute-count" || e.Name == "event-attributes" || e.Name == "log-count" {
 			prerequisite = prerequisite && expected > 0
 		}
-		check(prerequisite, len(after) > 0 && maxAttributes(after) == cap && dropped(after, "dropped_attributes_count") > 0 && preserved, fmt.Sprintf("maximum attributes %d -> %d; cap %d; dropped %d; affected records %d/%d; affected logs %d/%d; workload spans %d/%d, metrics %d/%d, logs %d/%d preserved", maxAttributes(before), maxAttributes(after), cap, dropped(after, "dropped_attributes_count"), present, expected, affectedLogsPresent, affectedLogsExpected, presentSpans, expectedSpans, presentMetrics, expectedMetrics, presentLogs, expectedLogs))
+		check(prerequisite, len(after) > 0 && maxAttributes(after) == cap && dropped(after, "dropped_attributes_count") > 0 && preserved, fmt.Sprintf("maximum attributes %d -> %d; cap %d; dropped %d; affected records %d/%d; affected logs %d/%d; affected events %d/%d; workload spans %d/%d, metrics %d/%d, logs %d/%d preserved", maxAttributes(before), maxAttributes(after), cap, dropped(after, "dropped_attributes_count"), present, expected, affectedLogsPresent, affectedLogsExpected, affectedEventsPresent, affectedEventsExpected, presentSpans, expectedSpans, presentMetrics, expectedMetrics, presentLogs, expectedLogs))
 	case "events":
 		expected, present := suppressedEventRecords(baseline, changed)
 		expectedSpans, presentSpans := matchingWorkloadSpans(baseline, changed)
@@ -746,36 +755,34 @@ func matchingWorkloadSpans(before, after capture) (int, int) {
 }
 
 func matchingWorkloadSpansIgnoring(before, after capture, ignoredResourceAttributes map[string]bool) (int, int) {
-	return matchingWorkloadSpansWithID(before, after, ignoredResourceAttributes, workloadSpanID)
+	return matchingWorkloadSpansWithID(before, after, ignoredResourceAttributes, workloadSpanID, true)
+}
+
+func matchingWorkloadSpansIgnoringParents(before, after capture) (int, int) {
+	return matchingWorkloadSpansWithID(before, after, nil, workloadSpanID, false)
 }
 
 func matchingLengthLimitedWorkloadSpans(before, after capture, limit int) (int, int) {
 	return matchingWorkloadSpansWithID(before, after, nil, func(span object) string {
 		return workloadSpanIDWithStringLimit(span, limit)
-	})
+	}, true)
 }
 
 func matchingCountLimitedWorkloadSpans(before, after capture) (int, int) {
-	return matchingWorkloadSpansWithID(before, after, nil, workloadSpanShapeID)
+	return matchingWorkloadSpansWithID(before, after, nil, workloadSpanShapeID, true)
 }
 
-func matchingWorkloadSpansWithID(before, after capture, ignoredResourceAttributes map[string]bool, identify func(object) string) (int, int) {
-	eligible := workloadSpanIdentitiesWithID(before, ignoredResourceAttributes, identify)
-	preserved := map[string]int{}
-	for id, count := range workloadSpanIdentitiesWithID(after, ignoredResourceAttributes, identify) {
-		if count > eligible[id] {
-			count = eligible[id]
-		}
-		preserved[id] = count
-	}
-	return countIdentities(eligible), countIdentities(preserved)
+func matchingWorkloadSpansWithID(before, after capture, ignoredResourceAttributes map[string]bool, identify func(object) string, includeParent bool) (int, int) {
+	eligible := workloadSpanIdentitiesWithID(before, ignoredResourceAttributes, identify, includeParent)
+	actual := workloadSpanIdentitiesWithID(after, ignoredResourceAttributes, identify, includeParent)
+	return matchingIdentityCounts(eligible, actual)
 }
 
 func workloadSpanIdentities(c capture, ignoredResourceAttributes map[string]bool) map[string]int {
-	return workloadSpanIdentitiesWithID(c, ignoredResourceAttributes, workloadSpanID)
+	return workloadSpanIdentitiesWithID(c, ignoredResourceAttributes, workloadSpanID, true)
 }
 
-func workloadSpanIdentitiesWithID(c capture, ignoredResourceAttributes map[string]bool, identify func(object) string) map[string]int {
+func workloadSpanIdentitiesWithID(c capture, ignoredResourceAttributes map[string]bool, identify func(object) string, includeParent bool) map[string]int {
 	traceIDs := map[string]bool{}
 	for _, stream := range captureSpanStreams(c) {
 		span := stream.Span
@@ -797,11 +804,31 @@ func workloadSpanIdentitiesWithID(c capture, ignoredResourceAttributes map[strin
 		if traceIDs[traceID] {
 			if id := identify(span); id != "" {
 				id += "\x00" + spanContextID(stream, ignoredResourceAttributes)
+				if includeParent {
+					id += "\x00" + spanParentRelationshipID(c, stream, ignoredResourceAttributes)
+				}
 				identities[id]++
 			}
 		}
 	}
 	return identities
+}
+
+func spanParentRelationshipID(c capture, child spanStream, ignoredResourceAttributes map[string]bool) string {
+	parentID, _ := field(child.Span, "parent_span_id").(string)
+	if parentID == "" {
+		return "root"
+	}
+	if !validSpan(parentID) {
+		return "invalid"
+	}
+	traceID, _ := field(child.Span, "trace_id").(string)
+	for _, candidate := range captureSpanStreams(c) {
+		if field(candidate.Span, "trace_id") == traceID && field(candidate.Span, "span_id") == parentID {
+			return "local\x00" + workloadSpanShapeID(candidate.Span) + "\x00" + spanContextID(candidate, ignoredResourceAttributes)
+		}
+	}
+	return "remote"
 }
 
 func captureSpanStreams(c capture) []spanStream {
@@ -995,6 +1022,69 @@ func identifiedLogRecords(c capture) []identifiedRecord {
 
 func preservedLongSpanAttributes(before, after capture, limit int) (int, int, int) {
 	return preservedLongIdentifiedAttributes(identifiedIncomingSpans(before), identifiedIncomingSpans(after), limit)
+}
+
+func preservedLongEventAttributes(before, after capture, limit int) (int, int, int) {
+	return preservedLongIdentifiedAttributes(identifiedGlobalEvents(before, func(span object) string {
+		return workloadSpanIDWithStringLimit(span, limit)
+	}), identifiedGlobalEvents(after, func(span object) string {
+		return workloadSpanIDWithStringLimit(span, limit)
+	}), limit)
+}
+
+func matchingLengthLimitedEvents(before, after capture, limit int) (int, int) {
+	identities := func(c capture) map[string]int {
+		items := map[string]int{}
+		for _, event := range identifiedGlobalEvents(c, func(span object) string {
+			return workloadSpanIDWithStringLimit(span, limit)
+		}) {
+			items[event.ID+"\x00"+attributeSetIDWithStringLimit(event.Record, limit)]++
+		}
+		return items
+	}
+	return matchingIdentityCounts(identities(before), identities(after))
+}
+
+func matchingGlobalCountLimitedEvents(before, after capture, limit int) (int, int) {
+	identities := func(c capture) map[string]int {
+		items := map[string]int{}
+		for _, event := range identifiedGlobalEvents(c, workloadSpanShapeID) {
+			attributeID := attributeSetID(event.Record, nil)
+			if len(attributes(event.Record)) > limit || number(field(event.Record, "dropped_attributes_count")) > 0 {
+				attributeID = "<count-limited>"
+			}
+			items[event.ID+"\x00"+attributeID]++
+		}
+		return items
+	}
+	return matchingIdentityCounts(identities(before), identities(after))
+}
+
+func identifiedGlobalEvents(c capture, parentIdentify func(object) string) []identifiedRecord {
+	groups := map[string][]object{}
+	for _, stream := range captureSpanStreams(c) {
+		parentID := parentIdentify(stream.Span)
+		if parentID == "" {
+			continue
+		}
+		parentID += "\x00" + spanContextID(stream, nil) + "\x00" + spanParentRelationshipID(c, stream, nil)
+		for _, event := range objects(stream.Span, "events") {
+			name, _ := field(event, "name").(string)
+			if name != "" {
+				groups[parentID+"\x00"+name] = append(groups[parentID+"\x00"+name], event)
+			}
+		}
+	}
+	var identified []identifiedRecord
+	for stableID, records := range groups {
+		sort.SliceStable(records, func(i, j int) bool {
+			return fmt.Sprint(field(records[i], "time_unix_nano")) < fmt.Sprint(field(records[j], "time_unix_nano"))
+		})
+		for ordinal, record := range records {
+			identified = append(identified, identifiedRecord{Record: record, ID: fmt.Sprintf("%s\x00%d", stableID, ordinal)})
+		}
+	}
+	return identified
 }
 
 func identifiedIncomingSpans(c capture) []identifiedRecord {
@@ -1277,6 +1367,22 @@ func limitedCountLogStreamRecords(before, after capture, limit int) (int, int) {
 	return expected, present
 }
 
+func limitedGlobalCountEventRecords(before, after capture, limit int) (int, int) {
+	eligible := map[string]int{}
+	for _, event := range identifiedGlobalEvents(before, workloadSpanShapeID) {
+		if len(attributes(event.Record)) > limit {
+			eligible[event.ID]++
+		}
+	}
+	preserved := map[string]int{}
+	for _, event := range identifiedGlobalEvents(after, workloadSpanShapeID) {
+		if preserved[event.ID] < eligible[event.ID] && len(attributes(event.Record)) == limit && number(field(event.Record, "dropped_attributes_count")) > 0 {
+			preserved[event.ID]++
+		}
+	}
+	return countIdentities(eligible), countIdentities(preserved)
+}
+
 func limitedEventRecords(before, after capture, limit int) (int, int) {
 	eligible := map[string]int{}
 	for _, parent := range identifiedSpans(before) {
@@ -1378,6 +1484,25 @@ func countIdentities(items map[string]int) int {
 	return total
 }
 
+func matchingIdentityCounts(eligible, actual map[string]int) (int, int) {
+	expected, matched, exact := countIdentities(eligible), 0, len(eligible) == len(actual)
+	for id, count := range eligible {
+		actualCount := actual[id]
+		if actualCount < count {
+			matched += actualCount
+		} else {
+			matched += count
+		}
+		if actualCount != count {
+			exact = false
+		}
+	}
+	if !exact && matched == expected {
+		return expected, expected + 1
+	}
+	return expected, matched
+}
+
 func captureMetricStreams(c capture) []metricStream {
 	if len(c.MetricStreams) > 0 {
 		return c.MetricStreams
@@ -1443,7 +1568,7 @@ func controlMetricPointID(stream metricStream, point object, ignoredResourceAttr
 		return ""
 	}
 	if transientMetricPoints(stream) {
-		return id + "\x00" + metricType
+		return fmt.Sprintf("%s\x00%s\x00%v", id, metricType, number(field(point, "flags")))
 	}
 	return id + "\x00" + metricType + "\x00" + metricPointAttributeSetID(point)
 }
@@ -1524,7 +1649,7 @@ func metricPointAttributeSetID(point object) string {
 		values = append(values, string(encoded))
 	}
 	sort.Strings(values)
-	encoded, _ := json.Marshal(values)
+	encoded, _ := json.Marshal([]any{number(field(point, "flags")), values})
 	return string(encoded)
 }
 

@@ -395,7 +395,7 @@ func TestLimitsCheckEveryRecordAndExactCap(t *testing.T) {
 	}
 }
 
-func TestGlobalAttributeLimitsCoverLogs(t *testing.T) {
+func TestGlobalAttributeLimitsCoverLogsAndEvents(t *testing.T) {
 	lengthBaseline := capture{Spans: syntheticProbeSpans(), Logs: []object{{
 		"body": object{"stringValue": "workload log"}, "attributes": []any{attr("payload", "long log attribute")},
 	}}}
@@ -425,6 +425,32 @@ func TestGlobalAttributeLimitsCoverLogs(t *testing.T) {
 	if got := evaluate(experiment{Name: "attribute-count"}, countBaseline, countChanged); got.Status == "pass" {
 		t.Fatal("global attribute count passed with an uncapped log record")
 	}
+
+	eventLengthBaseline := capture{Spans: syntheticProbeSpans()}
+	eventLengthChanged := capture{Spans: syntheticProbeSpans()}
+	eventLengthBaseline.Spans[0]["events"] = []any{object{"name": "exception", "attributes": []any{attr("message", "long event attribute")}}}
+	eventLengthChanged.Spans[0]["events"] = []any{object{"name": "exception", "attributes": []any{attr("message", "long event attribute")}}}
+	for _, span := range eventLengthChanged.Spans {
+		span["attributes"] = []any{attr("http.route", "api/tags"), attr("http.user_agent", "external")}
+	}
+	if got := evaluate(experiment{Name: "attribute-length"}, eventLengthBaseline, eventLengthChanged); got.Status == "pass" {
+		t.Fatal("global attribute length passed with an uncapped event attribute")
+	}
+
+	eventCountBaseline := capture{Spans: syntheticProbeSpans()}
+	eventCountChanged := capture{Spans: syntheticProbeSpans()}
+	for _, span := range eventCountBaseline.Spans {
+		span["attributes"] = append(span["attributes"].([]any), attr("second", "value"), attr("third", "value"))
+	}
+	eventCountBaseline.Spans[0]["events"] = []any{object{"name": "exception", "attributes": []any{attr("first", "value"), attr("second", "value"), attr("third", "value")}}}
+	eventCountChanged.Spans[0]["events"] = []any{object{"name": "exception", "attributes": []any{attr("first", "value"), attr("second", "value"), attr("third", "value")}}}
+	for _, span := range eventCountChanged.Spans {
+		span["attributes"] = []any{attr("first", "value"), attr("second", "value")}
+		span["dropped_attributes_count"] = float64(1)
+	}
+	if got := evaluate(experiment{Name: "attribute-count"}, eventCountBaseline, eventCountChanged); got.Status == "pass" {
+		t.Fatal("global attribute count passed with an uncapped event")
+	}
 }
 
 func TestWorkloadSpanIdentityPreservesStatus(t *testing.T) {
@@ -440,6 +466,26 @@ func TestWorkloadSpanIdentityPreservesStatus(t *testing.T) {
 	}
 	if expected, present := matchingCountLimitedWorkloadSpans(baseline, changed); expected != 4 || present != 3 {
 		t.Fatalf("count-limit identity omitted span status: %d/%d", present, expected)
+	}
+}
+
+func TestWorkloadSpanIdentityPreservesTopologyAndMultiplicity(t *testing.T) {
+	baseline := capture{Spans: syntheticProbeSpans()}
+	detached := capture{Spans: syntheticProbeSpans()}
+	for _, span := range detached.Spans {
+		span["parent_span_id"] = ""
+	}
+	if expected, present := matchingWorkloadSpans(baseline, detached); expected != 4 || present != 0 {
+		t.Fatalf("detached server spans were not detected: %d/%d", present, expected)
+	}
+	if expected, present := matchingWorkloadSpansIgnoringParents(baseline, detached); expected != 4 || present != 4 {
+		t.Fatalf("propagation-specific matching did not ignore the intended parent change: %d/%d", present, expected)
+	}
+
+	duplicated := capture{Spans: syntheticProbeSpans()}
+	duplicated.Spans = append(duplicated.Spans, duplicated.Spans[0])
+	if expected, present := matchingWorkloadSpans(baseline, duplicated); expected != 4 || present != 5 {
+		t.Fatalf("duplicate workload span was not rejected: %d/%d", present, expected)
 	}
 }
 
@@ -676,6 +722,15 @@ func TestControlMetricsPreserveDataPointIdentities(t *testing.T) {
 	changed := capture{Metrics: []object{changedMetric}, MetricStreams: []metricStream{{Metric: changedMetric}}}
 	if expected, present := matchingMetricStreams(baseline, changed); expected != 2 || present != 1 {
 		t.Fatalf("metric data-point loss was not detected: %d/%d", present, expected)
+	}
+	baselineFlaggedPoint := point("a")
+	baselineFlaggedPoint["flags"] = float64(0)
+	changedFlaggedPoint := point("a")
+	changedFlaggedPoint["flags"] = float64(1)
+	baselineFlaggedMetric := metric("flagged.metric", baselineFlaggedPoint)
+	changedFlaggedMetric := metric("flagged.metric", changedFlaggedPoint)
+	if expected, present := matchingMetricStreams(capture{Metrics: []object{baselineFlaggedMetric}}, capture{Metrics: []object{changedFlaggedMetric}}); expected != 1 || present != 0 {
+		t.Fatalf("metric no-recorded-value flag was not detected: %d/%d", present, expected)
 	}
 	beforeConnections := metric("system.network.connections", point("SYN_SENT"))
 	afterConnections := metric("system.network.connections", point("ESTABLISHED"))
