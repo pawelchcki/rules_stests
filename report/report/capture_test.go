@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -1198,6 +1199,55 @@ func TestCaptureParentOccurrenceIdentityWithoutScope(t *testing.T) {
 		t.Fatalf("hidden scope leaked into parent relationships: %q != %q", left.Spans[1].ParentWithoutScope, right.Spans[1].ParentWithoutScope)
 	}
 }
+
+func TestCaptureParentOccurrenceIdentityIncludesDescendantScopes(t *testing.T) {
+	fixture := func(firstScope, secondScope string) CaptureDataset {
+		parentAndMarkers := []any{
+			captureSpan(1, 1, 0, "parent"),
+			captureSpan(1, 2, 1, "marker-a"),
+			captureSpan(2, 1, 0, "parent"),
+			captureSpan(2, 2, 1, "marker-b"),
+		}
+		firstChild := captureSpan(1, 3, 1, "scoped")
+		secondChild := captureSpan(2, 3, 1, "scoped")
+		raw, _ := json.Marshal([]any{map[string]any{
+			"signal": "traces",
+			"payload": map[string]any{
+				"resourceSpans": []any{map[string]any{
+					"scopeSpans": []any{
+						map[string]any{"scope": map[string]any{"name": "base"}, "spans": parentAndMarkers},
+						map[string]any{"scope": map[string]any{"name": firstScope}, "spans": []any{firstChild}},
+						map[string]any{"scope": map[string]any{"name": secondScope}, "spans": []any{secondChild}},
+					},
+				}},
+			},
+		}})
+		return DecodeCapture(ValidationReceipt{}, raw)
+	}
+	left, right := fixture("scope-a", "scope-b"), fixture("scope-b", "scope-a")
+	parentKeys := func(dataset CaptureDataset, withoutScope bool) []string {
+		keys := []string{}
+		for _, span := range dataset.Spans {
+			if str(span.Fields["name"]) != "scoped" {
+				continue
+			}
+			if withoutScope {
+				keys = append(keys, span.ParentWithoutScope)
+			} else {
+				keys = append(keys, span.Parent)
+			}
+		}
+		sort.Strings(keys)
+		return keys
+	}
+	if canonical(parentKeys(left, false)) == canonical(parentKeys(right, false)) {
+		t.Fatal("descendant scope reassignment was lost from parent occurrence keys")
+	}
+	if canonical(parentKeys(left, true)) != canonical(parentKeys(right, true)) {
+		t.Fatal("descendant scopes leaked into scope-free parent occurrence keys")
+	}
+}
+
 func TestPlannedChecksDoNotInflateVerification(t *testing.T) {
 	proof := ProofPlanProof{FeatureID: "f", Assertion: "assert", Basis: "observed"}
 	model := ReportModel{Manifests: []Manifest{{Profile: "p"}, {Profile: "unavailable"}}, Coverage: []CoverageCell{{Profile: "p", Scenario: "pass", Declared: true}, {Profile: "p", Scenario: "xfail", Declared: true}, {Profile: "p", Scenario: "unrun", Declared: true}, {Profile: "p", Scenario: "excluded"}, {Profile: "unavailable", Scenario: "unrun", Declared: true}}, Verification: map[string]map[string]Verification{"f": {"p": {State: "verified"}, "unavailable": {State: "not_exercised"}}}, Receipts: []ValidationReceipt{{Profile: "p", Scenario: "pass", Outcome: "verified", Proofs: []ReceiptProof{{FeatureID: "f", Assertion: "assert", Basis: "observed", Result: "pass"}}}, {Profile: "p", Scenario: "xfail", Outcome: "xfail", XFailReason: "reason"}}}

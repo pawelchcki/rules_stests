@@ -1083,21 +1083,49 @@ func bestTracePair(leftIndex int, leftGroup TraceGroup, rightIndex int, rightGro
 }
 
 func shallowTraceMatchScore(left, right resolvedTrace) (int, bool) {
-	best, found := 0, false
-	for _, leftRoot := range left.roots {
-		for _, rightRoot := range right.roots {
-			score := shallowAlignedSpanMatchScore(leftRoot, rightRoot)
-			if score >= 0 {
-				score += childOverlapScore(leftRoot, rightRoot)
+	rootScore := func(leftRoot, rightRoot alignedSpan) int {
+		score := shallowAlignedSpanMatchScore(leftRoot, rightRoot)
+		if score >= 0 {
+			score += childOverlapScore(leftRoot, rightRoot)
+		}
+		return score
+	}
+	matchedSides, detail := 0, 0
+	if len(left.roots)+len(right.roots) <= nestedScoreVertexLimit {
+		matchedRight, _ := maximumCardinalityPairs(left.roots, right.roots, rootScore)
+		for leftIndex, rightIndex := range matchedRight {
+			if rightIndex < 0 {
+				continue
 			}
-			if score >= 0 && (!found || score > best) {
-				best, found = score, true
+			matchedSides += 2
+			detail += rootScore(left.roots[leftIndex], right.roots[rightIndex]) * 2
+		}
+	} else {
+		// Large root sets retain linear memory by aggregating the best score
+		// from both orientations. Every root contributes, while a single
+		// shared root can no longer hide the remaining set.
+		bestScores := func(from, to []alignedSpan) {
+			for _, source := range from {
+				best, found := 0, false
+				for _, target := range to {
+					score := rootScore(source, target)
+					if score >= 0 && (!found || score > best) {
+						best, found = score, true
+					}
+				}
+				if found {
+					matchedSides++
+					detail += best
+				}
 			}
 		}
+		bestScores(left.roots, right.roots)
+		bestScores(right.roots, left.roots)
 	}
-	if !found {
+	if matchedSides == 0 {
 		return 0, false
 	}
+	best := matchedSides*50000 + detail - (len(left.roots)+len(right.roots)-matchedSides)*10000
 	if left.card == right.card {
 		best += 100
 	}

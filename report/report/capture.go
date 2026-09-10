@@ -1648,6 +1648,44 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 			d.Spans[i].LinkTargetsWithoutScope = append(d.Spans[i].LinkTargetsWithoutScope, targetWithoutScope)
 		}
 	}
+	buildDescendantPartitions := func() []string {
+		partitions := make([]string, len(d.Spans))
+		var partition func(int) string
+		partition = func(i int) string {
+			if partitions[i] != "" {
+				return partitions[i]
+			}
+			descendants := make([]string, 0, len(children[i]))
+			for _, child := range children[i] {
+				descendants = append(descendants, canonical([]any{semanticSpanProjection(&d, child, false), partition(child)}))
+			}
+			sort.Strings(descendants)
+			partitions[i] = digest([]byte(canonical(descendants)))[:12]
+			return partitions[i]
+		}
+		for i := range d.Spans {
+			partition(i)
+		}
+		return partitions
+	}
+	descendantPartitions := buildDescendantPartitions()
+	descendantScopePartitions := make([]string, len(d.Spans))
+	var descendantScopePartition func(int) string
+	descendantScopePartition = func(i int) string {
+		if descendantScopePartitions[i] != "" {
+			return descendantScopePartitions[i]
+		}
+		descendants := make([]string, 0, len(children[i]))
+		for _, child := range children[i] {
+			descendants = append(descendants, canonical([]any{fingerprints[child], d.Scopes[d.Spans[child].Scope], descendantScopePartition(child)}))
+		}
+		sort.Strings(descendants)
+		descendantScopePartitions[i] = digest([]byte(canonical(descendants)))[:12]
+		return descendantScopePartitions[i]
+	}
+	for i := range d.Spans {
+		descendantScopePartition(i)
+	}
 	buildOccurrenceKeys := func(includeScope bool) []string {
 		keys := make([]string, len(d.Spans))
 		var key func(int) string
@@ -1661,7 +1699,11 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 			} else if parentIDs[i] != "" {
 				parent = "external parent"
 			}
-			keys[i] = digest([]byte(canonical([]any{parent, semanticSpanProjection(&d, i, includeScope)})))[:12]
+			parts := []any{parent, semanticSpanProjection(&d, i, includeScope)}
+			if includeScope {
+				parts = append(parts, descendantScopePartitions[i])
+			}
+			keys[i] = digest([]byte(canonical(parts)))[:12]
 			return keys[i]
 		}
 		for i := range d.Spans {
@@ -1671,23 +1713,6 @@ func DecodeCapture(receipt ValidationReceipt, input []byte) (d CaptureDataset) {
 	}
 	occurrenceKeys := buildOccurrenceKeys(true)
 	occurrenceKeysWithoutScope := buildOccurrenceKeys(false)
-	descendantPartitions := make([]string, len(d.Spans))
-	var descendantPartition func(int) string
-	descendantPartition = func(i int) string {
-		if descendantPartitions[i] != "" {
-			return descendantPartitions[i]
-		}
-		descendants := make([]string, 0, len(children[i]))
-		for _, child := range children[i] {
-			descendants = append(descendants, canonical([]any{semanticSpanProjection(&d, child, false), descendantPartition(child)}))
-		}
-		sort.Strings(descendants)
-		descendantPartitions[i] = digest([]byte(canonical(descendants)))[:12]
-		return descendantPartitions[i]
-	}
-	for i := range d.Spans {
-		descendantPartition(i)
-	}
 	buildExternalParents := func(keys []string) map[string][]string {
 		result := map[string][]string{}
 		for i := range d.Spans {

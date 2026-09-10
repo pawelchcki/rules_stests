@@ -65,6 +65,26 @@ func TestLargeTraceAlignmentUsesDescendantStructure(t *testing.T) {
 	}
 }
 
+func TestLargeMultiRootTraceAlignmentScoresEveryRoot(t *testing.T) {
+	const count = optimalAssignmentVertexLimit/2 + 1
+	left := &ScenarioShape{ExactCounts: true}
+	right := &ScenarioShape{ExactCounts: true}
+	for i := 0; i < count; i++ {
+		common := exactSpan("", "server", "unset", "common", "")
+		child := exactSpan("", "client", "unset", fmt.Sprintf("child-%03d", i), "")
+		leftDetail := exactSpan("", "server", "unset", "detail", "", child)
+		rightDetail := exactSpan("", "server", "error", "detail", "", child)
+		leftTrace := TraceGroup{Count: 1, ExactCount: true, Coverage: "complete", Roots: []SpanGroup{common, leftDetail}}
+		rightTrace := TraceGroup{Count: 1, ExactCount: true, Coverage: "complete", Roots: []SpanGroup{common, rightDetail}}
+		left.Traces = append(left.Traces, leftTrace)
+		right.Traces = append([]TraceGroup{rightTrace}, right.Traces...)
+	}
+	alignment := AlignShapes(left, right)
+	if alignment.Summary.TraceMatched != count || alignment.Summary.TraceLeftOnly != 0 || alignment.Summary.TraceRightOnly != 0 || alignment.Summary.Matched != count*3 || alignment.Summary.Differing != count || alignment.Summary.LeftOnly != 0 || alignment.Summary.RightOnly != 0 {
+		t.Fatalf("large multi-root pairing ignored secondary roots: %#v", alignment.Summary)
+	}
+}
+
 func TestLargePairingPreservesMaximumCardinality(t *testing.T) {
 	count := optimalAssignmentVertexLimit/2 + 1
 	matched, _ := maximumWeightMaximumCardinalityPairs(count, count, func(left, right int) (int, bool) {
