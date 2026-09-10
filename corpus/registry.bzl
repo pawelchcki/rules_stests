@@ -198,6 +198,13 @@ DATADOG_REVIEWED_SHAPES = [
     "datadog/realworld/shape/python-aiohttp-datadog-v4-14-0-v05/propagation_datadog.scm",
     "datadog/realworld/shape/python-aiohttp-datadog-v4-14-0-v05/tags.scm",
     "datadog/realworld/shape/python-aiohttp-datadog-v4-14-0-v05/unicode.scm",
+    "datadog/realworld/shape/python-django-datadog-v4-14-0-v04/tags.scm",
+    "datadog/realworld/shape/python-django-datadog-v4-14-0-v05/auth.scm",
+    "datadog/realworld/shape/python-django-datadog-v4-14-0-v05/profiles.scm",
+    "datadog/realworld/shape/python-django-datadog-v4-14-0-v05/propagation.scm",
+    "datadog/realworld/shape/python-django-datadog-v4-14-0-v05/propagation_datadog.scm",
+    "datadog/realworld/shape/python-django-datadog-v4-14-0-v05/tags.scm",
+    "datadog/realworld/shape/python-django-datadog-v4-14-0-v05/unicode.scm",
 ]
 
 def declare_datadog_profiles(datadog_realworld_profile):
