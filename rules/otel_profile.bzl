@@ -22,6 +22,27 @@ OtelProfileInfo = provider(fields = [
     "manifest",
 ])
 
+TelemetryProfileInfo = provider(fields = [
+    "family", "wire_version", "profile_id", "repository", "spec_path", "specification",
+    "implementation_libraries", "normalized_proof_plan", "signals", "scenarios",
+    "scenario_shapes", "scenario_shape_sources", "registry_matrix", "registry_metadata", "manifest",
+])
+
+def _telemetry_registry_impl(ctx):
+    return [
+        DefaultInfo(files = depset([ctx.file.scheme, ctx.file.catalog])),
+        OtelStandardRegistryInfo(scheme = ctx.file.scheme, json = ctx.file.catalog,
+                                 matrix = ctx.file.catalog, metadata = ctx.file.catalog),
+    ]
+
+telemetry_feature_registry = rule(
+    implementation = _telemetry_registry_impl,
+    attrs = {
+        "scheme": attr.label(allow_single_file = [".scm"], mandatory = True),
+        "catalog": attr.label(allow_single_file = [".json"], mandatory = True),
+    },
+)
+
 def _standard_registry_impl(ctx):
     scheme = ctx.actions.declare_file(ctx.label.name + ".scm")
     registry_json = ctx.actions.declare_file(ctx.label.name + ".json")
@@ -94,13 +115,15 @@ def _profile_impl(ctx):
     capture_shapes = None
     proof_rule_tables = []
     for source in core_libraries:
-        if source.short_path.endswith("otel/capture/shapes.scm"):
+        if source.short_path.endswith((ctx.attr.family or "otel") + "/capture/shapes.scm"):
             capture_shapes = source
-        elif "/otel/proofs/" in source.short_path:
+        elif "/otel/proofs/" in source.short_path or source.short_path.endswith("datadog/proofs.scm"):
             proof_rule_tables.append(source)
     if not capture_shapes:
-        fail("core_libraries must contain otel/capture/shapes.scm")
+        fail("core_libraries must contain the family capture/shapes.scm")
     arguments = ctx.actions.args()
+    arguments.add("--family=" + ctx.attr.family)
+    arguments.add("--wire-version=" + ctx.attr.wire_version)
     arguments.add("--profile=" + ctx.file.specification.path)
     arguments.add("--registry=" + registry.json.path)
     for source in proof_rule_tables:
@@ -114,7 +137,7 @@ def _profile_impl(ctx):
         arguments.add("--implementation=" + source.path)
     for source in common:
         arguments.add("--library=" + source.path)
-    for name in ["otel.profile", "realworld.profile.%s" % ctx.attr.profile_id]:
+    for name in (["datadog.profile", "datadog.realworld.profile.%s" % ctx.attr.profile_id] if ctx.attr.family == "datadog" else ["otel.profile", "realworld.profile.%s" % ctx.attr.profile_id]):
         arguments.add("--import=" + name)
     for signal in ctx.attr.signals:
         arguments.add("--signal=" + signal)
@@ -131,32 +154,35 @@ def _profile_impl(ctx):
         progress_message = "Compiling normalized proof plan for %s" % ctx.attr.profile_id,
     )
 
-    return [
+    fields = dict(
+        profile_id = ctx.attr.profile_id,
+        repository = ctx.label.repo_name,
+        spec_path = ctx.file.specification.short_path,
+        specification = ctx.file.specification,
+        implementation_libraries = depset(ctx.files.implementation_libraries),
+        normalized_proof_plan = plan,
+        signals = tuple(ctx.attr.signals),
+        scenarios = tuple(ctx.attr.scenarios),
+        scenario_shapes = shape_paths,
+        scenario_shape_sources = shape_sources,
+        registry_matrix = registry.matrix,
+        registry_metadata = registry.metadata,
+        manifest = manifest,
+    )
+    providers = [
         DefaultInfo(files = depset([manifest])),
-        OutputGroupInfo(
-            manifest = depset([manifest]),
-            proof_plan = depset([plan]),
-        ),
-        OtelProfileInfo(
-            profile_id = ctx.attr.profile_id,
-            repository = ctx.label.repo_name,
-            spec_path = ctx.file.specification.short_path,
-            specification = ctx.file.specification,
-            implementation_libraries = depset(ctx.files.implementation_libraries),
-            normalized_proof_plan = plan,
-            signals = tuple(ctx.attr.signals),
-            scenarios = tuple(ctx.attr.scenarios),
-            scenario_shapes = shape_paths,
-            scenario_shape_sources = shape_sources,
-            registry_matrix = registry.matrix,
-            registry_metadata = registry.metadata,
-            manifest = manifest,
-        ),
+        OutputGroupInfo(manifest = depset([manifest]), proof_plan = depset([plan])),
+        TelemetryProfileInfo(family = ctx.attr.family or "otlp", wire_version = ctx.attr.wire_version, **fields),
     ]
+    if not ctx.attr.family:
+        providers.append(OtelProfileInfo(**fields))
+    return providers
 
 otel_profile = rule(
     implementation = _profile_impl,
     attrs = {
+        "family": attr.string(values = ["", "datadog"]),
+        "wire_version": attr.string(),
         "profile_id": attr.string(mandatory = True),
         "specification": attr.label(allow_single_file = [".scm"], mandatory = True),
         "implementation_libraries": attr.label_list(allow_files = [".scm"], mandatory = True),
@@ -265,6 +291,36 @@ def otel_realworld_profile(
         name = name + ".proof_plan",
         srcs = [":" + name],
         output_group = "proof_plan",
+    )
+
+def datadog_realworld_profile(
+        name,
+        specification,
+        implementation_libraries,
+        wire_version = "v0.5",
+        runtime_libraries = [],
+        signals = ["traces"],
+        standard_registry = Label("//corpus:datadog_feature_registry"),
+        core_libraries = Label("//corpus:datadog_core_libraries"),
+        program = Label("//corpus:datadog/realworld/programs/validate_profile.scm"),
+        **kwargs):
+    """Declares an independent Datadog schema-v2 profile and proof plan."""
+    if wire_version not in ["v0.4", "v0.5"]:
+        fail("Datadog wire_version must be v0.4 or v0.5")
+    if signals != ["traces"]:
+        fail("Datadog profiles support traces only")
+    otel_realworld_profile(
+        name = name,
+        specification = specification,
+        implementation_libraries = implementation_libraries,
+        runtime_libraries = runtime_libraries,
+        signals = signals,
+        standard_registry = standard_registry,
+        core_libraries = core_libraries,
+        program = program,
+        family = "datadog",
+        wire_version = wire_version,
+        **kwargs
     )
 
 def _report_manifest_impl(ctx):

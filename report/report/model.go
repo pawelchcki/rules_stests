@@ -70,6 +70,10 @@ type ProofPlanProof struct {
 }
 
 type NormalizedProfilePlan struct {
+	Family          string            `json:"family,omitempty"`
+	WireVersion     string            `json:"wireVersion,omitempty"`
+	Application     string            `json:"application,omitempty"`
+	ShapeNamespace  string            `json:"shapeNamespace,omitempty"`
 	SchemaVersion   int               `json:"schemaVersion"`
 	Profile         string            `json:"profile"`
 	DisplayName     string            `json:"displayName"`

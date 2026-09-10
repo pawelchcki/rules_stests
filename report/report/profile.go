@@ -18,6 +18,11 @@ type registryDocument struct {
 // CompileNormalizedProfile converts the readable Scheme authoring form to the
 // deterministic data contract consumed by validation receipts and reporting.
 func CompileNormalizedProfile(profileSource string, implementationSources []string, registryJSON, proofRuleSource, captureShapeSource []byte, scenarios []string) (NormalizedProfilePlan, error) {
+	return CompileTelemetryProfile(profileSource, implementationSources, registryJSON, proofRuleSource, captureShapeSource, scenarios)
+}
+
+// CompileTelemetryProfile compiles either family using its own feature and proof tables.
+func CompileTelemetryProfile(profileSource string, implementationSources []string, registryJSON, proofRuleSource, captureShapeSource []byte, scenarios []string) (NormalizedProfilePlan, error) {
 	var registry registryDocument
 	if err := json.Unmarshal(registryJSON, &registry); err != nil {
 		return NormalizedProfilePlan{}, fmt.Errorf("decode standard registry: %w", err)
@@ -71,6 +76,21 @@ func CompileNormalizedProfile(profileSource string, implementationSources []stri
 				return plan, fmt.Errorf("profile id clause is malformed")
 			}
 			plan.Profile = atomValue(unquote(clause.list[1]))
+		case "family", "wire-version", "application", "shape-namespace":
+			if len(clause.list) != 2 {
+				return plan, fmt.Errorf("profile %s clause is malformed", head(clause))
+			}
+			value := atomValue(unquote(clause.list[1]))
+			switch head(clause) {
+			case "family":
+				plan.Family = value
+			case "wire-version":
+				plan.WireVersion = value
+			case "application":
+				plan.Application = value
+			case "shape-namespace":
+				plan.ShapeNamespace = value
+			}
 		case "display-name":
 			if len(clause.list) != 2 || !clause.list[1].str {
 				return plan, fmt.Errorf("profile display-name clause is malformed")
@@ -133,6 +153,17 @@ func CompileNormalizedProfile(profileSource string, implementationSources []stri
 		if signal != "traces" && signal != "metrics" && signal != "logs" {
 			return plan, fmt.Errorf("unknown signal %q", signal)
 		}
+	}
+	if plan.Family != "" {
+		if plan.Family != "datadog" || (plan.WireVersion != "v0.4" && plan.WireVersion != "v0.5") || plan.Application == "" || plan.ShapeNamespace == "" {
+			return plan, fmt.Errorf("invalid telemetry profile identity")
+		}
+		if len(plan.Signals) != 1 || plan.Signals[0] != "traces" {
+			return plan, fmt.Errorf("Datadog profiles support traces only")
+		}
+		plan.SchemaVersion = 2
+	} else if plan.WireVersion != "" || plan.Application != "" || plan.ShapeNamespace != "" {
+		return plan, fmt.Errorf("telemetry identity requires a family")
 	}
 	sort.Slice(plan.Proofs, func(i, j int) bool { return plan.Proofs[i].FeatureID < plan.Proofs[j].FeatureID })
 	return plan, nil

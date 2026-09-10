@@ -30,6 +30,11 @@ func main() {
 	otelMode := flag.String("otel-mode", "validate", "OTLP profile mode: validate or shape candidate")
 	otelCase := flag.String("otel-case", "", "RealWorld scenario name")
 	otelXFail := flag.String("otel-xfail", "", "reason this case is expected to violate its OTLP contract")
+	flag.StringVar(otelSinkSuffix, "telemetry-sink-suffix", "", "telemetry sink service suffix")
+	flag.StringVar(otelProfileManifest, "telemetry-profile-manifest", "", "atomic telemetry profile manifest")
+	flag.StringVar(otelMode, "telemetry-mode", "validate", "telemetry validation mode")
+	flag.StringVar(otelCase, "telemetry-case", "", "RealWorld scenario name")
+	flag.StringVar(otelXFail, "telemetry-xfail", "", "expected contract rejection reason")
 	hurlRootfs := flag.String("hurl-rootfs", "harness/hurl_rootfs", "Hurl OCI rootfs in runfiles")
 	jobs := flag.Int("jobs", 4, "number of Hurl files to execute concurrently")
 	uid := flag.String("uid", "", "unique suffix used for API objects")
@@ -102,7 +107,7 @@ func main() {
 		if err != nil {
 			fatal(err)
 		}
-		if err := resetStartupTelemetry(*otelSinkSuffix, profile.Signals); err != nil {
+		if err := resetStartupTelemetry(*otelSinkSuffix, profile.Signals, profile.Family); err != nil {
 			fatal(err)
 		}
 	}
@@ -150,6 +155,11 @@ type sinkRecord struct {
 }
 
 type atomicProfileManifest struct {
+	Family         string `json:"family,omitempty"`
+	WireVersion    string `json:"wireVersion,omitempty"`
+	Application    string `json:"application,omitempty"`
+	ShapeNamespace string `json:"shapeNamespace,omitempty"`
+
 	SchemaVersion  int               `json:"schemaVersion"`
 	Profile        string            `json:"profile"`
 	Signals        []string          `json:"signals"`
@@ -170,6 +180,11 @@ type proofPlanProof struct {
 }
 
 type normalizedProofPlan struct {
+	Family         string `json:"family,omitempty"`
+	WireVersion    string `json:"wireVersion,omitempty"`
+	Application    string `json:"application,omitempty"`
+	ShapeNamespace string `json:"shapeNamespace,omitempty"`
+
 	SchemaVersion   int               `json:"schemaVersion"`
 	Profile         string            `json:"profile"`
 	DisplayName     string            `json:"displayName"`
@@ -183,11 +198,12 @@ type normalizedProofPlan struct {
 }
 
 type atomicProfile struct {
-	ID, Scenario, Program, ValidationMode string
-	Signals                               map[string]bool
-	Libraries, Imports                    []string
-	Plan, Shape                           []byte
-	ExpectedProofs                        []proofPlanProof
+	Family, WireVersion, Application, ShapeNamespace string
+	ID, Scenario, Program, ValidationMode            string
+	Signals                                          map[string]bool
+	Libraries, Imports                               []string
+	Plan, Shape                                      []byte
+	ExpectedProofs                                   []proofPlanProof
 }
 
 func loadAtomicProfile(value, scenario, mode string) (atomicProfile, error) {
@@ -214,11 +230,26 @@ func loadAtomicProfile(value, scenario, mode string) (atomicProfile, error) {
 	if err != nil {
 		return profile, fmt.Errorf("decode atomic profile: %w", err)
 	}
-	if manifest.SchemaVersion != 1 || manifest.Profile == "" || manifest.ProofPlan == "" || manifest.Program == "" || len(manifest.Libraries) == 0 {
+	if (manifest.SchemaVersion != 1 && manifest.SchemaVersion != 2) || manifest.Profile == "" || manifest.ProofPlan == "" || manifest.Program == "" || len(manifest.Libraries) == 0 {
 		return profile, errors.New("atomic profile manifest is incomplete")
 	}
 	if err := schemeIdentifier(manifest.Profile); err != nil {
 		return profile, fmt.Errorf("invalid profile id: %w", err)
+	}
+	if manifest.SchemaVersion == 2 {
+		if manifest.Family != "datadog" || (manifest.WireVersion != "v0.4" && manifest.WireVersion != "v0.5") || manifest.Application == "" || manifest.ShapeNamespace == "" {
+			return profile, errors.New("invalid Datadog manifest identity")
+		}
+		if _, err := schemeLibraryName(manifest.ShapeNamespace); err != nil {
+			return profile, err
+		}
+	} else if manifest.Family != "" || manifest.WireVersion != "" || manifest.Application != "" || manifest.ShapeNamespace != "" {
+		return profile, errors.New("legacy manifest must not declare a telemetry family")
+	}
+	profile.Family, profile.WireVersion = manifest.Family, manifest.WireVersion
+	profile.Application, profile.ShapeNamespace = manifest.Application, manifest.ShapeNamespace
+	if profile.ShapeNamespace == "" {
+		profile.ShapeNamespace = "realworld.shape." + manifest.Profile
 	}
 	profile.ID, profile.Scenario = manifest.Profile, scenario
 	profile.Signals, err = parseOTLPSignals(strings.Join(manifest.Signals, ","))
@@ -233,7 +264,7 @@ func loadAtomicProfile(value, scenario, mode string) (atomicProfile, error) {
 	if shape := manifest.ScenarioShapes[scenario]; shape != "" && mode != "candidate" {
 		profile.ValidationMode, profile.Shape = "exact", []byte(shape)
 		profile.Libraries = append(profile.Libraries, shape)
-		profile.Imports = append(profile.Imports, "realworld.shape."+manifest.Profile+"."+scenario)
+		profile.Imports = append(profile.Imports, profile.ShapeNamespace+"."+scenario)
 	}
 	var plan normalizedProofPlan
 	decoder = json.NewDecoder(bytes.NewReader(profile.Plan))
@@ -241,7 +272,7 @@ func loadAtomicProfile(value, scenario, mode string) (atomicProfile, error) {
 	if err := decoder.Decode(&plan); err != nil {
 		return profile, fmt.Errorf("decode normalized proof plan: %w", err)
 	}
-	if plan.SchemaVersion != 1 || plan.Profile != profile.ID {
+	if plan.SchemaVersion != manifest.SchemaVersion || plan.Profile != profile.ID || plan.Family != profile.Family || plan.WireVersion != profile.WireVersion || plan.Application != manifest.Application || plan.ShapeNamespace != manifest.ShapeNamespace {
 		return profile, errors.New("normalized proof plan does not match profile")
 	}
 	for _, proof := range plan.Proofs {
@@ -280,7 +311,7 @@ func classifyOTLPValidation(validationErr error, xfailReason, scenarioName strin
 	return nil
 }
 
-func resetStartupTelemetry(serviceSuffix string, signals map[string]bool) error {
+func resetStartupTelemetry(serviceSuffix string, signals map[string]bool, family ...string) error {
 	port, err := assignedPort(serviceSuffix)
 	if err != nil {
 		return fmt.Errorf("locate OTLP sink for startup reset: %w", err)
@@ -293,16 +324,17 @@ func resetStartupTelemetry(serviceSuffix string, signals map[string]bool) error 
 		2*time.Second,
 		100*time.Millisecond,
 		signals,
+		family...,
 	)
 }
 
-func resetStartupTelemetryAt(client *http.Client, baseURL string, timeout, quietPeriod, pollInterval time.Duration, signals map[string]bool) error {
+func resetStartupTelemetryAt(client *http.Client, baseURL string, timeout, quietPeriod, pollInterval time.Duration, signals map[string]bool, family ...string) error {
 	deadline := time.Now().Add(timeout)
 	lastTraceRequests := -1
 	lastTraceSpans := -1
 	stableSince := time.Time{}
 	for {
-		stats, statsErr := readSinkStats(*client, baseURL)
+		stats, statsErr := readSinkStats(*client, baseURL, family...)
 		// An empty sink is not evidence of quiescence: the application's first
 		// health-check batch may still be queued in its exporter. Wait until at
 		// least one startup span has arrived before starting the quiet period.
@@ -327,7 +359,7 @@ func resetStartupTelemetryAt(client *http.Client, baseURL string, timeout, quiet
 	// which can race lazy instrument creation in the Python SDK. Preserve startup
 	// logs because short scenarios do not necessarily reproduce every required
 	// logging scope.
-	request, err := http.NewRequest(http.MethodPost, baseURL+"/reset/traces-and-metrics", nil)
+	request, err := http.NewRequest(http.MethodPost, sinkURL(baseURL, "/reset/traces-and-metrics", family...), nil)
 	if err != nil {
 		return fmt.Errorf("create startup OTLP reset request: %w", err)
 	}
@@ -395,7 +427,7 @@ func requireExportedTelemetry(serviceSuffix, mode, scenario string, profile atom
 			requestTimeout = 5 * time.Second
 		}
 		client := http.Client{Timeout: requestTimeout}
-		response, requestErr := client.Get(baseURL + "/stats")
+		response, requestErr := client.Get(sinkURL(baseURL, "/stats", profile.Family))
 		if requestErr != nil {
 			lastRequestError = requestErr.Error()
 		}
@@ -429,7 +461,7 @@ func requireExportedTelemetry(serviceSuffix, mode, scenario string, profile atom
 }
 
 func validateTelemetryDump(client http.Client, baseURL, mode, scenario string, profile atomicProfile, stats sinkStats) error {
-	response, err := client.Get(baseURL + "/dump")
+	response, err := client.Get(sinkURL(baseURL, "/dump", profile.Family))
 	if err != nil {
 		return fmt.Errorf("read quiescent OTLP dump: %w", err)
 	}
@@ -447,7 +479,7 @@ func validateTelemetryDump(client http.Client, baseURL, mode, scenario string, p
 	}
 	seen := map[string]bool{}
 	for _, record := range records {
-		if payloadHasServiceName(record.Payload, record.Signal) {
+		if (profile.Family == "datadog" && record.Signal == "traces") || payloadHasServiceName(record.Payload, record.Signal) {
 			seen[record.Signal] = true
 		}
 	}
@@ -462,19 +494,20 @@ func validateTelemetryDump(client http.Client, baseURL, mode, scenario string, p
 		return err
 	}
 	started := time.Now()
-	request, err := http.NewRequest(http.MethodPost, baseURL+"/validate", bytes.NewReader(source))
+	request, err := http.NewRequest(http.MethodPost, sinkURL(baseURL, "/validate", profile.Family), bytes.NewReader(source))
 	if err != nil {
 		return fmt.Errorf("create Scheme validation request: %w", err)
 	}
 	request.Header.Set("Content-Type", "text/x-scheme")
 	validationResponse, err := client.Do(request)
 	if err != nil {
+		emitFailedCapture(profile.ID+"/"+scenario, contents)
 		return fmt.Errorf("run Scheme validation: %w", err)
 	}
 	validationOutput, readErr := io.ReadAll(validationResponse.Body)
 	validationResponse.Body.Close()
 	elapsed := time.Since(started).Round(time.Millisecond)
-	if current, statsErr := readSinkStats(client, baseURL); statsErr == nil {
+	if current, statsErr := readSinkStats(client, baseURL, profile.Family); statsErr == nil {
 		fmt.Printf("Stak Scheme validation usage: wall=%s sink=%dms calls=%d peak_rss=%.1f MiB\n", elapsed, current.ValidationLastDurationMS, current.ValidationLastCalls, float64(current.PeakRSSKiB)/1024)
 	} else {
 		fmt.Printf("Stak Scheme validation usage: wall=%s stats_unavailable=%v\n", elapsed, statsErr)
@@ -491,22 +524,22 @@ func validateTelemetryDump(client http.Client, baseURL, mode, scenario string, p
 		}
 		return failure
 	}
-	proofs, err := validateProofSet(profile.ExpectedProofs, validationOutput)
+	proofs, err := validateFamilyProofSet(profile.ExpectedProofs, validationOutput, profile.Family)
 	if err != nil {
 		emitFailedCapture(profile.ID+"/"+scenario, contents)
 		return &otlpAssertionFailure{cause: err, capture: append([]byte(nil), contents...)}
 	}
 	if mode == "candidate" {
-		if err := emitShapeCandidate(client, baseURL, scenario, profile.ID, contents); err != nil {
+		if err := emitProfileShapeCandidate(client, baseURL, scenario, profile, contents); err != nil {
 			return err
 		}
-		fmt.Printf("Validated OTLP contract and emitted shape candidate for %s/%s: %d spans in %d trace requests\n", profile.ID, scenario, stats.TraceSpans, stats.TraceRequests)
+		fmt.Printf("Validated %s contract and emitted shape candidate for %s/%s: %d spans in %d trace requests\n", profile.protocolName(), profile.ID, scenario, stats.TraceSpans, stats.TraceRequests)
 		return nil
 	}
 	if err := emitValidationReceipt(profile, contents, proofs); err != nil {
 		return err
 	}
-	fmt.Printf("Verified quiescent OTLP profile: %d spans in %d trace requests (%s): %s", stats.TraceSpans, stats.TraceRequests, baseURL, validationOutput)
+	fmt.Printf("Verified quiescent %s profile: %d spans in %d trace requests (%s): %s", profile.protocolName(), stats.TraceSpans, stats.TraceRequests, baseURL, validationOutput)
 	return nil
 }
 
@@ -521,6 +554,8 @@ type receiptProof struct {
 }
 
 type validationReceipt struct {
+	Family              string         `json:"family,omitempty"`
+	WireVersion         string         `json:"wireVersion,omitempty"`
 	SchemaVersion       int            `json:"schemaVersion"`
 	Revision            string         `json:"revision"`
 	Profile             string         `json:"profile"`
@@ -535,8 +570,17 @@ type validationReceipt struct {
 }
 
 func validateProofSet(expected []proofPlanProof, output []byte) ([]receiptProof, error) {
+	return validateFamilyProofSet(expected, output, "")
+}
+
+func validateFamilyProofSet(expected []proofPlanProof, output []byte, family string) ([]receiptProof, error) {
+	marker := proofMarker
+	if family == "datadog" {
+		marker = regexp.MustCompile(`\[\[DATADOG-PROOF-V2\|([^|\]]+)\|([^|\]]+)\|([^|\]]+)\]\]`)
+	}
+
 	actual := map[string]receiptProof{}
-	for _, match := range proofMarker.FindAllSubmatch(output, -1) {
+	for _, match := range marker.FindAllSubmatch(output, -1) {
 		proof := receiptProof{FeatureID: string(match[1]), Assertion: string(match[2]), Basis: string(match[3]), Result: "pass"}
 		key := proof.FeatureID + "\x00" + proof.Assertion + "\x00" + proof.Basis
 		if _, exists := actual[key]; exists {
@@ -591,7 +635,10 @@ func emitExpectedFailureReceipt(profile atomicProfile, capture []byte, reason st
 }
 
 func emitReceipt(profile atomicProfile, capture []byte, proofs []receiptProof, outcome, xfailReason string) error {
-	revision := os.Getenv("OTEL_TEST_REVISION")
+	revision := os.Getenv("TELEMETRY_TEST_REVISION")
+	if revision == "" && profile.Family != "datadog" {
+		revision = os.Getenv("OTEL_TEST_REVISION")
+	}
 	if revision == "" {
 		return nil
 	}
@@ -608,6 +655,11 @@ func emitReceipt(profile atomicProfile, capture []byte, proofs []receiptProof, o
 		ProofPlanSHA256: fmt.Sprintf("%x", planDigest), CaptureSHA256: fmt.Sprintf("%x", captureDigest),
 		ValidationMode: profile.ValidationMode, Outcome: outcome, XFailReason: xfailReason, Proofs: proofs,
 	}
+	if profile.Family == "datadog" {
+		receipt.SchemaVersion = 2
+		receipt.Family = profile.Family
+		receipt.WireVersion = profile.WireVersion
+	}
 	if profile.ValidationMode == "exact" {
 		digest := sha256.Sum256(profile.Shape)
 		receipt.ScenarioShapeSHA256 = fmt.Sprintf("%x", digest)
@@ -618,6 +670,9 @@ func emitReceipt(profile atomicProfile, capture []byte, proofs []receiptProof, o
 	}
 	encoded = append(encoded, '\n')
 	directory := filepath.Join(root, "receipts", profile.ID)
+	if profile.Family == "datadog" {
+		directory = filepath.Join(root, "datadog", "receipts", profile.ID)
+	}
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return err
 	}
@@ -720,15 +775,15 @@ func mapValue(object map[string]any, names ...string) any {
 }
 
 func schemeValidationFailure(status int, output []byte) error {
-	failure := fmt.Errorf("Scheme rejected OTLP capture (HTTP %d):\n%s", status, output)
+	failure := fmt.Errorf("Scheme rejected telemetry capture (HTTP %d):\n%s", status, output)
 	if status == http.StatusConflict {
 		return &otlpAssertionFailure{cause: failure}
 	}
 	return failure
 }
 
-func readSinkStats(client http.Client, baseURL string) (sinkStats, error) {
-	response, err := client.Get(baseURL + "/stats")
+func readSinkStats(client http.Client, baseURL string, family ...string) (sinkStats, error) {
+	response, err := client.Get(sinkURL(baseURL, "/stats", family...))
 	if err != nil {
 		return sinkStats{}, err
 	}
@@ -819,6 +874,11 @@ func schemeLibraryName(value string) ([]byte, error) {
 }
 
 func emitShapeCandidate(client http.Client, baseURL, scenario, profile string, capture []byte) error {
+	return emitProfileShapeCandidate(client, baseURL, scenario, atomicProfile{ID: profile}, capture)
+}
+
+func emitProfileShapeCandidate(client http.Client, baseURL, scenario string, selected atomicProfile, capture []byte) error {
+	profile := selected.ID
 	app := profile
 	if strings.Contains(profile, "aiohttp") {
 		app = "aiohttp"
@@ -829,7 +889,10 @@ func emitShapeCandidate(client http.Client, baseURL, scenario, profile string, c
 	if strings.Contains(profile, "gin") {
 		app = "gin"
 	}
-	response, err := client.Get(baseURL + "/candidate?app=" + url.QueryEscape(app))
+	if selected.Application != "" {
+		app = selected.Application
+	}
+	response, err := client.Get(sinkURL(baseURL, "/candidate?app="+url.QueryEscape(app), selected.Family))
 	if err != nil {
 		return fmt.Errorf("generate OTLP Scheme shape candidate: %w", err)
 	}
@@ -841,13 +904,31 @@ func emitShapeCandidate(client http.Client, baseURL, scenario, profile string, c
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("generate OTLP Scheme shape candidate: HTTP %d: %s", response.StatusCode, shape)
 	}
-	shape = append([]byte(fmt.Sprintf("(define-library (realworld shape %s %s)\n  (export scenario-shape)\n  (import (scheme base) (otel trace-shape))\n  (begin\n", profile, scenario)), shape...)
+	namespace, shapeLibrary := selected.ShapeNamespace, "otel.trace-shape"
+	if namespace == "" {
+		namespace = "realworld.shape." + profile
+	}
+	if selected.Family == "datadog" {
+		shapeLibrary = "datadog.trace-shape"
+	}
+	library, err := schemeLibraryName(namespace + "." + scenario)
+	if err != nil {
+		return err
+	}
+	shapeImport, err := schemeLibraryName(shapeLibrary)
+	if err != nil {
+		return err
+	}
+	shape = append([]byte(fmt.Sprintf("(define-library %s\n  (export scenario-shape)\n  (import (scheme base) %s)\n  (begin\n", library, shapeImport)), shape...)
 	shape = append(shape, []byte("  ))\n")...)
 	root := os.Getenv("TEST_UNDECLARED_OUTPUTS_DIR")
 	if root == "" {
 		return errors.New("TEST_UNDECLARED_OUTPUTS_DIR is unavailable for shape candidate")
 	}
 	directory := filepath.Join(root, "shape", profile)
+	if selected.Family == "datadog" {
+		directory = filepath.Join(root, "datadog", "shape", profile)
+	}
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return fmt.Errorf("create shape candidate output directory: %w", err)
 	}
@@ -965,4 +1046,23 @@ func runfileRoots() []string {
 		add(filepath.Join(filepath.Dir(executable), filepath.Base(executable)+".runfiles"))
 	}
 	return roots
+}
+
+// sinkURL selects an independent capture without changing legacy OTLP endpoints.
+func sinkURL(base, path string, family ...string) string {
+	if len(family) == 0 || family[0] == "" || family[0] == "otlp" {
+		return base + path
+	}
+	separator := "?"
+	if strings.Contains(path, "?") {
+		separator = "&"
+	}
+	return base + path + separator + "protocol=" + url.QueryEscape(family[0])
+}
+
+func (profile atomicProfile) protocolName() string {
+	if profile.Family == "datadog" {
+		return "Datadog"
+	}
+	return "OTLP"
 }

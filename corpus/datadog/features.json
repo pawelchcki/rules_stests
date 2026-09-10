@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 2,
+  "family": "datadog",
+  "features": [
+    {
+      "id": "datadog.traces.native-fields",
+      "binding": "span/native-fields"
+    },
+    {
+      "id": "datadog.traces.unsigned-identifiers",
+      "binding": "span/ids-valid"
+    },
+    {
+      "id": "datadog.traces.completed",
+      "binding": "span/completed"
+    },
+    {
+      "id": "datadog.traces.root-span",
+      "binding": "span/root-present"
+    },
+    {
+      "id": "datadog.traces.http-classification",
+      "binding": "span/http-classification"
+    },
+    {
+      "id": "datadog.traces.exception-metadata",
+      "binding": "span/exception-metadata"
+    },
+    {
+      "id": "datadog.traces.service-identity",
+      "binding": "span/service-present"
+    },
+    {
+      "id": "datadog.intake.headers-and-counts",
+      "binding": "request/headers-and-counts"
+    },
+    {
+      "id": "datadog.intake.semantic-validity",
+      "binding": "capture/semantic-valid"
+    },
+    {
+      "id": "datadog.propagation.tracecontext",
+      "binding": "span/tracecontext-parent"
+    },
+    {
+      "id": "datadog.propagation.datadog",
+      "binding": "span/datadog-parent"
+    },
+    {
+      "id": "datadog.traces.database-children",
+      "binding": "span/database-children"
+    }
+  ]
+}

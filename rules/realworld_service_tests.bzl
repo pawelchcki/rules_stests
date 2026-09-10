@@ -11,6 +11,8 @@ def realworld_service_tests(
         name,
         service,
         profile = None,
+        telemetry_profile = None,
+        telemetry_sink = None,
         otel_sink = _SINK,
         scenarios = REALWORLD_BASE_HURL_CASES,
         otel_candidates = True,
@@ -39,6 +41,13 @@ def realworld_service_tests(
         tags: Tags applied to the tests.
         **kwargs: Additional options for realworld_hurl_test_suite.
     """
+    neutral_profile = telemetry_profile != None
+    if neutral_profile:
+        if profile != None:
+            fail("supply only one of profile and telemetry_profile")
+        profile = telemetry_profile
+    if telemetry_sink != None:
+        otel_sink = telemetry_sink
     label = native.package_relative_label(service)
     service_test(
         name = name + "_service_hygiene_test",
@@ -69,6 +78,6 @@ def realworld_service_tests(
         otel_xfails = otel_xfails,
         flaky = flaky,
         # Report assembly reads these instrumented scenario receipts.
-        tags = tags + (["otel-report"] if profile else []),
+        tags = tags + (["telemetry"] if neutral_profile else (["otel-report"] if profile else [])),
         **kwargs
     )
