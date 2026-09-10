@@ -179,41 +179,6 @@ DATADOG_PROFILES = {
     "python-django-datadog-v4-14-0-v04": struct(application = "django", wire_version = "v0.4", scenarios = ["tags"]),
 }
 
-# Exact expectations are enabled incrementally as their stack layer lands.
-DATADOG_REVIEWED_SHAPES = [
-    "datadog/realworld/shape/python-aiohttp-datadog-v4-14-0-v04/tags.scm",
-    "datadog/realworld/shape/python-aiohttp-datadog-v4-14-0-v05/articles.scm",
-    "datadog/realworld/shape/python-aiohttp-datadog-v4-14-0-v05/auth.scm",
-    "datadog/realworld/shape/python-aiohttp-datadog-v4-14-0-v05/comments.scm",
-    "datadog/realworld/shape/python-aiohttp-datadog-v4-14-0-v05/errors_articles.scm",
-    "datadog/realworld/shape/python-aiohttp-datadog-v4-14-0-v05/errors_auth.scm",
-    "datadog/realworld/shape/python-aiohttp-datadog-v4-14-0-v05/errors_authorization.scm",
-    "datadog/realworld/shape/python-aiohttp-datadog-v4-14-0-v05/errors_comments.scm",
-    "datadog/realworld/shape/python-aiohttp-datadog-v4-14-0-v05/errors_profiles.scm",
-    "datadog/realworld/shape/python-aiohttp-datadog-v4-14-0-v05/favorites.scm",
-    "datadog/realworld/shape/python-aiohttp-datadog-v4-14-0-v05/feed.scm",
-    "datadog/realworld/shape/python-aiohttp-datadog-v4-14-0-v05/pagination.scm",
-    "datadog/realworld/shape/python-aiohttp-datadog-v4-14-0-v05/profiles.scm",
-    "datadog/realworld/shape/python-aiohttp-datadog-v4-14-0-v05/propagation.scm",
-    "datadog/realworld/shape/python-aiohttp-datadog-v4-14-0-v05/propagation_datadog.scm",
-    "datadog/realworld/shape/python-aiohttp-datadog-v4-14-0-v05/tags.scm",
-    "datadog/realworld/shape/python-aiohttp-datadog-v4-14-0-v05/unicode.scm",
-    "datadog/realworld/shape/python-django-datadog-v4-14-0-v04/tags.scm",
-    "datadog/realworld/shape/python-django-datadog-v4-14-0-v05/articles.scm",
-    "datadog/realworld/shape/python-django-datadog-v4-14-0-v05/auth.scm",
-    "datadog/realworld/shape/python-django-datadog-v4-14-0-v05/comments.scm",
-    "datadog/realworld/shape/python-django-datadog-v4-14-0-v05/errors_comments.scm",
-    "datadog/realworld/shape/python-django-datadog-v4-14-0-v05/errors_profiles.scm",
-    "datadog/realworld/shape/python-django-datadog-v4-14-0-v05/favorites.scm",
-    "datadog/realworld/shape/python-django-datadog-v4-14-0-v05/feed.scm",
-    "datadog/realworld/shape/python-django-datadog-v4-14-0-v05/pagination.scm",
-    "datadog/realworld/shape/python-django-datadog-v4-14-0-v05/profiles.scm",
-    "datadog/realworld/shape/python-django-datadog-v4-14-0-v05/propagation.scm",
-    "datadog/realworld/shape/python-django-datadog-v4-14-0-v05/propagation_datadog.scm",
-    "datadog/realworld/shape/python-django-datadog-v4-14-0-v05/tags.scm",
-    "datadog/realworld/shape/python-django-datadog-v4-14-0-v05/unicode.scm",
-]
-
 def declare_datadog_profiles(datadog_realworld_profile):
     """Declares Datadog's independent profiles and native wire assertions."""
     for profile_id, declaration in DATADOG_PROFILES.items():
@@ -222,11 +187,7 @@ def declare_datadog_profiles(datadog_realworld_profile):
             specification = "datadog/realworld/profile/{}.scm".format(profile_id),
             implementation_libraries = ["datadog/implementation/python-v4.14.0.scm"],
             runtime_libraries = [],
-            scenario_shapes = {
-                path.rsplit("/", 1)[1][:-4]: path
-                for path in DATADOG_REVIEWED_SHAPES
-                if path.startswith("datadog/realworld/shape/{}/".format(profile_id))
-            },
+            shape_root = "datadog/realworld/shape/{}".format(profile_id),
             signals = ["traces"],
             scenarios = declaration.scenarios,
             wire_version = declaration.wire_version,
