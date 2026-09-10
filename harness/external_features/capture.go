@@ -566,7 +566,13 @@ func evaluate(e experiment, baseline, changed capture) observation {
 			expectedMetrics, presentMetrics := matchingMetricStreams(baseline, changed)
 			expectedLogs, presentLogs := matchingLogStreams(baseline, changed, nil)
 			if e.Name == "attribute-length" {
+				before = append(append([]object{}, baseline.Spans...), baseline.Logs...)
+				after = append(append([]object{}, changed.Spans...), changed.Logs...)
 				expectedLogs, presentLogs = matchingLengthLimitedLogStreams(baseline, changed, 8)
+				logAttributeExpected, logAttributePresent, logAttributeMissing := preservedLongLogAttributes(baseline, changed, 8)
+				attributeExpected += logAttributeExpected
+				attributePresent += logAttributePresent
+				attributeMissing += logAttributeMissing
 			}
 			preserved = len(expectedTraces) == 4 && len(presentTraces) == len(expectedTraces) && expected > 0 && present == expected && attributeExpected > 0 && attributePresent == attributeExpected && presentMetrics == expectedMetrics && presentLogs == expectedLogs
 		}
@@ -614,6 +620,7 @@ func evaluate(e experiment, baseline, changed capture) observation {
 	case "attribute-count", "event-attributes", "log-count":
 		before, after, cap := baseline.Spans, changed.Spans, 2
 		preserved, expected, present := true, 0, 0
+		affectedLogsExpected, affectedLogsPresent := 0, 0
 		if e.Name == "event-attributes" {
 			before, after, cap = events(baseline), events(changed), 1
 			expected, present = limitedEventRecords(baseline, changed, cap)
@@ -629,6 +636,10 @@ func evaluate(e experiment, baseline, changed capture) observation {
 			expectedProbes, presentProbes := limitedProbeRequests(baseline, changed, cap)
 			expected, present = matchingCountLimitedWorkloadSpans(baseline, changed)
 			preserved = expectedProbes > 0 && presentProbes == expectedProbes && expected > 0 && present == expected
+			before = append(append([]object{}, baseline.Spans...), baseline.Logs...)
+			after = append(append([]object{}, changed.Spans...), changed.Logs...)
+			affectedLogsExpected, affectedLogsPresent = limitedCountLogStreamRecords(baseline, changed, cap)
+			preserved = preserved && affectedLogsPresent == affectedLogsExpected
 		}
 		expectedSpans, presentSpans := matchingWorkloadSpans(baseline, changed)
 		if e.Name == "attribute-count" {
@@ -644,7 +655,7 @@ func evaluate(e experiment, baseline, changed capture) observation {
 		if e.Name == "attribute-count" || e.Name == "event-attributes" || e.Name == "log-count" {
 			prerequisite = prerequisite && expected > 0
 		}
-		check(prerequisite, len(after) > 0 && maxAttributes(after) == cap && dropped(after, "dropped_attributes_count") > 0 && preserved, fmt.Sprintf("maximum attributes %d -> %d; cap %d; dropped %d; affected records %d/%d; workload spans %d/%d, metrics %d/%d, logs %d/%d preserved", maxAttributes(before), maxAttributes(after), cap, dropped(after, "dropped_attributes_count"), present, expected, presentSpans, expectedSpans, presentMetrics, expectedMetrics, presentLogs, expectedLogs))
+		check(prerequisite, len(after) > 0 && maxAttributes(after) == cap && dropped(after, "dropped_attributes_count") > 0 && preserved, fmt.Sprintf("maximum attributes %d -> %d; cap %d; dropped %d; affected records %d/%d; affected logs %d/%d; workload spans %d/%d, metrics %d/%d, logs %d/%d preserved", maxAttributes(before), maxAttributes(after), cap, dropped(after, "dropped_attributes_count"), present, expected, affectedLogsPresent, affectedLogsExpected, presentSpans, expectedSpans, presentMetrics, expectedMetrics, presentLogs, expectedLogs))
 	case "events":
 		expected, present := suppressedEventRecords(baseline, changed)
 		expectedSpans, presentSpans := matchingWorkloadSpans(baseline, changed)
@@ -851,7 +862,7 @@ func workloadSpanIDWithStringLimit(span object, limit int) string {
 		values = append(values, string(encoded))
 	}
 	sort.Strings(values)
-	encoded, _ := json.Marshal([]any{normalizeExternalStatePath(name), number(field(span, "kind")), values})
+	encoded, _ := json.Marshal([]any{normalizeExternalStatePath(name), number(field(span, "kind")), spanStatusID(span), values})
 	return string(encoded)
 }
 
@@ -887,7 +898,7 @@ func workloadSpanIDWithValue(span object, normalize func(any) any) string {
 		values = append(values, string(encoded))
 	}
 	sort.Strings(values)
-	encoded, _ := json.Marshal([]any{name, number(field(span, "kind")), values})
+	encoded, _ := json.Marshal([]any{name, number(field(span, "kind")), spanStatusID(span), values})
 	return string(encoded)
 }
 
@@ -896,8 +907,14 @@ func workloadSpanShapeID(span object) string {
 	if name == "" {
 		return ""
 	}
-	encoded, _ := json.Marshal([]any{normalizeExternalStatePath(name), number(field(span, "kind"))})
+	encoded, _ := json.Marshal([]any{normalizeExternalStatePath(name), number(field(span, "kind")), spanStatusID(span)})
 	return string(encoded)
+}
+
+func spanStatusID(span object) []any {
+	status, _ := field(span, "status").(map[string]any)
+	message, _ := field(status, "message").(string)
+	return []any{number(field(status, "code")), normalizeExternalStatePath(message)}
 }
 func limitedProbeRequests(before, after capture, limit int) (int, int) {
 	expected := incomingProbeTraces(probeSpans(before))

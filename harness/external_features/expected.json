@@ -11,7 +11,7 @@
 	"default-service":"pass", "span-batch":"pass", "log-batch":"pass",
 	"exemplars-always-on":"pass", "request-headers":"pass", "propagation-none":"workload_rejected",
     "resource": "pass", "disabled": "pass", "sampler": "pass", "sampler-arg": "pass",
-    "span-length": "pass", "attribute-length": "pass", "attribute-count": "pass",
+    "span-length": "pass", "attribute-length": "gap:request=32", "attribute-count": "pass",
     "events": "pass", "event-attributes": "pass", "log-count": "pass",
     "log-length": "gap:request=32", "exemplars": "pass", "histogram": "pass"
   },

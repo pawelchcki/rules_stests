@@ -311,6 +311,9 @@ func TestExperimentsRequireBaselineAndRejectIgnoredSettings(t *testing.T) {
 				for _, span := range changed.Spans {
 					span["attributes"] = []any{attr("http.route", "api/tags"), attr("http.user_agent", "external")}
 				}
+				if e.Name == "attribute-length" {
+					changed.Logs[0]["attributes"] = []any{attr("first", "long bas"), attr("second", "another "), attr("third", "third at")}
+				}
 			case "log-length":
 				changed.Logs = []object{{
 					"body": object{"stringValue": "workload log"},
@@ -324,6 +327,8 @@ func TestExperimentsRequireBaselineAndRejectIgnoredSettings(t *testing.T) {
 					span["attributes"] = []any{attr("first", "value"), attr("second", "value")}
 					span["dropped_attributes_count"] = float64(1)
 				}
+				changed.Logs[0]["attributes"] = []any{attr("first", "long baseline attribute"), attr("second", "another long attribute")}
+				changed.Logs[0]["dropped_attributes_count"] = float64(1)
 			case "events":
 				changed.Spans = []object{{"dropped_events_count": float64(1)}}
 			case "event-attributes":
@@ -387,6 +392,54 @@ func TestLimitsCheckEveryRecordAndExactCap(t *testing.T) {
 		if got := evaluate(e, baseline, c); got.Status != "gap" {
 			t.Fatalf("one good span masked violations: %+v", got)
 		}
+	}
+}
+
+func TestGlobalAttributeLimitsCoverLogs(t *testing.T) {
+	lengthBaseline := capture{Spans: syntheticProbeSpans(), Logs: []object{{
+		"body": object{"stringValue": "workload log"}, "attributes": []any{attr("payload", "long log attribute")},
+	}}}
+	lengthChanged := capture{Spans: syntheticProbeSpans(), Logs: []object{{
+		"body": object{"stringValue": "workload log"}, "attributes": []any{attr("payload", "long log attribute")},
+	}}}
+	for _, span := range lengthChanged.Spans {
+		span["attributes"] = []any{attr("http.route", "api/tags"), attr("http.user_agent", "external")}
+	}
+	if got := evaluate(experiment{Name: "attribute-length"}, lengthBaseline, lengthChanged); got.Status == "pass" {
+		t.Fatal("global attribute length passed with an uncapped log attribute")
+	}
+
+	countBaseline := capture{Spans: syntheticProbeSpans(), Logs: []object{{
+		"body": object{"stringValue": "workload log"}, "attributes": []any{attr("first", "value"), attr("second", "value"), attr("third", "value")},
+	}}}
+	for _, span := range countBaseline.Spans {
+		span["attributes"] = append(span["attributes"].([]any), attr("second", "value"), attr("third", "value"))
+	}
+	countChanged := capture{Spans: syntheticProbeSpans(), Logs: []object{{
+		"body": object{"stringValue": "workload log"}, "attributes": []any{attr("first", "value"), attr("second", "value"), attr("third", "value")},
+	}}}
+	for _, span := range countChanged.Spans {
+		span["attributes"] = []any{attr("first", "value"), attr("second", "value")}
+		span["dropped_attributes_count"] = float64(1)
+	}
+	if got := evaluate(experiment{Name: "attribute-count"}, countBaseline, countChanged); got.Status == "pass" {
+		t.Fatal("global attribute count passed with an uncapped log record")
+	}
+}
+
+func TestWorkloadSpanIdentityPreservesStatus(t *testing.T) {
+	baseline := capture{Spans: syntheticProbeSpans()}
+	changed := capture{Spans: syntheticProbeSpans()}
+	baseline.Spans[0]["status"] = object{"code": float64(2), "message": "registration rejected"}
+	changed.Spans[0]["status"] = object{"code": float64(0), "message": ""}
+	if expected, present := matchingWorkloadSpans(baseline, changed); expected != 4 || present != 3 {
+		t.Fatalf("span status corruption was not detected: %d/%d", present, expected)
+	}
+	if expected, present := matchingLengthLimitedWorkloadSpans(baseline, changed, 8); expected != 4 || present != 3 {
+		t.Fatalf("length-limit identity omitted span status: %d/%d", present, expected)
+	}
+	if expected, present := matchingCountLimitedWorkloadSpans(baseline, changed); expected != 4 || present != 3 {
+		t.Fatalf("count-limit identity omitted span status: %d/%d", present, expected)
 	}
 }
 
