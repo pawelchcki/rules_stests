@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -329,7 +330,7 @@ func TestExperimentsRequireBaselineAndRejectIgnoredSettings(t *testing.T) {
 			case "attribute-count":
 				changed.Spans = syntheticProbeSpans()
 				for _, span := range changed.Spans {
-					span["attributes"] = []any{attr("first", "value"), attr("second", "value")}
+					span["attributes"] = append([]any(nil), span["attributes"].([]any)[:2]...)
 					span["dropped_attributes_count"] = float64(1)
 				}
 				changed.Logs[0]["attributes"] = []any{attr("first", "long baseline attribute"), attr("second", "another long attribute")}
@@ -1662,4 +1663,141 @@ func TestMetricPointIdentityNormalizesRandomizedEndpointPorts(t *testing.T) {
 	if got := normalizeEndpointPort("::1"); got != "::1" {
 		t.Fatalf("bare IPv6 address was treated as a host-port pair: %q", got)
 	}
+}
+
+func TestWorkloadIdentityPreservesCountersEventsLinksAndTraceState(t *testing.T) {
+	baseline := capture{Spans: syntheticProbeSpans()}
+	baseline.Spans[0]["events"] = []any{object{"name": "exception", "droppedAttributesCount": float64(1)}}
+	baseline.Spans[0]["links"] = []any{object{
+		"traceId": fmt.Sprintf("%032x", 50), "spanId": fmt.Sprintf("%016x", 50),
+		"traceState": "vendor=value", "flags": float64(1), "droppedAttributesCount": float64(2),
+		"attributes": []any{attr("link.kind", "retry")},
+	}}
+	baseline.Spans[0]["traceState"] = "vendor=value"
+	baseline.Spans[0]["droppedAttributesCount"] = float64(1)
+	baseline.Spans[0]["droppedEventsCount"] = float64(2)
+	baseline.Spans[0]["droppedLinksCount"] = float64(3)
+
+	for name, mutate := range map[string]func(object){
+		"span dropped attributes": func(span object) { span["droppedAttributesCount"] = float64(0) },
+		"span dropped events":     func(span object) { span["droppedEventsCount"] = float64(0) },
+		"span dropped links":      func(span object) { span["droppedLinksCount"] = float64(0) },
+		"event dropped attributes": func(span object) {
+			objects(span, "events")[0]["droppedAttributesCount"] = float64(0)
+		},
+		"links":       func(span object) { span["links"] = []any{} },
+		"trace state": func(span object) { span["traceState"] = "vendor=changed" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := capture{Spans: syntheticProbeSpans()}
+			changed.Spans[0] = cloneObject(baseline.Spans[0])
+			mutate(changed.Spans[0])
+			if expected, present := matchingWorkloadSpans(baseline, changed); expected != 4 || present != 3 {
+				t.Fatalf("corruption was not detected: %d/%d", present, expected)
+			}
+		})
+	}
+}
+
+func TestCountLimitPreservesUnaffectedAndRetainedSpanAttributes(t *testing.T) {
+	baseline := capture{Spans: syntheticProbeSpans()}
+	changed := capture{Spans: syntheticProbeSpans()}
+	changed.Spans[0]["attributes"] = changed.Spans[0]["attributes"].([]any)[:1]
+	if expected, present := matchingCountLimitedWorkloadSpans(baseline, changed); expected != 4 || present != 3 {
+		t.Fatalf("attributes on an unaffected span were not preserved: %d/%d", present, expected)
+	}
+
+	baseline = capture{Spans: syntheticProbeSpans()}
+	changed = capture{Spans: syntheticProbeSpans()}
+	for i := range baseline.Spans {
+		baseline.Spans[i]["attributes"] = append(baseline.Spans[i]["attributes"].([]any), attr("second", "value"), attr("third", "value"))
+		changed.Spans[i]["attributes"] = append([]any(nil), changed.Spans[i]["attributes"].([]any)[:2]...)
+		changed.Spans[i]["droppedAttributesCount"] = float64(2)
+	}
+	changed.Spans[0]["attributes"] = []any{attr("fabricated", "one"), attr("fabricated", "two")}
+	if expected, present := limitedGlobalCountSpanRecords(baseline, changed, 2); expected != 4 || present != 3 {
+		t.Fatalf("fabricated retained attributes were accepted: %d/%d", present, expected)
+	}
+}
+
+func TestSpanPortNormalizationRejectsMalformedValues(t *testing.T) {
+	span := func(port any) object {
+		return object{"name": "GET /", "kind": float64(2), "attributes": []any{object{"key": "server.port", "value": port}}}
+	}
+	first := span(object{"intValue": "12345"})
+	second := span(object{"intValue": "54321"})
+	if workloadSpanID(first) != workloadSpanID(second) {
+		t.Fatal("valid randomized span ports were not normalized")
+	}
+	malformed := span(object{"stringValue": "54321"})
+	if workloadSpanID(first) == workloadSpanID(malformed) {
+		t.Fatal("malformed span port was normalized as valid")
+	}
+}
+
+func TestLogIdentityPreservesStructuredBodiesAndDroppedCounts(t *testing.T) {
+	structured := object{"body": object{"arrayValue": object{"values": []any{object{"intValue": "1"}, object{"boolValue": true}}}}}
+	ordinary := object{"body": object{"stringValue": "ordinary"}}
+	if expected, present := matchingLogStreams(capture{Logs: []object{structured, ordinary}}, capture{Logs: []object{ordinary}}, nil); expected != 2 || present != 1 {
+		t.Fatalf("structured log loss was not detected: %d/%d", present, expected)
+	}
+	changed := cloneObject(ordinary)
+	changed["droppedAttributesCount"] = float64(1)
+	if expected, present := matchingLogStreams(capture{Logs: []object{ordinary}}, capture{Logs: []object{changed}}, nil); expected != 1 || present != 0 {
+		t.Fatalf("log dropped-attribute corruption was not detected: %d/%d", present, expected)
+	}
+}
+
+func TestMetricIdentityPreservesMeasurementsExemplarsAndPorts(t *testing.T) {
+	metric := func(port any, includeSum, includeExemplar bool) object {
+		point := object{
+			"attributes":   []any{object{"key": "server.port", "value": port}},
+			"count":        "2",
+			"bucketCounts": []any{"2"},
+		}
+		if includeSum {
+			point["sum"] = float64(1.5)
+		}
+		if includeExemplar {
+			point["exemplars"] = []any{object{
+				"timeUnixNano": "10", "asInt": "1",
+				"traceId": fmt.Sprintf("%032x", 60), "spanId": fmt.Sprintf("%016x", 60),
+				"filteredAttributes": []any{attr("sample.kind", "request")},
+			}}
+		}
+		return object{"name": "request.duration", "histogram": object{"dataPoints": []any{point}}}
+	}
+	baselineMetric := metric(object{"intValue": "12345"}, true, true)
+	baseline := capture{Metrics: []object{baselineMetric}}
+	portChanged := metric(object{"intValue": "54321"}, true, true)
+	if expected, present := matchingMetricStreams(baseline, capture{Metrics: []object{portChanged}}); expected != 1 || present != 1 {
+		t.Fatalf("valid randomized metric port split a point: %d/%d", present, expected)
+	}
+	for name, candidate := range map[string]object{
+		"measurement": metric(object{"intValue": "54321"}, false, true),
+		"exemplar":    metric(object{"intValue": "54321"}, true, false),
+		"port type":   metric(object{"stringValue": "54321"}, true, true),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if expected, present := matchingMetricStreams(baseline, capture{Metrics: []object{candidate}}); expected != 1 || present != 0 {
+				t.Fatalf("metric corruption was not detected: %d/%d", present, expected)
+			}
+		})
+	}
+	withoutExemplar := metric(object{"intValue": "54321"}, true, false)
+	if expected, present := matchingMetricStreamsIgnoringExemplars(baseline, capture{Metrics: []object{withoutExemplar}}); expected != 1 || present != 1 {
+		t.Fatalf("exemplar-specific matching did not ignore the intended change: %d/%d", present, expected)
+	}
+	nestedGauge := object{"name": "queue.depth", "gauge": object{"dataPoints": []any{object{"value": object{"asInt": "3"}}}}}
+	emptyGauge := object{"name": "queue.depth", "gauge": object{"dataPoints": []any{object{}}}}
+	if expected, present := matchingMetricStreams(capture{Metrics: []object{nestedGauge}}, capture{Metrics: []object{emptyGauge}}); expected != 1 || present != 0 {
+		t.Fatalf("nested numeric measurement loss was not detected: %d/%d", present, expected)
+	}
+}
+
+func cloneObject(value object) object {
+	data, _ := json.Marshal(value)
+	var cloned object
+	_ = json.Unmarshal(data, &cloned)
+	return cloned
 }
