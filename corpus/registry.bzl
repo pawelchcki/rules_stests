@@ -173,10 +173,12 @@ DATADOG_CORE_LIBRARIES = [
 ]
 
 DATADOG_PROFILES = {
+    "go-gin-datadog-v2-10-1-v04": struct(application = "gin", wire_version = "v0.4", scenarios = REALWORLD_BASE_HURL_CASES + ["propagation_datadog"], implementation = "go-v2.10.1", reviewed = True),
+    "ruby-rails-datadog-v2-42-0-v04": struct(application = "rails", wire_version = "v0.4", scenarios = REALWORLD_BASE_HURL_CASES + ["propagation_datadog"], implementation = "ruby-v2.42.0", reviewed = True),
     "python-aiohttp-datadog-v4-14-0-v05": struct(application = "aiohttp", wire_version = "v0.5", scenarios = REALWORLD_BASE_HURL_CASES + ["propagation_datadog"]),
     "python-django-datadog-v4-14-0-v05": struct(application = "django", wire_version = "v0.5", scenarios = REALWORLD_BASE_HURL_CASES + ["propagation_datadog"]),
-    "python-aiohttp-datadog-v4-14-0-v04": struct(application = "aiohttp", wire_version = "v0.4", scenarios = ["tags"]),
-    "python-django-datadog-v4-14-0-v04": struct(application = "django", wire_version = "v0.4", scenarios = ["tags"]),
+    "python-aiohttp-datadog-v4-14-0-v04": struct(application = "aiohttp", wire_version = "v0.4", scenarios = REALWORLD_BASE_HURL_CASES + ["propagation_datadog"]),
+    "python-django-datadog-v4-14-0-v04": struct(application = "django", wire_version = "v0.4", scenarios = REALWORLD_BASE_HURL_CASES + ["propagation_datadog"]),
 }
 
 def declare_datadog_profiles(datadog_realworld_profile):
@@ -185,9 +187,9 @@ def declare_datadog_profiles(datadog_realworld_profile):
         datadog_realworld_profile(
             name = profile_id,
             specification = "datadog/realworld/profile/{}.scm".format(profile_id),
-            implementation_libraries = ["datadog/implementation/python-v4.14.0.scm"],
+            implementation_libraries = ["datadog/implementation/" + getattr(declaration, "implementation", "python-v4.14.0") + ".scm"],
             runtime_libraries = [],
-            shape_root = "datadog/realworld/shape/{}".format(profile_id),
+            shape_root = "datadog/realworld/shape/{}".format(profile_id) if getattr(declaration, "reviewed", True) else None,
             signals = ["traces"],
             scenarios = declaration.scenarios,
             wire_version = declaration.wire_version,

@@ -135,8 +135,13 @@ impl<'a> Decoder<'a> {
     }
 }
 
-pub(crate) fn decode(path: &str, content_type: &str, bytes: &[u8]) -> Result<Payload, String> {
-    if bytes.len() > MAX_BYTES {
+pub(crate) fn decode(
+    path: &str,
+    content_type: &str,
+    bytes: &[u8],
+    max_bytes: usize,
+) -> Result<Payload, String> {
+    if bytes.len() > max_bytes {
         return Err("Datadog payload exceeds limit".into());
     }
     let value = if content_type == "application/json" {
@@ -146,7 +151,7 @@ pub(crate) fn decode(path: &str, content_type: &str, bytes: &[u8]) -> Result<Pay
         {
             use serde::de::DeserializeSeed;
             let mut decoder = serde_json::Deserializer::from_slice(bytes);
-            let mut remaining = MAX_NODES;
+            let mut remaining = MAX_NODES * (max_bytes / MAX_BYTES);
             let value = JsonSeed {
                 remaining: &mut remaining,
                 depth: 0,
@@ -160,7 +165,7 @@ pub(crate) fn decode(path: &str, content_type: &str, bytes: &[u8]) -> Result<Pay
         let mut decoder = Decoder {
             bytes,
             pos: 0,
-            remaining: MAX_NODES,
+            remaining: MAX_NODES * (max_bytes / MAX_BYTES),
             indexed_maps: path == "/v0.5/traces",
         };
         let value = decoder.value(0)?;
@@ -170,7 +175,7 @@ pub(crate) fn decode(path: &str, content_type: &str, bytes: &[u8]) -> Result<Pay
         value
     };
     let traces = if path == "/v0.5/traces" {
-        decode_v05(value)?
+        decode_v05(value, max_bytes)?
     } else {
         value
     };
@@ -194,8 +199,8 @@ fn lookup(dictionary: &[Value], value: &Value, remaining: &mut usize) -> Result<
     Ok(value.clone())
 }
 
-fn decode_v05(value: Value) -> Result<Value, String> {
-    let mut remaining = MAX_BYTES;
+fn decode_v05(value: Value, max_bytes: usize) -> Result<Value, String> {
+    let mut remaining = max_bytes;
     let pair = value
         .as_array()
         .filter(|a| a.len() == 2)
@@ -302,9 +307,33 @@ fn integer(v: Option<&Value>) -> String {
 }
 fn valid_span(span: &Value) -> bool {
     span.is_object()
-        && span.as_object().is_some_and(|object| object.keys().all(|key| matches!(key.as_str(),
-            "service" | "name" | "resource" | "trace_id" | "span_id" | "parent_id" |
-            "start" | "duration" | "error" | "meta" | "metrics" | "type")))
+        && span.as_object().is_some_and(|object| {
+            object.keys().all(|key| {
+                matches!(
+                    key.as_str(),
+                    "service"
+                        | "name"
+                        | "resource"
+                        | "trace_id"
+                        | "span_id"
+                        | "parent_id"
+                        | "start"
+                        | "duration"
+                        | "error"
+                        | "meta"
+                        | "metrics"
+                        | "type"
+                        | "meta_struct"
+                        | "span_links"
+                )
+            })
+        })
+        && span
+            .get("meta_struct")
+            .is_none_or(|v| v.as_object().is_some_and(|m| m.is_empty()))
+        && span
+            .get("span_links")
+            .is_none_or(|v| v.as_array().is_some_and(|a| a.is_empty()))
         && ["trace_id", "span_id"]
             .iter()
             .all(|key| uint(span.get(*key)).is_some_and(|id| id > 0))
@@ -412,8 +441,185 @@ fn field(out: &mut String, name: &str, value: &str) {
     out.push(')');
 }
 
+type TraceKey = (u64, String);
+
+struct IndexedTrace<'a> {
+    spans: Vec<&'a Value>,
+    by_id: BTreeMap<u64, usize>,
+    children: Vec<Vec<usize>>,
+    roots: Vec<usize>,
+}
+
+struct NativeIndex<'a> {
+    traces: BTreeMap<TraceKey, IndexedTrace<'a>>,
+    locations: BTreeMap<usize, (TraceKey, usize)>,
+}
+
+impl<'a> NativeIndex<'a> {
+    fn new(records: &'a [Record]) -> Result<Self, String> {
+        let mut chunks = Vec::new();
+        for record in records {
+            if !valid_record(record) {
+                return Err("Datadog semantic payload violation".into());
+            }
+            for chunk in array(payload(record).get("traces")) {
+                let spans = array(Some(chunk));
+                if spans.is_empty() {
+                    continue;
+                }
+                let mut high = None::<String>;
+                for span in spans {
+                    if let Some(tid) = span
+                        .get("meta")
+                        .and_then(|m| m.get("_dd.p.tid"))
+                        .and_then(Value::as_str)
+                    {
+                        if high
+                            .as_ref()
+                            .is_some_and(|old| !old.eq_ignore_ascii_case(tid))
+                        {
+                            return Err("conflicting Datadog trace high bits in chunk".into());
+                        }
+                        high = Some(tid.to_ascii_lowercase());
+                    }
+                }
+                chunks.push((uint(spans[0].get("trace_id")).unwrap(), high, spans));
+            }
+        }
+        // An untagged chunk can inherit high bits only through a unique span
+        // relationship, never merely because its low 64 bits match.
+        loop {
+            let mut changed = false;
+            for i in 0..chunks.len() {
+                if chunks[i].1.is_some() {
+                    continue;
+                }
+                let mut candidates = alloc::collections::BTreeSet::new();
+                for (low, high, other) in &chunks {
+                    if *low != chunks[i].0 {
+                        continue;
+                    }
+                    if let Some(high) = high {
+                        if chunks[i].2.iter().any(|a| {
+                            other.iter().any(|b| {
+                                parent_id(a) == uint(b.get("span_id"))
+                                    || parent_id(b) == uint(a.get("span_id"))
+                            })
+                        }) {
+                            candidates.insert(high.clone());
+                        }
+                    }
+                }
+                if candidates.len() > 1 {
+                    return Err("ambiguous Datadog chunk trace identity".into());
+                }
+                if let Some(high) = candidates.into_iter().next() {
+                    chunks[i].1 = Some(high);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let mut index = Self {
+            traces: BTreeMap::new(),
+            locations: BTreeMap::new(),
+        };
+        for (low, high, spans) in chunks {
+            let key = (low, high.unwrap_or_else(|| "0000000000000000".into()));
+            let trace = index
+                .traces
+                .entry(key.clone())
+                .or_insert_with(|| IndexedTrace {
+                    spans: Vec::new(),
+                    by_id: BTreeMap::new(),
+                    children: Vec::new(),
+                    roots: Vec::new(),
+                });
+            for span in spans {
+                let position = trace.spans.len();
+                if trace
+                    .by_id
+                    .insert(uint(span.get("span_id")).unwrap(), position)
+                    .is_some()
+                {
+                    return Err("duplicate Datadog span ID".into());
+                }
+                trace.spans.push(span);
+                trace.children.push(Vec::new());
+                index
+                    .locations
+                    .insert(span as *const Value as usize, (key.clone(), position));
+            }
+        }
+        for trace in index.traces.values_mut() {
+            for (position, span) in trace.spans.iter().enumerate() {
+                if let Some(parent) = trace.by_id.get(&parent_id(span).unwrap()) {
+                    trace.children[*parent].push(position);
+                } else {
+                    trace.roots.push(position);
+                }
+            }
+        }
+        Ok(index)
+    }
+
+    fn trace(&self, span: &Value) -> &IndexedTrace<'a> {
+        &self.traces[&self.locations[&(span as *const Value as usize)].0]
+    }
+
+    fn parent_kind(&self, span: &Value) -> &'static str {
+        self.trace(span).parent_kind(span)
+    }
+
+    fn http_ancestor(&self, span: &Value) -> bool {
+        let trace = self.trace(span);
+        let mut current = span;
+        for _ in 0..64 {
+            let Some(parent) = trace.by_id.get(&parent_id(current).unwrap()) else {
+                return false;
+            };
+            current = trace.spans[*parent];
+            if server_span(current) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn service(&self, span: &Value) -> &str {
+        self.trace(span)
+            .spans
+            .iter()
+            .find(|s| server_span(s))
+            .map(|s| text(s.get("service")))
+            .unwrap_or("")
+    }
+}
+
+impl IndexedTrace<'_> {
+    fn parent_kind(&self, span: &Value) -> &'static str {
+        if parent_id(span) == Some(0) {
+            "root"
+        } else if self.by_id.contains_key(&parent_id(span).unwrap()) {
+            "child"
+        } else {
+            "remote"
+        }
+    }
+}
+
+fn server_span(span: &Value) -> bool {
+    matches!(
+        text(span.get("name")),
+        "aiohttp.request" | "django.request" | "rack.request" | "gin.request"
+    ) || (text(span.get("name")) == "http.request" && text(span.get("type")) == "web")
+}
+
 pub(crate) fn capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
-    let trace_shapes = shapes(records);
+    let index = NativeIndex::new(records);
+    let trace_shapes = index.as_ref().map_err(|e| e.clone()).and_then(shapes);
     let mut out = String::from("((protocol datadog)(family \"datadog\")");
     write!(
         out,
@@ -491,7 +697,24 @@ pub(crate) fn capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                     };
                     field(&mut out, &name.replace('_', "-"), &value);
                 }
-                field(&mut out, "parent-kind", parent_kind(span, spans.iter()));
+                write!(
+                    out,
+                    "(http-ancestor {})",
+                    if index.as_ref().is_ok_and(|i| i.http_ancestor(span)) {
+                        "#t"
+                    } else {
+                        "#f"
+                    }
+                )
+                .unwrap();
+                field(
+                    &mut out,
+                    "parent-kind",
+                    index
+                        .as_ref()
+                        .map(|i| i.parent_kind(span))
+                        .unwrap_or_else(|_| parent_kind(span, spans.iter())),
+                );
                 write!(out,"(error {})(request-index {request_index})(chunk-index {chunk_index})(semantic-valid {})(ids-valid {})(completed {})",integer(span.get("error")).parse::<i64>().unwrap_or(0),if valid_span(span){"#t"}else{"#f"},if ["trace_id","span_id"].iter().all(|k|uint(span.get(*k)).is_some_and(|v|v>0))&&parent_id(span).is_some(){"#t"}else{"#f"},if uint(span.get("start")).is_some_and(|v|v>0)&&uint(span.get("duration")).is_some_and(|v|v>0){"#t"}else{"#f"}).unwrap();
                 for key in ["meta", "metrics"] {
                     write!(out, "({key} ").unwrap();
@@ -515,28 +738,44 @@ pub(crate) fn capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
     for record in records {
         for trace in array(payload(record).get("traces")) {
             let spans = array(Some(trace));
-            let trace_service = spans
-                .iter()
-                .find(|span| matches!(text(span.get("name")), "aiohttp.request" | "django.request"))
-                .map(|span| text(span.get("service")))
-                .unwrap_or("");
             for span in spans {
+                let trace_service = index.as_ref().map(|i| i.service(span)).unwrap_or("");
                 let name = text(span.get("name"));
-                if matches!(name, "aiohttp.request" | "django.request") { http_spans += 1; }
-                if text(span.get("type")) == "sql" || name.starts_with("sqlite.") { database_spans += 1; }
+                if server_span(span) {
+                    http_spans += 1;
+                }
+                if text(span.get("type")) == "sql" || name.starts_with("sqlite.") {
+                    database_spans += 1;
+                }
                 if let Some(object) = span.as_object() {
                     for key in object.keys() {
                         match key.as_str() {
-                            "trace_id" | "span_id" | "parent_id" | "start" | "duration" => runtime_fields += 1,
-                            "service" if text(span.get("service")) == trace_service => normalized_fields += 1,
+                            "trace_id" | "span_id" | "parent_id" | "start" | "duration" => {
+                                runtime_fields += 1
+                            }
+                            "service" if text(span.get("service")) == trace_service => {
+                                normalized_fields += 1
+                            }
                             "service" => exact_fields += 1,
                             "meta" => {
                                 exact_fields += 1; // map presence
                                 if let Some(fields) = span.get(key).and_then(Value::as_object) {
                                     for (meta_key, meta_value) in fields {
                                         match meta_key.as_str() {
-                                            "runtime-id" | "_dd.p.tid" | "error.stack" => runtime_fields += 1,
-                                            _ if normalized_meta_value(meta_key, meta_value, trace_service).is_ok_and(|normalized| normalized != *meta_value) => normalized_fields += 1,
+                                            "runtime-id"
+                                            | "http.response.headers.x-request-id"
+                                            | "_dd.p.tid"
+                                            | "error.stack"
+                                            | "error.handling_stack" => runtime_fields += 1,
+                                            _ if normalized_meta_value(
+                                                meta_key,
+                                                meta_value,
+                                                trace_service,
+                                            )
+                                            .is_ok_and(|normalized| normalized != *meta_value) =>
+                                            {
+                                                normalized_fields += 1
+                                            }
                                             _ => exact_fields += 1,
                                         }
                                     }
@@ -546,7 +785,16 @@ pub(crate) fn capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                                 exact_fields += 1; // map presence
                                 if let Some(fields) = span.get(key).and_then(Value::as_object) {
                                     for metric_key in fields.keys() {
-                                        if metric_key == "process_id" { runtime_fields += 1; } else { exact_fields += 1; }
+                                        if matches!(
+                                            metric_key.as_str(),
+                                            "process_id"
+                                                | "rails.db.runtime"
+                                                | "rails.view.runtime"
+                                        ) {
+                                            runtime_fields += 1;
+                                        } else {
+                                            exact_fields += 1;
+                                        }
                                     }
                                 }
                             }
@@ -578,7 +826,10 @@ pub(crate) fn capture_to_scheme_with_context(
 }
 
 fn context_identifier(value: &str) -> bool {
-    !value.is_empty() && value.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 fn validate_workload_context(records: &[Record], app: &str, scenario: &str) -> Result<(), String> {
@@ -588,11 +839,17 @@ fn validate_workload_context(records: &[Record], app: &str, scenario: &str) -> R
     let expected = match app {
         "aiohttp" => "aiohttp.request",
         "django" => "django.request",
+        "rails" => "rack.request",
+        "gin" => "http.request",
         _ => return Err("unknown Datadog application context".into()),
     };
-    if !records.iter().any(|record| array(payload(record).get("traces")).iter().any(|trace|
-        array(Some(trace)).iter().any(|span| text(span.get("name")) == expected)))
-    {
+    if !records.iter().any(|record| {
+        array(payload(record).get("traces")).iter().any(|trace| {
+            array(Some(trace))
+                .iter()
+                .any(|span| text(span.get("name")) == expected)
+        })
+    }) {
         return Err("Datadog capture does not match workload application".into());
     }
     Ok(())
@@ -650,7 +907,9 @@ fn normalize_workload_marker(value: &str, marker: &str) -> String {
         remaining = &after[digits..];
         if remaining.len() >= 9
             && remaining.as_bytes()[0] == b'-'
-            && remaining.as_bytes()[1..9].iter().all(|b| b.is_ascii_hexdigit())
+            && remaining.as_bytes()[1..9]
+                .iter()
+                .all(|b| b.is_ascii_hexdigit())
         {
             remaining = &remaining[9..];
         }
@@ -662,19 +921,24 @@ fn normalize_workload_marker(value: &str, marker: &str) -> String {
 fn normalized_meta_value(key: &str, value: &Value, service: &str) -> Result<Value, String> {
     let text = value.as_str().ok_or("Datadog metadata value is not text")?;
     Ok(Value::String(match key {
-        "runtime-id" => {
+        "runtime-id" | "http.response.headers.x-request-id" => {
             let compact = text.len() == 32 && text.bytes().all(|b| b.is_ascii_hexdigit());
-            let canonical = text.len() == 36 && text.bytes().enumerate().all(|(index, byte)| {
-                if matches!(index, 8 | 13 | 18 | 23) {
-                    byte == b'-'
-                } else {
-                    byte.is_ascii_hexdigit()
-                }
-            });
+            let canonical = text.len() == 36
+                && text.bytes().enumerate().all(|(index, byte)| {
+                    if matches!(index, 8 | 13 | 18 | 23) {
+                        byte == b'-'
+                    } else {
+                        byte.is_ascii_hexdigit()
+                    }
+                });
             if !compact && !canonical {
                 return Err("malformed Datadog runtime-id".into());
             }
-            "<runtime-id>".into()
+            if key == "runtime-id" {
+                "<runtime-id>".into()
+            } else {
+                "<request-id>".into()
+            }
         }
         "_dd.p.tid" => {
             if text.len() != 16 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -682,20 +946,39 @@ fn normalized_meta_value(key: &str, value: &Value, service: &str) -> Result<Valu
             }
             "<trace-id-high>".into()
         }
-        "error.stack" => {
-            if text.is_empty() || !text.contains("Traceback") {
+        "error.stack" | "error.handling_stack" => {
+            if text.is_empty()
+                || !(text.contains("Traceback") || text.contains(".rb:") || text.contains(".go:"))
+            {
                 return Err("malformed Datadog exception stack".into());
             }
             "<validated-stack>".into()
         }
         "http.url" => normalize_endpoint(text)?,
-        "db.name" | "sql.db" if text.ends_with("realworld.sqlite3") => "<fixture>/realworld.sqlite3".into(),
+        "http.host" => normalize_endpoint(&format!("http://{text}/"))?
+            .trim_start_matches("http://")
+            .trim_end_matches('/')
+            .into(),
+        "http.base_url" => normalize_endpoint(&format!("{text}/"))?
+            .trim_end_matches('/')
+            .into(),
+        "db.name" | "sql.db" | "active_record.db.name" | "db.instance"
+            if text.ends_with("realworld.sqlite3") =>
+        {
+            "<fixture>/realworld.sqlite3".into()
+        }
         "_dd.base_service" if text == service => "<service>".into(),
         _ => normalize_workload_id(text),
     }))
 }
 
 fn normalized_metric_value(key: &str, value: &Value) -> Result<Value, String> {
+    if matches!(key, "rails.db.runtime" | "rails.view.runtime") {
+        if !value.as_f64().is_some_and(|v| v.is_finite() && v >= 0.0) {
+            return Err("invalid Rails runtime measurement".into());
+        }
+        return Ok(Value::String("<duration-ms>".into()));
+    }
     if key == "process_id" {
         if !value.as_u64().is_some_and(|v| v >= 1)
             && !value.as_i64().is_some_and(|v| v >= 1)
@@ -711,12 +994,28 @@ fn normalized_metric_value(key: &str, value: &Value) -> Result<Value, String> {
 }
 
 fn validate_exception_consistency(span: &Value) -> Result<(), String> {
-    let Some(meta) = span.get("meta").and_then(Value::as_object) else { return Ok(()); };
-    let Some(stack) = meta.get("error.stack").and_then(Value::as_str) else { return Ok(()); };
+    let Some(meta) = span.get("meta").and_then(Value::as_object) else {
+        return Ok(());
+    };
+    let Some(stack) = meta
+        .get("error.stack")
+        .or_else(|| meta.get("error.handling_stack"))
+        .and_then(Value::as_str)
+    else {
+        return Ok(());
+    };
     let exception_type = meta.get("error.type").and_then(Value::as_str).unwrap_or("");
     let short_type = exception_type.rsplit('.').next().unwrap_or(exception_type);
-    let message = meta.get("error.message").or_else(|| meta.get("error.msg")).and_then(Value::as_str).unwrap_or("");
-    if (short_type.is_empty() || !stack.contains(short_type)) && (message.is_empty() || !stack.contains(message)) {
+    let message = meta
+        .get("error.message")
+        .or_else(|| meta.get("error.msg"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if !stack.contains(".rb:")
+        && !stack.contains(".go:")
+        && (short_type.is_empty() || !stack.contains(short_type))
+        && (message.is_empty() || !stack.contains(message))
+    {
         return Err("Datadog exception stack is inconsistent with type/message".into());
     }
     Ok(())
@@ -724,12 +1023,12 @@ fn validate_exception_consistency(span: &Value) -> Result<(), String> {
 
 fn node(
     span: &Value,
-    spans: &[&Value],
+    trace: &IndexedTrace<'_>,
     trace_service: &str,
     depth: usize,
     visited: &mut usize,
 ) -> Result<String, String> {
-    if depth > 64 || *visited >= spans.len() {
+    if depth > 64 || *visited >= trace.spans.len() {
         return Err("Datadog cyclic/deep parent graph".into());
     }
     *visited += 1;
@@ -743,15 +1042,21 @@ fn node(
         }
     }
     out.push_str("))");
-    field(&mut out, "service", if text(span.get("service")) == trace_service { "<service>" } else { text(span.get("service")) });
-    for name in ["name", "type"] { field(&mut out, name, text(span.get(name))); }
-    field(&mut out, "resource", text(span.get("resource")));
     field(
         &mut out,
-        "parent-kind",
-        parent_kind(span, spans.iter().copied()),
+        "service",
+        if text(span.get("service")) == trace_service {
+            "<service>"
+        } else {
+            text(span.get("service"))
+        },
     );
-    if parent_kind(span, spans.iter().copied()) == "remote" {
+    for name in ["name", "type"] {
+        field(&mut out, name, text(span.get(name)));
+    }
+    field(&mut out, "resource", text(span.get("resource")));
+    field(&mut out, "parent-kind", trace.parent_kind(span));
+    if trace.parent_kind(span) == "remote" {
         field(&mut out, "parent-id", &integer(span.get("parent_id")));
         field(&mut out, "trace-id", &integer(span.get("trace_id")));
         field(
@@ -787,11 +1092,15 @@ fn node(
     }
     out.push_str("))(children (");
     let mut children = Vec::new();
-    for child in spans
-        .iter()
-        .filter(|child| parent_id(child) == uint(span.get("span_id")))
-    {
-        children.push(node(child, spans, trace_service, depth + 1, visited)?);
+    let position = trace.by_id[&uint(span.get("span_id")).unwrap()];
+    for child in &trace.children[position] {
+        children.push(node(
+            trace.spans[*child],
+            trace,
+            trace_service,
+            depth + 1,
+            visited,
+        )?);
     }
     children.sort();
     for child in children {
@@ -800,56 +1109,19 @@ fn node(
     out.push_str(")))");
     Ok(out)
 }
-fn shapes(records: &[Record]) -> Result<String, String> {
-    let mut traces = BTreeMap::<(u64, String), Vec<&Value>>::new();
-    for record in records {
-        if !valid_record(record) {
-            return Err("Datadog semantic payload violation".into());
-        }
-        for chunk in array(payload(record).get("traces")) {
-            let spans = array(Some(chunk));
-            let mut high = None::<&str>;
-            for span in spans {
-                if let Some(tid) = span
-                    .get("meta")
-                    .and_then(|m| m.get("_dd.p.tid"))
-                    .and_then(Value::as_str)
-                {
-                    if high.is_some_and(|old| !old.eq_ignore_ascii_case(tid)) {
-                        return Err("conflicting Datadog trace high bits in chunk".into());
-                    }
-                    high = Some(tid);
-                }
-            }
-            let high = high.unwrap_or("0000000000000000").to_ascii_lowercase();
-            for span in spans {
-                traces
-                    .entry((uint(span.get("trace_id")).unwrap(), high.clone()))
-                    .or_default()
-                    .push(span);
-            }
-        }
-    }
+fn shapes(index: &NativeIndex<'_>) -> Result<String, String> {
     let mut groups = BTreeMap::<String, usize>::new();
-    for spans in traces.values() {
+    for trace in index.traces.values() {
+        let spans = &trace.spans;
         let trace_service = spans
             .iter()
-            .find(|span| matches!(text(span.get("name")), "aiohttp.request" | "django.request"))
+            .find(|span| server_span(span))
             .map(|span| text(span.get("service")))
             .ok_or("Datadog trace has no HTTP server span")?;
-        let mut ids = BTreeMap::new();
-        for span in spans {
-            if ids.insert(uint(span.get("span_id")).unwrap(), ()).is_some() {
-                return Err("duplicate Datadog span ID".into());
-            }
-        }
         let mut visited = 0;
         let mut roots = Vec::new();
-        for span in spans
-            .iter()
-            .filter(|s| parent_kind(s, spans.iter().copied()) != "child")
-        {
-            roots.push(node(span, spans, trace_service, 0, &mut visited)?);
+        for root in &trace.roots {
+            roots.push(node(spans[*root], trace, trace_service, 0, &mut visited)?);
         }
         if visited != spans.len() {
             return Err("Datadog cyclic/disconnected parent graph".into());
@@ -874,7 +1146,7 @@ pub(crate) fn candidate(records: &[Record], app: &str, scenario: &str) -> Result
     }
     Ok(format!(
         "(define scenario-shape\n  '{})\n",
-        pretty_shape(&shapes(records)?)
+        pretty_shape(&shapes(&NativeIndex::new(records)?)?)
     )
     .into_bytes())
 }

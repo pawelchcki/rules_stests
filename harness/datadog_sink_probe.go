@@ -13,6 +13,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,6 +28,7 @@ var ddClient = http.DefaultClient
 func main() {
 	suffix := flag.String("service-suffix", "telemetry_sink_service", "assigned sink service suffix")
 	assertions := flag.String("assertions", "", "Datadog capture assertion library")
+	compiler := flag.String("compiler", "", "Scheme compiler executable")
 	contractErrors := flag.String("contract-errors", "", "Shared contract error library")
 	flag.Parse()
 	var ports map[string]json.RawMessage
@@ -81,6 +84,9 @@ func main() {
 			source = bytes.Replace(source, []byte("(count 1)"), []byte("(count 2)"), 1)
 			request("POST", "/validate?protocol=datadog", "text/x-scheme", source, 409)
 		}
+	}
+	if *compiler != "" {
+		compiledEquivalence(*compiler)
 	}
 	exactMutationCoverage()
 	// v0.4 omits zero/empty defaults. Native dumps preserve absence and exact
@@ -166,6 +172,21 @@ func main() {
 		validate(tc.assertion, 409)
 		checkStats("datadog", 1, 1)
 	}
+
+	reset()
+	goError := nativeSpan()
+	goError["error"] = 1
+	meta := goError["meta"].(map[string]any)
+	meta["language"] = "go"
+	meta["error.type"] = "*errors.errorString"
+	meta["error.message"] = "controlled"
+	meta["error.handling_stack"] = "example/fixture.failure\n\tfixture.go:12"
+	request("POST", "/v0.4/traces", "application/msgpack", wire("v0.4", goError), 200)
+	validate("span/exception-metadata capture/semantic-valid", 200)
+	reset()
+	meta["error.handling_stack"] = "invalid stack"
+	request("POST", "/v0.4/traces", "application/msgpack", wire("v0.4", goError), 200)
+	validate("capture/semantic-valid", 409)
 	reset()
 	duplicate := nativeSpan()
 	request("POST", "/v0.4/traces", "application/msgpack", pack([]any{[]any{duplicate, duplicate}}), 200)
@@ -179,6 +200,33 @@ func main() {
 	checkStats("datadog", 1, 2)
 	reset()
 	request("POST", "/v0.4/traces", "application/msgpack", pack([]any{[]any{first, second}}), 200)
+	validate("capture/semantic-valid", 409)
+
+	// A completed child may arrive before its held parent in another intake.
+	reset()
+	parent, child := nativeSpan(), nativeSpan()
+	parent["parent_id"] = uint64(0)
+	child["span_id"] = uint64(77)
+	child["parent_id"] = parent["span_id"]
+	child["name"] = "sqlite.query"
+	child["type"] = "sql"
+	child["resource"] = "SELECT 1"
+	delete(child["meta"].(map[string]any), "_dd.p.tid")
+	request("POST", "/v0.4/traces", "application/msgpack", wire("v0.4", child), 200)
+	request("GET", "/dump?protocol=datadog", "", nil, 200)
+	request("POST", "/v0.4/traces", "application/msgpack", wire("v0.4", parent), 200)
+	validate("capture/semantic-valid span/database-children", 200)
+	// Parentage, not shared low bits, resolves an untagged partial chunk.
+	other := nativeSpan()
+	other["span_id"] = uint64(999)
+	other["meta"].(map[string]any)["_dd.p.tid"] = "8c1e0a5b6d2f4739"
+	request("POST", "/v0.4/traces", "application/msgpack", wire("v0.4", other), 200)
+	validate("capture/semantic-valid span/database-children", 200)
+	// If two full trace identities can own the same untagged child, reject it.
+	other["span_id"] = parent["span_id"]
+	reset()
+	request("POST", "/v0.4/traces", "application/msgpack", wire("v0.4", child), 200)
+	request("POST", "/v0.4/traces", "application/msgpack", pack([]any{[]any{parent}, []any{other}}), 200)
 	validate("capture/semantic-valid", 409)
 	// Empty and structurally malformed JSON are decodable diagnostic evidence.
 	reset()
@@ -510,4 +558,35 @@ func pack(value any) []byte {
 		panic(fmt.Sprintf("unsupported test value %T", value))
 	}
 	return out
+}
+
+func compiledEquivalence(compiler string) {
+	reset()
+	request("POST", "/v0.4/traces", "application/msgpack", wire("v0.4", nativeSpan()), 200)
+	directory, err := os.MkdirTemp("", "compiled-equivalence-")
+	must(err)
+	defer os.RemoveAll(directory)
+	for _, failure := range []bool{false, true} {
+		source := append([]byte{}, ddAssertions...)
+		source = append(source, []byte("\n(import (scheme base) (scheme read) (datadog capture shapes))\n(check (pair? (read)) \"capture\")\n")...)
+		status := 200
+		if failure {
+			source = append(source, []byte("(check #f \"deliberate mutation\")")...)
+			status = 409
+		}
+		input, output := filepath.Join(directory, "source.scm"), filepath.Join(directory, "validator.sbc")
+		must(os.WriteFile(input, source, 0600))
+		result, err := exec.Command(compiler, "--compile", input, "--output", output).CombinedOutput()
+		if err != nil {
+			panic(fmt.Sprintf("compile: %v: %s", err, result))
+		}
+		bytecode, err := os.ReadFile(output)
+		must(err)
+		original := request("POST", "/validate?protocol=datadog", "text/x-scheme", source, status)
+		compiled := request("POST", "/validate-bytecode?protocol=datadog", "application/vnd.stak.bytecode", bytecode, status)
+		if !bytes.Equal(original, compiled) {
+			panic("compiled/source validation differs")
+		}
+	}
+	request("POST", "/validate-bytecode?protocol=datadog", "application/vnd.stak.bytecode", []byte{255}, 422)
 }

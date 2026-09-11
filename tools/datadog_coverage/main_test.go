@@ -50,6 +50,39 @@ func TestCoverageGateRequiresCompleteExactEvidence(t *testing.T) {
 			}
 		})
 	}
+
+	artifact := compiledValidator{Path: "p.validators/tags.sbc", SourceSHA256: digest, CompilerSHA256: digest, BytecodeSHA256: digest}
+	compiledManifest, compiledReceipt := m, r
+	compiledManifest.CompiledValidators = map[string]compiledValidator{"tags": artifact}
+	compiledReceipt.Validator = &artifact
+	if err := validate(revision, []manifest{compiledManifest}, []receipt{compiledReceipt}, [][]byte{capture}); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"source", "compiler", "bytecode", "path", "missing"} {
+		t.Run("compiled-"+key, func(t *testing.T) {
+			changed := artifact
+			changedReceipt := compiledReceipt
+			changedReceipt.Validator = &changed
+			switch key {
+			case "source":
+				changed.SourceSHA256 = strings.Repeat("c", 64)
+			case "compiler":
+				changed.CompilerSHA256 = strings.Repeat("c", 64)
+			case "bytecode":
+				changed.BytecodeSHA256 = strings.Repeat("c", 64)
+			case "path":
+				changed.Path = "different.sbc"
+			case "missing":
+				changedReceipt.Validator = nil
+			}
+			if validate(revision, []manifest{compiledManifest}, []receipt{changedReceipt}, [][]byte{capture}) == nil {
+				t.Fatal("accepted mismatched selected validator")
+			}
+		})
+	}
+	if validate(revision, []manifest{m}, []receipt{compiledReceipt}, [][]byte{capture}) == nil {
+		t.Fatal("accepted undeclared compiled validator")
+	}
 	if validate(revision, []manifest{m}, nil, nil) == nil {
 		t.Fatal("missing receipt passed")
 	}

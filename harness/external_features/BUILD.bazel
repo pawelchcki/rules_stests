@@ -6,12 +6,12 @@ exports_files(["expected.json"])
 
 go_binary(
     name = "probe",
-    srcs = ["main.go", "capture.go", "cases.go"],
+    srcs = ["main.go", "capture.go", "cases.go", "datadog.go", "datadog_probes.go"],
 )
 
 go_test(
     name = "probe_test",
-    srcs = ["main.go", "capture.go", "cases.go", "capture_test.go"],
+    srcs = ["main.go", "capture.go", "cases.go", "datadog.go", "datadog_probes.go", "capture_test.go", "datadog_test.go", "datadog_probes_test.go"],
     args = ["$(rlocationpath //report:data/spec-compliance-matrix.md)"] + [
         "$(rlocationpath //corpus:otel/proofs/{}.scm)".format(name)
         for name in ["traces", "metrics", "logs", "resource", "exporters", "environment", "propagation"]

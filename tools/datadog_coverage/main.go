@@ -12,18 +12,26 @@ import (
 	"regexp"
 )
 
+type compiledValidator struct {
+	Path           string `json:"path"`
+	SourceSHA256   string `json:"sourceSha256"`
+	CompilerSHA256 string `json:"compilerSha256"`
+	BytecodeSHA256 string `json:"bytecodeSha256"`
+}
+
 type manifest struct {
-	Family                        string            `json:"family"`
-	WireVersion                   string            `json:"wireVersion"`
-	Profile                       string            `json:"profile"`
-	Application                   string            `json:"application"`
-	ProofPlan                     string            `json:"proofPlan"`
-	Scenarios                     []string          `json:"scenarios"`
-	ScenarioShapes                map[string]string `json:"scenarioShapes"`
-	ValidationPolicySHA256        string            `json:"validationPolicySha256"`
-	CandidateImplementationSHA256 string            `json:"candidateImplementationSha256"`
-	ReferenceProfile              string            `json:"referenceProfile,omitempty"`
-	ReferenceProofPlanSHA256      string            `json:"referenceProofPlanSha256,omitempty"`
+	CompiledValidators            map[string]compiledValidator `json:"compiledValidators,omitempty"`
+	Family                        string                       `json:"family"`
+	WireVersion                   string                       `json:"wireVersion"`
+	Profile                       string                       `json:"profile"`
+	Application                   string                       `json:"application"`
+	ProofPlan                     string                       `json:"proofPlan"`
+	Scenarios                     []string                     `json:"scenarios"`
+	ScenarioShapes                map[string]string            `json:"scenarioShapes"`
+	ValidationPolicySHA256        string                       `json:"validationPolicySha256"`
+	CandidateImplementationSHA256 string                       `json:"candidateImplementationSha256"`
+	ReferenceProfile              string                       `json:"referenceProfile,omitempty"`
+	ReferenceProofPlanSHA256      string                       `json:"referenceProofPlanSha256,omitempty"`
 }
 type coverage struct {
 	SchemaVersion      int            `json:"schemaVersion"`
@@ -51,23 +59,24 @@ type receiptProof struct {
 	Result    string `json:"result"`
 }
 type receipt struct {
-	Family                        string         `json:"family"`
-	WireVersion                   string         `json:"wireVersion"`
-	SchemaVersion                 int            `json:"schemaVersion"`
-	Revision                      string         `json:"revision"`
-	Profile                       string         `json:"profile"`
-	Scenario                      string         `json:"scenario"`
-	ValidationMode                string         `json:"validationMode"`
-	Outcome                       string         `json:"outcome"`
-	ProofPlanSHA256               string         `json:"proofPlanSha256"`
-	CaptureSHA256                 string         `json:"captureSha256"`
-	ScenarioShapeSHA256           string         `json:"scenarioShapeSha256"`
-	ValidationPolicySHA256        string         `json:"validationPolicySha256"`
-	CandidateImplementationSHA256 string         `json:"candidateImplementationSha256"`
-	Coverage                      coverage       `json:"coverage"`
-	Proofs                        []receiptProof `json:"proofs"`
-	ReferenceProfile              string         `json:"referenceProfile,omitempty"`
-	ReferenceProofPlanSHA256      string         `json:"referenceProofPlanSha256,omitempty"`
+	Validator                     *compiledValidator `json:"validator,omitempty"`
+	Family                        string             `json:"family"`
+	WireVersion                   string             `json:"wireVersion"`
+	SchemaVersion                 int                `json:"schemaVersion"`
+	Revision                      string             `json:"revision"`
+	Profile                       string             `json:"profile"`
+	Scenario                      string             `json:"scenario"`
+	ValidationMode                string             `json:"validationMode"`
+	Outcome                       string             `json:"outcome"`
+	ProofPlanSHA256               string             `json:"proofPlanSha256"`
+	CaptureSHA256                 string             `json:"captureSha256"`
+	ScenarioShapeSHA256           string             `json:"scenarioShapeSha256"`
+	ValidationPolicySHA256        string             `json:"validationPolicySha256"`
+	CandidateImplementationSHA256 string             `json:"candidateImplementationSha256"`
+	Coverage                      coverage           `json:"coverage"`
+	Proofs                        []receiptProof     `json:"proofs"`
+	ReferenceProfile              string             `json:"referenceProfile,omitempty"`
+	ReferenceProofPlanSHA256      string             `json:"referenceProofPlanSha256,omitempty"`
 }
 
 var revisionRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
@@ -139,6 +148,14 @@ func validate(revision string, manifests []manifest, receipts []receipt, capture
 			r.ValidationPolicySHA256 != m.ValidationPolicySHA256 || r.CandidateImplementationSHA256 != m.CandidateImplementationSHA256 ||
 			r.ReferenceProfile != m.ReferenceProfile || r.ReferenceProofPlanSHA256 != m.ReferenceProofPlanSHA256 {
 			return fmt.Errorf("receipt digest binding mismatch %s/%s", r.Profile, r.Scenario)
+		}
+		artifact, compiled := m.CompiledValidators[r.Scenario]
+		if compiled {
+			if r.Validator == nil || *r.Validator != artifact || artifact.Path == "" || !digestRE.MatchString(artifact.SourceSHA256) || !digestRE.MatchString(artifact.CompilerSHA256) || !digestRE.MatchString(artifact.BytecodeSHA256) {
+				return fmt.Errorf("receipt validator artifact binding mismatch %s/%s", r.Profile, r.Scenario)
+			}
+		} else if r.Validator != nil {
+			return fmt.Errorf("unexpected compiled validator receipt %s/%s", r.Profile, r.Scenario)
 		}
 		if err := validateReceiptProofSet(m.ProofPlan, r.Scenario, r.Proofs); err != nil {
 			return fmt.Errorf("invalid proof evidence %s/%s: %w", r.Profile, r.Scenario, err)

@@ -3,14 +3,16 @@
 load("//corpus:registry.bzl", "REALWORLD_BASE_HURL_CASES")
 load("//bazel:oci_images.lock.bzl", "RUBY_IMAGES_PUBLISHED")
 load("//rules:corpus_service.bzl", "corpus_service")
-load("//rules:realworld_app.bzl", "datadog_env", "datadog_python_injection", "otlp_env", "python_auto_injection", "ruby_auto_injection")
+load("//rules:realworld_app.bzl", "datadog_env", "datadog_python_injection", "datadog_ruby_injection", "otlp_env", "python_auto_injection", "ruby_auto_injection")
 load("//rules:realworld_service_tests.bzl", "realworld_service_tests")
 load("//rules:otel_profile.bzl", "otel_report_manifest")
-load(":external_features.bzl", "external_feature_tests")
+load(":external_features.bzl", "datadog_parallel_tests", "datadog_external_feature_tests", "external_feature_tests")
 
 package(default_visibility = ["//visibility:public"])
 
 external_feature_tests()
+datadog_external_feature_tests()
+datadog_parallel_tests()
 
 _PYTHON_ARGS = ["--host", "127.0.0.1", "--port", "$${PORT}"]
 _PYTHON_ENV = otlp_env(extra = {
@@ -372,7 +374,7 @@ realworld_service_tests(
     service = ":aiohttp_datadog_v04_service",
     telemetry_profile = "//corpus:python-aiohttp-datadog-v4-14-0-v04",
     telemetry_sink = "//harness:telemetry_sink_service",
-    scenarios = ["tags"],
+    scenarios = REALWORLD_BASE_HURL_CASES + ["propagation_datadog"],
     tags = ["datadog"],
 )
 
@@ -426,13 +428,69 @@ realworld_service_tests(
     service = ":django_datadog_v04_service",
     telemetry_profile = "//corpus:python-django-datadog-v4-14-0-v04",
     telemetry_sink = "//harness:telemetry_sink_service",
-    scenarios = ["tags"],
+    scenarios = REALWORLD_BASE_HURL_CASES + ["propagation_datadog"],
     tags = ["datadog"],
 )
 
 test_suite(
     name = "datadog_suite",
     tests = [":aiohttp_datadog_hurl_test", ":django_datadog_hurl_test",
-             ":aiohttp_datadog_v04_hurl_test", ":django_datadog_v04_hurl_test"],
+             ":aiohttp_datadog_v04_hurl_test", ":django_datadog_v04_hurl_test",
+             ":rails_datadog_hurl_test", ":gin_datadog_hurl_test"],
     tags = ["datadog"],
+)
+
+corpus_service(
+    name = "rails_datadog_service",
+    rootfs = "//harness:rails_rootfs",
+    runtime = "ruby",
+    instance = "rails-datadog",
+    command = "server",
+    args = ["--binding", "127.0.0.1", "--port", "$${PORT}"],
+    injection = datadog_ruby_injection(),
+    env = datadog_env(service = "rails-datadog", wire_version = "v0.4"),
+    deps = ["//harness:telemetry_sink_service"],
+    so_reuseport_aware = False,
+    autoassign_port = True,
+    expected_start_duration = "5s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    hygienic = False,
+    shutdown_timeout = "10s",
+    tags = ["manual"],
+)
+
+realworld_service_tests(
+    name = "rails_datadog",
+    service = ":rails_datadog_service",
+    telemetry_profile = "//corpus:ruby-rails-datadog-v2-42-0-v04",
+    telemetry_sink = "//harness:telemetry_sink_service",
+    scenarios = REALWORLD_BASE_HURL_CASES + ["propagation_datadog"],
+    tags = ["datadog", "manual"],
+)
+
+corpus_service(
+    name = "gin_datadog_service",
+    rootfs = "//harness:gin_datadog_rootfs",
+    runtime = "native",
+    instance = "gin-datadog",
+    command = "opt/app/bin/realworld-gin-datadog",
+    args = ["serve", "--host", "127.0.0.1", "--port", "$${PORT}"],
+    env = datadog_env(service = "gin-datadog", wire_version = "v0.4"),
+    deps = ["//harness:telemetry_sink_service"],
+    so_reuseport_aware = True,
+    autoassign_port = True,
+    expected_start_duration = "5s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    hygienic = False,
+    shutdown_timeout = "10s",
+    tags = ["manual"],
+)
+
+realworld_service_tests(
+    name = "gin_datadog",
+    service = ":gin_datadog_service",
+    telemetry_profile = "//corpus:go-gin-datadog-v2-10-1-v04",
+    telemetry_sink = "//harness:telemetry_sink_service",
+    scenarios = REALWORLD_BASE_HURL_CASES + ["propagation_datadog"],
+    tags = ["datadog", "manual"],
 )

@@ -96,6 +96,8 @@ def _profile_impl(ctx):
         ))
     plan = ctx.actions.declare_file(ctx.label.name + ".proof-plan.json")
     manifest = ctx.actions.declare_file(ctx.label.name + ".profile.json")
+    source_manifest = ctx.actions.declare_file(ctx.label.name + ".source-profile.json") if ctx.attr.family == "datadog" else manifest
+    validators = ctx.actions.declare_directory(ctx.label.name + ".validators") if ctx.attr.family == "datadog" else None
     reference = ctx.attr.reference_profile[TelemetryProfileInfo] if ctx.attr.reference_profile else None
     if reference:
         if ctx.attr.family != "datadog" or reference.family != "datadog":
@@ -152,7 +154,7 @@ def _profile_impl(ctx):
             arguments.add("--policy-library=" + source.path)
         arguments.add("--policy-source=" + ctx.file._datadog_policy_source.path)
     arguments.add("--out=" + plan.path)
-    arguments.add("--manifest-out=" + manifest.path)
+    arguments.add("--manifest-out=" + source_manifest.path)
     arguments.add("--profile-id=" + ctx.attr.profile_id)
     arguments.add("--program=" + ctx.file.program.path)
     for source in ctx.files.implementation_libraries:
@@ -173,11 +175,27 @@ def _profile_impl(ctx):
     ctx.actions.run(
         executable = ctx.executable._compiler,
         inputs = depset([ctx.file.specification, registry.json, ctx.file.program] + common + shape_files + policy_sources + ([reference.manifest] if reference else [])),
-        outputs = [plan, manifest],
+        outputs = [plan, source_manifest],
         arguments = [arguments],
         mnemonic = "OtelProfilePlan",
         progress_message = "Compiling normalized proof plan for %s" % ctx.attr.profile_id,
     )
+
+    if validators:
+        ctx.actions.run(
+            executable = ctx.executable._validator_builder,
+            tools = [ctx.executable._scheme_compiler],
+            inputs = [source_manifest],
+            outputs = [manifest, validators],
+            arguments = [
+                "--compile-profile=" + source_manifest.path,
+                "--compiled-manifest=" + manifest.path,
+                "--artifact-directory=" + validators.path,
+                "--compiler=" + ctx.executable._scheme_compiler.path,
+            ],
+            mnemonic = "DatadogValidators",
+            progress_message = "Compiling cached Scheme validators for " + ctx.attr.profile_id,
+        )
 
     fields = dict(
         profile_id = ctx.attr.profile_id,
@@ -200,7 +218,7 @@ def _profile_impl(ctx):
         reference_profile = reference.profile_id if reference else None,
     )
     providers = [
-        DefaultInfo(files = depset([manifest])),
+        DefaultInfo(files = depset([manifest]), runfiles = ctx.runfiles(files = [manifest] + ([validators] if validators else []))),
         OutputGroupInfo(manifest = depset([manifest]), proof_plan = depset([plan])),
         TelemetryProfileInfo(family = ctx.attr.family or "otlp", wire_version = ctx.attr.wire_version, **fields),
     ]
@@ -228,6 +246,8 @@ otel_profile = rule(
         ),
         "program": attr.label(allow_single_file = [".scm"], default = Label("//corpus:realworld/programs/validate_profile.scm")),
         "_datadog_policy_source": attr.label(allow_single_file = True, default = Label("//harness:otel_sink/datadog.rs")),
+        "_validator_builder": attr.label(default = Label("//harness:compile_validators"), executable = True, cfg = "exec"),
+        "_scheme_compiler": attr.label(default = Label("//harness:telemetry_sink"), executable = True, cfg = "exec"),
         "_compiler": attr.label(
             default = Label("//report:plan_compiler"),
             executable = True,

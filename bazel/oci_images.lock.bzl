@@ -22,6 +22,11 @@ OTEL_RUBY = struct(
 )
 
 OCI_IMAGES = {
+    "gin_datadog_realworld": struct(
+        repository = "ghcr.io/pawelchcki/rules_stest_apps",
+        digest = "sha256:c9dc1d66d85049ebbc70237ed04da9a83ad0475603574e504555da980a7ca20c",
+        tree = "unpublished",
+    ),
     "rails_realworld": struct(
         repository = "ghcr.io/pawelchcki/rules_stest_apps",
         digest = "sha256:ba5fafa30c4e0e76f06f65ae7981048a03d776eb5366602ddc02ecdcd1f6b88d",
@@ -51,4 +56,12 @@ DATADOG_PYTHON = struct(
     repository = "install.datadoghq.com/apm-library-python-package",
     digest = "sha256:8276af62a8236cb92a3bd64710271b5f2a537cb586e4633d92f1742f3c4ff3a0",
     version = "4.14.0-1",
+)
+
+# Built locally; publication is tracked separately from the payload digest.
+DATADOG_RUBY = struct(
+    repository = "ghcr.io/pawelchcki/rules_stest_agents",
+    digest = "sha256:534130a20451560dd3183355584916f3173bc8db7f97e20bd2de908f9d473be9",
+    tree = "unpublished",
+    version = "2.42.0",
 )

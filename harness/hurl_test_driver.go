@@ -21,6 +21,15 @@ import (
 )
 
 func main() {
+	driverStarted := time.Now()
+	timings := map[string]int64{}
+	parallel := flag.Bool("parallel-scenarios", false, "run complete scenarios concurrently with native isolation validation")
+	concurrency := flag.Int("scenario-concurrency", 32, "parallel scenario workers")
+	repetitions := flag.Int("scenario-repetitions", 3, "repetitions of every declared scenario")
+	compileInput := flag.String("compile-profile", "", "compile all effective validators in a manifest")
+	compileOutput := flag.String("compiled-manifest", "", "compiled manifest output")
+	artifactDirectory := flag.String("artifact-directory", "", "bytecode output directory")
+	compiler := flag.String("compiler", "", "bounded Scheme compiler executable")
 	baseURL := flag.String("base-url", "", "API origin to test, for example http://127.0.0.1:8000")
 	host := flag.String("host", "127.0.0.1", "API host when --port is used")
 	portFlag := flag.Int("port", 0, "API port (alternative to --base-url)")
@@ -39,6 +48,12 @@ func main() {
 	jobs := flag.Int("jobs", 4, "number of Hurl files to execute concurrently")
 	uid := flag.String("uid", "", "unique suffix used for API objects")
 	flag.Parse()
+	if *compileInput != "" {
+		if err := compileProfile(*compileInput, *compileOutput, *artifactDirectory, *compiler); err != nil {
+			fatal(err)
+		}
+		return
+	}
 	if *jobs < 1 {
 		fatal(errors.New("--jobs must be at least 1"))
 	}
@@ -63,7 +78,17 @@ func main() {
 		fatal(fmt.Errorf("resolve Hurl rootfs: %w", err))
 	}
 
-	specValues := flag.Args()
+	var specValues []string
+	for _, argument := range flag.Args() {
+		name, value, ok := strings.Cut(strings.TrimPrefix(argument, "--"), "=")
+		if ok && (name == "scenario-concurrency" || name == "scenario-repetitions") {
+			if err := flag.Set(name, value); err != nil {
+				fatal(err)
+			}
+		} else {
+			specValues = append(specValues, argument)
+		}
+	}
 	if len(specValues) == 0 {
 		specValues, err = bundledSpecs()
 		if err != nil {
@@ -79,6 +104,12 @@ func main() {
 		specs = append(specs, spec)
 	}
 
+	if *parallel {
+		if err := runParallelScenarios(endpoint, rootfs, specs, *otelProfileManifest, *otelSinkSuffix, *concurrency, *repetitions); err != nil {
+			fatal(err)
+		}
+		return
+	}
 	objectUID := *uid
 	if objectUID == "" {
 		objectUID = fmt.Sprintf("rules_stests_%d", os.Getpid())
@@ -102,24 +133,33 @@ func main() {
 	}
 	args = append(args, specs...)
 	var profile atomicProfile
+	var startupDrainStartedForTiming time.Time
 	if *otelSinkSuffix != "" {
 		profile, err = loadAtomicProfile(*otelProfileManifest, *otelCase, *otelMode)
 		if err != nil {
 			fatal(err)
 		}
+		startupDrainStartedForTiming = time.Now()
 		if err := resetStartupTelemetry(*otelSinkSuffix, profile.Signals, profile.Family); err != nil {
 			fatal(err)
 		}
+	}
+	if *otelSinkSuffix != "" {
+		timings["startupDrainMs"] = time.Since(startupDrainStartedForTiming).Milliseconds()
 	}
 	command := exec.Command(loader, args...)
 	command.Env = append(os.Environ(), "NO_COLOR=1")
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
+	workloadStarted := time.Now()
 	if err := command.Run(); err != nil {
 		fatal(fmt.Errorf("RealWorld Hurl suite failed: %w", err))
 	}
 	if *otelSinkSuffix != "" {
+		timings["workloadMs"] = time.Since(workloadStarted).Milliseconds()
+		validationStarted := time.Now()
 		validationErr := requireExportedTelemetry(*otelSinkSuffix, *otelMode, *otelCase, profile)
+		timings["drainAndValidationMs"] = time.Since(validationStarted).Milliseconds()
 		if err := classifyOTLPValidation(validationErr, *otelXFail, *otelCase, os.Stderr); err != nil {
 			fatal(err)
 		}
@@ -133,20 +173,31 @@ func main() {
 			}
 		}
 	}
+	if profile.Family == "datadog" {
+		timings["driverTotalMs"] = time.Since(driverStarted).Milliseconds()
+		data, _ := json.MarshalIndent(timings, "", "  ")
+		if out := os.Getenv("TEST_UNDECLARED_OUTPUTS_DIR"); out != "" {
+			if err := os.WriteFile(filepath.Join(out, "datadog.timings.json"), data, 0644); err != nil {
+				fatal(err)
+			}
+		}
+	}
 	fmt.Printf("RealWorld Hurl suite passed against %s (%d files, %d jobs)\n", endpoint, len(specs), *jobs)
 }
 
 type sinkStats struct {
-	Records                  int `json:"records"`
-	TraceRequests            int `json:"trace_requests"`
-	TraceSpans               int `json:"trace_spans"`
-	MetricRequests           int `json:"metric_requests"`
-	LogRequests              int `json:"log_requests"`
-	ValidationRuns           int `json:"validation_runs"`
-	ValidationFailures       int `json:"validation_failures"`
-	ValidationLastDurationMS int `json:"validation_last_duration_ms"`
-	ValidationLastCalls      int `json:"validation_last_calls"`
-	PeakRSSKiB               int `json:"peak_rss_kib"`
+	ValidationLastCompilationMS int  `json:"validation_last_compilation_ms"`
+	CaptureOverflow             bool `json:"capture_overflow"`
+	Records                     int  `json:"records"`
+	TraceRequests               int  `json:"trace_requests"`
+	TraceSpans                  int  `json:"trace_spans"`
+	MetricRequests              int  `json:"metric_requests"`
+	LogRequests                 int  `json:"log_requests"`
+	ValidationRuns              int  `json:"validation_runs"`
+	ValidationFailures          int  `json:"validation_failures"`
+	ValidationLastDurationMS    int  `json:"validation_last_duration_ms"`
+	ValidationLastCalls         int  `json:"validation_last_calls"`
+	PeakRSSKiB                  int  `json:"peak_rss_kib"`
 }
 
 type sinkRecord struct {
@@ -155,16 +206,17 @@ type sinkRecord struct {
 }
 
 type atomicProfileManifest struct {
-	Family                        string `json:"family,omitempty"`
-	WireVersion                   string `json:"wireVersion,omitempty"`
-	Application                   string `json:"application,omitempty"`
-	ShapeNamespace                string `json:"shapeNamespace,omitempty"`
-	TracerVersion                 string `json:"tracerVersion,omitempty"`
-	ReferenceProfile              string `json:"referenceProfile,omitempty"`
-	ReferenceShapeNamespace       string `json:"referenceShapeNamespace,omitempty"`
-	ReferenceProofPlanSHA256      string `json:"referenceProofPlanSha256,omitempty"`
-	ValidationPolicySHA256        string `json:"validationPolicySha256,omitempty"`
-	CandidateImplementationSHA256 string `json:"candidateImplementationSha256,omitempty"`
+	CompiledValidators            map[string]compiledValidator `json:"compiledValidators,omitempty"`
+	Family                        string                       `json:"family,omitempty"`
+	WireVersion                   string                       `json:"wireVersion,omitempty"`
+	Application                   string                       `json:"application,omitempty"`
+	ShapeNamespace                string                       `json:"shapeNamespace,omitempty"`
+	TracerVersion                 string                       `json:"tracerVersion,omitempty"`
+	ReferenceProfile              string                       `json:"referenceProfile,omitempty"`
+	ReferenceShapeNamespace       string                       `json:"referenceShapeNamespace,omitempty"`
+	ReferenceProofPlanSHA256      string                       `json:"referenceProofPlanSha256,omitempty"`
+	ValidationPolicySHA256        string                       `json:"validationPolicySha256,omitempty"`
+	CandidateImplementationSHA256 string                       `json:"candidateImplementationSha256,omitempty"`
 
 	SchemaVersion  int               `json:"schemaVersion"`
 	Profile        string            `json:"profile"`
@@ -207,6 +259,8 @@ type normalizedProofPlan struct {
 }
 
 type atomicProfile struct {
+	Compiled                                                                        *compiledValidator
+	Bytecode                                                                        []byte
 	Family, WireVersion, Application, ShapeNamespace, TracerVersion                 string
 	ReferenceProfile, ReferenceShapeNamespace                                       string
 	ReferenceProofPlanSHA256, ValidationPolicySHA256, CandidateImplementationSHA256 string
@@ -308,6 +362,17 @@ func loadAtomicProfile(value, scenario, mode string) (atomicProfile, error) {
 		if len(proof.Scenarios) == 0 || containsString(proof.Scenarios, scenario) {
 			profile.ExpectedProofs = append(profile.ExpectedProofs, proof)
 		}
+	}
+	if artifact, ok := manifest.CompiledValidators[scenario]; ok && mode != "candidate" {
+		source, err := readSchemeBundle(profile.Libraries, profile.Imports, profile.Program, scenario, profile.ValidationMode)
+		if err != nil {
+			return profile, err
+		}
+		profile.Bytecode, err = loadCompiledValidator(path, artifact, source)
+		if err != nil {
+			return profile, err
+		}
+		profile.Compiled = &artifact
 	}
 	return profile, nil
 }
@@ -524,6 +589,12 @@ func validateTelemetryDump(client http.Client, baseURL, mode, scenario string, p
 	}
 	started := time.Now()
 	validationPath := "/validate"
+	contentType := "text/x-scheme"
+	if profile.Compiled != nil {
+		source = profile.Bytecode
+		validationPath = "/validate-bytecode"
+		contentType = "application/vnd.stak.bytecode"
+	}
 	if profile.Family == "datadog" {
 		validationPath += "?app=" + url.QueryEscape(profile.Application) + "&scenario=" + url.QueryEscape(scenario)
 	}
@@ -531,7 +602,7 @@ func validateTelemetryDump(client http.Client, baseURL, mode, scenario string, p
 	if err != nil {
 		return fmt.Errorf("create Scheme validation request: %w", err)
 	}
-	request.Header.Set("Content-Type", "text/x-scheme")
+	request.Header.Set("Content-Type", contentType)
 	validationResponse, err := client.Do(request)
 	if err != nil {
 		emitFailedCapture(profile.ID+"/"+scenario, contents)
@@ -541,7 +612,15 @@ func validateTelemetryDump(client http.Client, baseURL, mode, scenario string, p
 	validationResponse.Body.Close()
 	elapsed := time.Since(started).Round(time.Millisecond)
 	if current, statsErr := readSinkStats(client, baseURL, profile.Family); statsErr == nil {
-		fmt.Printf("Stak Scheme validation usage: wall=%s sink=%dms calls=%d peak_rss=%.1f MiB\n", elapsed, current.ValidationLastDurationMS, current.ValidationLastCalls, float64(current.PeakRSSKiB)/1024)
+		fmt.Printf("Stak Scheme validation usage: wall=%s sink=%dms compilation=%dms calls=%d peak_rss=%.1f MiB\n", elapsed, current.ValidationLastDurationMS, current.ValidationLastCompilationMS, current.ValidationLastCalls, float64(current.PeakRSSKiB)/1024)
+		if profile.Family == "datadog" {
+			if out := os.Getenv("TEST_UNDECLARED_OUTPUTS_DIR"); out != "" {
+				data, _ := json.MarshalIndent(map[string]any{"compilationMs": current.ValidationLastCompilationMS, "validationMs": current.ValidationLastDurationMS - current.ValidationLastCompilationMS, "httpValidationMs": elapsed.Milliseconds(), "compiled": profile.Compiled != nil}, "", "  ")
+				if err := os.WriteFile(filepath.Join(out, "datadog.validation.timings.json"), data, 0644); err != nil {
+					return err
+				}
+			}
+		}
 	} else {
 		fmt.Printf("Stak Scheme validation usage: wall=%s stats_unavailable=%v\n", elapsed, statsErr)
 	}
@@ -588,24 +667,25 @@ type receiptProof struct {
 }
 
 type validationReceipt struct {
-	Family                        string           `json:"family,omitempty"`
-	WireVersion                   string           `json:"wireVersion,omitempty"`
-	SchemaVersion                 int              `json:"schemaVersion"`
-	Revision                      string           `json:"revision"`
-	Profile                       string           `json:"profile"`
-	Scenario                      string           `json:"scenario"`
-	ProofPlanSHA256               string           `json:"proofPlanSha256"`
-	CaptureSHA256                 string           `json:"captureSha256"`
-	ValidationMode                string           `json:"validationMode"`
-	Outcome                       string           `json:"outcome"`
-	XFailReason                   string           `json:"xfailReason,omitempty"`
-	ScenarioShapeSHA256           string           `json:"scenarioShapeSha256,omitempty"`
-	ReferenceProfile              string           `json:"referenceProfile,omitempty"`
-	ReferenceProofPlanSHA256      string           `json:"referenceProofPlanSha256,omitempty"`
-	ValidationPolicySHA256        string           `json:"validationPolicySha256,omitempty"`
-	CandidateImplementationSHA256 string           `json:"candidateImplementationSha256,omitempty"`
-	Coverage                      *datadogCoverage `json:"coverage,omitempty"`
-	Proofs                        []receiptProof   `json:"proofs"`
+	Validator                     *compiledValidator `json:"validator,omitempty"`
+	Family                        string             `json:"family,omitempty"`
+	WireVersion                   string             `json:"wireVersion,omitempty"`
+	SchemaVersion                 int                `json:"schemaVersion"`
+	Revision                      string             `json:"revision"`
+	Profile                       string             `json:"profile"`
+	Scenario                      string             `json:"scenario"`
+	ProofPlanSHA256               string             `json:"proofPlanSha256"`
+	CaptureSHA256                 string             `json:"captureSha256"`
+	ValidationMode                string             `json:"validationMode"`
+	Outcome                       string             `json:"outcome"`
+	XFailReason                   string             `json:"xfailReason,omitempty"`
+	ScenarioShapeSHA256           string             `json:"scenarioShapeSha256,omitempty"`
+	ReferenceProfile              string             `json:"referenceProfile,omitempty"`
+	ReferenceProofPlanSHA256      string             `json:"referenceProofPlanSha256,omitempty"`
+	ValidationPolicySHA256        string             `json:"validationPolicySha256,omitempty"`
+	CandidateImplementationSHA256 string             `json:"candidateImplementationSha256,omitempty"`
+	Coverage                      *datadogCoverage   `json:"coverage,omitempty"`
+	Proofs                        []receiptProof     `json:"proofs"`
 }
 
 type datadogCoverage struct {
@@ -637,7 +717,7 @@ func collectDatadogCoverage(capture []byte, profile atomicProfile) (*datadogCove
 			for _, span := range trace {
 				var name string
 				_ = json.Unmarshal(span["name"], &name)
-				if name == "aiohttp.request" || name == "django.request" {
+				if isDatadogServer(name) {
 					_ = json.Unmarshal(span["service"], &traceService)
 					break
 				}
@@ -647,7 +727,7 @@ func collectDatadogCoverage(capture []byte, profile atomicProfile) (*datadogCove
 				var name, typ string
 				_ = json.Unmarshal(span["name"], &name)
 				_ = json.Unmarshal(span["type"], &typ)
-				if name == "aiohttp.request" || name == "django.request" {
+				if isDatadogServer(name) {
 					coverage.IntegrationSpans["http.server"]++
 				}
 				if typ == "sql" || strings.HasPrefix(name, "sqlite.") {
@@ -677,7 +757,7 @@ func collectDatadogCoverage(capture []byte, profile atomicProfile) (*datadogCove
 						coverage.FieldPolicies["exact"]++
 						for nested, nestedRaw := range fields {
 							coverage.FieldOccurrences++
-							if (key == "meta" && (nested == "runtime-id" || nested == "_dd.p.tid" || nested == "error.stack")) || (key == "metrics" && nested == "process_id") {
+							if (key == "meta" && (nested == "runtime-id" || nested == "_dd.p.tid" || nested == "error.stack" || nested == "error.handling_stack" || nested == "http.response.headers.x-request-id")) || (key == "metrics" && (nested == "process_id" || nested == "rails.db.runtime" || nested == "rails.view.runtime")) {
 								coverage.FieldPolicies["runtime-validated"]++
 							} else if key == "meta" {
 								normalized, normalizeErr := datadogMetaFieldNormalized(nested, nestedRaw, traceService)
@@ -692,7 +772,7 @@ func collectDatadogCoverage(capture []byte, profile atomicProfile) (*datadogCove
 								coverage.FieldPolicies["exact"]++
 							}
 						}
-					case "name", "resource", "error", "type":
+					case "name", "resource", "error", "type", "meta_struct", "span_links":
 						coverage.FieldPolicies["exact"]++
 					default:
 						coverage.UnclassifiedFields++
@@ -720,10 +800,22 @@ func datadogMetaFieldNormalized(key string, raw json.RawMessage, traceService st
 		if normalizeErr != nil {
 			return false, normalizeErr
 		}
-	case "db.name", "sql.db":
+	case "db.name", "sql.db", "active_record.db.name", "db.instance":
 		if strings.HasSuffix(value, "realworld.sqlite3") {
 			normalized = "<fixture>/realworld.sqlite3"
 		}
+	case "http.host":
+		endpoint, err := normalizeDatadogEndpoint("http://" + value + "/")
+		if err != nil {
+			return false, err
+		}
+		normalized = strings.TrimSuffix(strings.TrimPrefix(endpoint, "http://"), "/")
+	case "http.base_url":
+		endpoint, err := normalizeDatadogEndpoint(value + "/")
+		if err != nil {
+			return false, err
+		}
+		normalized = strings.TrimSuffix(endpoint, "/")
 	case "_dd.base_service":
 		if value == traceService {
 			normalized = "<service>"
@@ -876,6 +968,7 @@ func emitReceipt(profile atomicProfile, capture []byte, proofs []receiptProof, o
 	}
 	planDigest, captureDigest := sha256.Sum256(profile.Plan), sha256.Sum256(capture)
 	receipt := validationReceipt{
+		Validator:     profile.Compiled,
 		SchemaVersion: 1, Revision: revision, Profile: profile.ID, Scenario: profile.Scenario,
 		ProofPlanSHA256: fmt.Sprintf("%x", planDigest), CaptureSHA256: fmt.Sprintf("%x", captureDigest),
 		ValidationMode: profile.ValidationMode, Outcome: outcome, XFailReason: xfailReason, Proofs: proofs,
