@@ -148,6 +148,8 @@ def _profile_impl(ctx):
     policy_sources = []
     if ctx.attr.family == "datadog":
         policy_sources = [ctx.file._datadog_policy_source]
+        for source in core_libraries:
+            arguments.add("--policy-library=" + source.path)
         arguments.add("--policy-source=" + ctx.file._datadog_policy_source.path)
     arguments.add("--out=" + plan.path)
     arguments.add("--manifest-out=" + manifest.path)

@@ -9,6 +9,7 @@ import (
 )
 
 func TestReferenceProfileMustBeCompleteAndCompatible(t *testing.T) {
+	policyDigest := strings.Repeat("a", 64)
 	proof := report.ProofPlanProof{FeatureID: "span/database-children", Assertion: "span/database-children", Basis: "observed", EvidencePolicy: "runtime"}
 	plan := report.NormalizedProfilePlan{Family: "datadog", WireVersion: "v0.5", Application: "aiohttp", Signals: []string{"traces"}, Proofs: []report.ProofPlanProof{proof}}
 	referencePlan, err := json.Marshal(report.NormalizedProfilePlan{Proofs: []report.ProofPlanProof{proof}})
@@ -17,10 +18,10 @@ func TestReferenceProfileMustBeCompleteAndCompatible(t *testing.T) {
 	}
 	reference := manifestDocument{
 		SchemaVersion: 2, Family: "datadog", Profile: "reference", WireVersion: "v0.5", Application: "aiohttp",
-		ShapeNamespace: "datadog.realworld.shape.reference", Program: "(validate-profile)",
+		ShapeNamespace: "datadog.realworld.shape.reference", Program: "(validate-profile)", ValidationPolicySHA256: policyDigest,
 		Signals: []string{"traces"}, ProofPlan: string(referencePlan), ScenarioShapes: map[string]string{"articles": "shape", "tags": "shape"},
 	}
-	if err := validateAndApplyReference(&plan, reference, []string{"articles", "tags"}); err != nil {
+	if err := validateAndApplyReference(&plan, reference, []string{"articles", "tags"}, policyDigest); err != nil {
 		t.Fatal(err)
 	}
 	if plan.ReferenceProfile != "reference" {
@@ -38,6 +39,7 @@ func TestReferenceProfileMustBeCompleteAndCompatible(t *testing.T) {
 		{"wrong wire version", func(r *manifestDocument) { r.WireVersion = "v0.4" }, "does not match"},
 		{"wrong proof contract", func(r *manifestDocument) { r.ProofPlan = `{"proofs":[]}` }, "does not match"},
 		{"wrong signals", func(r *manifestDocument) { r.Signals = []string{"metrics"} }, "does not match"},
+		{"wrong validation policy", func(r *manifestDocument) { r.ValidationPolicySHA256 = strings.Repeat("b", 64) }, "does not match"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -45,7 +47,7 @@ func TestReferenceProfileMustBeCompleteAndCompatible(t *testing.T) {
 			changed.ScenarioShapes = map[string]string{"articles": "shape", "tags": "shape"}
 			tc.mutate(&changed)
 			candidate := plan
-			if err := validateAndApplyReference(&candidate, changed, []string{"articles", "tags"}); err == nil || !strings.Contains(err.Error(), tc.want) {
+			if err := validateAndApplyReference(&candidate, changed, []string{"articles", "tags"}, policyDigest); err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want error containing %q", err, tc.want)
 			}
 		})

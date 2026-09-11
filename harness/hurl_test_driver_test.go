@@ -342,12 +342,12 @@ func TestDatadogReceiptIdentityAndRevisionIsolation(t *testing.T) {
 
 func TestDatadogCoverageClassifiesOnlyTraceServiceAsNormalized(t *testing.T) {
 	profile := atomicProfile{Application: "django", Scenario: "articles"}
-	capture := []byte(`[{"payload":{"traces":[[{"name":"django.request","service":"django-datadog"},{"name":"sqlite.query","service":"sqlite","type":"sql"}]]}}]`)
+	capture := []byte(`[{"payload":{"traces":[[{"name":"django.request","service":"django-datadog","meta":{"stable":"keep-rules-stests-literal","generated":"rules_stests_123-deadbeef","http.url":"https://example.com/static"}},{"name":"sqlite.query","service":"sqlite","type":"sql","meta":{"_dd.base_service":"django-datadog","sql.db":"/tmp/rules_stests_fixture/realworld.sqlite3"}}]]}}]`)
 	coverage, err := collectDatadogCoverage(capture, profile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if coverage.FieldPolicies["normalized"] != 1 || coverage.FieldPolicies["exact"] != 4 || coverage.FieldOccurrences != 5 {
+	if coverage.FieldPolicies["normalized"] != 4 || coverage.FieldPolicies["exact"] != 8 || coverage.FieldOccurrences != 12 {
 		t.Fatalf("wrong service field policies: %+v", coverage)
 	}
 }

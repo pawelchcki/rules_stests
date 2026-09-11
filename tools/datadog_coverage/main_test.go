@@ -10,8 +10,10 @@ import (
 func TestCoverageGateRequiresCompleteExactEvidence(t *testing.T) {
 	revision := strings.Repeat("a", 40)
 	digest := strings.Repeat("b", 64)
-	m := manifest{Family: "datadog", Profile: "p", Application: "aiohttp", ProofPlan: "plan", ScenarioShapes: map[string]string{"tags": "shape"}, ValidationPolicySHA256: digest, CandidateImplementationSHA256: digest}
-	r := receipt{Family: "datadog", SchemaVersion: 2, Revision: revision, Profile: "p", Scenario: "tags", ValidationMode: "exact", Outcome: "verified", ProofPlanSHA256: sum("plan"), CaptureSHA256: digest, ScenarioShapeSHA256: sum("shape"), ValidationPolicySHA256: digest, CandidateImplementationSHA256: digest, Coverage: coverage{SchemaVersion: 1, Application: "aiohttp", Scenario: "tags", IntegrationSpans: map[string]int{"http.server": 1, "database": 1}, FieldPolicies: map[string]int{"exact": 3, "normalized": 1, "runtime-validated": 2}, SpanOccurrences: 2, FieldOccurrences: 6}}
+	plan := `{"proofs":[{"featureId":"feature","assertion":"assertion","basis":"observed"}]}`
+	proof := receiptProof{FeatureID: "feature", Assertion: "assertion", Basis: "observed", Result: "pass"}
+	m := manifest{Family: "datadog", Profile: "p", Application: "aiohttp", ProofPlan: plan, ScenarioShapes: map[string]string{"tags": "shape"}, ValidationPolicySHA256: digest, CandidateImplementationSHA256: digest}
+	r := receipt{Family: "datadog", SchemaVersion: 2, Revision: revision, Profile: "p", Scenario: "tags", ValidationMode: "exact", Outcome: "verified", ProofPlanSHA256: sum(plan), CaptureSHA256: digest, ScenarioShapeSHA256: sum("shape"), ValidationPolicySHA256: digest, CandidateImplementationSHA256: digest, Proofs: []receiptProof{proof}, Coverage: coverage{SchemaVersion: 1, Application: "aiohttp", Scenario: "tags", IntegrationSpans: map[string]int{"http.server": 1, "database": 1}, FieldPolicies: map[string]int{"exact": 3, "normalized": 1, "runtime-validated": 2}, SpanOccurrences: 2, FieldOccurrences: 6}}
 	if err := validate(revision, []manifest{m}, []receipt{r}); err != nil {
 		t.Fatal(err)
 	}
@@ -28,10 +30,14 @@ func TestCoverageGateRequiresCompleteExactEvidence(t *testing.T) {
 		{"wrong policy binding", func(r *receipt) { r.ValidationPolicySHA256 = strings.Repeat("c", 64) }},
 		{"wrong shape binding", func(r *receipt) { r.ScenarioShapeSHA256 = strings.Repeat("c", 64) }},
 		{"wrong reference binding", func(r *receipt) { r.ReferenceProfile, r.ReferenceProofPlanSHA256 = "other", strings.Repeat("c", 64) }},
+		{"missing proofs", func(r *receipt) { r.Proofs = nil }},
+		{"duplicate proof", func(r *receipt) { r.Proofs = append(r.Proofs, proof) }},
+		{"non-passing proof", func(r *receipt) { r.Proofs[0].Result = "fail" }},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			changed := r
+			changed.Proofs = append([]receiptProof(nil), r.Proofs...)
 			changed.Coverage.IntegrationSpans = map[string]int{"http.server": 1, "database": 1}
 			tc.mutate(&changed)
 			if validate(revision, []manifest{m}, []receipt{changed}) == nil {

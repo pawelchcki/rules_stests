@@ -675,8 +675,15 @@ func collectDatadogCoverage(capture []byte, profile atomicProfile) (*datadogCove
 							coverage.FieldOccurrences++
 							if (key == "meta" && (nested == "runtime-id" || nested == "_dd.p.tid" || nested == "error.stack")) || (key == "metrics" && nested == "process_id") {
 								coverage.FieldPolicies["runtime-validated"]++
-							} else if key == "meta" && (nested == "http.url" || nested == "db.name" || nested == "sql.db" || nested == "_dd.base_service") || bytes.Contains(nestedRaw, []byte("rules_stests_")) || bytes.Contains(nestedRaw, []byte("rules-stests-")) {
-								coverage.FieldPolicies["normalized"]++
+							} else if key == "meta" {
+								normalized, normalizeErr := datadogMetaFieldNormalized(nested, nestedRaw, traceService)
+								if normalizeErr != nil {
+									coverage.UnclassifiedFields++
+								} else if normalized {
+									coverage.FieldPolicies["normalized"]++
+								} else {
+									coverage.FieldPolicies["exact"]++
+								}
 							} else {
 								coverage.FieldPolicies["exact"]++
 							}
@@ -694,6 +701,85 @@ func collectDatadogCoverage(capture []byte, profile atomicProfile) (*datadogCove
 		return nil, fmt.Errorf("incomplete Datadog coverage evidence: %+v", coverage)
 	}
 	return coverage, nil
+}
+
+func datadogMetaFieldNormalized(key string, raw json.RawMessage, traceService string) (bool, error) {
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return false, err
+	}
+	normalized := value
+	switch key {
+	case "http.url":
+		normalized = normalizeDatadogEndpoint(value)
+	case "db.name", "sql.db":
+		if strings.HasSuffix(value, "realworld.sqlite3") {
+			normalized = "<fixture>/realworld.sqlite3"
+		}
+	case "_dd.base_service":
+		if value == traceService {
+			normalized = "<service>"
+		}
+	default:
+		normalized = normalizeDatadogWorkloadID(value)
+	}
+	return normalized != value, nil
+}
+
+func normalizeDatadogEndpoint(value string) string {
+	for _, prefix := range []string{"http://127.0.0.1:", "http://localhost:"} {
+		if rest, found := strings.CutPrefix(value, prefix); found {
+			if offset := strings.IndexByte(rest, '/'); offset >= 0 {
+				port, suffix := rest[:offset], rest[offset:]
+				if port != "" && strings.IndexFunc(port, func(r rune) bool { return r < '0' || r > '9' }) < 0 {
+					return normalizeDatadogWorkloadID("http://<endpoint>" + suffix)
+				}
+			}
+		}
+	}
+	return normalizeDatadogWorkloadID(value)
+}
+
+func normalizeDatadogWorkloadID(value string) string {
+	return normalizeDatadogWorkloadMarker(normalizeDatadogWorkloadMarker(value, "rules_stests_"), "rules-stests-")
+}
+
+func normalizeDatadogWorkloadMarker(value, marker string) string {
+	var result strings.Builder
+	remaining := value
+	for {
+		offset := strings.Index(remaining, marker)
+		if offset < 0 {
+			result.WriteString(remaining)
+			return result.String()
+		}
+		result.WriteString(remaining[:offset])
+		after := remaining[offset+len(marker):]
+		digits := 0
+		for digits < len(after) && after[digits] >= '0' && after[digits] <= '9' {
+			digits++
+		}
+		result.WriteString(marker)
+		if digits == 0 {
+			remaining = after
+			continue
+		}
+		result.WriteString("<workload>")
+		remaining = after[digits:]
+		if len(remaining) >= 9 && remaining[0] == '-' && allASCIIHex(remaining[1:9]) {
+			remaining = remaining[9:]
+		}
+	}
+}
+
+func allASCIIHex(value string) bool {
+	for index := range value {
+		character := value[index]
+		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') || (character >= 'A' && character <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 func validateProofSet(expected []proofPlanProof, output []byte) ([]receiptProof, error) {

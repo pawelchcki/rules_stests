@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/pawelchcki/rules_stests/report"
@@ -17,13 +18,16 @@ type repeated []string
 func (values *repeated) String() string         { return fmt.Sprint([]string(*values)) }
 func (values *repeated) Set(value string) error { *values = append(*values, value); return nil }
 
+var digestRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
 func main() {
 	var profilePath, registryPath, captureShapesPath, outputPath, manifestPath, profileID, programPath, family, wireVersion, referenceManifestPath string
-	var implementationPaths, proofRulePaths, policySourcePaths, libraryPaths, importNames, signals, scenarios, shapeSpecs repeated
+	var implementationPaths, proofRulePaths, policyLibraryPaths, policySourcePaths, libraryPaths, importNames, signals, scenarios, shapeSpecs repeated
 	flag.StringVar(&profilePath, "profile", "", "Scheme profile")
 	flag.StringVar(&registryPath, "registry", "", "standard registry JSON")
 	flag.Var(&proofRulePaths, "proof-rules", "Scheme proof table (repeatable)")
 	flag.StringVar(&captureShapesPath, "capture-shapes", "", "Scheme capture-shape registry")
+	flag.Var(&policyLibraryPaths, "policy-library", "validation policy library source (repeatable)")
 	flag.Var(&policySourcePaths, "policy-source", "executable validation policy source (repeatable)")
 	flag.StringVar(&outputPath, "out", "", "normalized plan output")
 	flag.StringVar(&manifestPath, "manifest-out", "", "atomic profile manifest output")
@@ -63,6 +67,17 @@ func main() {
 	policyMaterial := append([]byte("datadog-field-policy-v1\x00"), captureShapes...)
 	policyMaterial = append(policyMaterial, '\x00')
 	policyMaterial = append(policyMaterial, rules...)
+	if len(policyLibraryPaths) > 0 {
+		policyMaterial = []byte("datadog-validation-policy-v2")
+		for _, path := range policyLibraryPaths {
+			contents, readErr := os.ReadFile(path)
+			if readErr != nil {
+				fail(readErr)
+			}
+			policyMaterial = append(policyMaterial, '\x00')
+			policyMaterial = append(policyMaterial, contents...)
+		}
+	}
 	for _, path := range policySourcePaths {
 		contents, readErr := os.ReadFile(path)
 		if readErr != nil {
@@ -71,6 +86,8 @@ func main() {
 		policyMaterial = append(policyMaterial, '\x00')
 		policyMaterial = append(policyMaterial, contents...)
 	}
+	policyDigest := sha256.Sum256(policyMaterial)
+	validationPolicySHA256 := fmt.Sprintf("%x", policyDigest)
 	implementations := make([]string, 0, len(implementationPaths))
 	for _, path := range implementationPaths {
 		contents, readErr := os.ReadFile(path)
@@ -104,7 +121,7 @@ func main() {
 		if decodeErr := decoder.Decode(&reference); decodeErr != nil {
 			fail(fmt.Errorf("decode reference profile: %w", decodeErr))
 		}
-		if referenceErr := validateAndApplyReference(&plan, reference, scenarios); referenceErr != nil {
+		if referenceErr := validateAndApplyReference(&plan, reference, scenarios, validationPolicySHA256); referenceErr != nil {
 			fail(referenceErr)
 		}
 		referenceManifest = &reference
@@ -165,10 +182,9 @@ func main() {
 			ProofPlan: string(encoded), Program: string(program), Libraries: libraries,
 			Imports: importNames, ScenarioShapes: shapes,
 		}
-		policyDigest := sha256.Sum256(policyMaterial)
 		implementationDeclaration := strings.Join([]string{plan.Language, plan.TracerVersion, strings.Join(plan.Implementations, "\x00"), strings.Join(implementations, "\x00")}, "\x00")
 		implementationDigest := sha256.Sum256([]byte(implementationDeclaration))
-		document.ValidationPolicySHA256 = fmt.Sprintf("%x", policyDigest)
+		document.ValidationPolicySHA256 = validationPolicySHA256
 		document.CandidateImplementationSHA256 = fmt.Sprintf("%x", implementationDigest)
 		if referenceManifest != nil {
 			document.ReferenceProfile = referenceManifest.Profile
@@ -187,12 +203,13 @@ func main() {
 	}
 }
 
-func validateAndApplyReference(plan *report.NormalizedProfilePlan, reference manifestDocument, scenarios []string) error {
+func validateAndApplyReference(plan *report.NormalizedProfilePlan, reference manifestDocument, scenarios []string, validationPolicySHA256 string) error {
 	var referencePlan report.NormalizedProfilePlan
 	if err := json.Unmarshal([]byte(reference.ProofPlan), &referencePlan); err != nil {
 		return fmt.Errorf("decode reference proof plan: %w", err)
 	}
 	if reference.SchemaVersion != 2 || reference.Family != "datadog" || reference.Profile == "" || reference.ShapeNamespace == "" || reference.Program == "" || len(reference.ScenarioShapes) == 0 ||
+		!digestRE.MatchString(reference.ValidationPolicySHA256) || reference.ValidationPolicySHA256 != validationPolicySHA256 ||
 		reference.Family != plan.Family || reference.WireVersion != plan.WireVersion || reference.Application != plan.Application ||
 		!sameProofContracts(referencePlan.Proofs, plan.Proofs) || !sameStringsPlain(reference.Signals, plan.Signals) {
 		return fmt.Errorf("candidate profile does not match complete Datadog reference contract")
