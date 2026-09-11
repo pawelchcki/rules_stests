@@ -8,6 +8,7 @@
     (id 'python-aiohttp-datadog-v4-14-0-v05)
     (display-name "Python aiohttp (Datadog 4.14.0, v0.5)")
     (language 'python)
+    (tracer-version "4.14.0")
     (framework "aiohttp")
     (family 'datadog)
     (wire-version "v0.5")
@@ -18,7 +19,8 @@
     (signals 'traces)
     (all (observed span/native-fields span/ids-valid span/completed span/database-children
                    span/root-present span/http-classification span/exception-metadata
-                   span/service-present request/headers-and-counts capture/semantic-valid))
+                   span/service-present request/headers-and-counts capture/semantic-valid
+                   capture/field-policy-coverage))
     (scenario 'propagation (observed span/tracecontext-parent))
     (scenario 'propagation_datadog (observed span/datadog-parent))))
   ))

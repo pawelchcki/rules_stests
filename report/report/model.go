@@ -70,20 +70,22 @@ type ProofPlanProof struct {
 }
 
 type NormalizedProfilePlan struct {
-	Family          string            `json:"family,omitempty"`
-	WireVersion     string            `json:"wireVersion,omitempty"`
-	Application     string            `json:"application,omitempty"`
-	ShapeNamespace  string            `json:"shapeNamespace,omitempty"`
-	SchemaVersion   int               `json:"schemaVersion"`
-	Profile         string            `json:"profile"`
-	DisplayName     string            `json:"displayName"`
-	Language        string            `json:"language"`
-	Framework       string            `json:"framework"`
-	ServiceName     string            `json:"serviceName"`
-	Signals         []string          `json:"signals"`
-	Implementations []string          `json:"implementations"`
-	Sources         map[string]string `json:"sources"`
-	Proofs          []ProofPlanProof  `json:"proofs"`
+	Family           string            `json:"family,omitempty"`
+	WireVersion      string            `json:"wireVersion,omitempty"`
+	Application      string            `json:"application,omitempty"`
+	ShapeNamespace   string            `json:"shapeNamespace,omitempty"`
+	TracerVersion    string            `json:"tracerVersion,omitempty"`
+	ReferenceProfile string            `json:"referenceProfile,omitempty"`
+	SchemaVersion    int               `json:"schemaVersion"`
+	Profile          string            `json:"profile"`
+	DisplayName      string            `json:"displayName"`
+	Language         string            `json:"language"`
+	Framework        string            `json:"framework"`
+	ServiceName      string            `json:"serviceName"`
+	Signals          []string          `json:"signals"`
+	Implementations  []string          `json:"implementations"`
+	Sources          map[string]string `json:"sources"`
+	Proofs           []ProofPlanProof  `json:"proofs"`
 }
 
 type Manifest struct {

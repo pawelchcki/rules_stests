@@ -217,18 +217,34 @@ func TestCheckedInProfilePlanSnapshotsAndDescriptorOwnership(t *testing.T) {
 }
 
 func TestCompileDatadogIdentityAndLegacySchema(t *testing.T) {
-	source := strings.Replace(profileTestSource, "(id 'test-profile)", `(id 'test-profile) (family 'datadog) (wire-version "v0.5") (application "aiohttp") (shape-namespace "datadog.realworld.shape.test-profile")`, 1)
+	source := strings.Replace(profileTestSource, "(id 'test-profile)", `(id 'test-profile) (family 'datadog) (wire-version "v0.5") (application "aiohttp") (shape-namespace "datadog.realworld.shape.test-profile") (tracer-version "4.14.0")`, 1)
 	plan, err := compileProfileFixture(source, profileTestImplementation, profileTestRules, profileTestShapes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.SchemaVersion != 2 || plan.Family != "datadog" || plan.WireVersion != "v0.5" || plan.Application != "aiohttp" {
+	if plan.SchemaVersion != 2 || plan.Family != "datadog" || plan.WireVersion != "v0.5" || plan.Application != "aiohttp" || plan.TracerVersion != "4.14.0" {
 		t.Fatalf("wrong identity: %+v", plan)
 	}
 	for _, bad := range []string{strings.Replace(source, "v0.5", "v0.3", 1), strings.Replace(source, `(family 'datadog)`, "", 1)} {
 		if _, err := compileProfileFixture(bad, profileTestImplementation, profileTestRules, profileTestShapes); err == nil {
 			t.Fatal("accepted invalid family identity")
 		}
+	}
+	duplicateTracerVersion := strings.Replace(source, `(tracer-version "4.14.0")`, `(tracer-version "4.14.0") (tracer-version "4.15.0")`, 1)
+	if _, err := compileProfileFixture(duplicateTracerVersion, profileTestImplementation, profileTestRules, profileTestShapes); err == nil || !strings.Contains(err.Error(), "duplicate profile tracer-version clause") {
+		t.Fatalf("duplicate tracer version error = %v", err)
+	}
+	duplicateLanguage := strings.Replace(source, `(language 'python)`, `(language 'python) (language 'ruby)`, 1)
+	if _, err := compileProfileFixture(duplicateLanguage, profileTestImplementation, profileTestRules, profileTestShapes); err == nil || !strings.Contains(err.Error(), "duplicate profile language clause") {
+		t.Fatalf("duplicate language error = %v", err)
+	}
+	stringLanguage := strings.Replace(source, `(language 'python)`, `(language "python")`, 1)
+	if _, err := compileProfileFixture(stringLanguage, profileTestImplementation, profileTestRules, profileTestShapes); err == nil || !strings.Contains(err.Error(), "profile language clause is malformed") {
+		t.Fatalf("string language error = %v", err)
+	}
+	nonStringTracerVersion := strings.Replace(source, `(tracer-version "4.14.0")`, `(tracer-version 'v4)`, 1)
+	if _, err := compileProfileFixture(nonStringTracerVersion, profileTestImplementation, profileTestRules, profileTestShapes); err == nil || !strings.Contains(err.Error(), "must contain a string") {
+		t.Fatalf("non-string tracer version error = %v", err)
 	}
 	legacy, err := compileProfileFixture(profileTestSource, profileTestImplementation, profileTestRules, profileTestShapes)
 	if err != nil {

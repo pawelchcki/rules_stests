@@ -69,16 +69,28 @@ func CompileTelemetryProfile(profileSource string, implementationSources []strin
 	}
 	plan := NormalizedProfilePlan{SchemaVersion: 1, Sources: map[string]string{}}
 	seenClaims := map[string]bool{}
+	seenSingleton := map[string]bool{}
+	singletonClauses := stringSet([]string{"id", "family", "wire-version", "application", "shape-namespace", "tracer-version", "display-name", "language", "framework", "service-name", "signals", "implementation"})
 	for _, clause := range expression.list[1:] {
-		switch head(clause) {
+		clauseName := head(clause)
+		if singletonClauses[clauseName] {
+			if seenSingleton[clauseName] {
+				return plan, fmt.Errorf("duplicate profile %s clause", clauseName)
+			}
+			seenSingleton[clauseName] = true
+		}
+		switch clauseName {
 		case "id":
 			if len(clause.list) != 2 {
 				return plan, fmt.Errorf("profile id clause is malformed")
 			}
 			plan.Profile = atomValue(unquote(clause.list[1]))
-		case "family", "wire-version", "application", "shape-namespace":
+		case "family", "wire-version", "application", "shape-namespace", "tracer-version":
 			if len(clause.list) != 2 {
 				return plan, fmt.Errorf("profile %s clause is malformed", head(clause))
+			}
+			if clauseName == "tracer-version" && !clause.list[1].str {
+				return plan, fmt.Errorf("profile tracer-version clause must contain a string")
 			}
 			value := atomValue(unquote(clause.list[1]))
 			switch head(clause) {
@@ -90,6 +102,8 @@ func CompileTelemetryProfile(profileSource string, implementationSources []strin
 				plan.Application = value
 			case "shape-namespace":
 				plan.ShapeNamespace = value
+			case "tracer-version":
+				plan.TracerVersion = value
 			}
 		case "display-name":
 			if len(clause.list) != 2 || !clause.list[1].str {
@@ -97,7 +111,7 @@ func CompileTelemetryProfile(profileSource string, implementationSources []strin
 			}
 			plan.DisplayName = clause.list[1].atom
 		case "language":
-			if len(clause.list) != 2 {
+			if len(clause.list) != 2 || len(clause.list[1].list) != 2 || head(clause.list[1]) != "quote" || clause.list[1].list[1].atom == "" || clause.list[1].list[1].str || len(clause.list[1].list[1].list) != 0 {
 				return plan, fmt.Errorf("profile language clause is malformed")
 			}
 			plan.Language = atomValue(unquote(clause.list[1]))
@@ -155,14 +169,14 @@ func CompileTelemetryProfile(profileSource string, implementationSources []strin
 		}
 	}
 	if plan.Family != "" {
-		if plan.Family != "datadog" || (plan.WireVersion != "v0.4" && plan.WireVersion != "v0.5") || plan.Application == "" || plan.ShapeNamespace == "" {
+		if plan.Family != "datadog" || (plan.WireVersion != "v0.4" && plan.WireVersion != "v0.5") || plan.Application == "" || plan.ShapeNamespace == "" || plan.TracerVersion == "" {
 			return plan, fmt.Errorf("invalid telemetry profile identity")
 		}
 		if len(plan.Signals) != 1 || plan.Signals[0] != "traces" {
 			return plan, fmt.Errorf("Datadog profiles support traces only")
 		}
 		plan.SchemaVersion = 2
-	} else if plan.WireVersion != "" || plan.Application != "" || plan.ShapeNamespace != "" {
+	} else if plan.WireVersion != "" || plan.Application != "" || plan.ShapeNamespace != "" || plan.TracerVersion != "" {
 		return plan, fmt.Errorf("telemetry identity requires a family")
 	}
 	sort.Slice(plan.Proofs, func(i, j int) bool { return plan.Proofs[i].FeatureID < plan.Proofs[j].FeatureID })

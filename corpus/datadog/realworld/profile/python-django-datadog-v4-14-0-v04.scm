@@ -8,6 +8,7 @@
     (id 'python-django-datadog-v4-14-0-v04)
     (display-name "Python django (Datadog 4.14.0, v0.4)")
     (language 'python)
+    (tracer-version "4.14.0")
     (framework "django")
     (family 'datadog)
     (wire-version "v0.4")
@@ -18,5 +19,6 @@
     (signals 'traces)
     (all (observed span/native-fields span/ids-valid span/completed span/database-children
                    span/root-present span/http-classification span/exception-metadata
-                   span/service-present request/headers-and-counts capture/semantic-valid))))
+                   span/service-present request/headers-and-counts capture/semantic-valid
+                   capture/field-policy-coverage))))
   ))

@@ -17,15 +17,18 @@ OtelProfileInfo = provider(fields = [
     "scenarios",
     "scenario_shapes",
     "scenario_shape_sources",
+    "scenario_shape_files",
     "registry_matrix",
     "registry_metadata",
     "manifest",
+    "reference_profile",
 ])
 
 TelemetryProfileInfo = provider(fields = [
     "family", "wire_version", "profile_id", "repository", "spec_path", "specification",
     "implementation_libraries", "normalized_proof_plan", "signals", "scenarios",
     "scenario_shapes", "scenario_shape_sources", "registry_matrix", "registry_metadata", "manifest",
+    "scenario_shape_files", "reference_profile",
 ])
 
 def _telemetry_registry_impl(ctx):
@@ -93,6 +96,15 @@ def _profile_impl(ctx):
         ))
     plan = ctx.actions.declare_file(ctx.label.name + ".proof-plan.json")
     manifest = ctx.actions.declare_file(ctx.label.name + ".profile.json")
+    reference = ctx.attr.reference_profile[TelemetryProfileInfo] if ctx.attr.reference_profile else None
+    if reference:
+        if ctx.attr.family != "datadog" or reference.family != "datadog":
+            fail("reference_profile is supported only between Datadog profiles")
+        if ctx.attr.scenarios or ctx.attr.scenario_shapes:
+            fail("reference mode inherits scenarios and shapes; they cannot be supplied")
+        if ctx.attr.wire_version != reference.wire_version:
+            fail("candidate wire_version must match reference_profile")
+    effective_scenarios = reference.scenarios if reference else ctx.attr.scenarios
     shape_paths = {}
     shape_sources = {}
     shape_files = []
@@ -109,6 +121,10 @@ def _profile_impl(ctx):
         shape_paths[scenario] = files[0].path
         shape_sources[scenario] = files[0].short_path
         shape_files.append(files[0])
+    if reference:
+        shape_paths = dict(reference.scenario_shapes)
+        shape_sources = dict(reference.scenario_shape_sources)
+        shape_files = [reference.scenario_shape_files[scenario] for scenario in effective_scenarios]
     core_libraries = ctx.attr.core_libraries.files.to_list()
     common = [registry.scheme] + core_libraries + ctx.files.runtime_libraries + ctx.files.implementation_libraries + [ctx.file.specification]
 
@@ -129,6 +145,12 @@ def _profile_impl(ctx):
     for source in proof_rule_tables:
         arguments.add("--proof-rules=" + source.path)
     arguments.add("--capture-shapes=" + capture_shapes.path)
+    policy_sources = []
+    if ctx.attr.family == "datadog":
+        policy_sources = [ctx.file._datadog_policy_source]
+        for source in core_libraries:
+            arguments.add("--policy-library=" + source.path)
+        arguments.add("--policy-source=" + ctx.file._datadog_policy_source.path)
     arguments.add("--out=" + plan.path)
     arguments.add("--manifest-out=" + manifest.path)
     arguments.add("--profile-id=" + ctx.attr.profile_id)
@@ -141,13 +163,16 @@ def _profile_impl(ctx):
         arguments.add("--import=" + name)
     for signal in ctx.attr.signals:
         arguments.add("--signal=" + signal)
-    for scenario in ctx.attr.scenarios:
+    for scenario in effective_scenarios:
         arguments.add("--scenario=" + scenario)
-    for target, scenario in ctx.attr.scenario_shapes.items():
-        arguments.add("--shape=%s,%s" % (scenario, target.files.to_list()[0].path))
+    if reference:
+        arguments.add("--reference-manifest=" + reference.manifest.path)
+    else:
+        for target, scenario in ctx.attr.scenario_shapes.items():
+            arguments.add("--shape=%s,%s" % (scenario, target.files.to_list()[0].path))
     ctx.actions.run(
         executable = ctx.executable._compiler,
-        inputs = depset([ctx.file.specification, registry.json, ctx.file.program] + common + shape_files),
+        inputs = depset([ctx.file.specification, registry.json, ctx.file.program] + common + shape_files + policy_sources + ([reference.manifest] if reference else [])),
         outputs = [plan, manifest],
         arguments = [arguments],
         mnemonic = "OtelProfilePlan",
@@ -162,12 +187,17 @@ def _profile_impl(ctx):
         implementation_libraries = depset(ctx.files.implementation_libraries),
         normalized_proof_plan = plan,
         signals = tuple(ctx.attr.signals),
-        scenarios = tuple(ctx.attr.scenarios),
+        scenarios = tuple(effective_scenarios),
         scenario_shapes = shape_paths,
         scenario_shape_sources = shape_sources,
+        scenario_shape_files = {scenario: shape_files[index] for index, scenario in enumerate(effective_scenarios)} if reference else {
+            scenario: target.files.to_list()[0]
+            for target, scenario in ctx.attr.scenario_shapes.items()
+        },
         registry_matrix = registry.matrix,
         registry_metadata = registry.metadata,
         manifest = manifest,
+        reference_profile = reference.profile_id if reference else None,
     )
     providers = [
         DefaultInfo(files = depset([manifest])),
@@ -190,12 +220,14 @@ otel_profile = rule(
         "signals": attr.string_list(mandatory = True),
         "scenarios": attr.string_list(mandatory = True),
         "scenario_shapes": attr.label_keyed_string_dict(allow_files = [".scm"]),
+        "reference_profile": attr.label(providers = [TelemetryProfileInfo]),
         "standard_registry": attr.label(providers = [OtelStandardRegistryInfo], mandatory = True),
         "core_libraries": attr.label(
             allow_files = [".scm"],
             default = Label("//corpus:core_libraries"),
         ),
         "program": attr.label(allow_single_file = [".scm"], default = Label("//corpus:realworld/programs/validate_profile.scm")),
+        "_datadog_policy_source": attr.label(allow_single_file = True, default = Label("//harness:otel_sink/datadog.rs")),
         "_compiler": attr.label(
             default = Label("//report:plan_compiler"),
             executable = True,
@@ -303,12 +335,38 @@ def datadog_realworld_profile(
         standard_registry = Label("//corpus:datadog_feature_registry"),
         core_libraries = Label("//corpus:datadog_core_libraries"),
         program = Label("//corpus:datadog/realworld/programs/validate_profile.scm"),
+        reference_profile = None,
+        scenarios = None,
         **kwargs):
     """Declares an independent Datadog schema-v2 profile and proof plan."""
     if wire_version not in ["v0.4", "v0.5"]:
         fail("Datadog wire_version must be v0.4 or v0.5")
     if signals != ["traces"]:
         fail("Datadog profiles support traces only")
+    if reference_profile:
+        if scenarios != None or "shape_root" in kwargs or "scenario_shapes" in kwargs:
+            fail("reference mode inherits reviewed scenarios and shapes")
+        resolved_profile_id = kwargs.pop("profile_id", name)
+        _validate_scheme_identifier(resolved_profile_id, "profile_id")
+        otel_profile(
+            name = name,
+            profile_id = resolved_profile_id,
+            specification = specification,
+            implementation_libraries = implementation_libraries,
+            runtime_libraries = runtime_libraries,
+            signals = signals,
+            scenarios = [],
+            scenario_shapes = {},
+            standard_registry = standard_registry,
+            core_libraries = core_libraries,
+            program = program,
+            family = "datadog",
+            wire_version = wire_version,
+            reference_profile = reference_profile,
+            **kwargs
+        )
+        native.filegroup(name = name + ".proof_plan", srcs = [":" + name], output_group = "proof_plan")
+        return
     otel_realworld_profile(
         name = name,
         specification = specification,
@@ -320,6 +378,7 @@ def datadog_realworld_profile(
         program = program,
         family = "datadog",
         wire_version = wire_version,
+        scenarios = scenarios if scenarios != None else REALWORLD_BASE_HURL_CASES,
         **kwargs
     )
 

@@ -1,6 +1,6 @@
 (define-library (datadog capture shapes)
   (export capture-shapes assert-capture-shape field items every some
-          tag header-value web-span? check decimal? nonempty-string?)
+          tag header-value web-span? database-span? check decimal? nonempty-string?)
   (import (scheme base) (scheme char) (scheme write) (telemetry contract-error))
   (begin
 
@@ -47,6 +47,14 @@
 (define (web-span? span)
   (and (member (field 'name span) '("aiohttp.request" "django.request"))
        (equal? (field 'type span) "web")))
+(define (string-prefix? prefix value)
+  (and (string? value) (<= (string-length prefix) (string-length value))
+       (string=? prefix (substring value 0 (string-length prefix)))))
+(define (database-span? span)
+  ; dd-trace-py emits sqlite.connection.commit without the "sql" type. Name
+  ; classification is therefore part of the database inventory policy.
+  (or (equal? (field 'type span) "sql")
+      (string-prefix? "sqlite." (field 'name span))))
 (define (all-spans capture predicate)
   (and (pair? (items capture 'spans)) (every predicate (items capture 'spans))))
 (define (check condition message)
@@ -95,8 +103,8 @@
        (equal? (field 'content-type request) "application/msgpack")
        (every (lambda (key) (= (header-count request key) 1))
               '("datadog-meta-lang" "datadog-meta-tracer-version" "x-datadog-trace-count"))
-       (equal? (header-value request "datadog-meta-lang") "python")
-       (equal? (header-value request "datadog-meta-tracer-version") "4.14.0")
+       (nonempty-string? (header-value request "datadog-meta-lang"))
+       (nonempty-string? (header-value request "datadog-meta-tracer-version"))
        (decimal? (field 'trace-count request))
        (equal? (header-value request "x-datadog-trace-count") (field 'trace-count request))
        (equal? (field 'trace-count request) (number->string (field 'chunk-count request)))
@@ -122,9 +130,9 @@
                               (http-ancestor? (cdr parent-entry) (- remaining 1))))))
               (set! memo (cons (list span result) memo))
               result))))
-    (and (some (lambda (span) (equal? (field 'type span) "sql")) spans)
+    (and (some database-span? spans)
          (every (lambda (span)
-                  (or (not (equal? (field 'type span) "sql"))
+                  (or (not (database-span? span))
                       (http-ancestor? span limit))) spans))))
 
 (define (capture-shape name predicate) (list name predicate))
@@ -157,6 +165,15 @@
       (lambda (capture) (and (pair? (items capture 'requests)) (every request-valid? (items capture 'requests)))))
     (capture-shape 'capture/semantic-valid
       (lambda (capture) (eq? (field 'semantic-valid capture) #t)))
+    (capture-shape 'capture/field-policy-coverage
+      (lambda (capture)
+        (let ((coverage (field 'coverage capture)))
+          (and (= (field 'policy-schema coverage) 1)
+               (> (field 'http-spans coverage) 0)
+               (> (+ (field 'exact-fields coverage)
+                     (field 'normalized-fields coverage)
+                     (field 'runtime-validated-fields coverage)) 0)
+               (= (field 'unclassified-fields coverage) 0)))))
     (capture-shape 'span/tracecontext-parent propagated?)
     (capture-shape 'span/datadog-parent propagated?)))
 

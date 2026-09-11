@@ -155,10 +155,16 @@ type sinkRecord struct {
 }
 
 type atomicProfileManifest struct {
-	Family         string `json:"family,omitempty"`
-	WireVersion    string `json:"wireVersion,omitempty"`
-	Application    string `json:"application,omitempty"`
-	ShapeNamespace string `json:"shapeNamespace,omitempty"`
+	Family                        string `json:"family,omitempty"`
+	WireVersion                   string `json:"wireVersion,omitempty"`
+	Application                   string `json:"application,omitempty"`
+	ShapeNamespace                string `json:"shapeNamespace,omitempty"`
+	TracerVersion                 string `json:"tracerVersion,omitempty"`
+	ReferenceProfile              string `json:"referenceProfile,omitempty"`
+	ReferenceShapeNamespace       string `json:"referenceShapeNamespace,omitempty"`
+	ReferenceProofPlanSHA256      string `json:"referenceProofPlanSha256,omitempty"`
+	ValidationPolicySHA256        string `json:"validationPolicySha256,omitempty"`
+	CandidateImplementationSHA256 string `json:"candidateImplementationSha256,omitempty"`
 
 	SchemaVersion  int               `json:"schemaVersion"`
 	Profile        string            `json:"profile"`
@@ -167,6 +173,7 @@ type atomicProfileManifest struct {
 	Program        string            `json:"program"`
 	Libraries      []string          `json:"libraries"`
 	Imports        []string          `json:"imports"`
+	Scenarios      []string          `json:"scenarios"`
 	ScenarioShapes map[string]string `json:"scenarioShapes"`
 }
 
@@ -180,10 +187,12 @@ type proofPlanProof struct {
 }
 
 type normalizedProofPlan struct {
-	Family         string `json:"family,omitempty"`
-	WireVersion    string `json:"wireVersion,omitempty"`
-	Application    string `json:"application,omitempty"`
-	ShapeNamespace string `json:"shapeNamespace,omitempty"`
+	Family           string `json:"family,omitempty"`
+	WireVersion      string `json:"wireVersion,omitempty"`
+	Application      string `json:"application,omitempty"`
+	ShapeNamespace   string `json:"shapeNamespace,omitempty"`
+	TracerVersion    string `json:"tracerVersion,omitempty"`
+	ReferenceProfile string `json:"referenceProfile,omitempty"`
 
 	SchemaVersion   int               `json:"schemaVersion"`
 	Profile         string            `json:"profile"`
@@ -198,12 +207,14 @@ type normalizedProofPlan struct {
 }
 
 type atomicProfile struct {
-	Family, WireVersion, Application, ShapeNamespace string
-	ID, Scenario, Program, ValidationMode            string
-	Signals                                          map[string]bool
-	Libraries, Imports                               []string
-	Plan, Shape                                      []byte
-	ExpectedProofs                                   []proofPlanProof
+	Family, WireVersion, Application, ShapeNamespace, TracerVersion                 string
+	ReferenceProfile, ReferenceShapeNamespace                                       string
+	ReferenceProofPlanSHA256, ValidationPolicySHA256, CandidateImplementationSHA256 string
+	ID, Scenario, Program, ValidationMode                                           string
+	Signals                                                                         map[string]bool
+	Libraries, Imports                                                              []string
+	Plan, Shape                                                                     []byte
+	ExpectedProofs                                                                  []proofPlanProof
 }
 
 func loadAtomicProfile(value, scenario, mode string) (atomicProfile, error) {
@@ -233,21 +244,35 @@ func loadAtomicProfile(value, scenario, mode string) (atomicProfile, error) {
 	if (manifest.SchemaVersion != 1 && manifest.SchemaVersion != 2) || manifest.Profile == "" || manifest.ProofPlan == "" || manifest.Program == "" || len(manifest.Libraries) == 0 {
 		return profile, errors.New("atomic profile manifest is incomplete")
 	}
+	if !containsString(manifest.Scenarios, scenario) {
+		return profile, fmt.Errorf("scenario %q is not declared by profile %q", scenario, manifest.Profile)
+	}
 	if err := schemeIdentifier(manifest.Profile); err != nil {
 		return profile, fmt.Errorf("invalid profile id: %w", err)
 	}
 	if manifest.SchemaVersion == 2 {
-		if manifest.Family != "datadog" || (manifest.WireVersion != "v0.4" && manifest.WireVersion != "v0.5") || manifest.Application == "" || manifest.ShapeNamespace == "" {
+		if manifest.Family != "datadog" || (manifest.WireVersion != "v0.4" && manifest.WireVersion != "v0.5") || manifest.Application == "" || manifest.ShapeNamespace == "" || manifest.TracerVersion == "" {
 			return profile, errors.New("invalid Datadog manifest identity")
+		}
+		if !sha256Digest.MatchString(manifest.ValidationPolicySHA256) || !sha256Digest.MatchString(manifest.CandidateImplementationSHA256) {
+			return profile, errors.New("invalid Datadog manifest policy/candidate digest")
+		}
+		hasReference := manifest.ReferenceProfile != "" || manifest.ReferenceShapeNamespace != "" || manifest.ReferenceProofPlanSHA256 != ""
+		if hasReference && (manifest.ReferenceProfile == "" || manifest.ReferenceShapeNamespace == "" || !sha256Digest.MatchString(manifest.ReferenceProofPlanSHA256)) {
+			return profile, errors.New("incomplete Datadog reference identity")
 		}
 		if _, err := schemeLibraryName(manifest.ShapeNamespace); err != nil {
 			return profile, err
 		}
-	} else if manifest.Family != "" || manifest.WireVersion != "" || manifest.Application != "" || manifest.ShapeNamespace != "" {
+	} else if manifest.Family != "" || manifest.WireVersion != "" || manifest.Application != "" || manifest.ShapeNamespace != "" || manifest.TracerVersion != "" {
 		return profile, errors.New("legacy manifest must not declare a telemetry family")
 	}
 	profile.Family, profile.WireVersion = manifest.Family, manifest.WireVersion
 	profile.Application, profile.ShapeNamespace = manifest.Application, manifest.ShapeNamespace
+	profile.TracerVersion = manifest.TracerVersion
+	profile.ReferenceProfile, profile.ReferenceShapeNamespace = manifest.ReferenceProfile, manifest.ReferenceShapeNamespace
+	profile.ReferenceProofPlanSHA256, profile.ValidationPolicySHA256 = manifest.ReferenceProofPlanSHA256, manifest.ValidationPolicySHA256
+	profile.CandidateImplementationSHA256 = manifest.CandidateImplementationSHA256
 	if profile.ShapeNamespace == "" {
 		profile.ShapeNamespace = "realworld.shape." + manifest.Profile
 	}
@@ -264,7 +289,11 @@ func loadAtomicProfile(value, scenario, mode string) (atomicProfile, error) {
 	if shape := manifest.ScenarioShapes[scenario]; shape != "" && mode != "candidate" {
 		profile.ValidationMode, profile.Shape = "exact", []byte(shape)
 		profile.Libraries = append(profile.Libraries, shape)
-		profile.Imports = append(profile.Imports, profile.ShapeNamespace+"."+scenario)
+		shapeNamespace := profile.ShapeNamespace
+		if profile.ReferenceShapeNamespace != "" {
+			shapeNamespace = profile.ReferenceShapeNamespace
+		}
+		profile.Imports = append(profile.Imports, shapeNamespace+"."+scenario)
 	}
 	var plan normalizedProofPlan
 	decoder = json.NewDecoder(bytes.NewReader(profile.Plan))
@@ -272,7 +301,7 @@ func loadAtomicProfile(value, scenario, mode string) (atomicProfile, error) {
 	if err := decoder.Decode(&plan); err != nil {
 		return profile, fmt.Errorf("decode normalized proof plan: %w", err)
 	}
-	if plan.SchemaVersion != manifest.SchemaVersion || plan.Profile != profile.ID || plan.Family != profile.Family || plan.WireVersion != profile.WireVersion || plan.Application != manifest.Application || plan.ShapeNamespace != manifest.ShapeNamespace {
+	if plan.SchemaVersion != manifest.SchemaVersion || plan.Profile != profile.ID || plan.Family != profile.Family || plan.WireVersion != profile.WireVersion || plan.Application != manifest.Application || plan.ShapeNamespace != manifest.ShapeNamespace || plan.TracerVersion != manifest.TracerVersion || plan.ReferenceProfile != manifest.ReferenceProfile {
 		return profile, errors.New("normalized proof plan does not match profile")
 	}
 	for _, proof := range plan.Proofs {
@@ -494,7 +523,11 @@ func validateTelemetryDump(client http.Client, baseURL, mode, scenario string, p
 		return err
 	}
 	started := time.Now()
-	request, err := http.NewRequest(http.MethodPost, sinkURL(baseURL, "/validate", profile.Family), bytes.NewReader(source))
+	validationPath := "/validate"
+	if profile.Family == "datadog" {
+		validationPath += "?app=" + url.QueryEscape(profile.Application) + "&scenario=" + url.QueryEscape(scenario)
+	}
+	request, err := http.NewRequest(http.MethodPost, sinkURL(baseURL, validationPath, profile.Family), bytes.NewReader(source))
 	if err != nil {
 		return fmt.Errorf("create Scheme validation request: %w", err)
 	}
@@ -545,6 +578,7 @@ func validateTelemetryDump(client http.Client, baseURL, mode, scenario string, p
 
 var proofMarker = regexp.MustCompile(`\[\[OTLP-PROOF-V1\|([^|\]]+)\|([^|\]]+)\|([^|\]]+)\]\]`)
 var commitRevision = regexp.MustCompile(`^[0-9a-f]{40}$`)
+var sha256Digest = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 type receiptProof struct {
 	FeatureID string `json:"featureId"`
@@ -554,19 +588,210 @@ type receiptProof struct {
 }
 
 type validationReceipt struct {
-	Family              string         `json:"family,omitempty"`
-	WireVersion         string         `json:"wireVersion,omitempty"`
-	SchemaVersion       int            `json:"schemaVersion"`
-	Revision            string         `json:"revision"`
-	Profile             string         `json:"profile"`
-	Scenario            string         `json:"scenario"`
-	ProofPlanSHA256     string         `json:"proofPlanSha256"`
-	CaptureSHA256       string         `json:"captureSha256"`
-	ValidationMode      string         `json:"validationMode"`
-	Outcome             string         `json:"outcome"`
-	XFailReason         string         `json:"xfailReason,omitempty"`
-	ScenarioShapeSHA256 string         `json:"scenarioShapeSha256,omitempty"`
-	Proofs              []receiptProof `json:"proofs"`
+	Family                        string           `json:"family,omitempty"`
+	WireVersion                   string           `json:"wireVersion,omitempty"`
+	SchemaVersion                 int              `json:"schemaVersion"`
+	Revision                      string           `json:"revision"`
+	Profile                       string           `json:"profile"`
+	Scenario                      string           `json:"scenario"`
+	ProofPlanSHA256               string           `json:"proofPlanSha256"`
+	CaptureSHA256                 string           `json:"captureSha256"`
+	ValidationMode                string           `json:"validationMode"`
+	Outcome                       string           `json:"outcome"`
+	XFailReason                   string           `json:"xfailReason,omitempty"`
+	ScenarioShapeSHA256           string           `json:"scenarioShapeSha256,omitempty"`
+	ReferenceProfile              string           `json:"referenceProfile,omitempty"`
+	ReferenceProofPlanSHA256      string           `json:"referenceProofPlanSha256,omitempty"`
+	ValidationPolicySHA256        string           `json:"validationPolicySha256,omitempty"`
+	CandidateImplementationSHA256 string           `json:"candidateImplementationSha256,omitempty"`
+	Coverage                      *datadogCoverage `json:"coverage,omitempty"`
+	Proofs                        []receiptProof   `json:"proofs"`
+}
+
+type datadogCoverage struct {
+	SchemaVersion      int            `json:"schemaVersion"`
+	Application        string         `json:"application"`
+	Scenario           string         `json:"scenario"`
+	IntegrationSpans   map[string]int `json:"integrationSpans"`
+	FieldPolicies      map[string]int `json:"fieldPolicies"`
+	SpanOccurrences    int            `json:"spanOccurrences"`
+	FieldOccurrences   int            `json:"fieldOccurrences"`
+	UnclassifiedFields int            `json:"unclassifiedFields"`
+}
+
+func collectDatadogCoverage(capture []byte, profile atomicProfile) (*datadogCoverage, error) {
+	var records []struct {
+		Payload struct {
+			Traces [][]map[string]json.RawMessage `json:"traces"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(capture, &records); err != nil {
+		return nil, fmt.Errorf("decode Datadog coverage capture: %w", err)
+	}
+	coverage := &datadogCoverage{SchemaVersion: 1, Application: profile.Application, Scenario: profile.Scenario,
+		IntegrationSpans: map[string]int{"http.server": 0, "database": 0},
+		FieldPolicies:    map[string]int{"exact": 0, "normalized": 0, "runtime-validated": 0}}
+	for _, record := range records {
+		for _, trace := range record.Payload.Traces {
+			traceService := ""
+			for _, span := range trace {
+				var name string
+				_ = json.Unmarshal(span["name"], &name)
+				if name == "aiohttp.request" || name == "django.request" {
+					_ = json.Unmarshal(span["service"], &traceService)
+					break
+				}
+			}
+			for _, span := range trace {
+				coverage.SpanOccurrences++
+				var name, typ string
+				_ = json.Unmarshal(span["name"], &name)
+				_ = json.Unmarshal(span["type"], &typ)
+				if name == "aiohttp.request" || name == "django.request" {
+					coverage.IntegrationSpans["http.server"]++
+				}
+				if typ == "sql" || strings.HasPrefix(name, "sqlite.") {
+					coverage.IntegrationSpans["database"]++
+				}
+				for key, raw := range span {
+					coverage.FieldOccurrences++
+					switch key {
+					case "trace_id", "span_id", "parent_id", "start", "duration":
+						coverage.FieldPolicies["runtime-validated"]++
+					case "service":
+						var service string
+						if json.Unmarshal(raw, &service) != nil {
+							coverage.UnclassifiedFields++
+						} else if traceService != "" && service == traceService {
+							coverage.FieldPolicies["normalized"]++
+						} else {
+							coverage.FieldPolicies["exact"]++
+						}
+					case "meta", "metrics":
+						var fields map[string]json.RawMessage
+						if json.Unmarshal(raw, &fields) != nil {
+							coverage.UnclassifiedFields++
+							continue
+						}
+						// The container field itself has an exact presence policy.
+						coverage.FieldPolicies["exact"]++
+						for nested, nestedRaw := range fields {
+							coverage.FieldOccurrences++
+							if (key == "meta" && (nested == "runtime-id" || nested == "_dd.p.tid" || nested == "error.stack")) || (key == "metrics" && nested == "process_id") {
+								coverage.FieldPolicies["runtime-validated"]++
+							} else if key == "meta" {
+								normalized, normalizeErr := datadogMetaFieldNormalized(nested, nestedRaw, traceService)
+								if normalizeErr != nil {
+									coverage.UnclassifiedFields++
+								} else if normalized {
+									coverage.FieldPolicies["normalized"]++
+								} else {
+									coverage.FieldPolicies["exact"]++
+								}
+							} else {
+								coverage.FieldPolicies["exact"]++
+							}
+						}
+					case "name", "resource", "error", "type":
+						coverage.FieldPolicies["exact"]++
+					default:
+						coverage.UnclassifiedFields++
+					}
+				}
+			}
+		}
+	}
+	if coverage.SpanOccurrences == 0 || coverage.IntegrationSpans["http.server"] == 0 || coverage.UnclassifiedFields != 0 {
+		return nil, fmt.Errorf("incomplete Datadog coverage evidence: %+v", coverage)
+	}
+	return coverage, nil
+}
+
+func datadogMetaFieldNormalized(key string, raw json.RawMessage, traceService string) (bool, error) {
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return false, err
+	}
+	normalized := value
+	switch key {
+	case "http.url":
+		var normalizeErr error
+		normalized, normalizeErr = normalizeDatadogEndpoint(value)
+		if normalizeErr != nil {
+			return false, normalizeErr
+		}
+	case "db.name", "sql.db":
+		if strings.HasSuffix(value, "realworld.sqlite3") {
+			normalized = "<fixture>/realworld.sqlite3"
+		}
+	case "_dd.base_service":
+		if value == traceService {
+			normalized = "<service>"
+		}
+	default:
+		normalized = normalizeDatadogWorkloadID(value)
+	}
+	return normalized != value, nil
+}
+
+func normalizeDatadogEndpoint(value string) (string, error) {
+	for _, prefix := range []string{"http://127.0.0.1:", "http://localhost:"} {
+		if rest, found := strings.CutPrefix(value, prefix); found {
+			if offset := strings.IndexByte(rest, '/'); offset >= 0 {
+				port, suffix := rest[:offset], rest[offset:]
+				if port != "" && strings.IndexFunc(port, func(r rune) bool { return r < '0' || r > '9' }) < 0 {
+					parsedPort, err := strconv.Atoi(port)
+					if err != nil || parsedPort < 1 || parsedPort > 65535 {
+						return "", errors.New("invalid Datadog loopback endpoint port")
+					}
+					return normalizeDatadogWorkloadID("http://<endpoint>" + suffix), nil
+				}
+			}
+		}
+	}
+	return normalizeDatadogWorkloadID(value), nil
+}
+
+func normalizeDatadogWorkloadID(value string) string {
+	return normalizeDatadogWorkloadMarker(normalizeDatadogWorkloadMarker(value, "rules_stests_"), "rules-stests-")
+}
+
+func normalizeDatadogWorkloadMarker(value, marker string) string {
+	var result strings.Builder
+	remaining := value
+	for {
+		offset := strings.Index(remaining, marker)
+		if offset < 0 {
+			result.WriteString(remaining)
+			return result.String()
+		}
+		result.WriteString(remaining[:offset])
+		after := remaining[offset+len(marker):]
+		digits := 0
+		for digits < len(after) && after[digits] >= '0' && after[digits] <= '9' {
+			digits++
+		}
+		result.WriteString(marker)
+		if digits == 0 {
+			remaining = after
+			continue
+		}
+		result.WriteString("<workload>")
+		remaining = after[digits:]
+		if len(remaining) >= 9 && remaining[0] == '-' && allASCIIHex(remaining[1:9]) {
+			remaining = remaining[9:]
+		}
+	}
+}
+
+func allASCIIHex(value string) bool {
+	for index := range value {
+		character := value[index]
+		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') || (character >= 'A' && character <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 func validateProofSet(expected []proofPlanProof, output []byte) ([]receiptProof, error) {
@@ -659,6 +884,15 @@ func emitReceipt(profile atomicProfile, capture []byte, proofs []receiptProof, o
 		receipt.SchemaVersion = 2
 		receipt.Family = profile.Family
 		receipt.WireVersion = profile.WireVersion
+		receipt.ReferenceProfile = profile.ReferenceProfile
+		receipt.ReferenceProofPlanSHA256 = profile.ReferenceProofPlanSHA256
+		receipt.ValidationPolicySHA256 = profile.ValidationPolicySHA256
+		receipt.CandidateImplementationSHA256 = profile.CandidateImplementationSHA256
+		coverage, coverageErr := collectDatadogCoverage(capture, profile)
+		if coverageErr != nil {
+			return coverageErr
+		}
+		receipt.Coverage = coverage
 	}
 	if profile.ValidationMode == "exact" {
 		digest := sha256.Sum256(profile.Shape)
@@ -892,7 +1126,8 @@ func emitProfileShapeCandidate(client http.Client, baseURL, scenario string, sel
 	if selected.Application != "" {
 		app = selected.Application
 	}
-	response, err := client.Get(sinkURL(baseURL, "/candidate?app="+url.QueryEscape(app), selected.Family))
+	candidatePath := "/candidate?app=" + url.QueryEscape(app) + "&scenario=" + url.QueryEscape(scenario)
+	response, err := client.Get(sinkURL(baseURL, candidatePath, selected.Family))
 	if err != nil {
 		return fmt.Errorf("generate OTLP Scheme shape candidate: %w", err)
 	}

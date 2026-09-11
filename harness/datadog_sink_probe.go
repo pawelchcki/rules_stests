@@ -72,7 +72,7 @@ func main() {
 				}
 			}
 			checkStats("datadog", 1, 1)
-			candidate := request("GET", "/candidate?app=aiohttp&protocol=datadog", "", nil, 200)
+			candidate := request("GET", "/candidate?app=aiohttp&scenario=probe&protocol=datadog", "", nil, 200)
 			source := append([]byte{}, ddAssertions...)
 			source = append(source, []byte("\n(import (scheme base) (scheme read) (datadog capture shapes))\n")...)
 			source = append(source, candidate...)
@@ -82,22 +82,23 @@ func main() {
 			request("POST", "/validate?protocol=datadog", "text/x-scheme", source, 409)
 		}
 	}
-	// v0.4 omits zero/empty defaults. Native dumps preserve absence, while
-	// Scheme semantics and exact topology equal the explicit-default form.
+	exactMutationCoverage()
+	// v0.4 omits zero/empty defaults. Native dumps preserve absence and exact
+	// topology records that field-presence difference.
 	reset()
 	defaults := nativeSpan()
-	defaults["name"], defaults["type"], defaults["metrics"] = "probe.span", "", map[string]any{}
+	defaults["name"], defaults["type"], defaults["metrics"] = "aiohttp.request", "", map[string]any{}
 	request("POST", "/v0.4/traces", "application/msgpack", wire("v0.4", defaults), 200)
-	explicitShape := request("GET", "/candidate?app=aiohttp&protocol=datadog", "", nil, 200)
+	explicitShape := request("GET", "/candidate?app=aiohttp&scenario=probe&protocol=datadog", "", nil, 200)
 	reset()
 	for _, field := range []string{"parent_id", "error", "type", "metrics"} {
 		delete(defaults, field)
 	}
 	request("POST", "/v0.4/traces", "application/msgpack", wire("v0.4", defaults), 200)
 	validate("span/native-fields span/ids-valid span/completed capture/semantic-valid", 200)
-	omittedShape := request("GET", "/candidate?app=aiohttp&protocol=datadog", "", nil, 200)
-	if !bytes.Equal(explicitShape, omittedShape) {
-		panic("omitted v0.4 defaults changed topology")
+	omittedShape := request("GET", "/candidate?app=aiohttp&scenario=probe&protocol=datadog", "", nil, 200)
+	if bytes.Equal(explicitShape, omittedShape) {
+		panic("omitted v0.4 defaults lost exact field-presence evidence")
 	}
 	dump := request("GET", "/dump?protocol=datadog", "", nil, 200)
 	for _, field := range []string{"parent_id", "error", "type", "metrics"} {
@@ -150,6 +151,11 @@ func main() {
 		{"partial exception", func(s map[string]any) { s["meta"].(map[string]any)["error.type"] = "ValueError"; s["error"] = 1 }, "span/exception-metadata"},
 		{"invalid meta", func(s map[string]any) { s["meta"].(map[string]any)["bad"] = 3 }, "capture/semantic-valid"},
 		{"invalid tid", func(s map[string]any) { s["meta"].(map[string]any)["_dd.p.tid"] = "no" }, "capture/semantic-valid"},
+		{"malformed runtime id", func(s map[string]any) { s["meta"].(map[string]any)["runtime-id"] = "no" }, "capture/semantic-valid"},
+		{"misplaced runtime id separator", func(s map[string]any) { s["meta"].(map[string]any)["runtime-id"] = "01234567-89abcdef0123456789abcdef" }, "capture/semantic-valid"},
+		{"invalid loopback port", func(s map[string]any) { s["meta"].(map[string]any)["http.url"] = "http://127.0.0.1:999999/api/tags" }, "capture/semantic-valid"},
+		{"malformed process id", func(s map[string]any) { s["metrics"].(map[string]any)["process_id"] = 0 }, "capture/semantic-valid"},
+		{"additional native field", func(s map[string]any) { s["private"] = "unclassified" }, "capture/semantic-valid"},
 		{"self cycle", func(s map[string]any) { s["parent_id"] = s["span_id"] }, "capture/semantic-valid"},
 	}
 	for _, tc := range mutations {
@@ -288,6 +294,119 @@ func nativeSpan() map[string]any {
 		"start": uint64(1800000000000000001), "duration": uint64(120001), "error": 0,
 		"meta":    map[string]any{"http.method": "GET", "http.status_code": "404", "component": "aiohttp", "span.kind": "server", "_dd.p.tid": "4bf92f3577b34da6"},
 		"metrics": map[string]any{"_dd.measured": 1, "_sampling_priority_v1": 1},
+	}
+}
+
+// Exercise the reviewed HTTP/database shape as one exact comparison program.
+// Semantically valid mutations must produce distinct shapes; a trace without
+// its HTTP server span must not be eligible for candidate generation at all.
+func exactMutationCoverage() {
+	type mutation struct {
+		name   string
+		mutate func([]map[string]any) []map[string]any
+	}
+	mutations := []mutation{
+		{"dropped database span", func(spans []map[string]any) []map[string]any { return spans[:1] }},
+		{"extra database span", func(spans []map[string]any) []map[string]any {
+			extra := databaseSpan(uint64(math.MaxUint64-4), uint64(math.MaxUint64-1), "SELECT 1")
+			return append(spans, extra)
+		}},
+		{"detached commit", func(spans []map[string]any) []map[string]any { spans[2]["parent_id"] = uint64(0); return spans }},
+		{"wrong database parent", func(spans []map[string]any) []map[string]any { spans[1]["parent_id"] = uint64(12345); return spans }},
+		{"altered SQL", func(spans []map[string]any) []map[string]any {
+			spans[1]["resource"] = "SELECT title FROM articles WHERE slug = 'changed'"
+			return spans
+		}},
+		{"altered row count", func(spans []map[string]any) []map[string]any {
+			spans[1]["metrics"].(map[string]any)["db.row_count"] = 2
+			return spans
+		}},
+		{"altered HTTP URL", func(spans []map[string]any) []map[string]any {
+			spans[0]["meta"].(map[string]any)["http.url"] = "http://127.0.0.1:9000/changed?literal=1"
+			return spans
+		}},
+		{"altered user agent", func(spans []map[string]any) []map[string]any {
+			spans[0]["meta"].(map[string]any)["http.useragent"] = "mutation-agent"
+			return spans
+		}},
+		{"altered Django metadata", func(spans []map[string]any) []map[string]any {
+			spans[0]["meta"].(map[string]any)["django.view"] = "changed:view"
+			return spans
+		}},
+		{"missing metadata field", func(spans []map[string]any) []map[string]any {
+			delete(spans[0]["meta"].(map[string]any), "http.useragent")
+			return spans
+		}},
+		{"additional private tag", func(spans []map[string]any) []map[string]any {
+			spans[1]["meta"].(map[string]any)["_private.unreviewed"] = "present"
+			return spans
+		}},
+	}
+
+	reset()
+	request("POST", "/v0.4/traces", "application/msgpack", wireSpans("v0.4", richTrace()), 200)
+	baseline := request("GET", "/candidate?app=aiohttp&scenario=mutations&protocol=datadog", "", nil, 200)
+	for _, literal := range []string{"slug = 'literal'", "include=author", "keep-rules-stests-literal"} {
+		if !bytes.Contains(baseline, []byte(literal)) {
+			panic("exact candidate normalized stable context: " + literal)
+		}
+	}
+	source := append([]byte{}, ddAssertions...)
+	source = append(source, []byte("\n(import (scheme base) (scheme read) (datadog capture shapes))\n")...)
+	source = append(source, baseline...)
+	source = append(source, []byte("(define actual-shape (field 'trace-shapes (read)))\n(check (equal? scenario-shape actual-shape) \"mutation baseline\")\n")...)
+
+	for _, tc := range mutations {
+		reset()
+		spans := tc.mutate(richTrace())
+		request("POST", "/v0.4/traces", "application/msgpack", wireSpans("v0.4", spans), 200)
+		candidate := request("GET", "/candidate?app=aiohttp&scenario=mutations&protocol=datadog", "", nil, 200)
+		shape := candidateDatum(candidate)
+		source = append(source, []byte("(check (not (equal? ")...)
+		source = append(source, shape...)
+		source = append(source, []byte(" actual-shape)) ")...)
+		source = append(source, strconv.AppendQuote(nil, tc.name)...)
+		source = append(source, []byte(")\n")...)
+	}
+
+	reset()
+	withoutHTTP := richTrace()[1:]
+	request("POST", "/v0.4/traces", "application/msgpack", wireSpans("v0.4", withoutHTTP), 200)
+	request("GET", "/candidate?app=aiohttp&scenario=mutations&protocol=datadog", "", nil, 422)
+
+	reset()
+	request("POST", "/v0.4/traces", "application/msgpack", wireSpans("v0.4", richTrace()), 200)
+	request("POST", "/validate?app=aiohttp&scenario=mutations&protocol=datadog", "text/x-scheme", source, 200)
+}
+
+func candidateDatum(candidate []byte) []byte {
+	start := bytes.IndexByte(candidate, '\'')
+	if start < 0 || len(candidate) < start+3 || !bytes.HasSuffix(candidate, []byte(")\n")) {
+		panic("malformed Datadog candidate source")
+	}
+	return candidate[start : len(candidate)-2]
+}
+
+func richTrace() []map[string]any {
+	root := nativeSpan()
+	root["resource"] = "GET /api/articles/{slug}"
+	root["meta"].(map[string]any)["http.url"] = "http://127.0.0.1:9000/api/articles/literal?include=author"
+	root["meta"].(map[string]any)["http.useragent"] = "hurl/8.0.1"
+	root["meta"].(map[string]any)["django.view"] = "api-1.0.0:retrieve"
+	root["meta"].(map[string]any)["test.context"] = "keep-rules-stests-literal"
+	query := databaseSpan(uint64(math.MaxUint64-2), uint64(math.MaxUint64-1), "SELECT title FROM articles WHERE slug = 'literal'")
+	commit := databaseSpan(uint64(math.MaxUint64-3), uint64(math.MaxUint64-2), "COMMIT")
+	commit["name"], commit["type"], commit["resource"] = "sqlite.connection.commit", "", "sqlite.connection.commit"
+	return []map[string]any{root, query, commit}
+}
+
+func databaseSpan(id, parent uint64, resource string) map[string]any {
+	return map[string]any{
+		"service": "sqlite", "name": "sqlite.query", "resource": resource, "type": "sql",
+		"trace_id": uint64(math.MaxUint64), "span_id": id, "parent_id": parent,
+		"start": uint64(1800000000000000002), "duration": uint64(12000), "error": 0,
+		"meta":    map[string]any{"_dd.base_service": "probe", "component": "sqlite", "span.kind": "client", "sql.db": "/tmp/rules_stests_fixture/realworld.sqlite3"},
+		"metrics": map[string]any{"db.row_count": 1},
 	}
 }
 func wire(version string, span map[string]any) []byte {

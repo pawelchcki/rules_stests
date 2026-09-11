@@ -25,8 +25,14 @@ immutable commit that supplies the selected module version.
 Build `//:telemetry_api_check` to compile consumer-owned OTel and Datadog
 manifests and check the shared `TelemetryProfileInfo` provider, protocol
 identity, and default injection/sink labels across repository boundaries.
-Run `//:example_datadog_hurl_test` for the Datadog `tags` scenario. Its receipts
-and candidates remain separate from the OTel report manifest.
+Run `//:example_datadog_hurl_test` and `//:example_django_datadog_hurl_test`
+to exercise both applications against the published 4.14.0 reference profiles.
+Run `//:datadog_consumer_identity_test` for the controlled native emitter: its
+declared `consumer-tracer/1.0` identity is accepted and 4.14.0 output is rejected
+against that declaration.
+The consumer profiles own their candidate declarations and tracer identity, but
+inherit the complete reviewed scenario, proof, application, wire, and exact-shape
+contract. Their receipts and candidates remain separate from the OTel report.
 
 Datadog's aiohttp server integration needs `datadog_python_injection(aiohttp =
 True)`: the launcher calls the package's `trace_app` hook before the server
