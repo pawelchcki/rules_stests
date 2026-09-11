@@ -180,7 +180,7 @@ func main() {
 			ShapeNamespace: plan.ShapeNamespace, TracerVersion: plan.TracerVersion,
 			SchemaVersion: plan.SchemaVersion, Profile: profileID, Signals: signals,
 			ProofPlan: string(encoded), Program: string(program), Libraries: libraries,
-			Imports: importNames, ScenarioShapes: shapes,
+			Imports: importNames, Scenarios: scenarios, ScenarioShapes: shapes,
 		}
 		implementationDeclaration := strings.Join([]string{plan.Language, plan.TracerVersion, strings.Join(plan.Implementations, "\x00"), strings.Join(implementations, "\x00")}, "\x00")
 		implementationDigest := sha256.Sum256([]byte(implementationDeclaration))
@@ -258,6 +258,7 @@ type manifestDocument struct {
 	Program                       string            `json:"program"`
 	Libraries                     []string          `json:"libraries"`
 	Imports                       []string          `json:"imports"`
+	Scenarios                     []string          `json:"scenarios"`
 	ScenarioShapes                map[string]string `json:"scenarioShapes"`
 }
 

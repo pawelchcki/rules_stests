@@ -173,6 +173,7 @@ type atomicProfileManifest struct {
 	Program        string            `json:"program"`
 	Libraries      []string          `json:"libraries"`
 	Imports        []string          `json:"imports"`
+	Scenarios      []string          `json:"scenarios"`
 	ScenarioShapes map[string]string `json:"scenarioShapes"`
 }
 

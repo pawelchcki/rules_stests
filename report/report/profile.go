@@ -69,14 +69,23 @@ func CompileTelemetryProfile(profileSource string, implementationSources []strin
 	}
 	plan := NormalizedProfilePlan{SchemaVersion: 1, Sources: map[string]string{}}
 	seenClaims := map[string]bool{}
+	seenIdentity := map[string]bool{}
 	for _, clause := range expression.list[1:] {
 		switch head(clause) {
 		case "id":
+			if seenIdentity["id"] {
+				return plan, fmt.Errorf("duplicate profile id clause")
+			}
+			seenIdentity["id"] = true
 			if len(clause.list) != 2 {
 				return plan, fmt.Errorf("profile id clause is malformed")
 			}
 			plan.Profile = atomValue(unquote(clause.list[1]))
 		case "family", "wire-version", "application", "shape-namespace", "tracer-version":
+			if seenIdentity[head(clause)] {
+				return plan, fmt.Errorf("duplicate profile %s clause", head(clause))
+			}
+			seenIdentity[head(clause)] = true
 			if len(clause.list) != 2 {
 				return plan, fmt.Errorf("profile %s clause is malformed", head(clause))
 			}

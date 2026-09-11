@@ -230,6 +230,10 @@ func TestCompileDatadogIdentityAndLegacySchema(t *testing.T) {
 			t.Fatal("accepted invalid family identity")
 		}
 	}
+	duplicateTracerVersion := strings.Replace(source, `(tracer-version "4.14.0")`, `(tracer-version "4.14.0") (tracer-version "4.15.0")`, 1)
+	if _, err := compileProfileFixture(duplicateTracerVersion, profileTestImplementation, profileTestRules, profileTestShapes); err == nil || !strings.Contains(err.Error(), "duplicate profile tracer-version clause") {
+		t.Fatalf("duplicate tracer version error = %v", err)
+	}
 	legacy, err := compileProfileFixture(profileTestSource, profileTestImplementation, profileTestRules, profileTestShapes)
 	if err != nil {
 		t.Fatal(err)

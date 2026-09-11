@@ -17,6 +17,7 @@ type manifest struct {
 	Profile                       string            `json:"profile"`
 	Application                   string            `json:"application"`
 	ProofPlan                     string            `json:"proofPlan"`
+	Scenarios                     []string          `json:"scenarios"`
 	ScenarioShapes                map[string]string `json:"scenarioShapes"`
 	ValidationPolicySHA256        string            `json:"validationPolicySha256"`
 	CandidateImplementationSHA256 string            `json:"candidateImplementationSha256"`
@@ -92,12 +93,17 @@ func validate(revision string, manifests []manifest, receipts []receipt) error {
 	expected := map[string]manifest{}
 	for _, m := range manifests {
 		hasReference := m.ReferenceProfile != "" || m.ReferenceProofPlanSHA256 != ""
-		if m.Family != "datadog" || m.Profile == "" || m.Application == "" || m.ProofPlan == "" || len(m.ScenarioShapes) == 0 ||
+		if m.Family != "datadog" || m.Profile == "" || m.Application == "" || m.ProofPlan == "" || len(m.Scenarios) == 0 || len(m.ScenarioShapes) != len(m.Scenarios) ||
 			!digestRE.MatchString(m.ValidationPolicySHA256) || !digestRE.MatchString(m.CandidateImplementationSHA256) ||
 			(hasReference && (m.ReferenceProfile == "" || !digestRE.MatchString(m.ReferenceProofPlanSHA256))) {
 			return fmt.Errorf("incomplete Datadog manifest")
 		}
-		for scenario := range m.ScenarioShapes {
+		declaredScenarios := map[string]bool{}
+		for _, scenario := range m.Scenarios {
+			if scenario == "" || declaredScenarios[scenario] || m.ScenarioShapes[scenario] == "" {
+				return fmt.Errorf("incomplete or duplicate Datadog scenario %s/%s", m.Profile, scenario)
+			}
+			declaredScenarios[scenario] = true
 			key := m.Profile + "\x00" + scenario
 			if _, exists := expected[key]; exists {
 				return fmt.Errorf("duplicate Datadog manifest identity %s/%s", m.Profile, scenario)
@@ -132,7 +138,8 @@ func validate(revision string, manifests []manifest, receipts []receipt) error {
 			return fmt.Errorf("invalid proof evidence %s/%s: %w", r.Profile, r.Scenario, err)
 		}
 		c := r.Coverage
-		if c.SchemaVersion != 1 || c.Application != m.Application || c.Scenario != r.Scenario || c.UnclassifiedFields != 0 || c.IntegrationSpans["http.server"] < 1 || c.IntegrationSpans["database"] < 1 || c.SpanOccurrences < c.IntegrationSpans["http.server"]+c.IntegrationSpans["database"] || c.FieldOccurrences != c.FieldPolicies["exact"]+c.FieldPolicies["normalized"]+c.FieldPolicies["runtime-validated"] {
+		exactFields, normalizedFields, runtimeFields := c.FieldPolicies["exact"], c.FieldPolicies["normalized"], c.FieldPolicies["runtime-validated"]
+		if c.SchemaVersion != 1 || c.Application != m.Application || c.Scenario != r.Scenario || c.UnclassifiedFields != 0 || c.IntegrationSpans["http.server"] < 1 || c.IntegrationSpans["database"] < 1 || c.SpanOccurrences < c.IntegrationSpans["http.server"]+c.IntegrationSpans["database"] || c.FieldOccurrences < 1 || exactFields < 0 || normalizedFields < 0 || runtimeFields < 0 || c.FieldOccurrences != exactFields+normalizedFields+runtimeFields {
 			return fmt.Errorf("incomplete field coverage %s/%s", r.Profile, r.Scenario)
 		}
 	}
