@@ -1,0 +1,7 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+package(default_visibility = ["//visibility:public"])
+
+go_library(name = "datadog_coverage_lib", srcs = ["main.go"], importpath = "github.com/pawelchcki/rules_stests/tools/datadog_coverage", visibility = [":__pkg__"])
+go_binary(name = "datadog_coverage", embed = [":datadog_coverage_lib"])
+go_test(name = "datadog_coverage_test", srcs = ["main_test.go"], embed = [":datadog_coverage_lib"])

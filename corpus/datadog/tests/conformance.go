@@ -29,7 +29,7 @@ const program = `
 (import (scheme base) (datadog capture shapes) (datadog profile) (datadog catalog))
 (define capture CAPTURE)
 (define profile
- (realworld-profile (service-name "test-datadog") (wire-version "v0.5")
+ (realworld-profile (service-name "test-datadog") (language 'python) (tracer-version "4.14.0") (wire-version "v0.5")
   (all (observed span/native-fields span/ids-valid span/completed span/root-present
                  span/http-classification span/exception-metadata span/service-present
                  request/headers-and-counts capture/semantic-valid))))
@@ -96,6 +96,11 @@ func main() {
 	run("unsigned IDs and default 404 classification", capture, program, 200)
 	run("wide metric integers remain lossless", strings.Replace(capture,
 		`("_dd.measured" 1)`, `("_dd.measured" 1) ("wide.unsigned" "18446744073709551615") ("wide.signed" "-9223372036854775808")`, 1), program, 200)
+	consumerIdentity := "consumer-tracer/1.0"
+	consumerProgram := strings.Replace(program, `"4.14.0"`, `"`+consumerIdentity+`"`, 1)
+	consumerCapture := strings.Replace(capture, `"4.14.0"`, `"`+consumerIdentity+`"`, 1)
+	run("declared consumer tracer identity", consumerCapture, consumerProgram, 200)
+	run("incompatible consumer tracer identity", capture, consumerProgram, 409)
 	for _, tc := range []testCase{
 		{"zero trace ID", `(trace-id "18446744073709551615")`, `(trace-id "0")`},
 		{"overflow trace ID", `(trace-id "18446744073709551615")`, `(trace-id "18446744073709551616")`},
@@ -105,6 +110,7 @@ func main() {
 		{"semantic violation", `(semantic-valid #t)`, `(semantic-valid #f)`},
 		{"wrong intake count", `(trace-count "1")`, `(trace-count "2")`},
 		{"wrong tracer version", `"4.14.0"`, `"0.0.0"`},
+		{"undeclared tracer language", `("Datadog-Meta-Lang" "python")`, `("Datadog-Meta-Lang" "ruby")`},
 		{"duplicate tracer header", `("Datadog-Meta-Lang" "python")`, `("Datadog-Meta-Lang" "python") ("datadog-meta-lang" "python")`},
 		{"duplicate count header", `("X-Datadog-Trace-Count" "1")`, `("X-Datadog-Trace-Count" "1") ("x-datadog-trace-count" "1")`},
 		{"wrong wire version", `(wire-version "v0.5")`, `(wire-version "v0.4")`},
@@ -127,10 +133,10 @@ func main() {
 	databaseCapture := `'((spans (
   ((name "aiohttp.request") (type "web") (trace-id "1") (span-id "2") (parent-id "0"))
   ((name "view") (type "") (trace-id "1") (span-id "3") (parent-id "2"))
-  ((name "sqlite.query") (type "sql") (trace-id "1") (span-id "4") (parent-id "3")))))`
+	  ((name "sqlite.connection.commit") (type "") (trace-id "1") (span-id "4") (parent-id "3")))))`
 	run("database HTTP ancestry", databaseCapture, databaseBody, 200)
 	run("detached database root", strings.Replace(databaseCapture, `(parent-id "3")`, `(parent-id "0")`, 1), databaseBody, 409)
-	run("database wrong trace", strings.Replace(databaseCapture, `(type "sql") (trace-id "1")`, `(type "sql") (trace-id "5")`, 1), databaseBody, 409)
+	run("database wrong trace", strings.Replace(databaseCapture, `(type "") (trace-id "1")`, `(type "") (trace-id "5")`, 1), databaseBody, 409)
 	run("database ancestry cycle", strings.Replace(databaseCapture, `(span-id "3") (parent-id "2")`, `(span-id "3") (parent-id "4")`, 1), databaseBody, 409)
 
 	exceptionBody := `(import (scheme base) (datadog capture shapes))

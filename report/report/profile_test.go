@@ -217,12 +217,12 @@ func TestCheckedInProfilePlanSnapshotsAndDescriptorOwnership(t *testing.T) {
 }
 
 func TestCompileDatadogIdentityAndLegacySchema(t *testing.T) {
-	source := strings.Replace(profileTestSource, "(id 'test-profile)", `(id 'test-profile) (family 'datadog) (wire-version "v0.5") (application "aiohttp") (shape-namespace "datadog.realworld.shape.test-profile")`, 1)
+	source := strings.Replace(profileTestSource, "(id 'test-profile)", `(id 'test-profile) (family 'datadog) (wire-version "v0.5") (application "aiohttp") (shape-namespace "datadog.realworld.shape.test-profile") (tracer-version "4.14.0")`, 1)
 	plan, err := compileProfileFixture(source, profileTestImplementation, profileTestRules, profileTestShapes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.SchemaVersion != 2 || plan.Family != "datadog" || plan.WireVersion != "v0.5" || plan.Application != "aiohttp" {
+	if plan.SchemaVersion != 2 || plan.Family != "datadog" || plan.WireVersion != "v0.5" || plan.Application != "aiohttp" || plan.TracerVersion != "4.14.0" {
 		t.Fatalf("wrong identity: %+v", plan)
 	}
 	for _, bad := range []string{strings.Replace(source, "v0.5", "v0.3", 1), strings.Replace(source, `(family 'datadog)`, "", 1)} {

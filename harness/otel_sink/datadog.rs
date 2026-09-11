@@ -302,6 +302,9 @@ fn integer(v: Option<&Value>) -> String {
 }
 fn valid_span(span: &Value) -> bool {
     span.is_object()
+        && span.as_object().is_some_and(|object| object.keys().all(|key| matches!(key.as_str(),
+            "service" | "name" | "resource" | "trace_id" | "span_id" | "parent_id" |
+            "start" | "duration" | "error" | "meta" | "metrics" | "type")))
         && ["trace_id", "span_id"]
             .iter()
             .all(|key| uint(span.get(*key)).is_some_and(|id| id > 0))
@@ -504,13 +507,95 @@ pub(crate) fn capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
             chunk_index += 1;
         }
     }
-    out.push_str("))(trace-shapes ");
+    let mut http_spans = 0usize;
+    let mut database_spans = 0usize;
+    let mut exact_fields = 0usize;
+    let mut normalized_fields = 0usize;
+    let mut runtime_fields = 0usize;
+    for record in records {
+        for trace in array(payload(record).get("traces")) {
+            let spans = array(Some(trace));
+            let trace_service = spans
+                .iter()
+                .find(|span| matches!(text(span.get("name")), "aiohttp.request" | "django.request"))
+                .map(|span| text(span.get("service")))
+                .unwrap_or("");
+            for span in spans {
+                let name = text(span.get("name"));
+                if matches!(name, "aiohttp.request" | "django.request") { http_spans += 1; }
+                if text(span.get("type")) == "sql" || name.starts_with("sqlite.") { database_spans += 1; }
+                if let Some(object) = span.as_object() {
+                    for key in object.keys() {
+                        match key.as_str() {
+                            "trace_id" | "span_id" | "parent_id" | "start" | "duration" => runtime_fields += 1,
+                            "service" if text(span.get("service")) == trace_service => normalized_fields += 1,
+                            "service" => exact_fields += 1,
+                            "meta" => {
+                                exact_fields += 1; // map presence
+                                if let Some(fields) = span.get(key).and_then(Value::as_object) {
+                                    for (meta_key, meta_value) in fields {
+                                        match meta_key.as_str() {
+                                            "runtime-id" | "_dd.p.tid" | "error.stack" => runtime_fields += 1,
+                                            _ if normalized_meta_value(meta_key, meta_value, trace_service).is_ok_and(|normalized| normalized != *meta_value) => normalized_fields += 1,
+                                            _ => exact_fields += 1,
+                                        }
+                                    }
+                                }
+                            }
+                            "metrics" => {
+                                exact_fields += 1; // map presence
+                                if let Some(fields) = span.get(key).and_then(Value::as_object) {
+                                    for metric_key in fields.keys() {
+                                        if metric_key == "process_id" { runtime_fields += 1; } else { exact_fields += 1; }
+                                    }
+                                }
+                            }
+                            _ => exact_fields += 1,
+                        }
+                    }
+                }
+            }
+        }
+    }
+    write!(out, "))(coverage ((policy-schema 1)(http-spans {http_spans})(database-spans {database_spans})(exact-fields {exact_fields})(normalized-fields {normalized_fields})(runtime-validated-fields {runtime_fields})(unclassified-fields 0)))(trace-shapes ").unwrap();
     match trace_shapes {
         Ok(s) => out.push_str(&s),
         Err(_) => out.push_str("#f"),
     }
     out.push_str("))\n");
     Ok(out.into_bytes())
+}
+
+pub(crate) fn capture_to_scheme_with_context(
+    records: &[Record],
+    app: &str,
+    scenario: &str,
+) -> Result<Vec<u8>, String> {
+    if !app.is_empty() || !scenario.is_empty() {
+        validate_workload_context(records, app, scenario)?;
+    }
+    capture_to_scheme(records)
+}
+
+fn context_identifier(value: &str) -> bool {
+    !value.is_empty() && value.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+fn validate_workload_context(records: &[Record], app: &str, scenario: &str) -> Result<(), String> {
+    if !context_identifier(app) || !context_identifier(scenario) {
+        return Err("invalid Datadog workload context".into());
+    }
+    let expected = match app {
+        "aiohttp" => "aiohttp.request",
+        "django" => "django.request",
+        _ => return Err("unknown Datadog application context".into()),
+    };
+    if !records.iter().any(|record| array(payload(record).get("traces")).iter().any(|trace|
+        array(Some(trace)).iter().any(|span| text(span.get("name")) == expected)))
+    {
+        return Err("Datadog capture does not match workload application".into());
+    }
+    Ok(())
 }
 fn parent_kind<'a>(span: &Value, mut spans: impl Iterator<Item = &'a Value>) -> &'static str {
     if parent_id(span) == Some(0) {
@@ -526,9 +611,112 @@ fn parent_kind<'a>(span: &Value, mut spans: impl Iterator<Item = &'a Value>) -> 
 
 // Exact native names and resources include stable SQL literals and LIMITs.
 // Only the fixture's temporary SQLite database path is normalized below.
+fn normalize_endpoint(value: &str) -> String {
+    for prefix in ["http://127.0.0.1:", "http://localhost:"] {
+        if let Some(rest) = value.strip_prefix(prefix) {
+            if let Some(offset) = rest.find('/') {
+                let (port, suffix) = rest.split_at(offset);
+                if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) {
+                    return normalize_workload_id(&format!("http://<endpoint>{suffix}"));
+                }
+            }
+        }
+    }
+    normalize_workload_id(value)
+}
+
+fn normalize_workload_id(value: &str) -> String {
+    let underscore = normalize_workload_marker(value, "rules_stests_");
+    normalize_workload_marker(&underscore, "rules-stests-")
+}
+
+fn normalize_workload_marker(value: &str, marker: &str) -> String {
+    let mut remaining = value;
+    let mut out = String::new();
+    while let Some(offset) = remaining.find(marker) {
+        out.push_str(&remaining[..offset]);
+        let after = &remaining[offset + marker.len()..];
+        let digits = after.bytes().take_while(|b| b.is_ascii_digit()).count();
+        if digits == 0 {
+            out.push_str(marker);
+            remaining = after;
+            continue;
+        }
+        out.push_str(marker);
+        out.push_str("<workload>");
+        remaining = &after[digits..];
+        if remaining.len() >= 9
+            && remaining.as_bytes()[0] == b'-'
+            && remaining.as_bytes()[1..9].iter().all(|b| b.is_ascii_hexdigit())
+        {
+            remaining = &remaining[9..];
+        }
+    }
+    out.push_str(remaining);
+    out
+}
+
+fn normalized_meta_value(key: &str, value: &Value, service: &str) -> Result<Value, String> {
+    let text = value.as_str().ok_or("Datadog metadata value is not text")?;
+    Ok(Value::String(match key {
+        "runtime-id" => {
+            let compact = text.bytes().filter(|b| *b != b'-').collect::<Vec<_>>();
+            if compact.len() != 32 || !compact.iter().all(|b| b.is_ascii_hexdigit())
+            {
+                return Err("malformed Datadog runtime-id".into());
+            }
+            "<runtime-id>".into()
+        }
+        "_dd.p.tid" => {
+            if text.len() != 16 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err("malformed Datadog trace high bits".into());
+            }
+            "<trace-id-high>".into()
+        }
+        "error.stack" => {
+            if text.is_empty() || !text.contains("Traceback") {
+                return Err("malformed Datadog exception stack".into());
+            }
+            "<validated-stack>".into()
+        }
+        "http.url" => normalize_endpoint(text),
+        "db.name" | "sql.db" if text.ends_with("realworld.sqlite3") => "<fixture>/realworld.sqlite3".into(),
+        "_dd.base_service" if text == service => "<service>".into(),
+        _ => normalize_workload_id(text),
+    }))
+}
+
+fn normalized_metric_value(key: &str, value: &Value) -> Result<Value, String> {
+    if key == "process_id" {
+        if !value.as_u64().is_some_and(|v| v >= 1)
+            && !value.as_i64().is_some_and(|v| v >= 1)
+            && !value.as_f64().is_some_and(|v| {
+                v.is_finite() && v >= 1.0 && v <= u64::MAX as f64 && (v as u64) as f64 == v
+            })
+        {
+            return Err("malformed Datadog process_id".into());
+        }
+        return Ok(Value::String("<process-id>".into()));
+    }
+    Ok(value.clone())
+}
+
+fn validate_exception_consistency(span: &Value) -> Result<(), String> {
+    let Some(meta) = span.get("meta").and_then(Value::as_object) else { return Ok(()); };
+    let Some(stack) = meta.get("error.stack").and_then(Value::as_str) else { return Ok(()); };
+    let exception_type = meta.get("error.type").and_then(Value::as_str).unwrap_or("");
+    let short_type = exception_type.rsplit('.').next().unwrap_or(exception_type);
+    let message = meta.get("error.message").or_else(|| meta.get("error.msg")).and_then(Value::as_str).unwrap_or("");
+    if (short_type.is_empty() || !stack.contains(short_type)) && (message.is_empty() || !stack.contains(message)) {
+        return Err("Datadog exception stack is inconsistent with type/message".into());
+    }
+    Ok(())
+}
+
 fn node(
     span: &Value,
     spans: &[&Value],
+    trace_service: &str,
     depth: usize,
     visited: &mut usize,
 ) -> Result<String, String> {
@@ -536,10 +724,18 @@ fn node(
         return Err("Datadog cyclic/deep parent graph".into());
     }
     *visited += 1;
+    validate_exception_consistency(span)?;
     let mut out = String::from("(");
-    for name in ["service", "name", "type"] {
-        field(&mut out, name, text(span.get(name)));
+    out.push_str("(native-fields (");
+    if let Some(object) = span.as_object() {
+        for key in object.keys() {
+            string(&mut out, key);
+            out.push(' ');
+        }
     }
+    out.push_str("))");
+    field(&mut out, "service", if text(span.get("service")) == trace_service { "<service>" } else { text(span.get("service")) });
+    for name in ["name", "type"] { field(&mut out, name, text(span.get(name))); }
     field(&mut out, "resource", text(span.get("resource")));
     field(
         &mut out,
@@ -561,36 +757,22 @@ fn node(
         integer(span.get("error")).parse::<i64>().unwrap_or(0)
     )
     .unwrap();
-    for key in [
-        "component",
-        "span.kind",
-        "http.method",
-        "http.route",
-        "http.status_code",
-        "db.system",
-        "db.name",
-        "db.operation",
-        "error.type",
-    ] {
-        if let Some(value) = span.get("meta").and_then(|m| m.get(key)) {
+    if let Some(meta) = span.get("meta").and_then(Value::as_object) {
+        for (key, value) in meta {
             out.push('(');
             string(&mut out, key);
             out.push(' ');
-            if key == "db.name" && text(Some(value)).ends_with("realworld.sqlite3") {
-                string(&mut out, "<fixture>/realworld.sqlite3")
-            } else {
-                value_scheme(&mut out, value)
-            }
+            value_scheme(&mut out, &normalized_meta_value(key, value, trace_service)?);
             out.push(')');
         }
     }
     out.push_str("))(metrics (");
-    for key in ["_dd.measured", "_sampling_priority_v1"] {
-        if let Some(value) = span.get("metrics").and_then(|m| m.get(key)) {
+    if let Some(metrics) = span.get("metrics").and_then(Value::as_object) {
+        for (key, value) in metrics {
             out.push('(');
             string(&mut out, key);
             out.push(' ');
-            value_scheme(&mut out, value);
+            value_scheme(&mut out, &normalized_metric_value(key, value)?);
             out.push(')');
         }
     }
@@ -600,7 +782,7 @@ fn node(
         .iter()
         .filter(|child| parent_id(child) == uint(span.get("span_id")))
     {
-        children.push(node(child, spans, depth + 1, visited)?);
+        children.push(node(child, spans, trace_service, depth + 1, visited)?);
     }
     children.sort();
     for child in children {
@@ -641,6 +823,11 @@ fn shapes(records: &[Record]) -> Result<String, String> {
     }
     let mut groups = BTreeMap::<String, usize>::new();
     for spans in traces.values() {
+        let trace_service = spans
+            .iter()
+            .find(|span| matches!(text(span.get("name")), "aiohttp.request" | "django.request"))
+            .map(|span| text(span.get("service")))
+            .ok_or("Datadog trace has no HTTP server span")?;
         let mut ids = BTreeMap::new();
         for span in spans {
             if ids.insert(uint(span.get("span_id")).unwrap(), ()).is_some() {
@@ -653,7 +840,7 @@ fn shapes(records: &[Record]) -> Result<String, String> {
             .iter()
             .filter(|s| parent_kind(s, spans.iter().copied()) != "child")
         {
-            roots.push(node(span, spans, 0, &mut visited)?);
+            roots.push(node(span, spans, trace_service, 0, &mut visited)?);
         }
         if visited != spans.len() {
             return Err("Datadog cyclic/disconnected parent graph".into());
@@ -671,14 +858,8 @@ fn shapes(records: &[Record]) -> Result<String, String> {
     out.push(')');
     Ok(out)
 }
-pub(crate) fn candidate(records: &[Record], app: &str) -> Result<Vec<u8>, String> {
-    if app.is_empty()
-        || !app
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-    {
-        return Err("invalid candidate app".into());
-    }
+pub(crate) fn candidate(records: &[Record], app: &str, scenario: &str) -> Result<Vec<u8>, String> {
+    validate_workload_context(records, app, scenario)?;
     if records.iter().all(|r| span_count(r) == 0) {
         return Err("trace capture contains no spans".into());
     }

@@ -13,6 +13,7 @@
     ("datadog.traces.service-identity" (assertion span/service-present) (evidence wire-sufficient))
     ("datadog.intake.headers-and-counts" (assertion request/headers-and-counts) (evidence wire-sufficient))
     ("datadog.intake.semantic-validity" (assertion capture/semantic-valid) (evidence wire-sufficient))
+    ("datadog.coverage.field-policies" (assertion capture/field-policy-coverage) (evidence wire-sufficient))
     ("datadog.propagation.tracecontext" (assertion span/tracecontext-parent) (evidence wire-sufficient))
     ("datadog.propagation.datadog" (assertion span/datadog-parent) (evidence wire-sufficient))))
 (define (proof-rule feature) (assoc feature proof-rules))

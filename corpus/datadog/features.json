@@ -49,6 +49,10 @@
     {
       "id": "datadog.traces.database-children",
       "binding": "span/database-children"
+    },
+    {
+      "id": "datadog.coverage.field-policies",
+      "binding": "capture/field-policy-coverage"
     }
   ]
 }

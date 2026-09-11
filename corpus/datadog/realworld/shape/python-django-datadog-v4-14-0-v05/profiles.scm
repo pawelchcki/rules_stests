@@ -9,7 +9,9 @@
       (roots
         (
           (
-            (service "django-datadog")
+            (native-fields
+              ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+            (service "<service>")
             (name "django.request")
             (type "web")
             (resource "DELETE api/profiles/<username>/follow")
@@ -17,19 +19,46 @@
             (error 0)
             (meta
               (
+                ("_dd.p.dm" "-3")
+                ("_dd.p.ksr" "1")
+                ("_dd.p.tid" "<trace-id-high>")
+                ("_dd.svc_src" "m")
+                ("_dd.tags.process" "entrypoint.basedir:main,entrypoint.name:-c,entrypoint.type:script,entrypoint.workdir:main,svc.user:true")
                 ("component" "django")
-                ("span.kind" "server")
+                ("django.app" "ninja")
+                ("django.namespace" "api-1.0.0")
+                ("django.request.class" "django.core.handlers.wsgi.WSGIRequest")
+                ("django.response.class" "django.http.response.HttpResponse")
+                ("django.user.id" "1")
+                ("django.user.is_authenticated" "True")
+                ("django.user.name" "prof_rules_stests_<workload>")
+                ("django.view" "api-1.0.0:follow_profile")
+                ("env" "test")
                 ("http.method" "DELETE")
                 ("http.route" "api/profiles/<username>/follow")
-                ("http.status_code" "200")))
+                ("http.status_code" "200")
+                ("http.url" "http://<endpoint>/api/profiles/celeb_rules_stests_<workload>/follow")
+                ("http.useragent" "hurl/8.0.1")
+                ("language" "python")
+                ("runtime-id" "<runtime-id>")
+                ("span.kind" "server")
+                ("usr.id" "1")
+                ("version" "1")))
             (metrics
               (
+                ("_dd.limit_psr" 1.0)
                 ("_dd.measured" 1.0)
-                ("_sampling_priority_v1" 2.0)))
+                ("_dd.rule_psr" 1.0)
+                ("_dd.top_level" 1.0)
+                ("_dd.tracer_kr" 1.0)
+                ("_sampling_priority_v1" 2.0)
+                ("process_id" "<process-id>")))
             (children
               (
                 (
-                  (service "django-datadog")
+                  (native-fields
+                    ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                  (service "<service>")
                   (name "django.middleware")
                   (type "")
                   (resource "django.middleware.security.SecurityMiddleware.__call__")
@@ -37,13 +66,18 @@
                   (error 0)
                   (meta
                     (
-                      ("component" "django")))
+                      ("_dd.svc_src" "m")
+                      ("component" "django")
+                      ("env" "test")
+                      ("version" "1")))
                   (metrics
                     ())
                   (children
                     (
                       (
-                        (service "django-datadog")
+                        (native-fields
+                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                        (service "<service>")
                         (name "django.middleware")
                         (type "")
                         (resource "django.contrib.sessions.middleware.SessionMiddleware.__call__")
@@ -51,13 +85,18 @@
                         (error 0)
                         (meta
                           (
-                            ("component" "django")))
+                            ("_dd.svc_src" "m")
+                            ("component" "django")
+                            ("env" "test")
+                            ("version" "1")))
                         (metrics
                           ())
                         (children
                           (
                             (
-                              (service "django-datadog")
+                              (native-fields
+                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                              (service "<service>")
                               (name "django.middleware")
                               (type "")
                               (resource "django.contrib.sessions.middleware.SessionMiddleware.process_request")
@@ -65,13 +104,18 @@
                               (error 0)
                               (meta
                                 (
-                                  ("component" "django")))
+                                  ("_dd.svc_src" "m")
+                                  ("component" "django")
+                                  ("env" "test")
+                                  ("version" "1")))
                               (metrics
                                 ())
                               (children
                                 ()))
                             (
-                              (service "django-datadog")
+                              (native-fields
+                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                              (service "<service>")
                               (name "django.middleware")
                               (type "")
                               (resource "django.contrib.sessions.middleware.SessionMiddleware.process_response")
@@ -79,13 +123,18 @@
                               (error 0)
                               (meta
                                 (
-                                  ("component" "django")))
+                                  ("_dd.svc_src" "m")
+                                  ("component" "django")
+                                  ("env" "test")
+                                  ("version" "1")))
                               (metrics
                                 ())
                               (children
                                 ()))
                             (
-                              (service "django-datadog")
+                              (native-fields
+                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                              (service "<service>")
                               (name "django.middleware")
                               (type "")
                               (resource "django.middleware.common.CommonMiddleware.__call__")
@@ -93,13 +142,18 @@
                               (error 0)
                               (meta
                                 (
-                                  ("component" "django")))
+                                  ("_dd.svc_src" "m")
+                                  ("component" "django")
+                                  ("env" "test")
+                                  ("version" "1")))
                               (metrics
                                 ())
                               (children
                                 (
                                   (
-                                    (service "django-datadog")
+                                    (native-fields
+                                      ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                    (service "<service>")
                                     (name "django.middleware")
                                     (type "")
                                     (resource "django.middleware.common.CommonMiddleware.process_request")
@@ -107,13 +161,18 @@
                                     (error 0)
                                     (meta
                                       (
-                                        ("component" "django")))
+                                        ("_dd.svc_src" "m")
+                                        ("component" "django")
+                                        ("env" "test")
+                                        ("version" "1")))
                                     (metrics
                                       ())
                                     (children
                                       ()))
                                   (
-                                    (service "django-datadog")
+                                    (native-fields
+                                      ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                    (service "<service>")
                                     (name "django.middleware")
                                     (type "")
                                     (resource "django.middleware.common.CommonMiddleware.process_response")
@@ -121,13 +180,18 @@
                                     (error 0)
                                     (meta
                                       (
-                                        ("component" "django")))
+                                        ("_dd.svc_src" "m")
+                                        ("component" "django")
+                                        ("env" "test")
+                                        ("version" "1")))
                                     (metrics
                                       ())
                                     (children
                                       ()))
                                   (
-                                    (service "django-datadog")
+                                    (native-fields
+                                      ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                    (service "<service>")
                                     (name "django.middleware")
                                     (type "")
                                     (resource "django.middleware.csrf.CsrfViewMiddleware.__call__")
@@ -135,13 +199,18 @@
                                     (error 0)
                                     (meta
                                       (
-                                        ("component" "django")))
+                                        ("_dd.svc_src" "m")
+                                        ("component" "django")
+                                        ("env" "test")
+                                        ("version" "1")))
                                     (metrics
                                       ())
                                     (children
                                       (
                                         (
-                                          (service "django-datadog")
+                                          (native-fields
+                                            ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                          (service "<service>")
                                           (name "django.middleware")
                                           (type "")
                                           (resource "django.contrib.auth.middleware.AuthenticationMiddleware.__call__")
@@ -149,13 +218,18 @@
                                           (error 0)
                                           (meta
                                             (
-                                              ("component" "django")))
+                                              ("_dd.svc_src" "m")
+                                              ("component" "django")
+                                              ("env" "test")
+                                              ("version" "1")))
                                           (metrics
                                             ())
                                           (children
                                             (
                                               (
-                                                (service "django-datadog")
+                                                (native-fields
+                                                  ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                (service "<service>")
                                                 (name "django.middleware")
                                                 (type "")
                                                 (resource "django.contrib.auth.middleware.AuthenticationMiddleware.process_request")
@@ -163,13 +237,18 @@
                                                 (error 0)
                                                 (meta
                                                   (
-                                                    ("component" "django")))
+                                                    ("_dd.svc_src" "m")
+                                                    ("component" "django")
+                                                    ("env" "test")
+                                                    ("version" "1")))
                                                 (metrics
                                                   ())
                                                 (children
                                                   ()))
                                               (
-                                                (service "django-datadog")
+                                                (native-fields
+                                                  ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                (service "<service>")
                                                 (name "django.middleware")
                                                 (type "")
                                                 (resource "django.contrib.messages.middleware.MessageMiddleware.__call__")
@@ -177,13 +256,18 @@
                                                 (error 0)
                                                 (meta
                                                   (
-                                                    ("component" "django")))
+                                                    ("_dd.svc_src" "m")
+                                                    ("component" "django")
+                                                    ("env" "test")
+                                                    ("version" "1")))
                                                 (metrics
                                                   ())
                                                 (children
                                                   (
                                                     (
-                                                      (service "django-datadog")
+                                                      (native-fields
+                                                        ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                      (service "<service>")
                                                       (name "django.middleware")
                                                       (type "")
                                                       (resource "django.contrib.messages.middleware.MessageMiddleware.process_request")
@@ -191,13 +275,18 @@
                                                       (error 0)
                                                       (meta
                                                         (
-                                                          ("component" "django")))
+                                                          ("_dd.svc_src" "m")
+                                                          ("component" "django")
+                                                          ("env" "test")
+                                                          ("version" "1")))
                                                       (metrics
                                                         ())
                                                       (children
                                                         ()))
                                                     (
-                                                      (service "django-datadog")
+                                                      (native-fields
+                                                        ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                      (service "<service>")
                                                       (name "django.middleware")
                                                       (type "")
                                                       (resource "django.contrib.messages.middleware.MessageMiddleware.process_response")
@@ -205,13 +294,18 @@
                                                       (error 0)
                                                       (meta
                                                         (
-                                                          ("component" "django")))
+                                                          ("_dd.svc_src" "m")
+                                                          ("component" "django")
+                                                          ("env" "test")
+                                                          ("version" "1")))
                                                       (metrics
                                                         ())
                                                       (children
                                                         ()))
                                                     (
-                                                      (service "django-datadog")
+                                                      (native-fields
+                                                        ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                      (service "<service>")
                                                       (name "django.middleware")
                                                       (type "")
                                                       (resource "django.middleware.clickjacking.XFrameOptionsMiddleware.__call__")
@@ -219,13 +313,18 @@
                                                       (error 0)
                                                       (meta
                                                         (
-                                                          ("component" "django")))
+                                                          ("_dd.svc_src" "m")
+                                                          ("component" "django")
+                                                          ("env" "test")
+                                                          ("version" "1")))
                                                       (metrics
                                                         ())
                                                       (children
                                                         (
                                                           (
-                                                            (service "django-datadog")
+                                                            (native-fields
+                                                              ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                            (service "<service>")
                                                             (name "django.middleware")
                                                             (type "")
                                                             (resource "corsheaders.middleware.CorsMiddleware.__call__")
@@ -233,13 +332,18 @@
                                                             (error 0)
                                                             (meta
                                                               (
-                                                                ("component" "django")))
+                                                                ("_dd.svc_src" "m")
+                                                                ("component" "django")
+                                                                ("env" "test")
+                                                                ("version" "1")))
                                                             (metrics
                                                               ())
                                                             (children
                                                               (
                                                                 (
-                                                                  (service "django-datadog")
+                                                                  (native-fields
+                                                                    ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                                  (service "<service>")
                                                                   (name "django.middleware")
                                                                   (type "")
                                                                   (resource "django.middleware.common.CommonMiddleware.__call__")
@@ -247,13 +351,18 @@
                                                                   (error 0)
                                                                   (meta
                                                                     (
-                                                                      ("component" "django")))
+                                                                      ("_dd.svc_src" "m")
+                                                                      ("component" "django")
+                                                                      ("env" "test")
+                                                                      ("version" "1")))
                                                                   (metrics
                                                                     ())
                                                                   (children
                                                                     (
                                                                       (
-                                                                        (service "django-datadog")
+                                                                        (native-fields
+                                                                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                                        (service "<service>")
                                                                         (name "django.middleware")
                                                                         (type "")
                                                                         (resource "django.middleware.common.CommonMiddleware.process_request")
@@ -261,13 +370,18 @@
                                                                         (error 0)
                                                                         (meta
                                                                           (
-                                                                            ("component" "django")))
+                                                                            ("_dd.svc_src" "m")
+                                                                            ("component" "django")
+                                                                            ("env" "test")
+                                                                            ("version" "1")))
                                                                         (metrics
                                                                           ())
                                                                         (children
                                                                           ()))
                                                                       (
-                                                                        (service "django-datadog")
+                                                                        (native-fields
+                                                                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                                        (service "<service>")
                                                                         (name "django.middleware")
                                                                         (type "")
                                                                         (resource "django.middleware.common.CommonMiddleware.process_response")
@@ -275,13 +389,18 @@
                                                                         (error 0)
                                                                         (meta
                                                                           (
-                                                                            ("component" "django")))
+                                                                            ("_dd.svc_src" "m")
+                                                                            ("component" "django")
+                                                                            ("env" "test")
+                                                                            ("version" "1")))
                                                                         (metrics
                                                                           ())
                                                                         (children
                                                                           ()))
                                                                       (
-                                                                        (service "django-datadog")
+                                                                        (native-fields
+                                                                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                                        (service "<service>")
                                                                         (name "django.middleware")
                                                                         (type "")
                                                                         (resource "django.middleware.csrf.CsrfViewMiddleware.process_view")
@@ -289,13 +408,18 @@
                                                                         (error 0)
                                                                         (meta
                                                                           (
-                                                                            ("component" "django")))
+                                                                            ("_dd.svc_src" "m")
+                                                                            ("component" "django")
+                                                                            ("env" "test")
+                                                                            ("version" "1")))
                                                                         (metrics
                                                                           ())
                                                                         (children
                                                                           ()))
                                                                       (
-                                                                        (service "django-datadog")
+                                                                        (native-fields
+                                                                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                                        (service "<service>")
                                                                         (name "django.view")
                                                                         (type "")
                                                                         (resource "ninja.operation._sync_view")
@@ -303,12 +427,17 @@
                                                                         (error 0)
                                                                         (meta
                                                                           (
-                                                                            ("component" "django")))
+                                                                            ("_dd.svc_src" "m")
+                                                                            ("component" "django")
+                                                                            ("env" "test")
+                                                                            ("version" "1")))
                                                                         (metrics
                                                                           ())
                                                                         (children
                                                                           (
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.connection.commit")
                                                                               (type "")
@@ -317,14 +446,20 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
-                                                                                ())
+                                                                                (
+                                                                                  ("_dd.top_level" 1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -333,15 +468,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -350,15 +492,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" 1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -367,15 +516,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -384,15 +540,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -401,15 +564,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -418,15 +588,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -435,15 +612,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -452,15 +636,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -469,15 +660,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -486,15 +684,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -503,15 +708,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -520,15 +732,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -537,15 +756,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -554,15 +780,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -571,15 +804,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -588,16 +828,23 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ())))))))))))
                                                           (
-                                                            (service "django-datadog")
+                                                            (native-fields
+                                                              ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                            (service "<service>")
                                                             (name "django.middleware")
                                                             (type "")
                                                             (resource "django.middleware.clickjacking.XFrameOptionsMiddleware.process_response")
@@ -605,13 +852,18 @@
                                                             (error 0)
                                                             (meta
                                                               (
-                                                                ("component" "django")))
+                                                                ("_dd.svc_src" "m")
+                                                                ("component" "django")
+                                                                ("env" "test")
+                                                                ("version" "1")))
                                                             (metrics
                                                               ())
                                                             (children
                                                               ())))))))))))
                                         (
-                                          (service "django-datadog")
+                                          (native-fields
+                                            ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                          (service "<service>")
                                           (name "django.middleware")
                                           (type "")
                                           (resource "django.middleware.csrf.CsrfViewMiddleware.process_request")
@@ -619,13 +871,18 @@
                                           (error 0)
                                           (meta
                                             (
-                                              ("component" "django")))
+                                              ("_dd.svc_src" "m")
+                                              ("component" "django")
+                                              ("env" "test")
+                                              ("version" "1")))
                                           (metrics
                                             ())
                                           (children
                                             ()))
                                         (
-                                          (service "django-datadog")
+                                          (native-fields
+                                            ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                          (service "<service>")
                                           (name "django.middleware")
                                           (type "")
                                           (resource "django.middleware.csrf.CsrfViewMiddleware.process_response")
@@ -633,13 +890,18 @@
                                           (error 0)
                                           (meta
                                             (
-                                              ("component" "django")))
+                                              ("_dd.svc_src" "m")
+                                              ("component" "django")
+                                              ("env" "test")
+                                              ("version" "1")))
                                           (metrics
                                             ())
                                           (children
                                             ())))))))))))
                       (
-                        (service "django-datadog")
+                        (native-fields
+                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                        (service "<service>")
                         (name "django.middleware")
                         (type "")
                         (resource "django.middleware.security.SecurityMiddleware.process_request")
@@ -647,13 +909,18 @@
                         (error 0)
                         (meta
                           (
-                            ("component" "django")))
+                            ("_dd.svc_src" "m")
+                            ("component" "django")
+                            ("env" "test")
+                            ("version" "1")))
                         (metrics
                           ())
                         (children
                           ()))
                       (
-                        (service "django-datadog")
+                        (native-fields
+                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                        (service "<service>")
                         (name "django.middleware")
                         (type "")
                         (resource "django.middleware.security.SecurityMiddleware.process_response")
@@ -661,7 +928,10 @@
                         (error 0)
                         (meta
                           (
-                            ("component" "django")))
+                            ("_dd.svc_src" "m")
+                            ("component" "django")
+                            ("env" "test")
+                            ("version" "1")))
                         (metrics
                           ())
                         (children
@@ -671,7 +941,9 @@
       (roots
         (
           (
-            (service "django-datadog")
+            (native-fields
+              ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+            (service "<service>")
             (name "django.request")
             (type "web")
             (resource "GET api/profiles/<username>")
@@ -679,19 +951,46 @@
             (error 0)
             (meta
               (
+                ("_dd.p.dm" "-3")
+                ("_dd.p.ksr" "1")
+                ("_dd.p.tid" "<trace-id-high>")
+                ("_dd.svc_src" "m")
+                ("_dd.tags.process" "entrypoint.basedir:main,entrypoint.name:-c,entrypoint.type:script,entrypoint.workdir:main,svc.user:true")
                 ("component" "django")
-                ("span.kind" "server")
+                ("django.app" "ninja")
+                ("django.namespace" "api-1.0.0")
+                ("django.request.class" "django.core.handlers.wsgi.WSGIRequest")
+                ("django.response.class" "django.http.response.HttpResponse")
+                ("django.user.id" "1")
+                ("django.user.is_authenticated" "True")
+                ("django.user.name" "prof_rules_stests_<workload>")
+                ("django.view" "api-1.0.0:get_profile")
+                ("env" "test")
                 ("http.method" "GET")
                 ("http.route" "api/profiles/<username>")
-                ("http.status_code" "200")))
+                ("http.status_code" "200")
+                ("http.url" "http://<endpoint>/api/profiles/celeb_rules_stests_<workload>")
+                ("http.useragent" "hurl/8.0.1")
+                ("language" "python")
+                ("runtime-id" "<runtime-id>")
+                ("span.kind" "server")
+                ("usr.id" "1")
+                ("version" "1")))
             (metrics
               (
+                ("_dd.limit_psr" 1.0)
                 ("_dd.measured" 1.0)
-                ("_sampling_priority_v1" 2.0)))
+                ("_dd.rule_psr" 1.0)
+                ("_dd.top_level" 1.0)
+                ("_dd.tracer_kr" 1.0)
+                ("_sampling_priority_v1" 2.0)
+                ("process_id" "<process-id>")))
             (children
               (
                 (
-                  (service "django-datadog")
+                  (native-fields
+                    ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                  (service "<service>")
                   (name "django.middleware")
                   (type "")
                   (resource "django.middleware.security.SecurityMiddleware.__call__")
@@ -699,13 +998,18 @@
                   (error 0)
                   (meta
                     (
-                      ("component" "django")))
+                      ("_dd.svc_src" "m")
+                      ("component" "django")
+                      ("env" "test")
+                      ("version" "1")))
                   (metrics
                     ())
                   (children
                     (
                       (
-                        (service "django-datadog")
+                        (native-fields
+                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                        (service "<service>")
                         (name "django.middleware")
                         (type "")
                         (resource "django.contrib.sessions.middleware.SessionMiddleware.__call__")
@@ -713,13 +1017,18 @@
                         (error 0)
                         (meta
                           (
-                            ("component" "django")))
+                            ("_dd.svc_src" "m")
+                            ("component" "django")
+                            ("env" "test")
+                            ("version" "1")))
                         (metrics
                           ())
                         (children
                           (
                             (
-                              (service "django-datadog")
+                              (native-fields
+                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                              (service "<service>")
                               (name "django.middleware")
                               (type "")
                               (resource "django.contrib.sessions.middleware.SessionMiddleware.process_request")
@@ -727,13 +1036,18 @@
                               (error 0)
                               (meta
                                 (
-                                  ("component" "django")))
+                                  ("_dd.svc_src" "m")
+                                  ("component" "django")
+                                  ("env" "test")
+                                  ("version" "1")))
                               (metrics
                                 ())
                               (children
                                 ()))
                             (
-                              (service "django-datadog")
+                              (native-fields
+                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                              (service "<service>")
                               (name "django.middleware")
                               (type "")
                               (resource "django.contrib.sessions.middleware.SessionMiddleware.process_response")
@@ -741,13 +1055,18 @@
                               (error 0)
                               (meta
                                 (
-                                  ("component" "django")))
+                                  ("_dd.svc_src" "m")
+                                  ("component" "django")
+                                  ("env" "test")
+                                  ("version" "1")))
                               (metrics
                                 ())
                               (children
                                 ()))
                             (
-                              (service "django-datadog")
+                              (native-fields
+                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                              (service "<service>")
                               (name "django.middleware")
                               (type "")
                               (resource "django.middleware.common.CommonMiddleware.__call__")
@@ -755,13 +1074,18 @@
                               (error 0)
                               (meta
                                 (
-                                  ("component" "django")))
+                                  ("_dd.svc_src" "m")
+                                  ("component" "django")
+                                  ("env" "test")
+                                  ("version" "1")))
                               (metrics
                                 ())
                               (children
                                 (
                                   (
-                                    (service "django-datadog")
+                                    (native-fields
+                                      ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                    (service "<service>")
                                     (name "django.middleware")
                                     (type "")
                                     (resource "django.middleware.common.CommonMiddleware.process_request")
@@ -769,13 +1093,18 @@
                                     (error 0)
                                     (meta
                                       (
-                                        ("component" "django")))
+                                        ("_dd.svc_src" "m")
+                                        ("component" "django")
+                                        ("env" "test")
+                                        ("version" "1")))
                                     (metrics
                                       ())
                                     (children
                                       ()))
                                   (
-                                    (service "django-datadog")
+                                    (native-fields
+                                      ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                    (service "<service>")
                                     (name "django.middleware")
                                     (type "")
                                     (resource "django.middleware.common.CommonMiddleware.process_response")
@@ -783,13 +1112,18 @@
                                     (error 0)
                                     (meta
                                       (
-                                        ("component" "django")))
+                                        ("_dd.svc_src" "m")
+                                        ("component" "django")
+                                        ("env" "test")
+                                        ("version" "1")))
                                     (metrics
                                       ())
                                     (children
                                       ()))
                                   (
-                                    (service "django-datadog")
+                                    (native-fields
+                                      ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                    (service "<service>")
                                     (name "django.middleware")
                                     (type "")
                                     (resource "django.middleware.csrf.CsrfViewMiddleware.__call__")
@@ -797,13 +1131,18 @@
                                     (error 0)
                                     (meta
                                       (
-                                        ("component" "django")))
+                                        ("_dd.svc_src" "m")
+                                        ("component" "django")
+                                        ("env" "test")
+                                        ("version" "1")))
                                     (metrics
                                       ())
                                     (children
                                       (
                                         (
-                                          (service "django-datadog")
+                                          (native-fields
+                                            ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                          (service "<service>")
                                           (name "django.middleware")
                                           (type "")
                                           (resource "django.contrib.auth.middleware.AuthenticationMiddleware.__call__")
@@ -811,13 +1150,18 @@
                                           (error 0)
                                           (meta
                                             (
-                                              ("component" "django")))
+                                              ("_dd.svc_src" "m")
+                                              ("component" "django")
+                                              ("env" "test")
+                                              ("version" "1")))
                                           (metrics
                                             ())
                                           (children
                                             (
                                               (
-                                                (service "django-datadog")
+                                                (native-fields
+                                                  ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                (service "<service>")
                                                 (name "django.middleware")
                                                 (type "")
                                                 (resource "django.contrib.auth.middleware.AuthenticationMiddleware.process_request")
@@ -825,13 +1169,18 @@
                                                 (error 0)
                                                 (meta
                                                   (
-                                                    ("component" "django")))
+                                                    ("_dd.svc_src" "m")
+                                                    ("component" "django")
+                                                    ("env" "test")
+                                                    ("version" "1")))
                                                 (metrics
                                                   ())
                                                 (children
                                                   ()))
                                               (
-                                                (service "django-datadog")
+                                                (native-fields
+                                                  ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                (service "<service>")
                                                 (name "django.middleware")
                                                 (type "")
                                                 (resource "django.contrib.messages.middleware.MessageMiddleware.__call__")
@@ -839,13 +1188,18 @@
                                                 (error 0)
                                                 (meta
                                                   (
-                                                    ("component" "django")))
+                                                    ("_dd.svc_src" "m")
+                                                    ("component" "django")
+                                                    ("env" "test")
+                                                    ("version" "1")))
                                                 (metrics
                                                   ())
                                                 (children
                                                   (
                                                     (
-                                                      (service "django-datadog")
+                                                      (native-fields
+                                                        ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                      (service "<service>")
                                                       (name "django.middleware")
                                                       (type "")
                                                       (resource "django.contrib.messages.middleware.MessageMiddleware.process_request")
@@ -853,13 +1207,18 @@
                                                       (error 0)
                                                       (meta
                                                         (
-                                                          ("component" "django")))
+                                                          ("_dd.svc_src" "m")
+                                                          ("component" "django")
+                                                          ("env" "test")
+                                                          ("version" "1")))
                                                       (metrics
                                                         ())
                                                       (children
                                                         ()))
                                                     (
-                                                      (service "django-datadog")
+                                                      (native-fields
+                                                        ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                      (service "<service>")
                                                       (name "django.middleware")
                                                       (type "")
                                                       (resource "django.contrib.messages.middleware.MessageMiddleware.process_response")
@@ -867,13 +1226,18 @@
                                                       (error 0)
                                                       (meta
                                                         (
-                                                          ("component" "django")))
+                                                          ("_dd.svc_src" "m")
+                                                          ("component" "django")
+                                                          ("env" "test")
+                                                          ("version" "1")))
                                                       (metrics
                                                         ())
                                                       (children
                                                         ()))
                                                     (
-                                                      (service "django-datadog")
+                                                      (native-fields
+                                                        ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                      (service "<service>")
                                                       (name "django.middleware")
                                                       (type "")
                                                       (resource "django.middleware.clickjacking.XFrameOptionsMiddleware.__call__")
@@ -881,13 +1245,18 @@
                                                       (error 0)
                                                       (meta
                                                         (
-                                                          ("component" "django")))
+                                                          ("_dd.svc_src" "m")
+                                                          ("component" "django")
+                                                          ("env" "test")
+                                                          ("version" "1")))
                                                       (metrics
                                                         ())
                                                       (children
                                                         (
                                                           (
-                                                            (service "django-datadog")
+                                                            (native-fields
+                                                              ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                            (service "<service>")
                                                             (name "django.middleware")
                                                             (type "")
                                                             (resource "corsheaders.middleware.CorsMiddleware.__call__")
@@ -895,13 +1264,18 @@
                                                             (error 0)
                                                             (meta
                                                               (
-                                                                ("component" "django")))
+                                                                ("_dd.svc_src" "m")
+                                                                ("component" "django")
+                                                                ("env" "test")
+                                                                ("version" "1")))
                                                             (metrics
                                                               ())
                                                             (children
                                                               (
                                                                 (
-                                                                  (service "django-datadog")
+                                                                  (native-fields
+                                                                    ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                                  (service "<service>")
                                                                   (name "django.middleware")
                                                                   (type "")
                                                                   (resource "django.middleware.common.CommonMiddleware.__call__")
@@ -909,13 +1283,18 @@
                                                                   (error 0)
                                                                   (meta
                                                                     (
-                                                                      ("component" "django")))
+                                                                      ("_dd.svc_src" "m")
+                                                                      ("component" "django")
+                                                                      ("env" "test")
+                                                                      ("version" "1")))
                                                                   (metrics
                                                                     ())
                                                                   (children
                                                                     (
                                                                       (
-                                                                        (service "django-datadog")
+                                                                        (native-fields
+                                                                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                                        (service "<service>")
                                                                         (name "django.middleware")
                                                                         (type "")
                                                                         (resource "django.middleware.common.CommonMiddleware.process_request")
@@ -923,13 +1302,18 @@
                                                                         (error 0)
                                                                         (meta
                                                                           (
-                                                                            ("component" "django")))
+                                                                            ("_dd.svc_src" "m")
+                                                                            ("component" "django")
+                                                                            ("env" "test")
+                                                                            ("version" "1")))
                                                                         (metrics
                                                                           ())
                                                                         (children
                                                                           ()))
                                                                       (
-                                                                        (service "django-datadog")
+                                                                        (native-fields
+                                                                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                                        (service "<service>")
                                                                         (name "django.middleware")
                                                                         (type "")
                                                                         (resource "django.middleware.common.CommonMiddleware.process_response")
@@ -937,13 +1321,18 @@
                                                                         (error 0)
                                                                         (meta
                                                                           (
-                                                                            ("component" "django")))
+                                                                            ("_dd.svc_src" "m")
+                                                                            ("component" "django")
+                                                                            ("env" "test")
+                                                                            ("version" "1")))
                                                                         (metrics
                                                                           ())
                                                                         (children
                                                                           ()))
                                                                       (
-                                                                        (service "django-datadog")
+                                                                        (native-fields
+                                                                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                                        (service "<service>")
                                                                         (name "django.middleware")
                                                                         (type "")
                                                                         (resource "django.middleware.csrf.CsrfViewMiddleware.process_view")
@@ -951,13 +1340,18 @@
                                                                         (error 0)
                                                                         (meta
                                                                           (
-                                                                            ("component" "django")))
+                                                                            ("_dd.svc_src" "m")
+                                                                            ("component" "django")
+                                                                            ("env" "test")
+                                                                            ("version" "1")))
                                                                         (metrics
                                                                           ())
                                                                         (children
                                                                           ()))
                                                                       (
-                                                                        (service "django-datadog")
+                                                                        (native-fields
+                                                                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                                        (service "<service>")
                                                                         (name "django.view")
                                                                         (type "")
                                                                         (resource "ninja.operation._sync_view")
@@ -965,12 +1359,17 @@
                                                                         (error 0)
                                                                         (meta
                                                                           (
-                                                                            ("component" "django")))
+                                                                            ("_dd.svc_src" "m")
+                                                                            ("component" "django")
+                                                                            ("env" "test")
+                                                                            ("version" "1")))
                                                                         (metrics
                                                                           ())
                                                                         (children
                                                                           (
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -979,15 +1378,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -996,15 +1402,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -1013,15 +1426,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -1030,15 +1450,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -1047,15 +1474,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -1064,15 +1498,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -1081,15 +1522,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -1098,15 +1546,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -1115,15 +1570,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -1132,15 +1594,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -1149,16 +1618,23 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ())))))))))))
                                                           (
-                                                            (service "django-datadog")
+                                                            (native-fields
+                                                              ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                            (service "<service>")
                                                             (name "django.middleware")
                                                             (type "")
                                                             (resource "django.middleware.clickjacking.XFrameOptionsMiddleware.process_response")
@@ -1166,13 +1642,18 @@
                                                             (error 0)
                                                             (meta
                                                               (
-                                                                ("component" "django")))
+                                                                ("_dd.svc_src" "m")
+                                                                ("component" "django")
+                                                                ("env" "test")
+                                                                ("version" "1")))
                                                             (metrics
                                                               ())
                                                             (children
                                                               ())))))))))))
                                         (
-                                          (service "django-datadog")
+                                          (native-fields
+                                            ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                          (service "<service>")
                                           (name "django.middleware")
                                           (type "")
                                           (resource "django.middleware.csrf.CsrfViewMiddleware.process_request")
@@ -1180,13 +1661,18 @@
                                           (error 0)
                                           (meta
                                             (
-                                              ("component" "django")))
+                                              ("_dd.svc_src" "m")
+                                              ("component" "django")
+                                              ("env" "test")
+                                              ("version" "1")))
                                           (metrics
                                             ())
                                           (children
                                             ()))
                                         (
-                                          (service "django-datadog")
+                                          (native-fields
+                                            ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                          (service "<service>")
                                           (name "django.middleware")
                                           (type "")
                                           (resource "django.middleware.csrf.CsrfViewMiddleware.process_response")
@@ -1194,13 +1680,18 @@
                                           (error 0)
                                           (meta
                                             (
-                                              ("component" "django")))
+                                              ("_dd.svc_src" "m")
+                                              ("component" "django")
+                                              ("env" "test")
+                                              ("version" "1")))
                                           (metrics
                                             ())
                                           (children
                                             ())))))))))))
                       (
-                        (service "django-datadog")
+                        (native-fields
+                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                        (service "<service>")
                         (name "django.middleware")
                         (type "")
                         (resource "django.middleware.security.SecurityMiddleware.process_request")
@@ -1208,13 +1699,18 @@
                         (error 0)
                         (meta
                           (
-                            ("component" "django")))
+                            ("_dd.svc_src" "m")
+                            ("component" "django")
+                            ("env" "test")
+                            ("version" "1")))
                         (metrics
                           ())
                         (children
                           ()))
                       (
-                        (service "django-datadog")
+                        (native-fields
+                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                        (service "<service>")
                         (name "django.middleware")
                         (type "")
                         (resource "django.middleware.security.SecurityMiddleware.process_response")
@@ -1222,7 +1718,10 @@
                         (error 0)
                         (meta
                           (
-                            ("component" "django")))
+                            ("_dd.svc_src" "m")
+                            ("component" "django")
+                            ("env" "test")
+                            ("version" "1")))
                         (metrics
                           ())
                         (children
@@ -1232,7 +1731,9 @@
       (roots
         (
           (
-            (service "django-datadog")
+            (native-fields
+              ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+            (service "<service>")
             (name "django.request")
             (type "web")
             (resource "GET api/profiles/<username>")
@@ -1240,19 +1741,43 @@
             (error 0)
             (meta
               (
+                ("_dd.p.dm" "-3")
+                ("_dd.p.ksr" "1")
+                ("_dd.p.tid" "<trace-id-high>")
+                ("_dd.svc_src" "m")
+                ("_dd.tags.process" "entrypoint.basedir:main,entrypoint.name:-c,entrypoint.type:script,entrypoint.workdir:main,svc.user:true")
                 ("component" "django")
-                ("span.kind" "server")
+                ("django.app" "ninja")
+                ("django.namespace" "api-1.0.0")
+                ("django.request.class" "django.core.handlers.wsgi.WSGIRequest")
+                ("django.response.class" "django.http.response.HttpResponse")
+                ("django.user.is_authenticated" "False")
+                ("django.view" "api-1.0.0:get_profile")
+                ("env" "test")
                 ("http.method" "GET")
                 ("http.route" "api/profiles/<username>")
-                ("http.status_code" "200")))
+                ("http.status_code" "200")
+                ("http.url" "http://<endpoint>/api/profiles/celeb_rules_stests_<workload>")
+                ("http.useragent" "hurl/8.0.1")
+                ("language" "python")
+                ("runtime-id" "<runtime-id>")
+                ("span.kind" "server")
+                ("version" "1")))
             (metrics
               (
+                ("_dd.limit_psr" 1.0)
                 ("_dd.measured" 1.0)
-                ("_sampling_priority_v1" 2.0)))
+                ("_dd.rule_psr" 1.0)
+                ("_dd.top_level" 1.0)
+                ("_dd.tracer_kr" 1.0)
+                ("_sampling_priority_v1" 2.0)
+                ("process_id" "<process-id>")))
             (children
               (
                 (
-                  (service "django-datadog")
+                  (native-fields
+                    ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                  (service "<service>")
                   (name "django.middleware")
                   (type "")
                   (resource "django.middleware.security.SecurityMiddleware.__call__")
@@ -1260,13 +1785,18 @@
                   (error 0)
                   (meta
                     (
-                      ("component" "django")))
+                      ("_dd.svc_src" "m")
+                      ("component" "django")
+                      ("env" "test")
+                      ("version" "1")))
                   (metrics
                     ())
                   (children
                     (
                       (
-                        (service "django-datadog")
+                        (native-fields
+                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                        (service "<service>")
                         (name "django.middleware")
                         (type "")
                         (resource "django.contrib.sessions.middleware.SessionMiddleware.__call__")
@@ -1274,13 +1804,18 @@
                         (error 0)
                         (meta
                           (
-                            ("component" "django")))
+                            ("_dd.svc_src" "m")
+                            ("component" "django")
+                            ("env" "test")
+                            ("version" "1")))
                         (metrics
                           ())
                         (children
                           (
                             (
-                              (service "django-datadog")
+                              (native-fields
+                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                              (service "<service>")
                               (name "django.middleware")
                               (type "")
                               (resource "django.contrib.sessions.middleware.SessionMiddleware.process_request")
@@ -1288,13 +1823,18 @@
                               (error 0)
                               (meta
                                 (
-                                  ("component" "django")))
+                                  ("_dd.svc_src" "m")
+                                  ("component" "django")
+                                  ("env" "test")
+                                  ("version" "1")))
                               (metrics
                                 ())
                               (children
                                 ()))
                             (
-                              (service "django-datadog")
+                              (native-fields
+                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                              (service "<service>")
                               (name "django.middleware")
                               (type "")
                               (resource "django.contrib.sessions.middleware.SessionMiddleware.process_response")
@@ -1302,13 +1842,18 @@
                               (error 0)
                               (meta
                                 (
-                                  ("component" "django")))
+                                  ("_dd.svc_src" "m")
+                                  ("component" "django")
+                                  ("env" "test")
+                                  ("version" "1")))
                               (metrics
                                 ())
                               (children
                                 ()))
                             (
-                              (service "django-datadog")
+                              (native-fields
+                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                              (service "<service>")
                               (name "django.middleware")
                               (type "")
                               (resource "django.middleware.common.CommonMiddleware.__call__")
@@ -1316,13 +1861,18 @@
                               (error 0)
                               (meta
                                 (
-                                  ("component" "django")))
+                                  ("_dd.svc_src" "m")
+                                  ("component" "django")
+                                  ("env" "test")
+                                  ("version" "1")))
                               (metrics
                                 ())
                               (children
                                 (
                                   (
-                                    (service "django-datadog")
+                                    (native-fields
+                                      ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                    (service "<service>")
                                     (name "django.middleware")
                                     (type "")
                                     (resource "django.middleware.common.CommonMiddleware.process_request")
@@ -1330,13 +1880,18 @@
                                     (error 0)
                                     (meta
                                       (
-                                        ("component" "django")))
+                                        ("_dd.svc_src" "m")
+                                        ("component" "django")
+                                        ("env" "test")
+                                        ("version" "1")))
                                     (metrics
                                       ())
                                     (children
                                       ()))
                                   (
-                                    (service "django-datadog")
+                                    (native-fields
+                                      ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                    (service "<service>")
                                     (name "django.middleware")
                                     (type "")
                                     (resource "django.middleware.common.CommonMiddleware.process_response")
@@ -1344,13 +1899,18 @@
                                     (error 0)
                                     (meta
                                       (
-                                        ("component" "django")))
+                                        ("_dd.svc_src" "m")
+                                        ("component" "django")
+                                        ("env" "test")
+                                        ("version" "1")))
                                     (metrics
                                       ())
                                     (children
                                       ()))
                                   (
-                                    (service "django-datadog")
+                                    (native-fields
+                                      ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                    (service "<service>")
                                     (name "django.middleware")
                                     (type "")
                                     (resource "django.middleware.csrf.CsrfViewMiddleware.__call__")
@@ -1358,13 +1918,18 @@
                                     (error 0)
                                     (meta
                                       (
-                                        ("component" "django")))
+                                        ("_dd.svc_src" "m")
+                                        ("component" "django")
+                                        ("env" "test")
+                                        ("version" "1")))
                                     (metrics
                                       ())
                                     (children
                                       (
                                         (
-                                          (service "django-datadog")
+                                          (native-fields
+                                            ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                          (service "<service>")
                                           (name "django.middleware")
                                           (type "")
                                           (resource "django.contrib.auth.middleware.AuthenticationMiddleware.__call__")
@@ -1372,13 +1937,18 @@
                                           (error 0)
                                           (meta
                                             (
-                                              ("component" "django")))
+                                              ("_dd.svc_src" "m")
+                                              ("component" "django")
+                                              ("env" "test")
+                                              ("version" "1")))
                                           (metrics
                                             ())
                                           (children
                                             (
                                               (
-                                                (service "django-datadog")
+                                                (native-fields
+                                                  ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                (service "<service>")
                                                 (name "django.middleware")
                                                 (type "")
                                                 (resource "django.contrib.auth.middleware.AuthenticationMiddleware.process_request")
@@ -1386,13 +1956,18 @@
                                                 (error 0)
                                                 (meta
                                                   (
-                                                    ("component" "django")))
+                                                    ("_dd.svc_src" "m")
+                                                    ("component" "django")
+                                                    ("env" "test")
+                                                    ("version" "1")))
                                                 (metrics
                                                   ())
                                                 (children
                                                   ()))
                                               (
-                                                (service "django-datadog")
+                                                (native-fields
+                                                  ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                (service "<service>")
                                                 (name "django.middleware")
                                                 (type "")
                                                 (resource "django.contrib.messages.middleware.MessageMiddleware.__call__")
@@ -1400,13 +1975,18 @@
                                                 (error 0)
                                                 (meta
                                                   (
-                                                    ("component" "django")))
+                                                    ("_dd.svc_src" "m")
+                                                    ("component" "django")
+                                                    ("env" "test")
+                                                    ("version" "1")))
                                                 (metrics
                                                   ())
                                                 (children
                                                   (
                                                     (
-                                                      (service "django-datadog")
+                                                      (native-fields
+                                                        ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                      (service "<service>")
                                                       (name "django.middleware")
                                                       (type "")
                                                       (resource "django.contrib.messages.middleware.MessageMiddleware.process_request")
@@ -1414,13 +1994,18 @@
                                                       (error 0)
                                                       (meta
                                                         (
-                                                          ("component" "django")))
+                                                          ("_dd.svc_src" "m")
+                                                          ("component" "django")
+                                                          ("env" "test")
+                                                          ("version" "1")))
                                                       (metrics
                                                         ())
                                                       (children
                                                         ()))
                                                     (
-                                                      (service "django-datadog")
+                                                      (native-fields
+                                                        ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                      (service "<service>")
                                                       (name "django.middleware")
                                                       (type "")
                                                       (resource "django.contrib.messages.middleware.MessageMiddleware.process_response")
@@ -1428,13 +2013,18 @@
                                                       (error 0)
                                                       (meta
                                                         (
-                                                          ("component" "django")))
+                                                          ("_dd.svc_src" "m")
+                                                          ("component" "django")
+                                                          ("env" "test")
+                                                          ("version" "1")))
                                                       (metrics
                                                         ())
                                                       (children
                                                         ()))
                                                     (
-                                                      (service "django-datadog")
+                                                      (native-fields
+                                                        ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                      (service "<service>")
                                                       (name "django.middleware")
                                                       (type "")
                                                       (resource "django.middleware.clickjacking.XFrameOptionsMiddleware.__call__")
@@ -1442,13 +2032,18 @@
                                                       (error 0)
                                                       (meta
                                                         (
-                                                          ("component" "django")))
+                                                          ("_dd.svc_src" "m")
+                                                          ("component" "django")
+                                                          ("env" "test")
+                                                          ("version" "1")))
                                                       (metrics
                                                         ())
                                                       (children
                                                         (
                                                           (
-                                                            (service "django-datadog")
+                                                            (native-fields
+                                                              ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                            (service "<service>")
                                                             (name "django.middleware")
                                                             (type "")
                                                             (resource "corsheaders.middleware.CorsMiddleware.__call__")
@@ -1456,13 +2051,18 @@
                                                             (error 0)
                                                             (meta
                                                               (
-                                                                ("component" "django")))
+                                                                ("_dd.svc_src" "m")
+                                                                ("component" "django")
+                                                                ("env" "test")
+                                                                ("version" "1")))
                                                             (metrics
                                                               ())
                                                             (children
                                                               (
                                                                 (
-                                                                  (service "django-datadog")
+                                                                  (native-fields
+                                                                    ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                                  (service "<service>")
                                                                   (name "django.middleware")
                                                                   (type "")
                                                                   (resource "django.middleware.common.CommonMiddleware.__call__")
@@ -1470,13 +2070,18 @@
                                                                   (error 0)
                                                                   (meta
                                                                     (
-                                                                      ("component" "django")))
+                                                                      ("_dd.svc_src" "m")
+                                                                      ("component" "django")
+                                                                      ("env" "test")
+                                                                      ("version" "1")))
                                                                   (metrics
                                                                     ())
                                                                   (children
                                                                     (
                                                                       (
-                                                                        (service "django-datadog")
+                                                                        (native-fields
+                                                                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                                        (service "<service>")
                                                                         (name "django.middleware")
                                                                         (type "")
                                                                         (resource "django.middleware.common.CommonMiddleware.process_request")
@@ -1484,13 +2089,18 @@
                                                                         (error 0)
                                                                         (meta
                                                                           (
-                                                                            ("component" "django")))
+                                                                            ("_dd.svc_src" "m")
+                                                                            ("component" "django")
+                                                                            ("env" "test")
+                                                                            ("version" "1")))
                                                                         (metrics
                                                                           ())
                                                                         (children
                                                                           ()))
                                                                       (
-                                                                        (service "django-datadog")
+                                                                        (native-fields
+                                                                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                                        (service "<service>")
                                                                         (name "django.middleware")
                                                                         (type "")
                                                                         (resource "django.middleware.common.CommonMiddleware.process_response")
@@ -1498,13 +2108,18 @@
                                                                         (error 0)
                                                                         (meta
                                                                           (
-                                                                            ("component" "django")))
+                                                                            ("_dd.svc_src" "m")
+                                                                            ("component" "django")
+                                                                            ("env" "test")
+                                                                            ("version" "1")))
                                                                         (metrics
                                                                           ())
                                                                         (children
                                                                           ()))
                                                                       (
-                                                                        (service "django-datadog")
+                                                                        (native-fields
+                                                                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                                        (service "<service>")
                                                                         (name "django.middleware")
                                                                         (type "")
                                                                         (resource "django.middleware.csrf.CsrfViewMiddleware.process_view")
@@ -1512,13 +2127,18 @@
                                                                         (error 0)
                                                                         (meta
                                                                           (
-                                                                            ("component" "django")))
+                                                                            ("_dd.svc_src" "m")
+                                                                            ("component" "django")
+                                                                            ("env" "test")
+                                                                            ("version" "1")))
                                                                         (metrics
                                                                           ())
                                                                         (children
                                                                           ()))
                                                                       (
-                                                                        (service "django-datadog")
+                                                                        (native-fields
+                                                                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                                        (service "<service>")
                                                                         (name "django.view")
                                                                         (type "")
                                                                         (resource "ninja.operation._sync_view")
@@ -1526,12 +2146,17 @@
                                                                         (error 0)
                                                                         (meta
                                                                           (
-                                                                            ("component" "django")))
+                                                                            ("_dd.svc_src" "m")
+                                                                            ("component" "django")
+                                                                            ("env" "test")
+                                                                            ("version" "1")))
                                                                         (metrics
                                                                           ())
                                                                         (children
                                                                           (
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -1540,15 +2165,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -1557,15 +2189,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -1574,15 +2213,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -1591,15 +2237,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -1608,16 +2261,23 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ())))))))))))
                                                           (
-                                                            (service "django-datadog")
+                                                            (native-fields
+                                                              ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                            (service "<service>")
                                                             (name "django.middleware")
                                                             (type "")
                                                             (resource "django.middleware.clickjacking.XFrameOptionsMiddleware.process_response")
@@ -1625,13 +2285,18 @@
                                                             (error 0)
                                                             (meta
                                                               (
-                                                                ("component" "django")))
+                                                                ("_dd.svc_src" "m")
+                                                                ("component" "django")
+                                                                ("env" "test")
+                                                                ("version" "1")))
                                                             (metrics
                                                               ())
                                                             (children
                                                               ())))))))))))
                                         (
-                                          (service "django-datadog")
+                                          (native-fields
+                                            ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                          (service "<service>")
                                           (name "django.middleware")
                                           (type "")
                                           (resource "django.middleware.csrf.CsrfViewMiddleware.process_request")
@@ -1639,13 +2304,18 @@
                                           (error 0)
                                           (meta
                                             (
-                                              ("component" "django")))
+                                              ("_dd.svc_src" "m")
+                                              ("component" "django")
+                                              ("env" "test")
+                                              ("version" "1")))
                                           (metrics
                                             ())
                                           (children
                                             ()))
                                         (
-                                          (service "django-datadog")
+                                          (native-fields
+                                            ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                          (service "<service>")
                                           (name "django.middleware")
                                           (type "")
                                           (resource "django.middleware.csrf.CsrfViewMiddleware.process_response")
@@ -1653,13 +2323,18 @@
                                           (error 0)
                                           (meta
                                             (
-                                              ("component" "django")))
+                                              ("_dd.svc_src" "m")
+                                              ("component" "django")
+                                              ("env" "test")
+                                              ("version" "1")))
                                           (metrics
                                             ())
                                           (children
                                             ())))))))))))
                       (
-                        (service "django-datadog")
+                        (native-fields
+                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                        (service "<service>")
                         (name "django.middleware")
                         (type "")
                         (resource "django.middleware.security.SecurityMiddleware.process_request")
@@ -1667,13 +2342,18 @@
                         (error 0)
                         (meta
                           (
-                            ("component" "django")))
+                            ("_dd.svc_src" "m")
+                            ("component" "django")
+                            ("env" "test")
+                            ("version" "1")))
                         (metrics
                           ())
                         (children
                           ()))
                       (
-                        (service "django-datadog")
+                        (native-fields
+                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                        (service "<service>")
                         (name "django.middleware")
                         (type "")
                         (resource "django.middleware.security.SecurityMiddleware.process_response")
@@ -1681,7 +2361,10 @@
                         (error 0)
                         (meta
                           (
-                            ("component" "django")))
+                            ("_dd.svc_src" "m")
+                            ("component" "django")
+                            ("env" "test")
+                            ("version" "1")))
                         (metrics
                           ())
                         (children
@@ -1691,7 +2374,9 @@
       (roots
         (
           (
-            (service "django-datadog")
+            (native-fields
+              ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+            (service "<service>")
             (name "django.request")
             (type "web")
             (resource "POST api/profiles/<username>/follow")
@@ -1699,19 +2384,46 @@
             (error 0)
             (meta
               (
+                ("_dd.p.dm" "-3")
+                ("_dd.p.ksr" "1")
+                ("_dd.p.tid" "<trace-id-high>")
+                ("_dd.svc_src" "m")
+                ("_dd.tags.process" "entrypoint.basedir:main,entrypoint.name:-c,entrypoint.type:script,entrypoint.workdir:main,svc.user:true")
                 ("component" "django")
-                ("span.kind" "server")
+                ("django.app" "ninja")
+                ("django.namespace" "api-1.0.0")
+                ("django.request.class" "django.core.handlers.wsgi.WSGIRequest")
+                ("django.response.class" "django.http.response.HttpResponse")
+                ("django.user.id" "1")
+                ("django.user.is_authenticated" "True")
+                ("django.user.name" "prof_rules_stests_<workload>")
+                ("django.view" "api-1.0.0:follow_profile")
+                ("env" "test")
                 ("http.method" "POST")
                 ("http.route" "api/profiles/<username>/follow")
-                ("http.status_code" "200")))
+                ("http.status_code" "200")
+                ("http.url" "http://<endpoint>/api/profiles/celeb_rules_stests_<workload>/follow")
+                ("http.useragent" "hurl/8.0.1")
+                ("language" "python")
+                ("runtime-id" "<runtime-id>")
+                ("span.kind" "server")
+                ("usr.id" "1")
+                ("version" "1")))
             (metrics
               (
+                ("_dd.limit_psr" 1.0)
                 ("_dd.measured" 1.0)
-                ("_sampling_priority_v1" 2.0)))
+                ("_dd.rule_psr" 1.0)
+                ("_dd.top_level" 1.0)
+                ("_dd.tracer_kr" 1.0)
+                ("_sampling_priority_v1" 2.0)
+                ("process_id" "<process-id>")))
             (children
               (
                 (
-                  (service "django-datadog")
+                  (native-fields
+                    ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                  (service "<service>")
                   (name "django.middleware")
                   (type "")
                   (resource "django.middleware.security.SecurityMiddleware.__call__")
@@ -1719,13 +2431,18 @@
                   (error 0)
                   (meta
                     (
-                      ("component" "django")))
+                      ("_dd.svc_src" "m")
+                      ("component" "django")
+                      ("env" "test")
+                      ("version" "1")))
                   (metrics
                     ())
                   (children
                     (
                       (
-                        (service "django-datadog")
+                        (native-fields
+                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                        (service "<service>")
                         (name "django.middleware")
                         (type "")
                         (resource "django.contrib.sessions.middleware.SessionMiddleware.__call__")
@@ -1733,13 +2450,18 @@
                         (error 0)
                         (meta
                           (
-                            ("component" "django")))
+                            ("_dd.svc_src" "m")
+                            ("component" "django")
+                            ("env" "test")
+                            ("version" "1")))
                         (metrics
                           ())
                         (children
                           (
                             (
-                              (service "django-datadog")
+                              (native-fields
+                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                              (service "<service>")
                               (name "django.middleware")
                               (type "")
                               (resource "django.contrib.sessions.middleware.SessionMiddleware.process_request")
@@ -1747,13 +2469,18 @@
                               (error 0)
                               (meta
                                 (
-                                  ("component" "django")))
+                                  ("_dd.svc_src" "m")
+                                  ("component" "django")
+                                  ("env" "test")
+                                  ("version" "1")))
                               (metrics
                                 ())
                               (children
                                 ()))
                             (
-                              (service "django-datadog")
+                              (native-fields
+                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                              (service "<service>")
                               (name "django.middleware")
                               (type "")
                               (resource "django.contrib.sessions.middleware.SessionMiddleware.process_response")
@@ -1761,13 +2488,18 @@
                               (error 0)
                               (meta
                                 (
-                                  ("component" "django")))
+                                  ("_dd.svc_src" "m")
+                                  ("component" "django")
+                                  ("env" "test")
+                                  ("version" "1")))
                               (metrics
                                 ())
                               (children
                                 ()))
                             (
-                              (service "django-datadog")
+                              (native-fields
+                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                              (service "<service>")
                               (name "django.middleware")
                               (type "")
                               (resource "django.middleware.common.CommonMiddleware.__call__")
@@ -1775,13 +2507,18 @@
                               (error 0)
                               (meta
                                 (
-                                  ("component" "django")))
+                                  ("_dd.svc_src" "m")
+                                  ("component" "django")
+                                  ("env" "test")
+                                  ("version" "1")))
                               (metrics
                                 ())
                               (children
                                 (
                                   (
-                                    (service "django-datadog")
+                                    (native-fields
+                                      ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                    (service "<service>")
                                     (name "django.middleware")
                                     (type "")
                                     (resource "django.middleware.common.CommonMiddleware.process_request")
@@ -1789,13 +2526,18 @@
                                     (error 0)
                                     (meta
                                       (
-                                        ("component" "django")))
+                                        ("_dd.svc_src" "m")
+                                        ("component" "django")
+                                        ("env" "test")
+                                        ("version" "1")))
                                     (metrics
                                       ())
                                     (children
                                       ()))
                                   (
-                                    (service "django-datadog")
+                                    (native-fields
+                                      ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                    (service "<service>")
                                     (name "django.middleware")
                                     (type "")
                                     (resource "django.middleware.common.CommonMiddleware.process_response")
@@ -1803,13 +2545,18 @@
                                     (error 0)
                                     (meta
                                       (
-                                        ("component" "django")))
+                                        ("_dd.svc_src" "m")
+                                        ("component" "django")
+                                        ("env" "test")
+                                        ("version" "1")))
                                     (metrics
                                       ())
                                     (children
                                       ()))
                                   (
-                                    (service "django-datadog")
+                                    (native-fields
+                                      ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                    (service "<service>")
                                     (name "django.middleware")
                                     (type "")
                                     (resource "django.middleware.csrf.CsrfViewMiddleware.__call__")
@@ -1817,13 +2564,18 @@
                                     (error 0)
                                     (meta
                                       (
-                                        ("component" "django")))
+                                        ("_dd.svc_src" "m")
+                                        ("component" "django")
+                                        ("env" "test")
+                                        ("version" "1")))
                                     (metrics
                                       ())
                                     (children
                                       (
                                         (
-                                          (service "django-datadog")
+                                          (native-fields
+                                            ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                          (service "<service>")
                                           (name "django.middleware")
                                           (type "")
                                           (resource "django.contrib.auth.middleware.AuthenticationMiddleware.__call__")
@@ -1831,13 +2583,18 @@
                                           (error 0)
                                           (meta
                                             (
-                                              ("component" "django")))
+                                              ("_dd.svc_src" "m")
+                                              ("component" "django")
+                                              ("env" "test")
+                                              ("version" "1")))
                                           (metrics
                                             ())
                                           (children
                                             (
                                               (
-                                                (service "django-datadog")
+                                                (native-fields
+                                                  ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                (service "<service>")
                                                 (name "django.middleware")
                                                 (type "")
                                                 (resource "django.contrib.auth.middleware.AuthenticationMiddleware.process_request")
@@ -1845,13 +2602,18 @@
                                                 (error 0)
                                                 (meta
                                                   (
-                                                    ("component" "django")))
+                                                    ("_dd.svc_src" "m")
+                                                    ("component" "django")
+                                                    ("env" "test")
+                                                    ("version" "1")))
                                                 (metrics
                                                   ())
                                                 (children
                                                   ()))
                                               (
-                                                (service "django-datadog")
+                                                (native-fields
+                                                  ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                (service "<service>")
                                                 (name "django.middleware")
                                                 (type "")
                                                 (resource "django.contrib.messages.middleware.MessageMiddleware.__call__")
@@ -1859,13 +2621,18 @@
                                                 (error 0)
                                                 (meta
                                                   (
-                                                    ("component" "django")))
+                                                    ("_dd.svc_src" "m")
+                                                    ("component" "django")
+                                                    ("env" "test")
+                                                    ("version" "1")))
                                                 (metrics
                                                   ())
                                                 (children
                                                   (
                                                     (
-                                                      (service "django-datadog")
+                                                      (native-fields
+                                                        ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                      (service "<service>")
                                                       (name "django.middleware")
                                                       (type "")
                                                       (resource "django.contrib.messages.middleware.MessageMiddleware.process_request")
@@ -1873,13 +2640,18 @@
                                                       (error 0)
                                                       (meta
                                                         (
-                                                          ("component" "django")))
+                                                          ("_dd.svc_src" "m")
+                                                          ("component" "django")
+                                                          ("env" "test")
+                                                          ("version" "1")))
                                                       (metrics
                                                         ())
                                                       (children
                                                         ()))
                                                     (
-                                                      (service "django-datadog")
+                                                      (native-fields
+                                                        ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                      (service "<service>")
                                                       (name "django.middleware")
                                                       (type "")
                                                       (resource "django.contrib.messages.middleware.MessageMiddleware.process_response")
@@ -1887,13 +2659,18 @@
                                                       (error 0)
                                                       (meta
                                                         (
-                                                          ("component" "django")))
+                                                          ("_dd.svc_src" "m")
+                                                          ("component" "django")
+                                                          ("env" "test")
+                                                          ("version" "1")))
                                                       (metrics
                                                         ())
                                                       (children
                                                         ()))
                                                     (
-                                                      (service "django-datadog")
+                                                      (native-fields
+                                                        ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                      (service "<service>")
                                                       (name "django.middleware")
                                                       (type "")
                                                       (resource "django.middleware.clickjacking.XFrameOptionsMiddleware.__call__")
@@ -1901,13 +2678,18 @@
                                                       (error 0)
                                                       (meta
                                                         (
-                                                          ("component" "django")))
+                                                          ("_dd.svc_src" "m")
+                                                          ("component" "django")
+                                                          ("env" "test")
+                                                          ("version" "1")))
                                                       (metrics
                                                         ())
                                                       (children
                                                         (
                                                           (
-                                                            (service "django-datadog")
+                                                            (native-fields
+                                                              ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                            (service "<service>")
                                                             (name "django.middleware")
                                                             (type "")
                                                             (resource "corsheaders.middleware.CorsMiddleware.__call__")
@@ -1915,13 +2697,18 @@
                                                             (error 0)
                                                             (meta
                                                               (
-                                                                ("component" "django")))
+                                                                ("_dd.svc_src" "m")
+                                                                ("component" "django")
+                                                                ("env" "test")
+                                                                ("version" "1")))
                                                             (metrics
                                                               ())
                                                             (children
                                                               (
                                                                 (
-                                                                  (service "django-datadog")
+                                                                  (native-fields
+                                                                    ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                                  (service "<service>")
                                                                   (name "django.middleware")
                                                                   (type "")
                                                                   (resource "django.middleware.common.CommonMiddleware.__call__")
@@ -1929,13 +2716,18 @@
                                                                   (error 0)
                                                                   (meta
                                                                     (
-                                                                      ("component" "django")))
+                                                                      ("_dd.svc_src" "m")
+                                                                      ("component" "django")
+                                                                      ("env" "test")
+                                                                      ("version" "1")))
                                                                   (metrics
                                                                     ())
                                                                   (children
                                                                     (
                                                                       (
-                                                                        (service "django-datadog")
+                                                                        (native-fields
+                                                                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                                        (service "<service>")
                                                                         (name "django.middleware")
                                                                         (type "")
                                                                         (resource "django.middleware.common.CommonMiddleware.process_request")
@@ -1943,13 +2735,18 @@
                                                                         (error 0)
                                                                         (meta
                                                                           (
-                                                                            ("component" "django")))
+                                                                            ("_dd.svc_src" "m")
+                                                                            ("component" "django")
+                                                                            ("env" "test")
+                                                                            ("version" "1")))
                                                                         (metrics
                                                                           ())
                                                                         (children
                                                                           ()))
                                                                       (
-                                                                        (service "django-datadog")
+                                                                        (native-fields
+                                                                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                                        (service "<service>")
                                                                         (name "django.middleware")
                                                                         (type "")
                                                                         (resource "django.middleware.common.CommonMiddleware.process_response")
@@ -1957,13 +2754,18 @@
                                                                         (error 0)
                                                                         (meta
                                                                           (
-                                                                            ("component" "django")))
+                                                                            ("_dd.svc_src" "m")
+                                                                            ("component" "django")
+                                                                            ("env" "test")
+                                                                            ("version" "1")))
                                                                         (metrics
                                                                           ())
                                                                         (children
                                                                           ()))
                                                                       (
-                                                                        (service "django-datadog")
+                                                                        (native-fields
+                                                                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                                        (service "<service>")
                                                                         (name "django.middleware")
                                                                         (type "")
                                                                         (resource "django.middleware.csrf.CsrfViewMiddleware.process_view")
@@ -1971,13 +2773,18 @@
                                                                         (error 0)
                                                                         (meta
                                                                           (
-                                                                            ("component" "django")))
+                                                                            ("_dd.svc_src" "m")
+                                                                            ("component" "django")
+                                                                            ("env" "test")
+                                                                            ("version" "1")))
                                                                         (metrics
                                                                           ())
                                                                         (children
                                                                           ()))
                                                                       (
-                                                                        (service "django-datadog")
+                                                                        (native-fields
+                                                                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                                        (service "<service>")
                                                                         (name "django.view")
                                                                         (type "")
                                                                         (resource "ninja.operation._sync_view")
@@ -1985,12 +2792,17 @@
                                                                         (error 0)
                                                                         (meta
                                                                           (
-                                                                            ("component" "django")))
+                                                                            ("_dd.svc_src" "m")
+                                                                            ("component" "django")
+                                                                            ("env" "test")
+                                                                            ("version" "1")))
                                                                         (metrics
                                                                           ())
                                                                         (children
                                                                           (
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.connection.commit")
                                                                               (type "")
@@ -1999,14 +2811,20 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
-                                                                                ())
+                                                                                (
+                                                                                  ("_dd.top_level" 1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -2015,15 +2833,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -2032,15 +2857,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" 1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -2049,15 +2881,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -2066,15 +2905,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -2083,15 +2929,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -2100,15 +2953,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -2117,15 +2977,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -2134,15 +3001,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -2151,15 +3025,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -2168,15 +3049,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -2185,15 +3073,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -2202,15 +3097,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -2219,15 +3121,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -2236,15 +3145,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -2253,15 +3169,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -2270,16 +3193,23 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ())))))))))))
                                                           (
-                                                            (service "django-datadog")
+                                                            (native-fields
+                                                              ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                            (service "<service>")
                                                             (name "django.middleware")
                                                             (type "")
                                                             (resource "django.middleware.clickjacking.XFrameOptionsMiddleware.process_response")
@@ -2287,13 +3217,18 @@
                                                             (error 0)
                                                             (meta
                                                               (
-                                                                ("component" "django")))
+                                                                ("_dd.svc_src" "m")
+                                                                ("component" "django")
+                                                                ("env" "test")
+                                                                ("version" "1")))
                                                             (metrics
                                                               ())
                                                             (children
                                                               ())))))))))))
                                         (
-                                          (service "django-datadog")
+                                          (native-fields
+                                            ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                          (service "<service>")
                                           (name "django.middleware")
                                           (type "")
                                           (resource "django.middleware.csrf.CsrfViewMiddleware.process_request")
@@ -2301,13 +3236,18 @@
                                           (error 0)
                                           (meta
                                             (
-                                              ("component" "django")))
+                                              ("_dd.svc_src" "m")
+                                              ("component" "django")
+                                              ("env" "test")
+                                              ("version" "1")))
                                           (metrics
                                             ())
                                           (children
                                             ()))
                                         (
-                                          (service "django-datadog")
+                                          (native-fields
+                                            ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                          (service "<service>")
                                           (name "django.middleware")
                                           (type "")
                                           (resource "django.middleware.csrf.CsrfViewMiddleware.process_response")
@@ -2315,13 +3255,18 @@
                                           (error 0)
                                           (meta
                                             (
-                                              ("component" "django")))
+                                              ("_dd.svc_src" "m")
+                                              ("component" "django")
+                                              ("env" "test")
+                                              ("version" "1")))
                                           (metrics
                                             ())
                                           (children
                                             ())))))))))))
                       (
-                        (service "django-datadog")
+                        (native-fields
+                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                        (service "<service>")
                         (name "django.middleware")
                         (type "")
                         (resource "django.middleware.security.SecurityMiddleware.process_request")
@@ -2329,13 +3274,18 @@
                         (error 0)
                         (meta
                           (
-                            ("component" "django")))
+                            ("_dd.svc_src" "m")
+                            ("component" "django")
+                            ("env" "test")
+                            ("version" "1")))
                         (metrics
                           ())
                         (children
                           ()))
                       (
-                        (service "django-datadog")
+                        (native-fields
+                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                        (service "<service>")
                         (name "django.middleware")
                         (type "")
                         (resource "django.middleware.security.SecurityMiddleware.process_response")
@@ -2343,7 +3293,10 @@
                         (error 0)
                         (meta
                           (
-                            ("component" "django")))
+                            ("_dd.svc_src" "m")
+                            ("component" "django")
+                            ("env" "test")
+                            ("version" "1")))
                         (metrics
                           ())
                         (children
@@ -2353,7 +3306,9 @@
       (roots
         (
           (
-            (service "django-datadog")
+            (native-fields
+              ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+            (service "<service>")
             (name "django.request")
             (type "web")
             (resource "POST api/users")
@@ -2361,19 +3316,43 @@
             (error 0)
             (meta
               (
+                ("_dd.p.dm" "-3")
+                ("_dd.p.ksr" "1")
+                ("_dd.p.tid" "<trace-id-high>")
+                ("_dd.svc_src" "m")
+                ("_dd.tags.process" "entrypoint.basedir:main,entrypoint.name:-c,entrypoint.type:script,entrypoint.workdir:main,svc.user:true")
                 ("component" "django")
-                ("span.kind" "server")
+                ("django.app" "ninja")
+                ("django.namespace" "api-1.0.0")
+                ("django.request.class" "django.core.handlers.wsgi.WSGIRequest")
+                ("django.response.class" "django.http.response.HttpResponse")
+                ("django.user.is_authenticated" "False")
+                ("django.view" "api-1.0.0:account_registration")
+                ("env" "test")
                 ("http.method" "POST")
                 ("http.route" "api/users")
-                ("http.status_code" "201")))
+                ("http.status_code" "201")
+                ("http.url" "http://<endpoint>/api/users")
+                ("http.useragent" "hurl/8.0.1")
+                ("language" "python")
+                ("runtime-id" "<runtime-id>")
+                ("span.kind" "server")
+                ("version" "1")))
             (metrics
               (
+                ("_dd.limit_psr" 1.0)
                 ("_dd.measured" 1.0)
-                ("_sampling_priority_v1" 2.0)))
+                ("_dd.rule_psr" 1.0)
+                ("_dd.top_level" 1.0)
+                ("_dd.tracer_kr" 1.0)
+                ("_sampling_priority_v1" 2.0)
+                ("process_id" "<process-id>")))
             (children
               (
                 (
-                  (service "django-datadog")
+                  (native-fields
+                    ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                  (service "<service>")
                   (name "django.middleware")
                   (type "")
                   (resource "django.middleware.security.SecurityMiddleware.__call__")
@@ -2381,13 +3360,18 @@
                   (error 0)
                   (meta
                     (
-                      ("component" "django")))
+                      ("_dd.svc_src" "m")
+                      ("component" "django")
+                      ("env" "test")
+                      ("version" "1")))
                   (metrics
                     ())
                   (children
                     (
                       (
-                        (service "django-datadog")
+                        (native-fields
+                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                        (service "<service>")
                         (name "django.middleware")
                         (type "")
                         (resource "django.contrib.sessions.middleware.SessionMiddleware.__call__")
@@ -2395,13 +3379,18 @@
                         (error 0)
                         (meta
                           (
-                            ("component" "django")))
+                            ("_dd.svc_src" "m")
+                            ("component" "django")
+                            ("env" "test")
+                            ("version" "1")))
                         (metrics
                           ())
                         (children
                           (
                             (
-                              (service "django-datadog")
+                              (native-fields
+                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                              (service "<service>")
                               (name "django.middleware")
                               (type "")
                               (resource "django.contrib.sessions.middleware.SessionMiddleware.process_request")
@@ -2409,13 +3398,18 @@
                               (error 0)
                               (meta
                                 (
-                                  ("component" "django")))
+                                  ("_dd.svc_src" "m")
+                                  ("component" "django")
+                                  ("env" "test")
+                                  ("version" "1")))
                               (metrics
                                 ())
                               (children
                                 ()))
                             (
-                              (service "django-datadog")
+                              (native-fields
+                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                              (service "<service>")
                               (name "django.middleware")
                               (type "")
                               (resource "django.contrib.sessions.middleware.SessionMiddleware.process_response")
@@ -2423,13 +3417,18 @@
                               (error 0)
                               (meta
                                 (
-                                  ("component" "django")))
+                                  ("_dd.svc_src" "m")
+                                  ("component" "django")
+                                  ("env" "test")
+                                  ("version" "1")))
                               (metrics
                                 ())
                               (children
                                 ()))
                             (
-                              (service "django-datadog")
+                              (native-fields
+                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                              (service "<service>")
                               (name "django.middleware")
                               (type "")
                               (resource "django.middleware.common.CommonMiddleware.__call__")
@@ -2437,13 +3436,18 @@
                               (error 0)
                               (meta
                                 (
-                                  ("component" "django")))
+                                  ("_dd.svc_src" "m")
+                                  ("component" "django")
+                                  ("env" "test")
+                                  ("version" "1")))
                               (metrics
                                 ())
                               (children
                                 (
                                   (
-                                    (service "django-datadog")
+                                    (native-fields
+                                      ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                    (service "<service>")
                                     (name "django.middleware")
                                     (type "")
                                     (resource "django.middleware.common.CommonMiddleware.process_request")
@@ -2451,13 +3455,18 @@
                                     (error 0)
                                     (meta
                                       (
-                                        ("component" "django")))
+                                        ("_dd.svc_src" "m")
+                                        ("component" "django")
+                                        ("env" "test")
+                                        ("version" "1")))
                                     (metrics
                                       ())
                                     (children
                                       ()))
                                   (
-                                    (service "django-datadog")
+                                    (native-fields
+                                      ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                    (service "<service>")
                                     (name "django.middleware")
                                     (type "")
                                     (resource "django.middleware.common.CommonMiddleware.process_response")
@@ -2465,13 +3474,18 @@
                                     (error 0)
                                     (meta
                                       (
-                                        ("component" "django")))
+                                        ("_dd.svc_src" "m")
+                                        ("component" "django")
+                                        ("env" "test")
+                                        ("version" "1")))
                                     (metrics
                                       ())
                                     (children
                                       ()))
                                   (
-                                    (service "django-datadog")
+                                    (native-fields
+                                      ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                    (service "<service>")
                                     (name "django.middleware")
                                     (type "")
                                     (resource "django.middleware.csrf.CsrfViewMiddleware.__call__")
@@ -2479,13 +3493,18 @@
                                     (error 0)
                                     (meta
                                       (
-                                        ("component" "django")))
+                                        ("_dd.svc_src" "m")
+                                        ("component" "django")
+                                        ("env" "test")
+                                        ("version" "1")))
                                     (metrics
                                       ())
                                     (children
                                       (
                                         (
-                                          (service "django-datadog")
+                                          (native-fields
+                                            ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                          (service "<service>")
                                           (name "django.middleware")
                                           (type "")
                                           (resource "django.contrib.auth.middleware.AuthenticationMiddleware.__call__")
@@ -2493,13 +3512,18 @@
                                           (error 0)
                                           (meta
                                             (
-                                              ("component" "django")))
+                                              ("_dd.svc_src" "m")
+                                              ("component" "django")
+                                              ("env" "test")
+                                              ("version" "1")))
                                           (metrics
                                             ())
                                           (children
                                             (
                                               (
-                                                (service "django-datadog")
+                                                (native-fields
+                                                  ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                (service "<service>")
                                                 (name "django.middleware")
                                                 (type "")
                                                 (resource "django.contrib.auth.middleware.AuthenticationMiddleware.process_request")
@@ -2507,13 +3531,18 @@
                                                 (error 0)
                                                 (meta
                                                   (
-                                                    ("component" "django")))
+                                                    ("_dd.svc_src" "m")
+                                                    ("component" "django")
+                                                    ("env" "test")
+                                                    ("version" "1")))
                                                 (metrics
                                                   ())
                                                 (children
                                                   ()))
                                               (
-                                                (service "django-datadog")
+                                                (native-fields
+                                                  ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                (service "<service>")
                                                 (name "django.middleware")
                                                 (type "")
                                                 (resource "django.contrib.messages.middleware.MessageMiddleware.__call__")
@@ -2521,13 +3550,18 @@
                                                 (error 0)
                                                 (meta
                                                   (
-                                                    ("component" "django")))
+                                                    ("_dd.svc_src" "m")
+                                                    ("component" "django")
+                                                    ("env" "test")
+                                                    ("version" "1")))
                                                 (metrics
                                                   ())
                                                 (children
                                                   (
                                                     (
-                                                      (service "django-datadog")
+                                                      (native-fields
+                                                        ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                      (service "<service>")
                                                       (name "django.middleware")
                                                       (type "")
                                                       (resource "django.contrib.messages.middleware.MessageMiddleware.process_request")
@@ -2535,13 +3569,18 @@
                                                       (error 0)
                                                       (meta
                                                         (
-                                                          ("component" "django")))
+                                                          ("_dd.svc_src" "m")
+                                                          ("component" "django")
+                                                          ("env" "test")
+                                                          ("version" "1")))
                                                       (metrics
                                                         ())
                                                       (children
                                                         ()))
                                                     (
-                                                      (service "django-datadog")
+                                                      (native-fields
+                                                        ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                      (service "<service>")
                                                       (name "django.middleware")
                                                       (type "")
                                                       (resource "django.contrib.messages.middleware.MessageMiddleware.process_response")
@@ -2549,13 +3588,18 @@
                                                       (error 0)
                                                       (meta
                                                         (
-                                                          ("component" "django")))
+                                                          ("_dd.svc_src" "m")
+                                                          ("component" "django")
+                                                          ("env" "test")
+                                                          ("version" "1")))
                                                       (metrics
                                                         ())
                                                       (children
                                                         ()))
                                                     (
-                                                      (service "django-datadog")
+                                                      (native-fields
+                                                        ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                      (service "<service>")
                                                       (name "django.middleware")
                                                       (type "")
                                                       (resource "django.middleware.clickjacking.XFrameOptionsMiddleware.__call__")
@@ -2563,13 +3607,18 @@
                                                       (error 0)
                                                       (meta
                                                         (
-                                                          ("component" "django")))
+                                                          ("_dd.svc_src" "m")
+                                                          ("component" "django")
+                                                          ("env" "test")
+                                                          ("version" "1")))
                                                       (metrics
                                                         ())
                                                       (children
                                                         (
                                                           (
-                                                            (service "django-datadog")
+                                                            (native-fields
+                                                              ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                            (service "<service>")
                                                             (name "django.middleware")
                                                             (type "")
                                                             (resource "corsheaders.middleware.CorsMiddleware.__call__")
@@ -2577,13 +3626,18 @@
                                                             (error 0)
                                                             (meta
                                                               (
-                                                                ("component" "django")))
+                                                                ("_dd.svc_src" "m")
+                                                                ("component" "django")
+                                                                ("env" "test")
+                                                                ("version" "1")))
                                                             (metrics
                                                               ())
                                                             (children
                                                               (
                                                                 (
-                                                                  (service "django-datadog")
+                                                                  (native-fields
+                                                                    ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                                  (service "<service>")
                                                                   (name "django.middleware")
                                                                   (type "")
                                                                   (resource "django.middleware.common.CommonMiddleware.__call__")
@@ -2591,13 +3645,18 @@
                                                                   (error 0)
                                                                   (meta
                                                                     (
-                                                                      ("component" "django")))
+                                                                      ("_dd.svc_src" "m")
+                                                                      ("component" "django")
+                                                                      ("env" "test")
+                                                                      ("version" "1")))
                                                                   (metrics
                                                                     ())
                                                                   (children
                                                                     (
                                                                       (
-                                                                        (service "django-datadog")
+                                                                        (native-fields
+                                                                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                                        (service "<service>")
                                                                         (name "django.middleware")
                                                                         (type "")
                                                                         (resource "django.middleware.common.CommonMiddleware.process_request")
@@ -2605,13 +3664,18 @@
                                                                         (error 0)
                                                                         (meta
                                                                           (
-                                                                            ("component" "django")))
+                                                                            ("_dd.svc_src" "m")
+                                                                            ("component" "django")
+                                                                            ("env" "test")
+                                                                            ("version" "1")))
                                                                         (metrics
                                                                           ())
                                                                         (children
                                                                           ()))
                                                                       (
-                                                                        (service "django-datadog")
+                                                                        (native-fields
+                                                                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                                        (service "<service>")
                                                                         (name "django.middleware")
                                                                         (type "")
                                                                         (resource "django.middleware.common.CommonMiddleware.process_response")
@@ -2619,13 +3683,18 @@
                                                                         (error 0)
                                                                         (meta
                                                                           (
-                                                                            ("component" "django")))
+                                                                            ("_dd.svc_src" "m")
+                                                                            ("component" "django")
+                                                                            ("env" "test")
+                                                                            ("version" "1")))
                                                                         (metrics
                                                                           ())
                                                                         (children
                                                                           ()))
                                                                       (
-                                                                        (service "django-datadog")
+                                                                        (native-fields
+                                                                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                                        (service "<service>")
                                                                         (name "django.middleware")
                                                                         (type "")
                                                                         (resource "django.middleware.csrf.CsrfViewMiddleware.process_view")
@@ -2633,13 +3702,18 @@
                                                                         (error 0)
                                                                         (meta
                                                                           (
-                                                                            ("component" "django")))
+                                                                            ("_dd.svc_src" "m")
+                                                                            ("component" "django")
+                                                                            ("env" "test")
+                                                                            ("version" "1")))
                                                                         (metrics
                                                                           ())
                                                                         (children
                                                                           ()))
                                                                       (
-                                                                        (service "django-datadog")
+                                                                        (native-fields
+                                                                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                                        (service "<service>")
                                                                         (name "django.view")
                                                                         (type "")
                                                                         (resource "ninja.operation._sync_view")
@@ -2647,12 +3721,17 @@
                                                                         (error 0)
                                                                         (meta
                                                                           (
-                                                                            ("component" "django")))
+                                                                            ("_dd.svc_src" "m")
+                                                                            ("component" "django")
+                                                                            ("env" "test")
+                                                                            ("version" "1")))
                                                                         (metrics
                                                                           ())
                                                                         (children
                                                                           (
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -2661,15 +3740,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" 0.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -2678,15 +3764,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" 1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -2695,15 +3788,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -2712,15 +3812,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -2729,15 +3836,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -2746,15 +3860,22 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ()))
                                                                             (
+                                                                              (native-fields
+                                                                                ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
                                                                               (service "sqlite")
                                                                               (name "sqlite.query")
                                                                               (type "sql")
@@ -2763,16 +3884,23 @@
                                                                               (error 0)
                                                                               (meta
                                                                                 (
+                                                                                  ("_dd.base_service" "<service>")
+                                                                                  ("_dd.svc_src" "sqlite")
                                                                                   ("component" "sqlite")
-                                                                                  ("span.kind" "client")
-                                                                                  ("db.system" "sqlite")))
+                                                                                  ("db.system" "sqlite")
+                                                                                  ("env" "test")
+                                                                                  ("span.kind" "client")))
                                                                               (metrics
                                                                                 (
-                                                                                  ("_dd.measured" 1.0)))
+                                                                                  ("_dd.measured" 1.0)
+                                                                                  ("_dd.top_level" 1.0)
+                                                                                  ("db.row_count" -1.0)))
                                                                               (children
                                                                                 ())))))))))))
                                                           (
-                                                            (service "django-datadog")
+                                                            (native-fields
+                                                              ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                                            (service "<service>")
                                                             (name "django.middleware")
                                                             (type "")
                                                             (resource "django.middleware.clickjacking.XFrameOptionsMiddleware.process_response")
@@ -2780,13 +3908,18 @@
                                                             (error 0)
                                                             (meta
                                                               (
-                                                                ("component" "django")))
+                                                                ("_dd.svc_src" "m")
+                                                                ("component" "django")
+                                                                ("env" "test")
+                                                                ("version" "1")))
                                                             (metrics
                                                               ())
                                                             (children
                                                               ())))))))))))
                                         (
-                                          (service "django-datadog")
+                                          (native-fields
+                                            ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                          (service "<service>")
                                           (name "django.middleware")
                                           (type "")
                                           (resource "django.middleware.csrf.CsrfViewMiddleware.process_request")
@@ -2794,13 +3927,18 @@
                                           (error 0)
                                           (meta
                                             (
-                                              ("component" "django")))
+                                              ("_dd.svc_src" "m")
+                                              ("component" "django")
+                                              ("env" "test")
+                                              ("version" "1")))
                                           (metrics
                                             ())
                                           (children
                                             ()))
                                         (
-                                          (service "django-datadog")
+                                          (native-fields
+                                            ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                                          (service "<service>")
                                           (name "django.middleware")
                                           (type "")
                                           (resource "django.middleware.csrf.CsrfViewMiddleware.process_response")
@@ -2808,13 +3946,18 @@
                                           (error 0)
                                           (meta
                                             (
-                                              ("component" "django")))
+                                              ("_dd.svc_src" "m")
+                                              ("component" "django")
+                                              ("env" "test")
+                                              ("version" "1")))
                                           (metrics
                                             ())
                                           (children
                                             ())))))))))))
                       (
-                        (service "django-datadog")
+                        (native-fields
+                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                        (service "<service>")
                         (name "django.middleware")
                         (type "")
                         (resource "django.middleware.security.SecurityMiddleware.process_request")
@@ -2822,13 +3965,18 @@
                         (error 0)
                         (meta
                           (
-                            ("component" "django")))
+                            ("_dd.svc_src" "m")
+                            ("component" "django")
+                            ("env" "test")
+                            ("version" "1")))
                         (metrics
                           ())
                         (children
                           ()))
                       (
-                        (service "django-datadog")
+                        (native-fields
+                          ("duration" "error" "meta" "metrics" "name" "parent_id" "resource" "service" "span_id" "start" "trace_id" "type" ))
+                        (service "<service>")
                         (name "django.middleware")
                         (type "")
                         (resource "django.middleware.security.SecurityMiddleware.process_response")
@@ -2836,7 +3984,10 @@
                         (error 0)
                         (meta
                           (
-                            ("component" "django")))
+                            ("_dd.svc_src" "m")
+                            ("component" "django")
+                            ("env" "test")
+                            ("version" "1")))
                         (metrics
                           ())
                         (children

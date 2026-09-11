@@ -22,6 +22,12 @@ _PYTHON_ENV = otlp_env(extra = {
 })
 
 _EXAMPLE_SCENARIOS = ["comments"]
+_DATADOG_REFERENCE_SCENARIOS = [
+    "articles", "auth", "comments", "errors_articles", "errors_auth",
+    "errors_authorization", "errors_comments", "errors_profiles", "favorites",
+    "feed", "pagination", "profiles", "propagation", "tags", "unicode",
+    "propagation_datadog",
+]
 
 corpus_service(
     name = "aiohttp_otel_service",
@@ -155,7 +161,7 @@ datadog_realworld_profile(
     specification = "profile/example-aiohttp-datadog-v4-14-0.scm",
     implementation_libraries = ["@rules_stests//corpus:datadog/implementation/python-v4.14.0.scm"],
     wire_version = "v0.5",
-    scenarios = ["tags"],
+    reference_profile = "@rules_stests//corpus:python-aiohttp-datadog-v4-14-0-v05",
 )
 
 corpus_service(
@@ -181,7 +187,48 @@ realworld_service_tests(
     service = ":example_datadog_service",
     telemetry_profile = ":example-aiohttp-datadog-v4-14-0",
     telemetry_sink = "@rules_stests//harness:telemetry_sink_service",
-    scenarios = ["tags"],
+    scenarios = _DATADOG_REFERENCE_SCENARIOS,
+)
+
+datadog_realworld_profile(
+    name = "example-django-datadog-v4-14-0",
+    specification = "profile/example-django-datadog-v4-14-0.scm",
+    implementation_libraries = ["@rules_stests//corpus:datadog/implementation/python-v4.14.0.scm"],
+    wire_version = "v0.5",
+    reference_profile = "@rules_stests//corpus:python-django-datadog-v4-14-0-v05",
+)
+
+corpus_service(
+    name = "example_django_datadog_service",
+    rootfs = "@rules_stests//harness:django_rootfs",
+    runtime = "python",
+    instance = "example-django-datadog",
+    command = "serve",
+    args = ["--host", "127.0.0.1", "--port", "$${PORT}"],
+    env = datadog_env(service = "example-django-datadog"),
+    injection = datadog_python_injection(),
+    deps = ["@rules_stests//harness:telemetry_sink_service"],
+    autoassign_port = True,
+    expected_start_duration = "3s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    hygienic = False,
+    shutdown_timeout = "10s",
+    so_reuseport_aware = True,
+)
+
+realworld_service_tests(
+    name = "example_django_datadog",
+    service = ":example_django_datadog_service",
+    telemetry_profile = ":example-django-datadog-v4-14-0",
+    telemetry_sink = "@rules_stests//harness:telemetry_sink_service",
+    scenarios = _DATADOG_REFERENCE_SCENARIOS,
+)
+
+# Re-export the controlled native emitter check so an external module verifies
+# that a consumer-declared tracer identity is accepted and a mismatch rejected.
+test_suite(
+    name = "datadog_consumer_identity_test",
+    tests = ["@rules_stests//corpus:datadog_conformance_test"],
 )
 
 telemetry_api_check(

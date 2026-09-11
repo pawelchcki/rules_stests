@@ -76,7 +76,7 @@ func CompileTelemetryProfile(profileSource string, implementationSources []strin
 				return plan, fmt.Errorf("profile id clause is malformed")
 			}
 			plan.Profile = atomValue(unquote(clause.list[1]))
-		case "family", "wire-version", "application", "shape-namespace":
+		case "family", "wire-version", "application", "shape-namespace", "tracer-version":
 			if len(clause.list) != 2 {
 				return plan, fmt.Errorf("profile %s clause is malformed", head(clause))
 			}
@@ -90,6 +90,8 @@ func CompileTelemetryProfile(profileSource string, implementationSources []strin
 				plan.Application = value
 			case "shape-namespace":
 				plan.ShapeNamespace = value
+			case "tracer-version":
+				plan.TracerVersion = value
 			}
 		case "display-name":
 			if len(clause.list) != 2 || !clause.list[1].str {
@@ -155,14 +157,14 @@ func CompileTelemetryProfile(profileSource string, implementationSources []strin
 		}
 	}
 	if plan.Family != "" {
-		if plan.Family != "datadog" || (plan.WireVersion != "v0.4" && plan.WireVersion != "v0.5") || plan.Application == "" || plan.ShapeNamespace == "" {
+		if plan.Family != "datadog" || (plan.WireVersion != "v0.4" && plan.WireVersion != "v0.5") || plan.Application == "" || plan.ShapeNamespace == "" || plan.TracerVersion == "" {
 			return plan, fmt.Errorf("invalid telemetry profile identity")
 		}
 		if len(plan.Signals) != 1 || plan.Signals[0] != "traces" {
 			return plan, fmt.Errorf("Datadog profiles support traces only")
 		}
 		plan.SchemaVersion = 2
-	} else if plan.WireVersion != "" || plan.Application != "" || plan.ShapeNamespace != "" {
+	} else if plan.WireVersion != "" || plan.Application != "" || plan.ShapeNamespace != "" || plan.TracerVersion != "" {
 		return plan, fmt.Errorf("telemetry identity requires a family")
 	}
 	sort.Slice(plan.Proofs, func(i, j int) bool { return plan.Proofs[i].FeatureID < plan.Proofs[j].FeatureID })

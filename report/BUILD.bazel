@@ -12,6 +12,7 @@ go_library(
 
 go_binary(name = "registry_generator", srcs = ["registry/main.go"], deps = [":lib"])
 go_binary(name = "plan_compiler", srcs = ["profilecmd/main.go"], deps = [":lib"])
+go_test(name = "profilecmd_test", srcs = ["profilecmd/main.go", "profilecmd/main_test.go"], deps = [":lib"])
 go_binary(name = "assemble", srcs = ["cmd/main.go"], deps = [":lib"])
 
 go_test(

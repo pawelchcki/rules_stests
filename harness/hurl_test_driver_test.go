@@ -314,8 +314,9 @@ func TestDatadogReceiptIdentityAndRevisionIsolation(t *testing.T) {
 	t.Setenv("TEST_UNDECLARED_OUTPUTS_DIR", root)
 	t.Setenv("OTEL_TEST_REVISION", strings.Repeat("a", 40))
 	t.Setenv("TELEMETRY_TEST_REVISION", "")
-	profile := atomicProfile{ID: "dd", Scenario: "tags", Family: "datadog", WireVersion: "v0.5", Plan: []byte("plan"), Shape: []byte("shape"), ValidationMode: "exact"}
-	if err := emitValidationReceipt(profile, []byte("capture"), nil); err != nil {
+	profile := atomicProfile{ID: "dd", Scenario: "tags", Family: "datadog", WireVersion: "v0.5", Application: "aiohttp", Plan: []byte("plan"), Shape: []byte("shape"), ValidationMode: "exact"}
+	capture := []byte(`[{"payload":{"traces":[[{"name":"aiohttp.request"}]]}}]`)
+	if err := emitValidationReceipt(profile, capture, nil); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(root, "datadog", "receipts", "dd", "tags.json")
@@ -323,7 +324,7 @@ func TestDatadogReceiptIdentityAndRevisionIsolation(t *testing.T) {
 		t.Fatal("Datadog consumed the legacy revision")
 	}
 	t.Setenv("TELEMETRY_TEST_REVISION", strings.Repeat("b", 40))
-	if err := emitValidationReceipt(profile, []byte("capture"), nil); err != nil {
+	if err := emitValidationReceipt(profile, capture, nil); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
@@ -334,7 +335,7 @@ func TestDatadogReceiptIdentityAndRevisionIsolation(t *testing.T) {
 	if err := json.Unmarshal(data, &receipt); err != nil {
 		t.Fatal(err)
 	}
-	if receipt.SchemaVersion != 2 || receipt.Family != "datadog" || receipt.WireVersion != "v0.5" || receipt.Revision != strings.Repeat("b", 40) || receipt.ScenarioShapeSHA256 == "" {
+	if receipt.SchemaVersion != 2 || receipt.Family != "datadog" || receipt.WireVersion != "v0.5" || receipt.Revision != strings.Repeat("b", 40) || receipt.ScenarioShapeSHA256 == "" || receipt.Coverage == nil || receipt.Coverage.UnclassifiedFields != 0 {
 		t.Fatalf("wrong identity: %+v", receipt)
 	}
 }

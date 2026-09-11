@@ -1,5 +1,5 @@
 (define-library (datadog catalog)
-  (export span/database-children span/native-fields span/ids-valid span/completed span/root-present span/http-classification span/exception-metadata span/service-present request/headers-and-counts capture/semantic-valid span/tracecontext-parent span/datadog-parent)
+  (export span/database-children span/native-fields span/ids-valid span/completed span/root-present span/http-classification span/exception-metadata span/service-present request/headers-and-counts capture/semantic-valid capture/field-policy-coverage span/tracecontext-parent span/datadog-parent)
   (import (scheme base))
   (begin
 (define span/database-children "datadog.traces.database-children")
@@ -12,6 +12,7 @@
 (define span/service-present "datadog.traces.service-identity")
 (define request/headers-and-counts "datadog.intake.headers-and-counts")
 (define capture/semantic-valid "datadog.intake.semantic-validity")
+(define capture/field-policy-coverage "datadog.coverage.field-policies")
 (define span/tracecontext-parent "datadog.propagation.tracecontext")
 (define span/datadog-parent "datadog.propagation.datadog")
   ))

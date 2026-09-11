@@ -227,9 +227,10 @@ fn handle_connection(
     }
     if request.method == "GET" && path == "/candidate" {
         let app = query_value("app").unwrap_or("");
+        let scenario = query_value("scenario").unwrap_or("");
         let snapshot = frozen_records.as_deref().unwrap_or(records);
         match if is_dd {
-            datadog::candidate(snapshot, app)
+            datadog::candidate(snapshot, app, scenario)
         } else {
             validation::scenario_shape_candidate(snapshot, app)
         } {
@@ -240,7 +241,8 @@ fn handle_connection(
     }
     if request.method == "POST" && request.path == "/validate" {
         let snapshot = frozen_records.as_deref().unwrap_or(records);
-        validate(connection, &request.body, snapshot, validation_stats, is_dd);
+        validate(connection, &request.body, snapshot, validation_stats, is_dd,
+                 query_value("app").unwrap_or(""), query_value("scenario").unwrap_or(""));
         return;
     }
     if request.method != "POST" && !(is_dd && request.method == "PUT") {
@@ -270,10 +272,12 @@ fn validate(
     records: &[Record],
     validation_stats: &mut ValidationStats,
     is_dd: bool,
+    app: &str,
+    scenario: &str,
 ) {
     let started = clock_gettime(ClockId::Monotonic);
     let input = match if is_dd {
-        datadog::capture_to_scheme(records)
+        datadog::capture_to_scheme_with_context(records, app, scenario)
     } else {
         validation::capture_to_scheme(records)
     } {

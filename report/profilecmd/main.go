@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -16,12 +17,13 @@ func (values *repeated) String() string         { return fmt.Sprint([]string(*va
 func (values *repeated) Set(value string) error { *values = append(*values, value); return nil }
 
 func main() {
-	var profilePath, registryPath, captureShapesPath, outputPath, manifestPath, profileID, programPath, family, wireVersion string
-	var implementationPaths, proofRulePaths, libraryPaths, importNames, signals, scenarios, shapeSpecs repeated
+	var profilePath, registryPath, captureShapesPath, outputPath, manifestPath, profileID, programPath, family, wireVersion, referenceManifestPath string
+	var implementationPaths, proofRulePaths, policySourcePaths, libraryPaths, importNames, signals, scenarios, shapeSpecs repeated
 	flag.StringVar(&profilePath, "profile", "", "Scheme profile")
 	flag.StringVar(&registryPath, "registry", "", "standard registry JSON")
 	flag.Var(&proofRulePaths, "proof-rules", "Scheme proof table (repeatable)")
 	flag.StringVar(&captureShapesPath, "capture-shapes", "", "Scheme capture-shape registry")
+	flag.Var(&policySourcePaths, "policy-source", "executable validation policy source (repeatable)")
 	flag.StringVar(&outputPath, "out", "", "normalized plan output")
 	flag.StringVar(&manifestPath, "manifest-out", "", "atomic profile manifest output")
 	flag.StringVar(&profileID, "profile-id", "", "profile identity")
@@ -34,6 +36,7 @@ func main() {
 	flag.Var(&shapeSpecs, "shape", "scenario,path exact shape (repeatable)")
 	flag.StringVar(&family, "family", "", "telemetry family")
 	flag.StringVar(&wireVersion, "wire-version", "", "intake wire version")
+	flag.StringVar(&referenceManifestPath, "reference-manifest", "", "reviewed Datadog reference profile manifest")
 	flag.Parse()
 	profile, err := os.ReadFile(profilePath)
 	if err != nil {
@@ -56,6 +59,17 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
+	policyMaterial := append([]byte("datadog-field-policy-v1\x00"), captureShapes...)
+	policyMaterial = append(policyMaterial, '\x00')
+	policyMaterial = append(policyMaterial, rules...)
+	for _, path := range policySourcePaths {
+		contents, readErr := os.ReadFile(path)
+		if readErr != nil {
+			fail(readErr)
+		}
+		policyMaterial = append(policyMaterial, '\x00')
+		policyMaterial = append(policyMaterial, contents...)
+	}
 	implementations := make([]string, 0, len(implementationPaths))
 	for _, path := range implementationPaths {
 		contents, readErr := os.ReadFile(path)
@@ -76,6 +90,23 @@ func main() {
 	}
 	if !sameStrings(plan.Signals, signals) {
 		fail(fmt.Errorf("profile signals %v do not match target signals %v", plan.Signals, []string(signals)))
+	}
+	var referenceManifest *manifestDocument
+	if referenceManifestPath != "" {
+		contents, readErr := os.ReadFile(referenceManifestPath)
+		if readErr != nil {
+			fail(readErr)
+		}
+		var reference manifestDocument
+		decoder := json.NewDecoder(strings.NewReader(string(contents)))
+		decoder.DisallowUnknownFields()
+		if decodeErr := decoder.Decode(&reference); decodeErr != nil {
+			fail(fmt.Errorf("decode reference profile: %w", decodeErr))
+		}
+		if referenceErr := validateAndApplyReference(&plan, reference, scenarios); referenceErr != nil {
+			fail(referenceErr)
+		}
+		referenceManifest = &reference
 	}
 	encoded, err := json.MarshalIndent(plan, "", "  ")
 	if err != nil {
@@ -120,20 +151,27 @@ func main() {
 			}
 			shapes[parts[0]] = string(contents)
 		}
-		document := struct {
-			Family         string            `json:"family,omitempty"`
-			WireVersion    string            `json:"wireVersion,omitempty"`
-			Application    string            `json:"application,omitempty"`
-			ShapeNamespace string            `json:"shapeNamespace,omitempty"`
-			SchemaVersion  int               `json:"schemaVersion"`
-			Profile        string            `json:"profile"`
-			Signals        []string          `json:"signals"`
-			ProofPlan      string            `json:"proofPlan"`
-			Program        string            `json:"program"`
-			Libraries      []string          `json:"libraries"`
-			Imports        []string          `json:"imports"`
-			ScenarioShapes map[string]string `json:"scenarioShapes"`
-		}{plan.Family, plan.WireVersion, plan.Application, plan.ShapeNamespace, plan.SchemaVersion, profileID, signals, string(encoded), string(program), libraries, importNames, shapes}
+		if referenceManifest != nil {
+			shapes = referenceManifest.ScenarioShapes
+		}
+		document := manifestDocument{
+			Family: plan.Family, WireVersion: plan.WireVersion, Application: plan.Application,
+			ShapeNamespace: plan.ShapeNamespace, TracerVersion: plan.TracerVersion,
+			SchemaVersion: plan.SchemaVersion, Profile: profileID, Signals: signals,
+			ProofPlan: string(encoded), Program: string(program), Libraries: libraries,
+			Imports: importNames, ScenarioShapes: shapes,
+		}
+		policyDigest := sha256.Sum256(policyMaterial)
+		implementationDeclaration := strings.Join([]string{plan.Language, plan.TracerVersion, strings.Join(plan.Implementations, "\x00"), strings.Join(implementations, "\x00")}, "\x00")
+		implementationDigest := sha256.Sum256([]byte(implementationDeclaration))
+		document.ValidationPolicySHA256 = fmt.Sprintf("%x", policyDigest)
+		document.CandidateImplementationSHA256 = fmt.Sprintf("%x", implementationDigest)
+		if referenceManifest != nil {
+			document.ReferenceProfile = referenceManifest.Profile
+			document.ReferenceShapeNamespace = referenceManifest.ShapeNamespace
+			referenceDigest := sha256.Sum256([]byte(referenceManifest.ProofPlan))
+			document.ReferenceProofPlanSHA256 = fmt.Sprintf("%x", referenceDigest)
+		}
 		manifest, marshalErr := json.Marshal(document)
 		if marshalErr != nil {
 			fail(marshalErr)
@@ -143,6 +181,72 @@ func main() {
 			fail(writeErr)
 		}
 	}
+}
+
+func validateAndApplyReference(plan *report.NormalizedProfilePlan, reference manifestDocument, scenarios []string) error {
+	var referencePlan report.NormalizedProfilePlan
+	if err := json.Unmarshal([]byte(reference.ProofPlan), &referencePlan); err != nil {
+		return fmt.Errorf("decode reference proof plan: %w", err)
+	}
+	if reference.SchemaVersion != 2 || reference.Family != "datadog" || reference.Profile == "" || len(reference.ScenarioShapes) == 0 ||
+		reference.Family != plan.Family || reference.WireVersion != plan.WireVersion || reference.Application != plan.Application ||
+		!sameProofContracts(referencePlan.Proofs, plan.Proofs) || !sameStringsPlain(reference.Signals, plan.Signals) {
+		return fmt.Errorf("candidate profile does not match complete Datadog reference contract")
+	}
+	if len(reference.ScenarioShapes) != len(scenarios) {
+		return fmt.Errorf("reference profile scenario set is incomplete")
+	}
+	for _, scenario := range scenarios {
+		if reference.ScenarioShapes[scenario] == "" {
+			return fmt.Errorf("reference profile lacks scenario %q", scenario)
+		}
+	}
+	plan.ReferenceProfile = reference.Profile
+	return nil
+}
+
+type manifestDocument struct {
+	Family                        string            `json:"family,omitempty"`
+	WireVersion                   string            `json:"wireVersion,omitempty"`
+	Application                   string            `json:"application,omitempty"`
+	ShapeNamespace                string            `json:"shapeNamespace,omitempty"`
+	ReferenceShapeNamespace       string            `json:"referenceShapeNamespace,omitempty"`
+	TracerVersion                 string            `json:"tracerVersion,omitempty"`
+	ReferenceProfile              string            `json:"referenceProfile,omitempty"`
+	ReferenceProofPlanSHA256      string            `json:"referenceProofPlanSha256,omitempty"`
+	ValidationPolicySHA256        string            `json:"validationPolicySha256,omitempty"`
+	CandidateImplementationSHA256 string            `json:"candidateImplementationSha256,omitempty"`
+	SchemaVersion                 int               `json:"schemaVersion"`
+	Profile                       string            `json:"profile"`
+	Signals                       []string          `json:"signals"`
+	ProofPlan                     string            `json:"proofPlan"`
+	Program                       string            `json:"program"`
+	Libraries                     []string          `json:"libraries"`
+	Imports                       []string          `json:"imports"`
+	ScenarioShapes                map[string]string `json:"scenarioShapes"`
+}
+
+func sameStringsPlain(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+func sameProofContracts(left, right []report.ProofPlanProof) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i].FeatureID != right[i].FeatureID || left[i].Assertion != right[i].Assertion || left[i].Basis != right[i].Basis || left[i].EvidencePolicy != right[i].EvidencePolicy || !sameStringsPlain(left[i].Scenarios, right[i].Scenarios) {
+			return false
+		}
+	}
+	return true
 }
 
 func sameStrings(left []string, right repeated) bool {

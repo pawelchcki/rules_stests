@@ -22,6 +22,8 @@ def _telemetry_api_check_impl(ctx):
             fail("consumer-owned profile was attributed to the ruleset repository")
         if profile.specification.owner.repo_name != ctx.label.repo_name:
             fail("consumer specification does not retain its repository identity")
+        if expected_family == "datadog" and (not profile.reference_profile or len(profile.scenarios) != 16):
+            fail("consumer Datadog profile did not inherit its complete external reference")
         files.extend([profile.manifest, profile.normalized_proof_plan])
         entries.append({
             "family": profile.family,

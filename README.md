@@ -112,6 +112,9 @@ The Python fixtures inject dd-trace-py 4.14.0 from the digest-pinned Datadog
 package using `PYTHONPATH`. Bazel materializes the package; application processes
 receive the injection and exporter environment. The default wire format is v0.5
 MessagePack; each app also has a separate v0.4 MessagePack `tags` profile.
+Each profile declares its expected intake language and tracer version; the
+shared decoder checks header uniqueness and counts, and the profile enforces
+those declared values.
 
 ```bash
 bazel test //fixtures:datadog_suite
@@ -141,9 +144,20 @@ targets run `telemetry_sink` and accept both protocols. Existing
 Datadog dump, stats, reset, validation, and candidate operations use
 `?protocol=datadog`; unqualified operations retain OTLP behavior. The Datadog
 corpus asserts native intake metadata, IDs, completion, propagation, HTTP
-classification, and exact parent/child trees. Shapes retain native service,
-operation, resource, error, and selected tags/metrics. SQL resources, including stable literals, remain exact. Temporary database
-paths are explicitly normalized; runtime IDs and timestamps stay in captures.
+classification, and exact parent/child trees. Shapes retain all native span
+fields, complete metadata and metrics, and field presence. This includes HTTP
+URLs and user agents, Django metadata, `sql.db`, `db.row_count`, service and
+sampling tags, and SQLite commit spans without a `sql` type. SQL resources and
+URL path/query content remain exact. Only loopback endpoint ports, generated
+workload suffixes, fixture database roots, validated runtime/process IDs, trace
+high bits, and structurally validated exception stacks use explicit policies.
+
+A consumer-owned profile can set `reference_profile` to a published Datadog
+profile. Reference mode inherits its complete scenario set, proof contract,
+application, wire version, and reviewed exact shapes; supplying replacement
+scenarios or shapes is rejected. The candidate specification and implementation
+remain separate, and receipts bind their digest, the reference proof-plan
+digest, and the validation-policy digest.
 
 Set `TELEMETRY_TEST_REVISION` to the current 40-character commit to emit Datadog
 schema-v2 receipts under test outputs `datadog/receipts`. Shape candidates are
@@ -151,6 +165,12 @@ under `datadog/shape`; candidate suites have the `_shape_candidates` suffix and
 are manual targets. OTel receipts retain schema v1 and accept
 `OTEL_TEST_REVISION` as a fallback. Datadog evidence stays outside the OTel HTML
 report; Datadog HTML reporting is deferred.
+Each verified receipt also contains machine-readable application/scenario,
+integration-span, and exact/normalized/runtime field-policy counts. Candidates,
+contract-only runs, xfails, missing scenarios, or nonzero unclassified fields
+cannot serve as complete parity evidence.
+CI can enforce this trust boundary with `//tools/datadog_coverage:datadog_coverage`,
+passing the current revision plus each profile manifest and emitted receipt.
 
 ## Public API
 

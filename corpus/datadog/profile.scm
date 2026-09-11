@@ -1,6 +1,7 @@
 (define-library (datadog profile)
   (export realworld-profile id display-name language framework implementation compose
           family wire-version application shape-namespace service-name signals
+          tracer-version
           all scenario observed validate-profile)
   (import (scheme base) (scheme write) (datadog capture shapes)
           (datadog proofs) (datadog trace-shape) (realworld scenarios))
@@ -16,6 +17,7 @@
 (define (application value) (list 'application value))
 (define (shape-namespace value) (list 'shape-namespace value))
 (define (service-name value) (list 'service-name value))
+(define (tracer-version value) (list 'tracer-version value))
 (define (signals . values) (list 'signals values))
 (define (observed . features) (list 'observed features))
 (define (all proof) (list 'claim 'all proof))
@@ -71,6 +73,12 @@
   (check (every (lambda (request)
                   (equal? (field 'wire-version request) (profile-field profile 'wire-version)))
                 (items capture 'requests)) "Datadog intake wire version differs from profile")
+  (check (every (lambda (request)
+                  (and (equal? (header-value request "datadog-meta-lang")
+                               (symbol->string (profile-field profile 'language)))
+                       (equal? (header-value request "datadog-meta-tracer-version")
+                               (profile-field profile 'tracer-version))))
+                (items capture 'requests)) "Datadog tracer identity differs from profile")
   (check (every (lambda (span)
                   (or (not (web-span? span))
                       (equal? (field 'service span) (profile-field profile 'service-name))))
