@@ -152,6 +152,7 @@ func main() {
 		{"invalid meta", func(s map[string]any) { s["meta"].(map[string]any)["bad"] = 3 }, "capture/semantic-valid"},
 		{"invalid tid", func(s map[string]any) { s["meta"].(map[string]any)["_dd.p.tid"] = "no" }, "capture/semantic-valid"},
 		{"malformed runtime id", func(s map[string]any) { s["meta"].(map[string]any)["runtime-id"] = "no" }, "capture/semantic-valid"},
+		{"misplaced runtime id separator", func(s map[string]any) { s["meta"].(map[string]any)["runtime-id"] = "01234567-89abcdef0123456789abcdef" }, "capture/semantic-valid"},
 		{"malformed process id", func(s map[string]any) { s["metrics"].(map[string]any)["process_id"] = 0 }, "capture/semantic-valid"},
 		{"additional native field", func(s map[string]any) { s["private"] = "unclassified" }, "capture/semantic-valid"},
 		{"self cycle", func(s map[string]any) { s["parent_id"] = s["span_id"] }, "capture/semantic-valid"},

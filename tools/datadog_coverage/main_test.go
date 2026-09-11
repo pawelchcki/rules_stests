@@ -42,6 +42,9 @@ func TestCoverageGateRequiresCompleteExactEvidence(t *testing.T) {
 	if validate(revision, []manifest{m}, nil) == nil {
 		t.Fatal("missing receipt passed")
 	}
+	if validate(revision, []manifest{m, m}, []receipt{r}) == nil {
+		t.Fatal("duplicate manifest identity passed")
+	}
 	incompleteReference := m
 	incompleteReference.ReferenceProfile = "reference"
 	if validate(revision, []manifest{incompleteReference}, []receipt{r}) == nil {

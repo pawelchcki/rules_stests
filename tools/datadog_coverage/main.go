@@ -83,7 +83,11 @@ func validate(revision string, manifests []manifest, receipts []receipt) error {
 			return fmt.Errorf("incomplete Datadog manifest")
 		}
 		for scenario := range m.ScenarioShapes {
-			expected[m.Profile+"\x00"+scenario] = m
+			key := m.Profile + "\x00" + scenario
+			if _, exists := expected[key]; exists {
+				return fmt.Errorf("duplicate Datadog manifest identity %s/%s", m.Profile, scenario)
+			}
+			expected[key] = m
 		}
 	}
 	seen := map[string]bool{}

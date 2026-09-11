@@ -660,9 +660,15 @@ fn normalized_meta_value(key: &str, value: &Value, service: &str) -> Result<Valu
     let text = value.as_str().ok_or("Datadog metadata value is not text")?;
     Ok(Value::String(match key {
         "runtime-id" => {
-            let compact = text.bytes().filter(|b| *b != b'-').collect::<Vec<_>>();
-            if compact.len() != 32 || !compact.iter().all(|b| b.is_ascii_hexdigit())
-            {
+            let compact = text.len() == 32 && text.bytes().all(|b| b.is_ascii_hexdigit());
+            let canonical = text.len() == 36 && text.bytes().enumerate().all(|(index, byte)| {
+                if matches!(index, 8 | 13 | 18 | 23) {
+                    byte == b'-'
+                } else {
+                    byte.is_ascii_hexdigit()
+                }
+            });
+            if !compact && !canonical {
                 return Err("malformed Datadog runtime-id".into());
             }
             "<runtime-id>".into()

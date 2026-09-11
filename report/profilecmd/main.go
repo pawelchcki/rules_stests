@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"flag"
@@ -129,6 +130,9 @@ func main() {
 		if readErr != nil {
 			fail(readErr)
 		}
+		if programErr := requireReferenceProgram(program, referenceManifest); programErr != nil {
+			fail(programErr)
+		}
 		shapes := map[string]string{}
 		knownScenarios := map[string]bool{}
 		for _, scenario := range scenarios {
@@ -168,7 +172,7 @@ func main() {
 		document.CandidateImplementationSHA256 = fmt.Sprintf("%x", implementationDigest)
 		if referenceManifest != nil {
 			document.ReferenceProfile = referenceManifest.Profile
-			document.ReferenceShapeNamespace = referenceManifest.ShapeNamespace
+			document.ReferenceShapeNamespace = referenceShapeNamespace(*referenceManifest)
 			referenceDigest := sha256.Sum256([]byte(referenceManifest.ProofPlan))
 			document.ReferenceProofPlanSHA256 = fmt.Sprintf("%x", referenceDigest)
 		}
@@ -188,7 +192,7 @@ func validateAndApplyReference(plan *report.NormalizedProfilePlan, reference man
 	if err := json.Unmarshal([]byte(reference.ProofPlan), &referencePlan); err != nil {
 		return fmt.Errorf("decode reference proof plan: %w", err)
 	}
-	if reference.SchemaVersion != 2 || reference.Family != "datadog" || reference.Profile == "" || len(reference.ScenarioShapes) == 0 ||
+	if reference.SchemaVersion != 2 || reference.Family != "datadog" || reference.Profile == "" || reference.ShapeNamespace == "" || reference.Program == "" || len(reference.ScenarioShapes) == 0 ||
 		reference.Family != plan.Family || reference.WireVersion != plan.WireVersion || reference.Application != plan.Application ||
 		!sameProofContracts(referencePlan.Proofs, plan.Proofs) || !sameStringsPlain(reference.Signals, plan.Signals) {
 		return fmt.Errorf("candidate profile does not match complete Datadog reference contract")
@@ -202,6 +206,20 @@ func validateAndApplyReference(plan *report.NormalizedProfilePlan, reference man
 		}
 	}
 	plan.ReferenceProfile = reference.Profile
+	return nil
+}
+
+func referenceShapeNamespace(reference manifestDocument) string {
+	if reference.ReferenceShapeNamespace != "" {
+		return reference.ReferenceShapeNamespace
+	}
+	return reference.ShapeNamespace
+}
+
+func requireReferenceProgram(program []byte, reference *manifestDocument) error {
+	if reference != nil && !bytes.Equal(program, []byte(reference.Program)) {
+		return fmt.Errorf("reference mode requires the reviewed validation program")
+	}
 	return nil
 }
 

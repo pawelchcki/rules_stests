@@ -629,6 +629,15 @@ func collectDatadogCoverage(capture []byte, profile atomicProfile) (*datadogCove
 		FieldPolicies:    map[string]int{"exact": 0, "normalized": 0, "runtime-validated": 0}}
 	for _, record := range records {
 		for _, trace := range record.Payload.Traces {
+			traceService := ""
+			for _, span := range trace {
+				var name string
+				_ = json.Unmarshal(span["name"], &name)
+				if name == "aiohttp.request" || name == "django.request" {
+					_ = json.Unmarshal(span["service"], &traceService)
+					break
+				}
+			}
 			for _, span := range trace {
 				coverage.SpanOccurrences++
 				var name, typ string
@@ -646,7 +655,14 @@ func collectDatadogCoverage(capture []byte, profile atomicProfile) (*datadogCove
 					case "trace_id", "span_id", "parent_id", "start", "duration":
 						coverage.FieldPolicies["runtime-validated"]++
 					case "service":
-						coverage.FieldPolicies["normalized"]++
+						var service string
+						if json.Unmarshal(raw, &service) != nil {
+							coverage.UnclassifiedFields++
+						} else if traceService != "" && service == traceService {
+							coverage.FieldPolicies["normalized"]++
+						} else {
+							coverage.FieldPolicies["exact"]++
+						}
 					case "meta", "metrics":
 						var fields map[string]json.RawMessage
 						if json.Unmarshal(raw, &fields) != nil {

@@ -17,6 +17,7 @@ func TestReferenceProfileMustBeCompleteAndCompatible(t *testing.T) {
 	}
 	reference := manifestDocument{
 		SchemaVersion: 2, Family: "datadog", Profile: "reference", WireVersion: "v0.5", Application: "aiohttp",
+		ShapeNamespace: "datadog.realworld.shape.reference", Program: "(validate-profile)",
 		Signals: []string{"traces"}, ProofPlan: string(referencePlan), ScenarioShapes: map[string]string{"articles": "shape", "tags": "shape"},
 	}
 	if err := validateAndApplyReference(&plan, reference, []string{"articles", "tags"}); err != nil {
@@ -48,5 +49,26 @@ func TestReferenceProfileMustBeCompleteAndCompatible(t *testing.T) {
 				t.Fatalf("got %v, want error containing %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestReferenceShapeNamespaceFollowsReferenceChain(t *testing.T) {
+	reference := manifestDocument{ShapeNamespace: "candidate.shape", ReferenceShapeNamespace: "reviewed.shape"}
+	if got := referenceShapeNamespace(reference); got != "reviewed.shape" {
+		t.Fatalf("got %q, want ultimate reference namespace", got)
+	}
+	reference.ReferenceShapeNamespace = ""
+	if got := referenceShapeNamespace(reference); got != "candidate.shape" {
+		t.Fatalf("got %q, want direct reference namespace", got)
+	}
+}
+
+func TestReferenceProfileRequiresReviewedProgram(t *testing.T) {
+	reference := &manifestDocument{Program: "(validate-profile)"}
+	if err := requireReferenceProgram([]byte(reference.Program), reference); err != nil {
+		t.Fatal(err)
+	}
+	if err := requireReferenceProgram([]byte("(print-proof-markers-only)"), reference); err == nil {
+		t.Fatal("reference mode accepted a validator override")
 	}
 }
