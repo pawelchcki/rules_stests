@@ -69,25 +69,28 @@ func CompileTelemetryProfile(profileSource string, implementationSources []strin
 	}
 	plan := NormalizedProfilePlan{SchemaVersion: 1, Sources: map[string]string{}}
 	seenClaims := map[string]bool{}
-	seenIdentity := map[string]bool{}
+	seenSingleton := map[string]bool{}
+	singletonClauses := stringSet([]string{"id", "family", "wire-version", "application", "shape-namespace", "tracer-version", "display-name", "language", "framework", "service-name", "signals", "implementation"})
 	for _, clause := range expression.list[1:] {
-		switch head(clause) {
-		case "id":
-			if seenIdentity["id"] {
-				return plan, fmt.Errorf("duplicate profile id clause")
+		clauseName := head(clause)
+		if singletonClauses[clauseName] {
+			if seenSingleton[clauseName] {
+				return plan, fmt.Errorf("duplicate profile %s clause", clauseName)
 			}
-			seenIdentity["id"] = true
+			seenSingleton[clauseName] = true
+		}
+		switch clauseName {
+		case "id":
 			if len(clause.list) != 2 {
 				return plan, fmt.Errorf("profile id clause is malformed")
 			}
 			plan.Profile = atomValue(unquote(clause.list[1]))
 		case "family", "wire-version", "application", "shape-namespace", "tracer-version":
-			if seenIdentity[head(clause)] {
-				return plan, fmt.Errorf("duplicate profile %s clause", head(clause))
-			}
-			seenIdentity[head(clause)] = true
 			if len(clause.list) != 2 {
 				return plan, fmt.Errorf("profile %s clause is malformed", head(clause))
+			}
+			if clauseName == "tracer-version" && !clause.list[1].str {
+				return plan, fmt.Errorf("profile tracer-version clause must contain a string")
 			}
 			value := atomValue(unquote(clause.list[1]))
 			switch head(clause) {

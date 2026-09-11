@@ -611,18 +611,21 @@ fn parent_kind<'a>(span: &Value, mut spans: impl Iterator<Item = &'a Value>) -> 
 
 // Exact native names and resources include stable SQL literals and LIMITs.
 // Only the fixture's temporary SQLite database path is normalized below.
-fn normalize_endpoint(value: &str) -> String {
+fn normalize_endpoint(value: &str) -> Result<String, String> {
     for prefix in ["http://127.0.0.1:", "http://localhost:"] {
         if let Some(rest) = value.strip_prefix(prefix) {
             if let Some(offset) = rest.find('/') {
                 let (port, suffix) = rest.split_at(offset);
                 if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) {
-                    return normalize_workload_id(&format!("http://<endpoint>{suffix}"));
+                    if !port.parse::<u16>().is_ok_and(|port| port > 0) {
+                        return Err("invalid Datadog loopback endpoint port".into());
+                    }
+                    return Ok(normalize_workload_id(&format!("http://<endpoint>{suffix}")));
                 }
             }
         }
     }
-    normalize_workload_id(value)
+    Ok(normalize_workload_id(value))
 }
 
 fn normalize_workload_id(value: &str) -> String {
@@ -685,7 +688,7 @@ fn normalized_meta_value(key: &str, value: &Value, service: &str) -> Result<Valu
             }
             "<validated-stack>".into()
         }
-        "http.url" => normalize_endpoint(text),
+        "http.url" => normalize_endpoint(text)?,
         "db.name" | "sql.db" if text.ends_with("realworld.sqlite3") => "<fixture>/realworld.sqlite3".into(),
         "_dd.base_service" if text == service => "<service>".into(),
         _ => normalize_workload_id(text),

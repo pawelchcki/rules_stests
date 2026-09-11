@@ -244,6 +244,9 @@ func loadAtomicProfile(value, scenario, mode string) (atomicProfile, error) {
 	if (manifest.SchemaVersion != 1 && manifest.SchemaVersion != 2) || manifest.Profile == "" || manifest.ProofPlan == "" || manifest.Program == "" || len(manifest.Libraries) == 0 {
 		return profile, errors.New("atomic profile manifest is incomplete")
 	}
+	if !containsString(manifest.Scenarios, scenario) {
+		return profile, fmt.Errorf("scenario %q is not declared by profile %q", scenario, manifest.Profile)
+	}
 	if err := schemeIdentifier(manifest.Profile); err != nil {
 		return profile, fmt.Errorf("invalid profile id: %w", err)
 	}
@@ -712,7 +715,11 @@ func datadogMetaFieldNormalized(key string, raw json.RawMessage, traceService st
 	normalized := value
 	switch key {
 	case "http.url":
-		normalized = normalizeDatadogEndpoint(value)
+		var normalizeErr error
+		normalized, normalizeErr = normalizeDatadogEndpoint(value)
+		if normalizeErr != nil {
+			return false, normalizeErr
+		}
 	case "db.name", "sql.db":
 		if strings.HasSuffix(value, "realworld.sqlite3") {
 			normalized = "<fixture>/realworld.sqlite3"
@@ -727,18 +734,22 @@ func datadogMetaFieldNormalized(key string, raw json.RawMessage, traceService st
 	return normalized != value, nil
 }
 
-func normalizeDatadogEndpoint(value string) string {
+func normalizeDatadogEndpoint(value string) (string, error) {
 	for _, prefix := range []string{"http://127.0.0.1:", "http://localhost:"} {
 		if rest, found := strings.CutPrefix(value, prefix); found {
 			if offset := strings.IndexByte(rest, '/'); offset >= 0 {
 				port, suffix := rest[:offset], rest[offset:]
 				if port != "" && strings.IndexFunc(port, func(r rune) bool { return r < '0' || r > '9' }) < 0 {
-					return normalizeDatadogWorkloadID("http://<endpoint>" + suffix)
+					parsedPort, err := strconv.Atoi(port)
+					if err != nil || parsedPort < 1 || parsedPort > 65535 {
+						return "", errors.New("invalid Datadog loopback endpoint port")
+					}
+					return normalizeDatadogWorkloadID("http://<endpoint>" + suffix), nil
 				}
 			}
 		}
 	}
-	return normalizeDatadogWorkloadID(value)
+	return normalizeDatadogWorkloadID(value), nil
 }
 
 func normalizeDatadogWorkloadID(value string) string {

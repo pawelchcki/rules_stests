@@ -14,6 +14,7 @@ import (
 
 type manifest struct {
 	Family                        string            `json:"family"`
+	WireVersion                   string            `json:"wireVersion"`
 	Profile                       string            `json:"profile"`
 	Application                   string            `json:"application"`
 	ProofPlan                     string            `json:"proofPlan"`
@@ -51,6 +52,7 @@ type receiptProof struct {
 }
 type receipt struct {
 	Family                        string         `json:"family"`
+	WireVersion                   string         `json:"wireVersion"`
 	SchemaVersion                 int            `json:"schemaVersion"`
 	Revision                      string         `json:"revision"`
 	Profile                       string         `json:"profile"`
@@ -86,14 +88,17 @@ func decode(path string, value any) error {
 	return nil
 }
 
-func validate(revision string, manifests []manifest, receipts []receipt) error {
+func validate(revision string, manifests []manifest, receipts []receipt, captures [][]byte) error {
 	if !revisionRE.MatchString(revision) {
 		return fmt.Errorf("revision must be a lowercase 40-character commit")
+	}
+	if len(captures) != len(receipts) {
+		return fmt.Errorf("capture count mismatch: got %d want %d", len(captures), len(receipts))
 	}
 	expected := map[string]manifest{}
 	for _, m := range manifests {
 		hasReference := m.ReferenceProfile != "" || m.ReferenceProofPlanSHA256 != ""
-		if m.Family != "datadog" || m.Profile == "" || m.Application == "" || m.ProofPlan == "" || len(m.Scenarios) == 0 || len(m.ScenarioShapes) != len(m.Scenarios) ||
+		if m.Family != "datadog" || (m.WireVersion != "v0.4" && m.WireVersion != "v0.5") || m.Profile == "" || m.Application == "" || m.ProofPlan == "" || len(m.Scenarios) == 0 || len(m.ScenarioShapes) != len(m.Scenarios) ||
 			!digestRE.MatchString(m.ValidationPolicySHA256) || !digestRE.MatchString(m.CandidateImplementationSHA256) ||
 			(hasReference && (m.ReferenceProfile == "" || !digestRE.MatchString(m.ReferenceProofPlanSHA256))) {
 			return fmt.Errorf("incomplete Datadog manifest")
@@ -112,14 +117,14 @@ func validate(revision string, manifests []manifest, receipts []receipt) error {
 		}
 	}
 	seen := map[string]bool{}
-	for _, r := range receipts {
+	for index, r := range receipts {
 		key := r.Profile + "\x00" + r.Scenario
 		m, ok := expected[key]
 		if !ok || seen[key] {
 			return fmt.Errorf("unexpected or duplicate receipt %s/%s", r.Profile, r.Scenario)
 		}
 		seen[key] = true
-		if r.Family != "datadog" || r.SchemaVersion != 2 || r.Revision != revision || r.ValidationMode != "exact" || r.Outcome != "verified" {
+		if r.Family != "datadog" || r.WireVersion != m.WireVersion || r.SchemaVersion != 2 || r.Revision != revision || r.ValidationMode != "exact" || r.Outcome != "verified" {
 			return fmt.Errorf("non-verifying receipt %s/%s", r.Profile, r.Scenario)
 		}
 		for _, value := range []string{r.ProofPlanSHA256, r.CaptureSHA256, r.ScenarioShapeSHA256, r.ValidationPolicySHA256, r.CandidateImplementationSHA256} {
@@ -128,8 +133,9 @@ func validate(revision string, manifests []manifest, receipts []receipt) error {
 			}
 		}
 		proofPlanDigest := fmt.Sprintf("%x", sha256.Sum256([]byte(m.ProofPlan)))
+		captureDigest := fmt.Sprintf("%x", sha256.Sum256(captures[index]))
 		shapeDigest := fmt.Sprintf("%x", sha256.Sum256([]byte(m.ScenarioShapes[r.Scenario])))
-		if r.ProofPlanSHA256 != proofPlanDigest || r.ScenarioShapeSHA256 != shapeDigest ||
+		if r.ProofPlanSHA256 != proofPlanDigest || r.CaptureSHA256 != captureDigest || r.ScenarioShapeSHA256 != shapeDigest ||
 			r.ValidationPolicySHA256 != m.ValidationPolicySHA256 || r.CandidateImplementationSHA256 != m.CandidateImplementationSHA256 ||
 			r.ReferenceProfile != m.ReferenceProfile || r.ReferenceProofPlanSHA256 != m.ReferenceProofPlanSHA256 {
 			return fmt.Errorf("receipt digest binding mismatch %s/%s", r.Profile, r.Scenario)
@@ -200,9 +206,10 @@ func contains(values []string, wanted string) bool {
 
 func main() {
 	revision := flag.String("revision", "", "expected repository revision")
-	var manifestPaths, receiptPaths stringsFlag
+	var manifestPaths, receiptPaths, capturePaths stringsFlag
 	flag.Var(&manifestPaths, "manifest", "profile manifest (repeatable)")
 	flag.Var(&receiptPaths, "receipt", "verified receipt (repeatable)")
+	flag.Var(&capturePaths, "capture", "accepted capture paired with a receipt (repeatable)")
 	flag.Parse()
 	manifests := make([]manifest, len(manifestPaths))
 	for i, p := range manifestPaths {
@@ -216,7 +223,15 @@ func main() {
 			fatal(err)
 		}
 	}
-	if err := validate(*revision, manifests, receipts); err != nil {
+	captures := make([][]byte, len(capturePaths))
+	for i, p := range capturePaths {
+		contents, err := os.ReadFile(p)
+		if err != nil {
+			fatal(err)
+		}
+		captures[i] = contents
+	}
+	if err := validate(*revision, manifests, receipts, captures); err != nil {
 		fatal(err)
 	}
 	fmt.Printf("Datadog coverage gate passed: %d profiles, %d scenarios\n", len(manifests), len(receipts))

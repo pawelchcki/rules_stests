@@ -351,3 +351,14 @@ func TestDatadogCoverageClassifiesOnlyTraceServiceAsNormalized(t *testing.T) {
 		t.Fatalf("wrong service field policies: %+v", coverage)
 	}
 }
+
+func TestNormalizeDatadogEndpointRejectsInvalidLoopbackPorts(t *testing.T) {
+	for _, endpoint := range []string{"http://127.0.0.1:0/api/tags", "http://localhost:999999/api/tags"} {
+		if _, err := normalizeDatadogEndpoint(endpoint); err == nil {
+			t.Fatalf("accepted invalid endpoint %q", endpoint)
+		}
+	}
+	if normalized, err := normalizeDatadogEndpoint("http://127.0.0.1:8080/api/tags"); err != nil || normalized != "http://<endpoint>/api/tags" {
+		t.Fatalf("valid endpoint normalized to %q: %v", normalized, err)
+	}
+}

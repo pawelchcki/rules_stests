@@ -28,7 +28,10 @@ jobs:
           for manifest in bazel-bin/corpus/python-{aiohttp,django}-datadog-v4-14-0-{v04,v05}.profile.json; do
             args+=(--manifest "${PWD}/${manifest}")
           done
-          while IFS= read -r receipt; do args+=(--receipt "${PWD}/${receipt}"); done < <(find -L bazel-testlogs/fixtures -path '*/test.outputs/datadog/receipts/*.json' ! -name '*.capture.json' -type f | sort)
+          while IFS= read -r receipt; do
+            args+=(--receipt "${PWD}/${receipt}")
+            args+=(--capture "${PWD}/${receipt%.json}.capture.json")
+          done < <(find -L bazel-testlogs/fixtures -path '*/test.outputs/datadog/receipts/*.json' ! -name '*.capture.json' -type f | sort)
           bazel run --config=local //tools/datadog_coverage:datadog_coverage -- "${args[@]}"
       - name: Shared OTel regressions
         run: bazel test --config=local //report:report_test //harness:hurl_test_driver_test //harness:otel_sink_test
