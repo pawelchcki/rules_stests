@@ -111,7 +111,7 @@ func CompileTelemetryProfile(profileSource string, implementationSources []strin
 			}
 			plan.DisplayName = clause.list[1].atom
 		case "language":
-			if len(clause.list) != 2 {
+			if len(clause.list) != 2 || len(clause.list[1].list) != 2 || head(clause.list[1]) != "quote" || clause.list[1].list[1].atom == "" || clause.list[1].list[1].str || len(clause.list[1].list[1].list) != 0 {
 				return plan, fmt.Errorf("profile language clause is malformed")
 			}
 			plan.Language = atomValue(unquote(clause.list[1]))

@@ -238,6 +238,10 @@ func TestCompileDatadogIdentityAndLegacySchema(t *testing.T) {
 	if _, err := compileProfileFixture(duplicateLanguage, profileTestImplementation, profileTestRules, profileTestShapes); err == nil || !strings.Contains(err.Error(), "duplicate profile language clause") {
 		t.Fatalf("duplicate language error = %v", err)
 	}
+	stringLanguage := strings.Replace(source, `(language 'python)`, `(language "python")`, 1)
+	if _, err := compileProfileFixture(stringLanguage, profileTestImplementation, profileTestRules, profileTestShapes); err == nil || !strings.Contains(err.Error(), "profile language clause is malformed") {
+		t.Fatalf("string language error = %v", err)
+	}
 	nonStringTracerVersion := strings.Replace(source, `(tracer-version "4.14.0")`, `(tracer-version 'v4)`, 1)
 	if _, err := compileProfileFixture(nonStringTracerVersion, profileTestImplementation, profileTestRules, profileTestShapes); err == nil || !strings.Contains(err.Error(), "must contain a string") {
 		t.Fatalf("non-string tracer version error = %v", err)
