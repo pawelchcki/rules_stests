@@ -1,6 +1,6 @@
 # Datadog tracing coverage
 
-The fixed comparison reference is [DataDog/system-tests at ea8a5976064509df0a5232e314b22e7e90ca4d40](https://github.com/DataDog/system-tests/tree/ea8a5976064509df0a5232e314b22e7e90ca4d40/tests). These are independently implemented checks against native intake data, not a claim of complete upstream parity.
+The fixed comparison reference is [DataDog/system-tests at ea8a5976064509df0a5232e314b22e7e90ca4d40](https://github.com/DataDog/system-tests/tree/ea8a5976064509df0a5232e314b22e7e90ca4d40/tests). Native feature validation combines the original upstream D001 and D002 Datadog-header test methods with local checks for the remaining behaviors. This does not establish complete upstream parity.
 
 The [verification record](datadog-verification.md) distinguishes completed, pending, and unsupported acceptance results for the current worktree.
 
@@ -15,11 +15,17 @@ The [verification record](datadog-verification.md) distinguishes completed, pend
 
 The 96 combinations retain exact native span shapes, including multiplicities, service identity, routes/resources, HTTP status/error classification, database operations and ancestry, exception metadata, and the reviewed field policy. Ruby Rack/controller/ActiveRecord and Go Gin/Gorm/database/sql layers remain distinct. Candidate captures were reviewed before enabling these shapes; `datadog-shape-review.json` records capture hashes and reviewed counts. Candidate generation does not produce a passing receipt.
 
+The checked-in shape sources use shared definitions under `corpus/datadog/realworld/shape_snapshot/`. Bazel expands them into the original per-scenario Scheme libraries at the existing public labels. A SHA-256 lock records all 96 reviewed source files from commit `d6d6b5a86d8d47c52916e3ec5feab42df6a13414`; expansion must reproduce those bytes exactly. This preserves field presence and values, tree ordering, parent-child relationships, multiplicities, and the source consumed by the cached validator compiler. Generated expanded libraries remain available as build outputs rather than repeated checked-in literals.
+
 Run `//fixtures:datadog_suite`. BuildBuddy's Full test suite runs the parity checks on the remote executor fleet, retaining and gating each of two uncached independent executions before running the next. `tools/retain_datadog_evidence.py` copies each manifest, compiled validator, receipt, capture, timing artifact, and test log. The gate requires complete scenario/profile coverage and matching revision and validator hashes. The same BuildBuddy workflow checks concurrent isolation, native features, shared OpenTelemetry regressions, and external consumers; its artifacts retain the Datadog evidence.
 
 ## Upstream-derived feature checks
 
-Every feature result contains its exact upstream file URL, configuration, baseline capture hash, configured capture hash, and status. Held-parent cases also retain the early capture hash. The files are under each external-feature test's `test.outputs` directory.
+The original `Test_Headers_Datadog` methods D001 (valid extraction) and D002 (invalid zero-ID extraction) execute from a commit- and SHA-256-pinned copy of upstream `test_headers_datadog.py`. The adapter presents each marked native server span through upstream's test-agent interface and checks that the upstream method's requested headers match the configuration actually exercised. The original method bodies supply the propagation assertions; local checks retain request ownership and native HTTP metadata validation. D002 uses default sampling rules so a new trace's sampling decision is independent of the invalid incoming priority.
+
+This direct reuse covers D001 and D002 only. D003–D005 and the other upstream modules in the table below are references for local checks, not imported test methods. The adapter does not run upstream's container orchestration or claim to implement its complete parametric client API.
+
+Every feature result contains its exact upstream file URL, configuration, baseline capture hash, configured capture hash, and status. Directly reused cases also record the original method name and pinned test-source hash. Held-parent cases retain the early capture hash. The files are under each external-feature test's `test.outputs` directory.
 
 | Check | Reference under pinned `tests/parametric/` | Evidence |
 | --- | --- | --- |

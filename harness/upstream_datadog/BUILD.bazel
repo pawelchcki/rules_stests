@@ -1,0 +1,20 @@
+load("@rules_python//python:defs.bzl", "py_binary", "py_test")
+
+package(default_visibility = ["//visibility:public"])
+
+py_binary(
+    name = "adapter",
+    srcs = ["adapter.py"],
+    main = "adapter.py",
+    python_version = "PY3",
+)
+
+py_test(
+    name = "adapter_test",
+    srcs = ["adapter_test.py"],
+    args = [
+        "$(rlocationpath :adapter)",
+        "$(rlocationpath @datadog_system_tests_headers//file)",
+    ],
+    data = [":adapter", "@datadog_system_tests_headers//file"],
+)

@@ -6,6 +6,25 @@ import (
 	"testing"
 )
 
+func TestUpstreamReceiptBindsMethodSourceAndSpanCount(t *testing.T) {
+	method := "test_distributed_headers_extract_datadog_D001"
+	valid := fmt.Sprintf(`{"sourceSha256":%q,"method":%q,"spans":4}`, datadogHeadersSourceSHA256, method)
+	if _, err := validateUpstreamReceipt(method, []byte(valid)); err != nil {
+		t.Fatal(err)
+	}
+	for name, receipt := range map[string]string{
+		"source": fmt.Sprintf(`{"sourceSha256":"wrong","method":%q,"spans":4}`, method),
+		"method": fmt.Sprintf(`{"sourceSha256":%q,"method":"wrong","spans":4}`, datadogHeadersSourceSHA256),
+		"spans":  fmt.Sprintf(`{"sourceSha256":%q,"method":%q,"spans":3}`, datadogHeadersSourceSHA256, method),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := validateUpstreamReceipt(method, []byte(receipt)); err == nil {
+				t.Fatal("accepted unbound upstream receipt")
+			}
+		})
+	}
+}
+
 func ddBaselineFixture() []ddNativeSpan {
 	var result []ddNativeSpan
 	for i := 1; i <= 4; i++ {
@@ -51,6 +70,8 @@ func TestDatadogNativeAssertionsRejectMutations(t *testing.T) {
 			}
 			if c.Disabled {
 				spans = ddBaselineFixture()
+			} else if c.UpstreamMethod != "" {
+				spans[0].Service = "wrong"
 			} else if c.Priority != nil {
 				delete(spans[0].Metrics, "_sampling_priority_v1")
 			} else if c.Propagated {

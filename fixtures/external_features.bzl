@@ -6,6 +6,16 @@ load("//rules:hurl_test.bzl", "realworld_parallel_hurl_test")
 load("//corpus:registry.bzl", "REALWORLD_BASE_HURL_CASES")
 load("//rules:realworld_app.bzl", "REALWORLD_APPS", "datadog_env", "datadog_python_injection", "datadog_ruby_injection", "python_auto_injection", "ruby_auto_injection")
 
+def _runfiles_data_impl(ctx):
+    # rules_itest service_test includes data files but does not merge their
+    # runfiles. Project the hermetic Python launcher's runfiles into its data.
+    return [DefaultInfo(files = ctx.attr.target[DefaultInfo].default_runfiles.files)]
+
+_runfiles_data = rule(
+    implementation = _runfiles_data_impl,
+    attrs = {"target": attr.label(mandatory = True)},
+)
+
 def external_feature_tests():
     tests = []
     for app, config in REALWORLD_APPS.items():
@@ -55,10 +65,13 @@ def _datadog_fixture(app):
 
 def datadog_external_feature_tests():
     tests = []
+    adapter = "//harness/upstream_datadog:adapter"
+    adapter_runfiles = ":datadog_upstream_adapter_runfiles"
+    _runfiles_data(name = adapter_runfiles[1:], target = adapter)
     for app in ["aiohttp", "django", "rails", "gin"]:
         config = _datadog_fixture(app)
         args = ["--runtime=" + config.runtime, "--rootfs=$(rlocationpath {})".format(config.rootfs)]
-        data = [config.rootfs, "//harness:app_launcher"]
+        data = [config.rootfs, "//harness:app_launcher", adapter, adapter_runfiles, "@datadog_system_tests_headers//file"]
         if config.injection:
             args += config.injection.flags
             data.append(config.injection.rootfs)
@@ -76,6 +89,8 @@ def datadog_external_feature_tests():
                     "--wire-version=" + wire,
                     "--app=" + app,
                     "--launcher=$(rlocationpath //harness:app_launcher)",
+                    "--upstream-datadog-adapter=$(rlocationpath {})".format(adapter),
+                    "--upstream-datadog-test=$(rlocationpath @datadog_system_tests_headers//file)",
                     "--launch-args='" + json.encode(args) + "'",
                 ],
                 tags = ["datadog", "external-features"] + (["manual"] if app in ["rails", "gin"] else []),

@@ -7,16 +7,19 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 )
 
 const datadogUpstream = "https://github.com/DataDog/system-tests/blob/ea8a5976064509df0a5232e314b22e7e90ca4d40/tests/parametric/"
+const datadogHeadersSourceSHA256 = "eae879d44ecf020bb1f4a2899d78f2027c9942e556baf406932c2f9ad6905b43"
 
 var telemetryProtocol = "otlp"
 var datadogWire = "v0.5"
 var activeDatadogCase ddCase
+var datadogUpstreamAdapter, datadogUpstreamTest string
 
 type ddCase struct {
 	Name                          string
@@ -32,6 +35,7 @@ type ddCase struct {
 	Method, Query                 string
 	ChunkMetadataPosition         string
 	Partial                       bool
+	UpstreamMethod                string
 }
 
 type ddNativeSpan struct {
@@ -52,34 +56,32 @@ type ddNativeSpan struct {
 }
 
 type ddResult struct {
-	Name               string `json:"name"`
-	Status             string `json:"status"`
-	Source             string `json:"source"`
-	BaselineSHA256     string `json:"baselineSha256"`
-	CaptureSHA256      string `json:"captureSha256"`
-	Configuration      ddCase `json:"configuration"`
-	Detail             string `json:"detail,omitempty"`
-	EarlyCaptureSHA256 string `json:"earlyCaptureSha256,omitempty"`
-	RejectionLogSHA256 string `json:"rejectionLogSha256,omitempty"`
+	Name                 string `json:"name"`
+	Status               string `json:"status"`
+	Source               string `json:"source"`
+	BaselineSHA256       string `json:"baselineSha256"`
+	CaptureSHA256        string `json:"captureSha256"`
+	Configuration        ddCase `json:"configuration"`
+	Detail               string `json:"detail,omitempty"`
+	EarlyCaptureSHA256   string `json:"earlyCaptureSha256,omitempty"`
+	RejectionLogSHA256   string `json:"rejectionLogSha256,omitempty"`
+	UpstreamMethod       string `json:"upstreamMethod,omitempty"`
+	UpstreamSourceSHA256 string `json:"upstreamSourceSha256,omitempty"`
 }
 
 func ddCases() []ddCase {
 	keep, drop := 2, -1
 	propagated := map[string]string{"x-datadog-trace-id": "123456789", "x-datadog-parent-id": "987654321", "x-datadog-sampling-priority": "2", "x-datadog-tags": "_dd.p.tid=1234567890abcdef"}
-	originHeaders := map[string]string{}
-	for key, value := range propagated {
-		originHeaders[key] = value
-	}
-	originHeaders["x-datadog-origin"] = "synthetics"
+	originHeaders := map[string]string{"x-datadog-trace-id": "123456789", "x-datadog-parent-id": "987654321", "x-datadog-sampling-priority": "2", "x-datadog-origin": "synthetics;=web,z", "x-datadog-tags": "_dd.p.dm=-4"}
 	traceparent := "00-1234567890abcdef00000000075bcd15-000000003ade68b1-01"
 	return []ddCase{
 		{Name: "generate-128", Source: "test_128_bit_traceids.py", Bits: 128, Env: map[string]string{"DD_TRACE_128_BIT_TRACEID_GENERATION_ENABLED": "true"}},
 		{Name: "generate-64", Source: "test_128_bit_traceids.py", Bits: 64, Env: map[string]string{"DD_TRACE_128_BIT_TRACEID_GENERATION_ENABLED": "false"}},
 		{Name: "extract-64", Source: "test_headers_datadog.py", Bits: 64, Propagated: true, Headers: map[string]string{"x-datadog-trace-id": "123456789", "x-datadog-parent-id": "987654321"}},
-		{Name: "malformed-zero", Source: "test_headers_datadog.py", Headers: map[string]string{"x-datadog-trace-id": "0", "x-datadog-parent-id": "987654321"}},
+		{Name: "malformed-zero", Source: "test_headers_datadog.py", Headers: map[string]string{"x-datadog-trace-id": "0", "x-datadog-parent-id": "0", "x-datadog-sampling-priority": "2", "x-datadog-origin": "synthetics", "x-datadog-tags": "_dd.p.dm=-4"}, Env: map[string]string{"DD_TRACE_SAMPLING_RULES": "[]"}, UpstreamMethod: "test_distributed_headers_extract_datadog_invalid_D002"},
 		{Name: "malformed-overflow", Source: "test_headers_datadog.py", Headers: map[string]string{"x-datadog-trace-id": "18446744073709551616", "x-datadog-parent-id": "987654321"}},
 		{Name: "datadog", Source: "test_headers_datadog.py", Headers: propagated, Propagated: true, Priority: &keep},
-		{Name: "origin", Source: "test_headers_datadog.py", Headers: originHeaders, Propagated: true, Priority: &keep},
+		{Name: "origin", Source: "test_headers_datadog.py", Headers: originHeaders, Propagated: true, Priority: &keep, Bits: 64, UpstreamMethod: "test_distributed_headers_extract_datadog_D001"},
 		{Name: "tracecontext", Source: "test_headers_tracecontext.py", Env: map[string]string{"DD_TRACE_PROPAGATION_STYLE_EXTRACT": "tracecontext"}, Headers: map[string]string{"traceparent": traceparent}, Propagated: true},
 		{Name: "b3", Source: "test_headers_b3.py", Env: map[string]string{"DD_TRACE_PROPAGATION_STYLE_EXTRACT": "b3"}, Headers: map[string]string{"b3": "1234567890abcdef00000000075bcd15-000000003ade68b1-1"}, Propagated: true},
 		{Name: "b3multi", Source: "test_headers_b3multi.py", Env: map[string]string{"DD_TRACE_PROPAGATION_STYLE_EXTRACT": "b3multi"}, Headers: map[string]string{"x-b3-traceid": "1234567890abcdef00000000075bcd15", "x-b3-spanid": "000000003ade68b1", "x-b3-sampled": "1"}, Propagated: true},
@@ -277,28 +279,60 @@ func validateDatadogCase(c ddCase, baseline, spans []ddNativeSpan) error {
 				return fmt.Errorf("query string was not selectively redacted")
 			}
 		}
-		if c.Propagated {
-			high := "1234567890abcdef"
-			if c.Bits == 64 {
-				high = ""
+		if c.UpstreamMethod == "" {
+			if c.Propagated {
+				high := "1234567890abcdef"
+				if c.Bits == 64 {
+					high = ""
+				}
+				if s.TraceID != 123456789 || s.ParentID != 987654321 || s.Meta["_dd.p.tid"] != high {
+					return fmt.Errorf("incorrect extracted full trace identity/parent")
+				}
+			} else if s.ParentID != 0 || s.TraceID == 123456789 {
+				return fmt.Errorf("disabled/malformed propagation unexpectedly continued a caller")
 			}
-			if s.TraceID != 123456789 || s.ParentID != 987654321 || s.Meta["_dd.p.tid"] != high {
-				return fmt.Errorf("incorrect extracted full trace identity/parent")
+			if c.Priority != nil {
+				p, ok := s.Metrics["_sampling_priority_v1"]
+				if !ok || p != float64(*c.Priority) {
+					return fmt.Errorf("incorrect or missing sampling priority")
+				}
 			}
-		} else if s.ParentID != 0 || s.TraceID == 123456789 {
-			return fmt.Errorf("disabled/malformed propagation unexpectedly continued a caller")
-		}
-		if c.Priority != nil {
-			p, ok := s.Metrics["_sampling_priority_v1"]
-			if !ok || p != float64(*c.Priority) {
-				return fmt.Errorf("incorrect or missing sampling priority")
-			}
-		}
-		if c.Name == "origin" && s.Meta["_dd.origin"] != "synthetics" {
-			return fmt.Errorf("origin was not propagated")
 		}
 	}
 	return nil
+}
+
+func validateWithUpstream(c ddCase, spans []ddNativeSpan) (string, error) {
+	if c.UpstreamMethod == "" {
+		return "", nil
+	}
+	payload, err := json.Marshal(struct {
+		Method  string            `json:"method"`
+		Headers map[string]string `json:"headers"`
+		Spans   []ddNativeSpan    `json:"spans"`
+	}{c.UpstreamMethod, c.Headers, ddServers(spans)})
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.Command(datadogUpstreamAdapter, "--source", datadogUpstreamTest)
+	cmd.Stdin = strings.NewReader(string(payload))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("upstream %s: %w: %s", c.UpstreamMethod, err, output)
+	}
+	return validateUpstreamReceipt(c.UpstreamMethod, output)
+}
+
+func validateUpstreamReceipt(method string, output []byte) (string, error) {
+	var receipt struct {
+		SourceSHA256 string `json:"sourceSha256"`
+		Method       string `json:"method"`
+		Spans        int    `json:"spans"`
+	}
+	if err := json.Unmarshal(output, &receipt); err != nil || receipt.SourceSHA256 != datadogHeadersSourceSHA256 || receipt.Method != method || receipt.Spans != 4 {
+		return "", fmt.Errorf("upstream %s returned invalid receipt: %s", method, output)
+	}
+	return receipt.SourceSHA256, nil
 }
 
 func runDatadog(app, launcher string, args []string) error {
@@ -359,11 +393,19 @@ func runDatadog(app, launcher string, args []string) error {
 		}
 		result := ddResult{Name: c.Name, Status: "passed", Source: datadogUpstream + c.Source, BaselineSHA256: controlHash, CaptureSHA256: fmt.Sprintf("%x", sha256.Sum256(data)), Configuration: c}
 		validationErr := validateDatadogCase(c, control, spans)
+		upstreamSHA := ""
+		if validationErr == nil {
+			upstreamSHA, validationErr = validateWithUpstream(c, spans)
+		}
 		if c.Kind != "" && validationErr == nil {
 			validationErr = validateDatadogProbes(c, spans, ddEarlyCapture)
 		}
 		if ddEarlyCapture != nil {
 			result.EarlyCaptureSHA256 = fmt.Sprintf("%x", sha256.Sum256(ddEarlyCapture))
+		}
+		if upstreamSHA != "" {
+			result.UpstreamMethod = c.UpstreamMethod
+			result.UpstreamSourceSHA256 = upstreamSHA
 		}
 		if err := validationErr; err != nil {
 			result.Status = "failed"

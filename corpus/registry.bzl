@@ -181,6 +181,31 @@ DATADOG_PROFILES = {
     "python-django-datadog-v4-14-0-v04": struct(application = "django", wire_version = "v0.4", scenarios = REALWORLD_BASE_HURL_CASES + ["propagation_datadog"]),
 }
 
+def _factored_datadog_shape_sources(profile_id, scenarios):
+    """Generates stable per-scenario Scheme sources from the compact snapshot."""
+    # These are the former checked-in source labels.  Keep them stable for
+    # profiles (including external reference profiles) that consume a specific
+    # scenario library directly.
+    directory = "datadog/realworld/shape/{}".format(profile_id)
+    outputs = [directory + "/" + scenario + ".scm" for scenario in scenarios]
+    native.genrule(
+        name = profile_id + "_factored_shapes",
+        srcs = [
+            "datadog/realworld/shape_snapshot/snapshots.json",
+            "datadog/realworld/shape_snapshot/hashes.json",
+        ],
+        tools = ["//tools:expand_datadog_shapes"],
+        outs = outputs,
+        cmd = " ".join([
+            "$(location //tools:expand_datadog_shapes)",
+            "--snapshot $(location datadog/realworld/shape_snapshot/snapshots.json)",
+            "--hash-lock $(location datadog/realworld/shape_snapshot/hashes.json)",
+            "--profile {}".format(profile_id),
+            "--output-dir $(@D)/{}".format("datadog/realworld/shape"),
+        ]),
+    )
+    return {scenario: ":" + output for output, scenario in zip(outputs, scenarios)}
+
 def declare_datadog_profiles(datadog_realworld_profile):
     """Declares Datadog's independent profiles and native wire assertions."""
     for profile_id, declaration in DATADOG_PROFILES.items():
@@ -189,7 +214,7 @@ def declare_datadog_profiles(datadog_realworld_profile):
             specification = "datadog/realworld/profile/{}.scm".format(profile_id),
             implementation_libraries = ["datadog/implementation/" + getattr(declaration, "implementation", "python-v4.14.0") + ".scm"],
             runtime_libraries = [],
-            shape_root = "datadog/realworld/shape/{}".format(profile_id) if getattr(declaration, "reviewed", True) else None,
+            scenario_shapes = _factored_datadog_shape_sources(profile_id, declaration.scenarios) if getattr(declaration, "reviewed", True) else {},
             signals = ["traces"],
             scenarios = declaration.scenarios,
             wire_version = declaration.wire_version,

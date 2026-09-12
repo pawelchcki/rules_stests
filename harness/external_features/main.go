@@ -37,6 +37,8 @@ func main() {
 	app := flag.String("app", "", "fixture application")
 	launcher := flag.String("launcher", "", "app launcher runfile")
 	expected := flag.String("expected", "", "reviewed outcome JSON runfile")
+	upstreamAdapter := flag.String("upstream-datadog-adapter", "", "upstream Datadog adapter runfile")
+	upstreamTest := flag.String("upstream-datadog-test", "", "pinned upstream Datadog test")
 	discover := flag.Bool("discover", false, "record discoveries without comparing reviewed outcomes")
 	compare := flag.Bool("compare", false, "render a comparison of result JSON files given as arguments")
 	launchJSON := flag.String("launch-args", "[]", "JSON array of launcher arguments")
@@ -58,6 +60,10 @@ func main() {
 		if datadogWire != "v0.4" && datadogWire != "v0.5" {
 			fail(fmt.Errorf("unsupported Datadog wire version"))
 		}
+		if *upstreamAdapter == "" || *upstreamTest == "" {
+			fail(fmt.Errorf("Datadog probes require upstream adapter and test source"))
+		}
+		datadogUpstreamAdapter, datadogUpstreamTest = resolve(*upstreamAdapter), resolve(*upstreamTest)
 		if err := runDatadog(*app, resolve(*launcher), launchArgs); err != nil {
 			fail(err)
 		}
