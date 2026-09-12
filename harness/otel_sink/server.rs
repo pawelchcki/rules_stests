@@ -20,7 +20,7 @@ const MAX_CAPTURE_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CAPTURE_RECORDS: usize = 4096;
 const MAX_DECODED_OTLP_BYTES: usize = 1024 * 1024;
 
-pub(crate) fn serve(port: u16, output: &CStr) -> Result<(), String> {
+pub(crate) fn serve(port: u16, output: &CStr, stress_capture: bool) -> Result<(), String> {
     let listener = socket(AddressFamily::INET, SocketType::STREAM, None)
         .map_err(|error| format!("socket: {error}"))?;
     set_socket_reuseport(&listener, true).map_err(|error| format!("SO_REUSEPORT: {error}"))?;
@@ -34,7 +34,13 @@ pub(crate) fn serve(port: u16, output: &CStr) -> Result<(), String> {
     let mut dd_records = Vec::<Record>::new();
     let mut dd_frozen_records = None::<Vec<Record>>;
     let mut dd_validation_stats = ValidationStats::default();
+    let dd_output = alloc::ffi::CString::new(format!(
+        "{}.datadog.json",
+        String::from_utf8_lossy(output.to_bytes())
+    ))
+    .unwrap();
     storage::persist(output, &records)?;
+    storage::persist(dd_output.as_c_str(), &dd_records)?;
     let startup = format!(
         "telemetry_sink: listening on 0.0.0.0:{port}; pretty JSON output: {}\n",
         String::from_utf8_lossy(output.to_bytes())
@@ -71,6 +77,11 @@ pub(crate) fn serve(port: u16, output: &CStr) -> Result<(), String> {
             &mut dd_records,
             &mut dd_frozen_records,
             &mut dd_validation_stats,
+            if stress_capture {
+                64 * 1024 * 1024
+            } else {
+                MAX_CAPTURE_REQUEST_BYTES
+            },
         );
     }
 }
@@ -85,10 +96,21 @@ fn handle_connection(
     dd_records: &mut Vec<Record>,
     dd_frozen_records: &mut Option<Vec<Record>>,
     dd_validation_stats: &mut ValidationStats,
+    capture_limit: usize,
 ) {
-    let mut request = match read_request(connection) {
+    let mut request = match read_request(
+        connection,
+        if capture_limit > MAX_CAPTURE_REQUEST_BYTES {
+            8 * 1024 * 1024
+        } else {
+            1024 * 1024
+        },
+    ) {
         Ok(request) => request,
         Err(error) => {
+            if error.status() == 413 && capture_limit > MAX_CAPTURE_REQUEST_BYTES {
+                dd_validation_stats.capture.overflow = true;
+            }
             respond(
                 connection,
                 error.status(),
@@ -186,11 +208,7 @@ fn handle_connection(
         return;
     }
     if request.method == "GET" && request.path == "/stats" {
-        match serde_json::to_vec(&stats::snapshot(
-            frozen_records.as_deref(),
-            records,
-            validation_stats,
-        )) {
+        match serde_json::to_vec(&stats::snapshot(validation_stats)) {
             Ok(mut bytes) => {
                 bytes.push(b'\n');
                 respond(connection, 200, "application/json", &bytes);
@@ -219,6 +237,9 @@ fn handle_connection(
             }
         }
         *validation_stats = ValidationStats::default();
+        for record in frozen_records.iter().flatten().chain(records.iter()) {
+            validation_stats.capture.add(record);
+        }
         match storage::persist_parts(output, frozen_records.as_deref(), records) {
             Ok(()) => respond(connection, 200, "application/json", b"{}\n"),
             Err(error) => respond(connection, 500, "text/plain", error.as_bytes()),
@@ -239,10 +260,20 @@ fn handle_connection(
         }
         return;
     }
-    if request.method == "POST" && request.path == "/validate" {
+    if request.method == "POST"
+        && matches!(request.path.as_str(), "/validate" | "/validate-bytecode")
+    {
         let snapshot = frozen_records.as_deref().unwrap_or(records);
-        validate(connection, &request.body, snapshot, validation_stats, is_dd,
-                 query_value("app").unwrap_or(""), query_value("scenario").unwrap_or(""));
+        validate(
+            connection,
+            &request.body,
+            snapshot,
+            validation_stats,
+            is_dd,
+            request.path == "/validate-bytecode",
+            query_value("app").unwrap_or(""),
+            query_value("scenario").unwrap_or(""),
+        );
         return;
     }
     if request.method != "POST" && !(is_dd && request.method == "PUT") {
@@ -255,8 +286,9 @@ fn handle_connection(
         remote,
         output,
         request,
-        frozen_records.as_deref(),
         records,
+        &mut validation_stats.capture,
+        capture_limit,
     );
 }
 
@@ -272,10 +304,12 @@ fn validate(
     records: &[Record],
     validation_stats: &mut ValidationStats,
     is_dd: bool,
+    bytecode: bool,
     app: &str,
     scenario: &str,
 ) {
     let started = clock_gettime(ClockId::Monotonic);
+    validation_stats.last_compilation_ms = 0;
     let input = match if is_dd {
         datadog::capture_to_scheme_with_context(records, app, scenario)
     } else {
@@ -296,7 +330,11 @@ fn validate(
             return;
         }
     };
-    let result = scheme::evaluate(source, &input);
+    let result = if bytecode {
+        scheme::evaluate_bytecode(source, &input)
+    } else {
+        scheme::evaluate_timed(source, &input, &mut validation_stats.last_compilation_ms)
+    };
     let finished = clock_gettime(ClockId::Monotonic);
     validation_stats.runs += 1;
     validation_stats.last_duration_ms = stats::elapsed_millis(started, finished);
@@ -322,8 +360,9 @@ fn ingest(
     remote: Option<&SocketAddrAny>,
     output: &CStr,
     request: crate::http::Request,
-    frozen_records: Option<&[Record]>,
     records: &mut Vec<Record>,
+    counters: &mut stats::CaptureCounters,
+    capture_limit: usize,
 ) {
     let signal = match request.path.as_str() {
         "/v1/traces" | "/v0.4/traces" | "/v0.5/traces" => "traces",
@@ -400,29 +439,38 @@ fn ingest(
         );
         return;
     }
-    let retained_count = frozen_records.map_or(0, <[Record]>::len) + records.len();
-    let retained_bytes = frozen_records
-        .into_iter()
-        .flatten()
-        .chain(records.iter())
-        .try_fold(0usize, |total, record| {
-            total.checked_add(record.retained_bytes)
-        });
+    let retained_count = counters.records;
+    let retained_bytes = Some(counters.retained_bytes);
     if retained_count >= MAX_CAPTURE_RECORDS
         || retained_bytes
             .and_then(|total| total.checked_add(request.body.len()))
-            .is_none_or(|total| total > MAX_CAPTURE_REQUEST_BYTES)
+            .is_none_or(|total| total > capture_limit)
     {
+        counters.overflow = true;
         respond(
             connection,
             413,
             "text/plain",
-            b"cumulative OTLP capture exceeds limit\n",
+            if is_dd {
+                b"cumulative Datadog capture exceeds limit\n"
+            } else {
+                b"cumulative OTLP capture exceeds limit\n"
+            },
         );
         return;
     }
     let (encoding, payload) = match if is_dd {
-        datadog::decode(&request.path, &content_type, &request.body).map(|p| {
+        datadog::decode(
+            &request.path,
+            &content_type,
+            &request.body,
+            if capture_limit > MAX_CAPTURE_REQUEST_BYTES {
+                8 * 1024 * 1024
+            } else {
+                1024 * 1024
+            },
+        )
+        .map(|p| {
             (
                 if content_type == "application/json" {
                     "json"
@@ -437,6 +485,9 @@ fn ingest(
     } {
         Ok(decoded) => decoded,
         Err(error) => {
+            if error.contains("limit") || error.contains("budget") {
+                counters.overflow = true;
+            }
             respond(connection, 400, "text/plain", error.as_bytes());
             return;
         }
@@ -453,7 +504,14 @@ fn ingest(
             return;
         }
     };
-    if decoded_size > MAX_DECODED_OTLP_BYTES {
+    if decoded_size
+        > if is_dd && capture_limit > MAX_CAPTURE_REQUEST_BYTES {
+            8 * 1024 * 1024
+        } else {
+            MAX_DECODED_OTLP_BYTES
+        }
+    {
+        counters.overflow = true;
         respond(
             connection,
             413,
@@ -488,20 +546,21 @@ fn ingest(
             return;
         }
     };
-    if frozen_records
-        .into_iter()
-        .flatten()
-        .chain(records.iter())
-        .try_fold(retained_bytes, |total, record| {
-            total.checked_add(record.retained_bytes)
-        })
-        .is_none_or(|total| total > MAX_CAPTURE_REQUEST_BYTES)
+    if counters
+        .retained_bytes
+        .checked_add(retained_bytes)
+        .is_none_or(|total| total > capture_limit)
     {
+        counters.overflow = true;
         respond(
             connection,
             413,
             "text/plain",
-            b"cumulative OTLP capture exceeds limit\n",
+            if is_dd {
+                b"cumulative Datadog capture exceeds limit\n"
+            } else {
+                b"cumulative OTLP capture exceeds limit\n"
+            },
         );
         return;
     }
@@ -523,11 +582,12 @@ fn ingest(
         payload,
         retained_bytes,
     });
-    if let Err(error) = storage::persist_parts(output, frozen_records, records) {
+    if let Err(error) = storage::append_record(output, records.last().unwrap()) {
         records.pop();
         respond(connection, 500, "text/plain", error.as_bytes());
         return;
     }
+    counters.add(records.last().unwrap());
     if is_dd {
         respond(
             connection,

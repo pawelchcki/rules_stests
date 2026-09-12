@@ -97,6 +97,7 @@ func main() {
 	}
 
 	r := gin.Default()
+	installFixtureProbes(r, db)
 
 	// Disable automatic redirect for trailing slashes
 	// This prevents POST body from being lost during redirects

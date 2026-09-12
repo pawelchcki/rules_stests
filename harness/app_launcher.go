@@ -1,6 +1,7 @@
 package main
 
 import (
+	_ "embed"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,7 +12,12 @@ import (
 	"syscall"
 )
 
-const pythonBootstrap = `
+//go:embed probes/python.py
+var pythonProbes string
+
+var pythonBootstrap = pythonBootstrapSetup + pythonProbes + pythonBootstrapEntrypoint
+
+const pythonBootstrapSetup = `
 import asyncio
 import os
 import runpy
@@ -30,7 +36,7 @@ asyncio.BaseEventLoop.create_server = create_server_with_reuse_port
 # Datadog's supported aiohttp server integration requires trace_app; its
 # automatic patcher only covers the client. Activate the server middleware
 # from the injection environment, before the application freezes its router.
-if os.environ.get("RULES_STESTS_DATADOG_AIOHTTP_ENABLED") == "true":
+if os.environ.get("RULES_STESTS_DATADOG_AIOHTTP_ENABLED") == "true" and os.environ.get("DD_TRACE_ENABLED", "true").lower() != "false":
     from aiohttp import web
     from ddtrace.contrib.aiohttp import trace_app
 
@@ -51,6 +57,9 @@ if os.environ.get("RULES_STESTS_DATADOG_AIOHTTP_ENABLED") == "true":
         return original_run_app(app, *args, **kwargs)
 
     web.run_app = traced_run_app
+`
+
+const pythonBootstrapEntrypoint = `
 entrypoint = sys.argv[1]
 sys.argv = sys.argv[1:]
 runpy.run_path(entrypoint, run_name="__main__")

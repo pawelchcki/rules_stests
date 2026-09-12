@@ -1,0 +1,1651 @@
+{
+  "rails": [
+    {
+      "scenario": "articles",
+      "sha256": "35653a9401ef75ea1b9af3fd91534c73543a57a5ea7bb55f6a25ec4ace7fe765",
+      "spans": {
+        "sqlite.query": 191,
+        "rails.action_controller": 17,
+        "rack.request": 17,
+        "active_record.instantiation": 66
+      },
+      "sqlOperations": {
+        "PRAGMA": 16,
+        "SELECT": 149,
+        "BEGIN": 6,
+        "INSERT": 6,
+        "COMMIT": 6,
+        "SAVEPOINT": 2,
+        "RELEASE": 2,
+        "UPDATE": 2,
+        "DELETE": 2
+      },
+      "http": [
+        [
+          [
+            "DELETE",
+            "204",
+            "ArticlesController#destroy"
+          ],
+          1
+        ],
+        [
+          [
+            "GET",
+            "200",
+            "ArticlesController#index"
+          ],
+          6
+        ],
+        [
+          [
+            "GET",
+            "200",
+            "ArticlesController#show"
+          ],
+          3
+        ],
+        [
+          [
+            "GET",
+            "404",
+            "ArticlesController#show"
+          ],
+          1
+        ],
+        [
+          [
+            "POST",
+            "201",
+            "ArticlesController#create"
+          ],
+          1
+        ],
+        [
+          [
+            "POST",
+            "201",
+            "UsersController#create"
+          ],
+          1
+        ],
+        [
+          [
+            "PUT",
+            "200",
+            "ArticlesController#update"
+          ],
+          3
+        ],
+        [
+          [
+            "PUT",
+            "422",
+            "ArticlesController#update"
+          ],
+          1
+        ]
+      ]
+    },
+    {
+      "scenario": "auth",
+      "sha256": "8dd67e56bb1cac7609827a1a5710a3cbde3e102588047bd0269ad1b330a7f23a",
+      "spans": {
+        "sqlite.query": 66,
+        "rails.action_controller": 20,
+        "rack.request": 20,
+        "active_record.instantiation": 19
+      },
+      "sqlOperations": {
+        "PRAGMA": 5,
+        "SELECT": 28,
+        "BEGIN": 11,
+        "INSERT": 1,
+        "COMMIT": 11,
+        "UPDATE": 10
+      },
+      "http": [
+        [
+          [
+            "GET",
+            "200",
+            "UsersController#show"
+          ],
+          8
+        ],
+        [
+          [
+            "POST",
+            "200",
+            "UsersController#login"
+          ],
+          1
+        ],
+        [
+          [
+            "POST",
+            "201",
+            "UsersController#create"
+          ],
+          1
+        ],
+        [
+          [
+            "PUT",
+            "200",
+            "UsersController#update"
+          ],
+          10
+        ]
+      ]
+    },
+    {
+      "scenario": "comments",
+      "sha256": "22c3a36b5958a1f85a7a2cb21ca862e8909b5ef9fa715b2d75dde1fbdcceea5a",
+      "spans": {
+        "sqlite.query": 119,
+        "rails.action_controller": 13,
+        "rack.request": 13,
+        "active_record.instantiation": 43
+      },
+      "sqlOperations": {
+        "PRAGMA": 12,
+        "SELECT": 82,
+        "BEGIN": 8,
+        "INSERT": 5,
+        "COMMIT": 8,
+        "DELETE": 4
+      },
+      "http": [
+        [
+          [
+            "DELETE",
+            "204",
+            "ArticlesController#destroy"
+          ],
+          1
+        ],
+        [
+          [
+            "DELETE",
+            "204",
+            "CommentsController#destroy"
+          ],
+          2
+        ],
+        [
+          [
+            "GET",
+            "200",
+            "CommentsController#index"
+          ],
+          5
+        ],
+        [
+          [
+            "POST",
+            "201",
+            "ArticlesController#create"
+          ],
+          1
+        ],
+        [
+          [
+            "POST",
+            "201",
+            "CommentsController#create"
+          ],
+          3
+        ],
+        [
+          [
+            "POST",
+            "201",
+            "UsersController#create"
+          ],
+          1
+        ]
+      ]
+    },
+    {
+      "scenario": "errors_articles",
+      "sha256": "b9962e95b09809820a0daaf20ce616d4c4dd6f7a1f2f499f0a1a0018f71ba75b",
+      "spans": {
+        "rack.request": 20,
+        "sqlite.query": 100,
+        "rails.action_controller": 14,
+        "active_record.instantiation": 20
+      },
+      "sqlOperations": {
+        "PRAGMA": 12,
+        "SELECT": 67,
+        "BEGIN": 8,
+        "INSERT": 3,
+        "COMMIT": 5,
+        "ROLLBACK": 3,
+        "DELETE": 2
+      },
+      "http": [
+        [
+          [
+            "DELETE",
+            "204",
+            "ArticlesController#destroy"
+          ],
+          2
+        ],
+        [
+          [
+            "DELETE",
+            "401",
+            "DELETE 401"
+          ],
+          2
+        ],
+        [
+          [
+            "DELETE",
+            "404",
+            "ArticlesController#destroy"
+          ],
+          1
+        ],
+        [
+          [
+            "DELETE",
+            "404",
+            "ArticlesController#unfavorite"
+          ],
+          1
+        ],
+        [
+          [
+            "GET",
+            "401",
+            "GET 401"
+          ],
+          1
+        ],
+        [
+          [
+            "GET",
+            "404",
+            "ArticlesController#show"
+          ],
+          1
+        ],
+        [
+          [
+            "POST",
+            "201",
+            "ArticlesController#create"
+          ],
+          2
+        ],
+        [
+          [
+            "POST",
+            "201",
+            "UsersController#create"
+          ],
+          1
+        ],
+        [
+          [
+            "POST",
+            "401",
+            "POST 401"
+          ],
+          2
+        ],
+        [
+          [
+            "POST",
+            "404",
+            "ArticlesController#favorite"
+          ],
+          1
+        ],
+        [
+          [
+            "POST",
+            "422",
+            "ArticlesController#create"
+          ],
+          3
+        ],
+        [
+          [
+            "PUT",
+            "401",
+            "PUT 401"
+          ],
+          1
+        ],
+        [
+          [
+            "PUT",
+            "404",
+            "ArticlesController#update"
+          ],
+          2
+        ]
+      ]
+    },
+    {
+      "scenario": "errors_auth",
+      "sha256": "fc193f5f5a2532e0a7deb89bd201c6def3f2a4e71f6171e2165ea314ccdf24dc",
+      "spans": {
+        "sqlite.query": 63,
+        "rails.action_controller": 18,
+        "rack.request": 20,
+        "active_record.instantiation": 10
+      },
+      "sqlOperations": {
+        "PRAGMA": 5,
+        "SELECT": 31,
+        "BEGIN": 12,
+        "ROLLBACK": 9,
+        "INSERT": 1,
+        "COMMIT": 3,
+        "UPDATE": 2
+      },
+      "http": [
+        [
+          [
+            "GET",
+            "401",
+            "GET 401"
+          ],
+          1
+        ],
+        [
+          [
+            "POST",
+            "201",
+            "UsersController#create"
+          ],
+          1
+        ],
+        [
+          [
+            "POST",
+            "401",
+            "UsersController#login"
+          ],
+          1
+        ],
+        [
+          [
+            "POST",
+            "409",
+            "UsersController#create"
+          ],
+          2
+        ],
+        [
+          [
+            "POST",
+            "422",
+            "UsersController#create"
+          ],
+          3
+        ],
+        [
+          [
+            "POST",
+            "422",
+            "UsersController#login"
+          ],
+          2
+        ],
+        [
+          [
+            "PUT",
+            "200",
+            "UsersController#update"
+          ],
+          2
+        ],
+        [
+          [
+            "PUT",
+            "401",
+            "PUT 401"
+          ],
+          1
+        ],
+        [
+          [
+            "PUT",
+            "422",
+            "UsersController#update"
+          ],
+          7
+        ]
+      ]
+    },
+    {
+      "scenario": "errors_authorization",
+      "sha256": "d2322d5baac0407c793ee6d5fe47842f1d4349a0eeb42cb6db6e6638eecc79fc",
+      "spans": {
+        "sqlite.query": 84,
+        "rails.action_controller": 9,
+        "rack.request": 9,
+        "active_record.instantiation": 24
+      },
+      "sqlOperations": {
+        "PRAGMA": 12,
+        "SELECT": 56,
+        "BEGIN": 5,
+        "INSERT": 4,
+        "COMMIT": 5,
+        "DELETE": 2
+      },
+      "http": [
+        [
+          [
+            "DELETE",
+            "204",
+            "ArticlesController#destroy"
+          ],
+          1
+        ],
+        [
+          [
+            "DELETE",
+            "403",
+            "ArticlesController#destroy"
+          ],
+          1
+        ],
+        [
+          [
+            "DELETE",
+            "403",
+            "CommentsController#destroy"
+          ],
+          1
+        ],
+        [
+          [
+            "GET",
+            "200",
+            "CommentsController#index"
+          ],
+          1
+        ],
+        [
+          [
+            "POST",
+            "201",
+            "ArticlesController#create"
+          ],
+          1
+        ],
+        [
+          [
+            "POST",
+            "201",
+            "CommentsController#create"
+          ],
+          1
+        ],
+        [
+          [
+            "POST",
+            "201",
+            "UsersController#create"
+          ],
+          2
+        ],
+        [
+          [
+            "PUT",
+            "403",
+            "ArticlesController#update"
+          ],
+          1
+        ]
+      ]
+    },
+    {
+      "scenario": "errors_comments",
+      "sha256": "b5f8f01bf575d2f816f944ba6baf70ad33f3f0a0ff0d6f272bce389c89994162",
+      "spans": {
+        "rack.request": 10,
+        "sqlite.query": 66,
+        "rails.action_controller": 8,
+        "active_record.instantiation": 14
+      },
+      "sqlOperations": {
+        "PRAGMA": 12,
+        "SELECT": 45,
+        "BEGIN": 3,
+        "INSERT": 2,
+        "COMMIT": 3,
+        "DELETE": 1
+      },
+      "http": [
+        [
+          [
+            "DELETE",
+            "204",
+            "ArticlesController#destroy"
+          ],
+          1
+        ],
+        [
+          [
+            "DELETE",
+            "401",
+            "DELETE 401"
+          ],
+          1
+        ],
+        [
+          [
+            "DELETE",
+            "404",
+            "CommentsController#destroy"
+          ],
+          2
+        ],
+        [
+          [
+            "GET",
+            "404",
+            "CommentsController#index"
+          ],
+          1
+        ],
+        [
+          [
+            "POST",
+            "201",
+            "ArticlesController#create"
+          ],
+          1
+        ],
+        [
+          [
+            "POST",
+            "201",
+            "UsersController#create"
+          ],
+          1
+        ],
+        [
+          [
+            "POST",
+            "401",
+            "POST 401"
+          ],
+          1
+        ],
+        [
+          [
+            "POST",
+            "404",
+            "CommentsController#create"
+          ],
+          1
+        ],
+        [
+          [
+            "POST",
+            "422",
+            "CommentsController#create"
+          ],
+          1
+        ]
+      ]
+    },
+    {
+      "scenario": "errors_profiles",
+      "sha256": "cb7ea41d5ecdc8aae91c847ee5aef97089c0727686c6b76fb5fe87ba342a2af9",
+      "spans": {
+        "sqlite.query": 15,
+        "rails.action_controller": 4,
+        "rack.request": 6,
+        "active_record.instantiation": 2
+      },
+      "sqlOperations": {
+        "PRAGMA": 2,
+        "SELECT": 10,
+        "BEGIN": 1,
+        "INSERT": 1,
+        "COMMIT": 1
+      },
+      "http": [
+        [
+          [
+            "DELETE",
+            "401",
+            "DELETE 401"
+          ],
+          1
+        ],
+        [
+          [
+            "DELETE",
+            "404",
+            "ProfilesController#unfollow"
+          ],
+          1
+        ],
+        [
+          [
+            "GET",
+            "404",
+            "ProfilesController#show"
+          ],
+          1
+        ],
+        [
+          [
+            "POST",
+            "201",
+            "UsersController#create"
+          ],
+          1
+        ],
+        [
+          [
+            "POST",
+            "401",
+            "POST 401"
+          ],
+          1
+        ],
+        [
+          [
+            "POST",
+            "404",
+            "ProfilesController#follow"
+          ],
+          1
+        ]
+      ]
+    },
+    {
+      "scenario": "favorites",
+      "sha256": "d19f90ed43b0c48dc25b49d2bd96f27b2afccc9804e2250917bb1fdd4e72b503",
+      "spans": {
+        "sqlite.query": 111,
+        "rails.action_controller": 9,
+        "rack.request": 9,
+        "active_record.instantiation": 29
+      },
+      "sqlOperations": {
+        "PRAGMA": 12,
+        "SELECT": 86,
+        "BEGIN": 4,
+        "INSERT": 3,
+        "COMMIT": 4,
+        "DELETE": 2
+      },
+      "http": [
+        [
+          [
+            "DELETE",
+            "200",
+            "ArticlesController#unfavorite"
+          ],
+          1
+        ],
+        [
+          [
+            "DELETE",
+            "204",
+            "ArticlesController#destroy"
+          ],
+          1
+        ],
+        [
+          [
+            "GET",
+            "200",
+            "ArticlesController#index"
+          ],
+          2
+        ],
+        [
+          [
+            "GET",
+            "200",
+            "ArticlesController#show"
+          ],
+          2
+        ],
+        [
+          [
+            "POST",
+            "200",
+            "ArticlesController#favorite"
+          ],
+          1
+        ],
+        [
+          [
+            "POST",
+            "201",
+            "ArticlesController#create"
+          ],
+          1
+        ],
+        [
+          [
+            "POST",
+            "201",
+            "UsersController#create"
+          ],
+          1
+        ]
+      ]
+    },
+    {
+      "scenario": "feed",
+      "sha256": "e1f410e1b8e436daf4301eddbd6aab66e214dfd5fbe2c8b7fad6a05a2f99f84e",
+      "spans": {
+        "sqlite.query": 130,
+        "rails.action_controller": 12,
+        "rack.request": 12,
+        "active_record.instantiation": 26
+      },
+      "sqlOperations": {
+        "PRAGMA": 13,
+        "SELECT": 95,
+        "BEGIN": 7,
+        "INSERT": 5,
+        "COMMIT": 7,
+        "DELETE": 3
+      },
+      "http": [
+        [
+          [
+            "DELETE",
+            "200",
+            "ProfilesController#unfollow"
+          ],
+          1
+        ],
+        [
+          [
+            "DELETE",
+            "204",
+            "ArticlesController#destroy"
+          ],
+          2
+        ],
+        [
+          [
+            "GET",
+            "200",
+            "ArticlesController#feed"
+          ],
+          4
+        ],
+        [
+          [
+            "POST",
+            "200",
+            "ProfilesController#follow"
+          ],
+          1
+        ],
+        [
+          [
+            "POST",
+            "201",
+            "ArticlesController#create"
+          ],
+          2
+        ],
+        [
+          [
+            "POST",
+            "201",
+            "UsersController#create"
+          ],
+          2
+        ]
+      ]
+    },
+    {
+      "scenario": "pagination",
+      "sha256": "2b02f95d4142b7416a41b02516e1c5ebbf79e6beabac5eb56fc1034d0970128a",
+      "spans": {
+        "sqlite.query": 88,
+        "rails.action_controller": 7,
+        "rack.request": 7,
+        "active_record.instantiation": 16
+      },
+      "sqlOperations": {
+        "PRAGMA": 12,
+        "SELECT": 61,
+        "BEGIN": 5,
+        "INSERT": 3,
+        "COMMIT": 5,
+        "DELETE": 2
+      },
+      "http": [
+        [
+          [
+            "DELETE",
+            "204",
+            "ArticlesController#destroy"
+          ],
+          2
+        ],
+        [
+          [
+            "GET",
+            "200",
+            "ArticlesController#index"
+          ],
+          2
+        ],
+        [
+          [
+            "POST",
+            "201",
+            "ArticlesController#create"
+          ],
+          2
+        ],
+        [
+          [
+            "POST",
+            "201",
+            "UsersController#create"
+          ],
+          1
+        ]
+      ]
+    },
+    {
+      "scenario": "profiles",
+      "sha256": "634431762edeb46884da314822bb606dbed7e4dc3a1f5f41e2c77689b37ac4f0",
+      "spans": {
+        "sqlite.query": 38,
+        "rails.action_controller": 7,
+        "rack.request": 7,
+        "active_record.instantiation": 9
+      },
+      "sqlOperations": {
+        "PRAGMA": 4,
+        "SELECT": 24,
+        "BEGIN": 3,
+        "INSERT": 3,
+        "COMMIT": 3,
+        "DELETE": 1
+      },
+      "http": [
+        [
+          [
+            "DELETE",
+            "200",
+            "ProfilesController#unfollow"
+          ],
+          1
+        ],
+        [
+          [
+            "GET",
+            "200",
+            "ProfilesController#show"
+          ],
+          3
+        ],
+        [
+          [
+            "POST",
+            "200",
+            "ProfilesController#follow"
+          ],
+          1
+        ],
+        [
+          [
+            "POST",
+            "201",
+            "UsersController#create"
+          ],
+          2
+        ]
+      ]
+    },
+    {
+      "scenario": "propagation_datadog",
+      "sha256": "0b56a4fa38f2b0bbcee07f53b452955c9aad4e4fa09df6e3408aa064e845c498",
+      "spans": {
+        "sqlite.query": 13,
+        "rails.action_controller": 4,
+        "rack.request": 4
+      },
+      "sqlOperations": {
+        "PRAGMA": 2,
+        "SELECT": 8,
+        "BEGIN": 1,
+        "INSERT": 1,
+        "COMMIT": 1
+      },
+      "http": [
+        [
+          [
+            "GET",
+            "200",
+            "TagsController#index"
+          ],
+          3
+        ],
+        [
+          [
+            "POST",
+            "201",
+            "UsersController#create"
+          ],
+          1
+        ]
+      ]
+    },
+    {
+      "scenario": "propagation",
+      "sha256": "aaf3e2bccb49c19629fc3e42a1b64e002b786882863594601666115d4f751bf9",
+      "spans": {
+        "sqlite.query": 13,
+        "rails.action_controller": 4,
+        "rack.request": 4
+      },
+      "sqlOperations": {
+        "PRAGMA": 2,
+        "SELECT": 8,
+        "BEGIN": 1,
+        "INSERT": 1,
+        "COMMIT": 1
+      },
+      "http": [
+        [
+          [
+            "GET",
+            "200",
+            "TagsController#index"
+          ],
+          3
+        ],
+        [
+          [
+            "POST",
+            "201",
+            "UsersController#create"
+          ],
+          1
+        ]
+      ]
+    },
+    {
+      "scenario": "tags",
+      "sha256": "742428f018dcff11a8cad2d100368b3f4361a95b369ca663319518e9a07bc6ad",
+      "spans": {
+        "sqlite.query": 70,
+        "rails.action_controller": 4,
+        "rack.request": 4,
+        "active_record.instantiation": 8
+      },
+      "sqlOperations": {
+        "PRAGMA": 12,
+        "SELECT": 39,
+        "BEGIN": 3,
+        "INSERT": 6,
+        "COMMIT": 3,
+        "SAVEPOINT": 2,
+        "RELEASE": 2,
+        "DELETE": 3
+      },
+      "http": [
+        [
+          [
+            "DELETE",
+            "204",
+            "ArticlesController#destroy"
+          ],
+          1
+        ],
+        [
+          [
+            "GET",
+            "200",
+            "TagsController#index"
+          ],
+          1
+        ],
+        [
+          [
+            "POST",
+            "201",
+            "ArticlesController#create"
+          ],
+          1
+        ],
+        [
+          [
+            "POST",
+            "201",
+            "UsersController#create"
+          ],
+          1
+        ]
+      ]
+    },
+    {
+      "scenario": "unicode",
+      "sha256": "1c9b4263069a6b5a8637c96fe69acf6981ab35ad6556d8b3bd129dad07b22631",
+      "spans": {
+        "sqlite.query": 3,
+        "rails.action_controller": 1,
+        "rack.request": 1
+      },
+      "sqlOperations": {
+        "PRAGMA": 1,
+        "SELECT": 2
+      },
+      "http": [
+        [
+          [
+            "GET",
+            "404",
+            "ProfilesController#show"
+          ],
+          1
+        ]
+      ]
+    }
+  ],
+  "gin": [
+    {
+      "scenario": "articles",
+      "sha256": "d3cbf5259333fd51b1b3f234a7cf1c567662d3fcdf3710babb1e816fa836634d",
+      "spans": {
+        "http.request": 17,
+        "gorm.query": 146,
+        "sqlite3.query": 225,
+        "gorm.create": 35,
+        "gorm.update": 4,
+        "gorm.delete": 2
+      },
+      "sqlOperations": {
+        "SELECT": 292,
+        "Begin": 19,
+        "INSERT": 70,
+        "Commit": 19,
+        "UPDATE": 10,
+        "DELETE": 2
+      }
+    },
+    {
+      "scenario": "auth",
+      "sha256": "ec203a62116f43b5c10aead1bc56d06b35bb155570a44729b44c172999984e4b",
+      "spans": {
+        "http.request": 20,
+        "gorm.query": 59,
+        "sqlite3.query": 92,
+        "gorm.create": 1,
+        "gorm.update": 10
+      },
+      "sqlOperations": {
+        "SELECT": 118,
+        "Begin": 11,
+        "INSERT": 2,
+        "Commit": 11,
+        "UPDATE": 20
+      }
+    },
+    {
+      "scenario": "comments",
+      "sha256": "2957610821f9eebf63d735d80634e1d4f28cee77c2aa495d8e55292ce091a226",
+      "spans": {
+        "http.request": 13,
+        "gorm.query": 110,
+        "sqlite3.query": 165,
+        "gorm.create": 30,
+        "gorm.delete": 3
+      },
+      "sqlOperations": {
+        "SELECT": 220,
+        "Begin": 11,
+        "INSERT": 60,
+        "Commit": 11,
+        "UPDATE": 6
+      }
+    },
+    {
+      "scenario": "errors_articles",
+      "sha256": "8cfd7fcd64271a5023a319e8b5acad10feb2a3d8dcd59b197cc1b15a08244124",
+      "spans": {
+        "http.request": 20,
+        "gorm.query": 55,
+        "sqlite3.query": 90,
+        "gorm.create": 13,
+        "gorm.delete": 2
+      },
+      "sqlOperations": {
+        "SELECT": 110,
+        "Begin": 10,
+        "INSERT": 26,
+        "Commit": 7,
+        "Rollback": 3,
+        "UPDATE": 4
+      }
+    },
+    {
+      "scenario": "errors_auth",
+      "sha256": "98d9ecb5bd439aa661160e26a6e321b5434393f5670774a21974abd3b689eba6",
+      "spans": {
+        "http.request": 20,
+        "gorm.query": 28,
+        "sqlite3.query": 37,
+        "gorm.create": 1,
+        "gorm.update": 2
+      },
+      "sqlOperations": {
+        "SELECT": 56,
+        "Begin": 3,
+        "INSERT": 2,
+        "Commit": 3,
+        "UPDATE": 4
+      }
+    },
+    {
+      "scenario": "errors_authorization",
+      "sha256": "ee0e2577adf83d31ddde68eb92d49bf8b02c8cf733f84848a59186e44c8e3be8",
+      "spans": {
+        "http.request": 9,
+        "gorm.query": 63,
+        "sqlite3.query": 100,
+        "gorm.create": 18,
+        "gorm.delete": 1
+      },
+      "sqlOperations": {
+        "SELECT": 126,
+        "Begin": 9,
+        "INSERT": 36,
+        "Commit": 9,
+        "UPDATE": 2
+      }
+    },
+    {
+      "scenario": "errors_comments",
+      "sha256": "8ae02b9dc7c7e50fe86c3fa59896fa04883710a4b15ba760d6ebeb81e6d1a33b",
+      "spans": {
+        "http.request": 10,
+        "gorm.query": 41,
+        "sqlite3.query": 59,
+        "gorm.create": 7,
+        "gorm.delete": 1
+      },
+      "sqlOperations": {
+        "SELECT": 82,
+        "Begin": 5,
+        "INSERT": 14,
+        "Commit": 4,
+        "Rollback": 1,
+        "UPDATE": 2
+      }
+    },
+    {
+      "scenario": "errors_profiles",
+      "sha256": "638068224e8e3d73dbe7ca6ef6f990084c1dfc3d2e4171f39f93738062eb72ba",
+      "spans": {
+        "http.request": 6,
+        "gorm.query": 9,
+        "sqlite3.query": 12,
+        "gorm.create": 1
+      },
+      "sqlOperations": {
+        "SELECT": 18,
+        "Begin": 1,
+        "INSERT": 2,
+        "Commit": 1
+      }
+    },
+    {
+      "scenario": "favorites",
+      "sha256": "1b4d536458c84ff3ddbc8e4976938fd0992702735dfed5ab8d0c9b74f435c3f5",
+      "spans": {
+        "http.request": 9,
+        "gorm.query": 81,
+        "sqlite3.query": 124,
+        "gorm.create": 15,
+        "gorm.delete": 2
+      },
+      "sqlOperations": {
+        "SELECT": 162,
+        "Begin": 13,
+        "INSERT": 30,
+        "Commit": 13,
+        "DELETE": 2,
+        "UPDATE": 2
+      }
+    },
+    {
+      "scenario": "feed",
+      "sha256": "8a66fdd2f09ab76b511f4b826cbfa31a9bce95b72a2c3111d0bb211dac310c68",
+      "spans": {
+        "http.request": 12,
+        "gorm.query": 92,
+        "sqlite3.query": 159,
+        "gorm.create": 22,
+        "gorm.delete": 3
+      },
+      "sqlOperations": {
+        "SELECT": 184,
+        "Begin": 21,
+        "INSERT": 44,
+        "Commit": 21,
+        "UPDATE": 4,
+        "DELETE": 2
+      }
+    },
+    {
+      "scenario": "pagination",
+      "sha256": "dde4d661481b70c8a6dd71caf8a4ac21617679f6e8e79ae6ac5135d1fda96ea6",
+      "spans": {
+        "http.request": 7,
+        "gorm.query": 44,
+        "sqlite3.query": 77,
+        "gorm.create": 13,
+        "gorm.delete": 2
+      },
+      "sqlOperations": {
+        "SELECT": 88,
+        "Begin": 9,
+        "INSERT": 26,
+        "Commit": 9,
+        "UPDATE": 4
+      }
+    },
+    {
+      "scenario": "profiles",
+      "sha256": "be286d668ef55c337aa18de0d9c472ead9232783ed4e5f2d56f8c6715dec41ea",
+      "spans": {
+        "http.request": 7,
+        "gorm.query": 19,
+        "sqlite3.query": 31,
+        "gorm.create": 3,
+        "gorm.delete": 1
+      },
+      "sqlOperations": {
+        "SELECT": 38,
+        "Begin": 4,
+        "INSERT": 6,
+        "Commit": 4,
+        "DELETE": 2
+      }
+    },
+    {
+      "scenario": "propagation_datadog",
+      "sha256": "cf69e28bc9a80e997c97ae640ce359e186b8b88c0ec061694d4ae882f627a6df",
+      "spans": {
+        "http.request": 4,
+        "gorm.query": 5,
+        "sqlite3.query": 8,
+        "gorm.create": 1
+      },
+      "sqlOperations": {
+        "SELECT": 10,
+        "Begin": 1,
+        "INSERT": 2,
+        "Commit": 1
+      }
+    },
+    {
+      "scenario": "propagation",
+      "sha256": "ad286835770568ac52aa125b43fed053ae11073a44c8be369031ce2b8d0afe6a",
+      "spans": {
+        "http.request": 4,
+        "gorm.query": 5,
+        "sqlite3.query": 8,
+        "gorm.create": 1
+      },
+      "sqlOperations": {
+        "SELECT": 10,
+        "Begin": 1,
+        "INSERT": 2,
+        "Commit": 1
+      }
+    },
+    {
+      "scenario": "tags",
+      "sha256": "6235aafa836316284e14688d14ff122e18de4038e3324b10e49f1e23ec8af1fc",
+      "spans": {
+        "http.request": 4,
+        "gorm.query": 20,
+        "sqlite3.query": 40,
+        "gorm.create": 11,
+        "gorm.delete": 1
+      },
+      "sqlOperations": {
+        "SELECT": 40,
+        "Begin": 4,
+        "INSERT": 22,
+        "Commit": 4,
+        "UPDATE": 2
+      }
+    },
+    {
+      "scenario": "unicode",
+      "sha256": "e578910c70ce7870a94d7da1334574147063408d8196e5309578e5382779abdc",
+      "spans": {
+        "http.request": 1,
+        "gorm.query": 1,
+        "sqlite3.query": 1
+      },
+      "sqlOperations": {
+        "SELECT": 2
+      }
+    }
+  ],
+  "python-aiohttp-datadog-v4-14-0-v04": [
+    {
+      "scenario": "articles",
+      "sha256": "5a84bfbecdbc42a58a62d36371d5857c08c11632791459560c877ea750b578b6",
+      "spans": {
+        "aiohttp.request": 17,
+        "sqlite.query": 85
+      }
+    },
+    {
+      "scenario": "auth",
+      "sha256": "888dbfbe3866da3ce76e76437e689e5e7912a055e9cc2f8fa0097733c841705a",
+      "spans": {
+        "aiohttp.request": 20,
+        "sqlite.query": 35
+      }
+    },
+    {
+      "scenario": "comments",
+      "sha256": "14c19f040cf092352465c74a16c57511f9194e48b4f0e8d243ae6983b7dd7162",
+      "spans": {
+        "aiohttp.request": 13,
+        "sqlite.query": 49
+      }
+    },
+    {
+      "scenario": "errors_articles",
+      "sha256": "cbb82c69068d57fa11cebfdfd32372d5998984e4d8ae4837904a37152f201859",
+      "spans": {
+        "aiohttp.request": 20,
+        "sqlite.query": 38
+      }
+    },
+    {
+      "scenario": "errors_auth",
+      "sha256": "678ad2665e010419313e84f75a50723790fa79d80b7d85c3119e4e767f0b1bab",
+      "spans": {
+        "aiohttp.request": 20,
+        "sqlite.query": 18
+      }
+    },
+    {
+      "scenario": "errors_authorization",
+      "sha256": "bd477fc8432a50bf1944c3be1cf281949b39d04da0cb8c5015690de6ef4e4e72",
+      "spans": {
+        "aiohttp.request": 9,
+        "sqlite.query": 30
+      }
+    },
+    {
+      "scenario": "errors_comments",
+      "sha256": "765b40508193cbe64e79dc8f5c3ec53686111e1bf1a925346e7a5dd118b02280",
+      "spans": {
+        "aiohttp.request": 10,
+        "sqlite.query": 22
+      }
+    },
+    {
+      "scenario": "errors_profiles",
+      "sha256": "9562495ca2358d1db1fe56558abf59f147b68a6e5a4304386bc1a0f8753e6146",
+      "spans": {
+        "aiohttp.request": 6,
+        "sqlite.query": 8
+      }
+    },
+    {
+      "scenario": "favorites",
+      "sha256": "aa0e59960d5fa408ef73e61cb3386a41325ff778d5a26106cedd81943db3a6ee",
+      "spans": {
+        "aiohttp.request": 9,
+        "sqlite.query": 51
+      }
+    },
+    {
+      "scenario": "feed",
+      "sha256": "cca520a2739000133f06e97f927e7bfc2ef5176e2697c3ac09430e4901a0b380",
+      "spans": {
+        "aiohttp.request": 12,
+        "sqlite.query": 66
+      }
+    },
+    {
+      "scenario": "pagination",
+      "sha256": "1f337d1bf30f587f826bbba0acafba38b8f15a531eacda2b9b41084ffb27fb5c",
+      "spans": {
+        "aiohttp.request": 7,
+        "sqlite.query": 33
+      }
+    },
+    {
+      "scenario": "profiles",
+      "sha256": "55f0fde0e0e5d61c0f159f348a2d8c84531f8d86d4494f5457945d6f89242407",
+      "spans": {
+        "aiohttp.request": 7,
+        "sqlite.query": 21
+      }
+    },
+    {
+      "scenario": "propagation",
+      "sha256": "1c269dfafb08a71972d7d2b1f5d8fc5bcecf68d26024bc6f867fea82b7d4f242",
+      "spans": {
+        "aiohttp.request": 4,
+        "sqlite.query": 6
+      }
+    },
+    {
+      "scenario": "propagation_datadog",
+      "sha256": "1e65d10dfdb70653111c5eace0f527ecb4bb187b090eabf0fc1501d34c05c759",
+      "spans": {
+        "aiohttp.request": 4,
+        "sqlite.query": 6
+      }
+    },
+    {
+      "scenario": "tags",
+      "sha256": "077e4e485116c5d417e394264db1975647b5b77f090cba875f450ebeb65d0dd0",
+      "spans": {
+        "aiohttp.request": 4,
+        "sqlite.query": 15
+      }
+    },
+    {
+      "scenario": "unicode",
+      "sha256": "d6067bffbcc5684350181910b223fb068c689defb0af4189530d372d2b9a279e",
+      "spans": {
+        "aiohttp.request": 1,
+        "sqlite.query": 1
+      }
+    }
+  ],
+  "python-django-datadog-v4-14-0-v04": [
+    {
+      "scenario": "articles",
+      "sha256": "66fdbd4a749bc803c20e53d338037075a1bdffe15fcb10ae67c232f9174fd5f5",
+      "spans": {
+        "django.request": 17,
+        "django.middleware": 408,
+        "django.view": 17,
+        "sqlite.query": 227,
+        "sqlite.connection.commit": 7
+      }
+    },
+    {
+      "scenario": "auth",
+      "sha256": "bbfa4b59aac8c5af7a191bcb52eae926b68ad29e2244a92d7fbbefc6e86cb8c1",
+      "spans": {
+        "django.request": 20,
+        "django.middleware": 480,
+        "django.view": 20,
+        "sqlite.query": 196
+      }
+    },
+    {
+      "scenario": "comments",
+      "sha256": "b058dd331aeaf6ed20027f920638283405f33469701cc9c84b523b2ac1186c85",
+      "spans": {
+        "django.request": 13,
+        "django.middleware": 312,
+        "django.view": 13,
+        "sqlite.query": 149,
+        "sqlite.connection.commit": 2
+      }
+    },
+    {
+      "scenario": "errors_articles",
+      "sha256": "f1a6d68e611ae88d38bee431369d79d0c20e37f0165927a025aa69b29ec90b22",
+      "spans": {
+        "django.request": 20,
+        "django.middleware": 480,
+        "django.view": 20,
+        "sqlite.query": 158,
+        "sqlite.connection.commit": 4
+      }
+    },
+    {
+      "scenario": "errors_auth",
+      "sha256": "b9b19cef543610b0b0a2607185a2984482a70472cd706ee61909947fb64e81aa",
+      "spans": {
+        "django.request": 20,
+        "django.middleware": 480,
+        "django.view": 20,
+        "sqlite.query": 93
+      }
+    },
+    {
+      "scenario": "errors_authorization",
+      "sha256": "456b453b4f556ec3c03aedf04543fd81fdbd79341b9b7149a451d69737ae713d",
+      "spans": {
+        "django.request": 9,
+        "django.middleware": 216,
+        "django.view": 9,
+        "sqlite.query": 111,
+        "sqlite.connection.commit": 2
+      }
+    },
+    {
+      "scenario": "errors_comments",
+      "sha256": "bcb290f59cf8a86eb389db8a8d1e505a6ece85d28fd0153124bb09da1beca5e9",
+      "spans": {
+        "django.request": 10,
+        "django.middleware": 240,
+        "django.view": 10,
+        "sqlite.query": 88,
+        "sqlite.connection.commit": 2
+      }
+    },
+    {
+      "scenario": "errors_profiles",
+      "sha256": "2b4ad0e8bafa958d9cb113722a84737f81da0fb09badea84664fbcce492b4f9a",
+      "spans": {
+        "django.request": 6,
+        "django.middleware": 144,
+        "django.view": 6,
+        "sqlite.query": 30
+      }
+    },
+    {
+      "scenario": "favorites",
+      "sha256": "f558044583d97024857e9d26aac067e79d8c2be5365616801d0f5791e334fc2e",
+      "spans": {
+        "django.request": 9,
+        "django.middleware": 216,
+        "django.view": 9,
+        "sqlite.query": 143,
+        "sqlite.connection.commit": 4
+      }
+    },
+    {
+      "scenario": "feed",
+      "sha256": "eb3e44d74eee95bd878c5f3c977d16d6a9a1b9e5c7c0c4457ab31d74c9a02e6f",
+      "spans": {
+        "django.request": 12,
+        "django.middleware": 288,
+        "django.view": 12,
+        "sqlite.query": 194,
+        "sqlite.connection.commit": 6
+      }
+    },
+    {
+      "scenario": "pagination",
+      "sha256": "1ef785b2ea07a3e00eb13e074563d7c8cca1491c8ce47cabbda683b3e25313de",
+      "spans": {
+        "django.request": 7,
+        "django.middleware": 168,
+        "django.view": 7,
+        "sqlite.query": 109,
+        "sqlite.connection.commit": 4
+      }
+    },
+    {
+      "scenario": "profiles",
+      "sha256": "ec77ff031ddee34bd9ad54045c103f9d9e90f5fea79cd329d7984ebdc09b4e7d",
+      "spans": {
+        "django.request": 7,
+        "django.middleware": 168,
+        "django.view": 7,
+        "sqlite.query": 73,
+        "sqlite.connection.commit": 2
+      }
+    },
+    {
+      "scenario": "propagation",
+      "sha256": "def75285592aaf2334cfd7db2b7b003c00de6de635067ff8fe2ce522a803e983",
+      "spans": {
+        "django.request": 4,
+        "django.middleware": 96,
+        "django.view": 4,
+        "sqlite.query": 19
+      }
+    },
+    {
+      "scenario": "propagation_datadog",
+      "sha256": "68640285824b8a334918ceca9ac52cd7eebf2a9bcc42487773505aefee3b4e71",
+      "spans": {
+        "django.request": 4,
+        "django.middleware": 96,
+        "django.view": 4,
+        "sqlite.query": 19
+      }
+    },
+    {
+      "scenario": "tags",
+      "sha256": "f485e0ac1f2b81a3c0f8af011a8eaf1eae08f881cc76af43682ea0941f1d92e8",
+      "spans": {
+        "django.request": 4,
+        "django.middleware": 96,
+        "django.view": 4,
+        "sqlite.query": 65,
+        "sqlite.connection.commit": 4
+      }
+    },
+    {
+      "scenario": "unicode",
+      "sha256": "fd231600355265f80f97e5672109972d214c38398364cb9a48257f2d8db26b3f",
+      "spans": {
+        "django.request": 1,
+        "django.middleware": 24,
+        "django.view": 1,
+        "sqlite.query": 5
+      }
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 """RealWorld checks attached to explicitly declared services."""
 
 load("@rules_itest//:itest.bzl", "service_test")
-load("//rules:hurl_test.bzl", "REALWORLD_BASE_HURL_CASES", "realworld_hurl_test_suite")
+load("//rules:hurl_test.bzl", "REALWORLD_BASE_HURL_CASES", "realworld_hurl_test_suite", "realworld_parallel_hurl_test")
 
 _SINK = Label("//harness:otel_sink_service")
 _PROBE = Label("//harness:api_probe")
@@ -13,6 +13,8 @@ def realworld_service_tests(
         profile = None,
         telemetry_profile = None,
         telemetry_sink = None,
+        parallel_scenarios = False,
+        parallel_service = None,
         otel_sink = _SINK,
         scenarios = REALWORLD_BASE_HURL_CASES,
         otel_candidates = True,
@@ -32,6 +34,10 @@ def realworld_service_tests(
         profile: Optional atomic OpenTelemetry profile; enables OTel checks.
         otel_sink: Sink label used when profile is supplied. The service must
             declare its own sink dependency and exporter environment.
+        parallel_scenarios: Generate a manual shared-process isolation test.
+        parallel_service: Optional service configured with SQL markers and request header tags.
+        telemetry_profile: Atomic telemetry profile (any supported family).
+        telemetry_sink: Telemetry sink service used by the profile.
         scenarios: RealWorld scenario names to test.
         otel_candidates: Generate manual shape-candidate targets.
         otel_flaky_reason: Retry reason for every instrumented scenario.
@@ -48,6 +54,17 @@ def realworld_service_tests(
         profile = telemetry_profile
     if telemetry_sink != None:
         otel_sink = telemetry_sink
+    if parallel_scenarios:
+        if not profile:
+            fail("parallel_scenarios requires a telemetry profile and sink")
+        realworld_parallel_hurl_test(
+            name = name + "_parallel_test",
+            service = parallel_service or service,
+            profile = profile,
+            sink = otel_sink,
+            cases = scenarios,
+            tags = tags,
+        )
     label = native.package_relative_label(service)
     service_test(
         name = name + "_service_hygiene_test",

@@ -8,6 +8,7 @@ bazel_dep(name = "rules_itest", version = "0.0.59")
 bazel_dep(name = "rules_oci", version = "2.3.0")
 bazel_dep(name = "rules_rs", version = "0.0.108")
 bazel_dep(name = "rules_shell", version = "0.8.0")
+bazel_dep(name = "rules_python", version = "1.8.0")
 bazel_dep(name = "llvm", version = "0.8.18")
 bazel_dep(name = "aspect_bazel_lib", version = "2.21.1")
 bazel_dep(name = "package_metadata", version = "0.0.7")
@@ -29,6 +30,11 @@ register_toolchains(
     "@default_rust_toolchains//...",
     "@llvm//toolchain:all",
 )
+
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(python_version = "3.12")
+use_repo(python, "python_3_12")
+register_toolchains("@python_3_12//:all")
 
 crate = use_extension("@rules_rs//rs:extensions.bzl", "crate")
 crate.from_cargo(
@@ -140,6 +146,10 @@ use_repo(
     corpus_images,
     "aiohttp_realworld",
     "aiohttp_realworld_linux_amd64",
+    "gin_datadog_realworld",
+    "gin_datadog_realworld_linux_amd64",
+    "datadog_ruby",
+    "datadog_ruby_linux_amd64",
     "datadog_python",
     "datadog_python_linux_amd64",
     "django_ninja_realworld",
@@ -158,6 +168,13 @@ use_repo(
 
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
+
+http_file(
+    name = "datadog_system_tests_headers",
+    downloaded_file_path = "test_headers_datadog.py",
+    sha256 = "eae879d44ecf020bb1f4a2899d78f2027c9942e556baf406932c2f9ad6905b43",
+    urls = ["https://raw.githubusercontent.com/DataDog/system-tests/ea8a5976064509df0a5232e314b22e7e90ca4d40/tests/parametric/test_headers_datadog.py"],
+)
 
 http_file(
     name = "cloudflared_linux_amd64",

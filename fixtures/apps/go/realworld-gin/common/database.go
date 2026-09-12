@@ -54,6 +54,10 @@ func Init() (*gorm.DB, error) {
 		return nil, fmt.Errorf("create database directory: %w", err)
 	}
 
+	if os.Getenv("RULES_STESTS_SQL_MARKERS") == "true" {
+		// Acquire write transactions before their reads to avoid SQLite lock upgrades.
+		dbPath += "?_busy_timeout=30000&_txlock=immediate&_journal_mode=WAL"
+	}
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{TranslateError: true})
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)

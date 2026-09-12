@@ -110,14 +110,20 @@ by the consumer. See [`examples/plugin_agent`](examples/plugin_agent).
 
 The Python fixtures inject dd-trace-py 4.14.0 from the digest-pinned Datadog
 package using `PYTHONPATH`. Bazel materializes the package; application processes
-receive the injection and exporter environment. The default wire format is v0.5
-MessagePack; each app also has a separate v0.4 MessagePack `tags` profile.
+receive the injection and exporter environment. Both Python fixtures run all 16
+scenarios on v0.4 and v0.5 MessagePack. Rails uses a separate Ruby 2.42.0
+tracer payload, with the application Bundler setup loaded first and frozen
+Gemfiles. Gin has a separate binary built with Orchestrion 1.13.0 and
+dd-trace-go 2.10.1. Rails and Gin run all 16 scenarios on v0.4: 96 combinations.
 Each profile declares its expected intake language and tracer version; the
 shared decoder checks header uniqueness and counts, and the profile enforces
 those declared values.
 
 ```bash
-bazel test //fixtures:datadog_suite
+# Build the reviewed local Ruby/Gin images until their publication is available.
+tools/build_datadog_fixtures.sh /tmp/datadog-images
+mapfile -t image_flags < /tmp/datadog-images/bazel.flags
+bazel test --config=local "${image_flags[@]}" //fixtures:datadog_suite
 ```
 
 For a custom service, use `datadog_python_injection(aiohttp = True)` for aiohttp (the default for Django is
@@ -150,7 +156,24 @@ URLs and user agents, Django metadata, `sql.db`, `db.row_count`, service and
 sampling tags, and SQLite commit spans without a `sql` type. SQL resources and
 URL path/query content remain exact. Only loopback endpoint ports, generated
 workload suffixes, fixture database roots, validated runtime/process IDs, trace
-high bits, and structurally validated exception stacks use explicit policies.
+high bits, Rails request IDs and runtime measurements, and structurally
+validated Python, Ruby, and Go exception stacks use explicit policies.
+
+Datadog validators compile into Bazel-cached bounded-VM bytecode. Manifests
+and receipts bind the selected source, compiler, and bytecode hashes. Source
+validation remains available for diagnostics. Captures retain their full
+128-bit identity across intake chunks. See [coverage and verification](docs/datadog-coverage.md)
+for the pinned upstream references, retained evidence, and capability limits.
+
+`//fixtures:datadog_external_features_suite` runs differential native tracer
+checks using opt-in shared probe routes. `//fixtures:datadog_parallel_suite` is
+a manual shared-process isolation suite: 32 workers and three repetitions of
+every scenario by default. CI uses `--test_arg=--scenario-concurrency=4` and
+`--test_arg=--scenario-repetitions=1`. The proxy ledger, independent SQL markers
+and execution counts, native capture, overlap, and graph assertions are retained
+as separate stress evidence. Application probes and SQL hooks activate only
+when their fixture configuration enables them. Custom suites can opt in with
+`parallel_scenarios = True` and supply a suitably configured `parallel_service`.
 
 A consumer-owned profile can set `reference_profile` to a published Datadog
 profile. Reference mode inherits its complete scenario set, proof contract,
@@ -178,7 +201,7 @@ passing the current revision plus each profile manifest and emitted receipt.
 `otel_injection`, `python_auto_injection`, `ruby_auto_injection`, `otlp_env`,
 `realworld_service_tests`, `realworld_app_suite`, `realworld_hurl_test_suite`,
 `otel_realworld_profile`, `otel_standard_registry`, and
-`otel_report_manifest`. Datadog adds `datadog_python_injection`, `datadog_env`,
+`otel_report_manifest`. Datadog adds `datadog_python_injection`, `datadog_ruby_injection`, `datadog_env`,
 `datadog_realworld_profile`, `instrumentation_injection`, and `TelemetryProfileInfo`.
 
 `corpus_service` is independent of RealWorld. A service built by Bazel can use

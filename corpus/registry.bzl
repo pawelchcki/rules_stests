@@ -173,11 +173,38 @@ DATADOG_CORE_LIBRARIES = [
 ]
 
 DATADOG_PROFILES = {
+    "go-gin-datadog-v2-10-1-v04": struct(application = "gin", wire_version = "v0.4", scenarios = REALWORLD_BASE_HURL_CASES + ["propagation_datadog"], implementation = "go-v2.10.1", reviewed = True),
+    "ruby-rails-datadog-v2-42-0-v04": struct(application = "rails", wire_version = "v0.4", scenarios = REALWORLD_BASE_HURL_CASES + ["propagation_datadog"], implementation = "ruby-v2.42.0", reviewed = True),
     "python-aiohttp-datadog-v4-14-0-v05": struct(application = "aiohttp", wire_version = "v0.5", scenarios = REALWORLD_BASE_HURL_CASES + ["propagation_datadog"]),
     "python-django-datadog-v4-14-0-v05": struct(application = "django", wire_version = "v0.5", scenarios = REALWORLD_BASE_HURL_CASES + ["propagation_datadog"]),
-    "python-aiohttp-datadog-v4-14-0-v04": struct(application = "aiohttp", wire_version = "v0.4", scenarios = ["tags"]),
-    "python-django-datadog-v4-14-0-v04": struct(application = "django", wire_version = "v0.4", scenarios = ["tags"]),
+    "python-aiohttp-datadog-v4-14-0-v04": struct(application = "aiohttp", wire_version = "v0.4", scenarios = REALWORLD_BASE_HURL_CASES + ["propagation_datadog"]),
+    "python-django-datadog-v4-14-0-v04": struct(application = "django", wire_version = "v0.4", scenarios = REALWORLD_BASE_HURL_CASES + ["propagation_datadog"]),
 }
+
+def _factored_datadog_shape_sources(profile_id, scenarios):
+    """Generates stable per-scenario Scheme sources from the compact snapshot."""
+    # These are the former checked-in source labels.  Keep them stable for
+    # profiles (including external reference profiles) that consume a specific
+    # scenario library directly.
+    directory = "datadog/realworld/shape/{}".format(profile_id)
+    outputs = [directory + "/" + scenario + ".scm" for scenario in scenarios]
+    native.genrule(
+        name = profile_id + "_factored_shapes",
+        srcs = [
+            "datadog/realworld/shape_snapshot/snapshots.json",
+            "datadog/realworld/shape_snapshot/hashes.json",
+        ],
+        tools = ["//tools:expand_datadog_shapes"],
+        outs = outputs,
+        cmd = " ".join([
+            "$(location //tools:expand_datadog_shapes)",
+            "--snapshot $(location datadog/realworld/shape_snapshot/snapshots.json)",
+            "--hash-lock $(location datadog/realworld/shape_snapshot/hashes.json)",
+            "--profile {}".format(profile_id),
+            "--output-dir $(@D)/{}".format("datadog/realworld/shape"),
+        ]),
+    )
+    return {scenario: ":" + output for output, scenario in zip(outputs, scenarios)}
 
 def declare_datadog_profiles(datadog_realworld_profile):
     """Declares Datadog's independent profiles and native wire assertions."""
@@ -185,9 +212,9 @@ def declare_datadog_profiles(datadog_realworld_profile):
         datadog_realworld_profile(
             name = profile_id,
             specification = "datadog/realworld/profile/{}.scm".format(profile_id),
-            implementation_libraries = ["datadog/implementation/python-v4.14.0.scm"],
+            implementation_libraries = ["datadog/implementation/" + getattr(declaration, "implementation", "python-v4.14.0") + ".scm"],
             runtime_libraries = [],
-            shape_root = "datadog/realworld/shape/{}".format(profile_id),
+            scenario_shapes = _factored_datadog_shape_sources(profile_id, declaration.scenarios) if getattr(declaration, "reviewed", True) else {},
             signals = ["traces"],
             scenarios = declaration.scenarios,
             wire_version = declaration.wire_version,

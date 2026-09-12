@@ -132,6 +132,7 @@ go_test(
 
 go_library(
     name = "app_launcher_lib",
+    embedsrcs = ["probes/python.py"],
     srcs = [
         "app_launcher.go",
         "bundle_paths.go",
@@ -165,7 +166,7 @@ go_binary(
 
 go_library(
     name = "hurl_test_driver_lib",
-    srcs = ["hurl_test_driver.go"],
+    srcs = ["hurl_test_driver.go", "compiled_validator.go", "parallel_scenarios.go"],
     importpath = "github.com/pawelchcki/rules_stests/harness/hurl_test_driver",
     visibility = ["//visibility:private"],
 )
@@ -181,7 +182,7 @@ go_binary(
 
 go_test(
     name = "hurl_test_driver_test",
-    srcs = ["hurl_test_driver_test.go"],
+    srcs = ["hurl_test_driver_test.go", "compiled_validator_test.go", "parallel_scenarios_test.go"],
     embed = [":hurl_test_driver_lib"],
 )
 
@@ -243,9 +244,49 @@ service_test(
     args = [
         "--service-suffix=//harness:telemetry_sink_service",
         "--assertions=$(rootpath //corpus:datadog/capture/shapes.scm)",
+        "--compiler=$(rootpath :telemetry_sink)",
         "--contract-errors=$(rootpath //corpus:telemetry/contract-error.scm)",
     ],
-    data = ["//corpus:datadog/capture/shapes.scm", "//corpus:telemetry/contract-error.scm"],
+    data = [":telemetry_sink", "//corpus:datadog/capture/shapes.scm", "//corpus:telemetry/contract-error.scm"],
     services = [":telemetry_sink_service"],
     test = ":datadog_sink_probe",
+)
+
+go_binary(
+    name = "compile_validators",
+    embed = [":hurl_test_driver_lib"],
+)
+
+oci_rootfs(
+    name = "datadog_ruby_rootfs",
+    image = "@datadog_ruby_linux_amd64",
+    single_payload = True,
+    tags = ["manual"],
+)
+
+corpus_service(
+    name = "datadog_stress_sink_service",
+    args = ["--port", "$${PORT}", "--output", "$${TMPDIR}/datadog-stress.json", "--stress-capture"],
+    autoassign_port = True,
+    exe = ":telemetry_sink",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/healthz",
+    so_reuseport_aware = True,
+    shutdown_timeout = "2s",
+    tags = ["manual"],
+)
+
+oci_rootfs(
+    name = "gin_datadog_rootfs",
+    image = "@gin_datadog_realworld_linux_amd64",
+    single_payload = True,
+    tags = ["manual"],
+)
+
+go_test(
+    name = "datadog_ruby_bootstrap_test",
+    srcs = ["ruby_bootstrap_test.go"],
+    embed = [":app_launcher_lib"],
+    data = [":rails_rootfs", ":datadog_ruby_rootfs"],
+    env = {"RAILS_ROOTFS": "$(rlocationpath :rails_rootfs)", "DATADOG_RUBY_ROOTFS": "$(rlocationpath :datadog_ruby_rootfs)"},
+    tags = ["manual"],
 )

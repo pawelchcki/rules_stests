@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 ARG SOURCE_DATE_EPOCH=0
-FROM golang:1.25-bookworm@sha256:3b4a11519ad929d1e1d261a12cff056f0c85b735253d7d861346b9c6f8b36437 AS builder
+FROM docker.io/library/golang:1.25-bookworm@sha256:3b4a11519ad929d1e1d261a12cff056f0c85b735253d7d861346b9c6f8b36437 AS builder
 ARG SOURCE_DATE_EPOCH
 
 # The vendored app keeps upstream's cgo mattn/go-sqlite3 driver. This immutable
@@ -20,7 +20,7 @@ RUN go install go.opentelemetry.io/otelc/tool/cmd/otelc@${OTELC_VERSION}
 WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
-COPY hello.go ./
+COPY hello.go probes_disabled.go ./
 COPY common ./common
 COPY users ./users
 COPY articles ./articles
@@ -29,6 +29,16 @@ RUN go build -ldflags "-s -w -buildid= -linkmode external -extldflags -static" \
         -o /rootfs/opt/app/bin/realworld-gin . \
     && otelc go build -ldflags "-s -w -buildid= -linkmode external -extldflags -static" \
         -o /rootfs/opt/app/bin/realworld-gin-otel .
+
+# A separately locked graph keeps Datadog and Orchestrion out of the plain
+# and OpenTelemetry binaries. Both the compiler tool and tracer are pinned.
+COPY datadog/go.mod datadog/go.sum ./
+COPY datadog/orchestrion.tool.go ./
+COPY datadog/probes.go ./probes_datadog.go
+RUN go mod download \
+    && go run github.com/DataDog/orchestrion go build -tags=datadog \
+        -ldflags "-s -w -buildid= -linkmode external -extldflags -static" \
+        -o /rootfs/opt/app/bin/realworld-gin-datadog .
 
 COPY LICENSE /rootfs/opt/app/licenses/application-LICENSE
 

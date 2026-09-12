@@ -3,6 +3,8 @@ package main
 import (
 	"crypto/sha256"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -13,8 +15,9 @@ func TestCoverageGateRequiresCompleteExactEvidence(t *testing.T) {
 	capture := []byte("capture")
 	plan := `{"proofs":[{"featureId":"feature","assertion":"assertion","basis":"observed"}]}`
 	proof := receiptProof{FeatureID: "feature", Assertion: "assertion", Basis: "observed", Result: "pass"}
-	m := manifest{Family: "datadog", WireVersion: "v0.5", Profile: "p", Application: "aiohttp", ProofPlan: plan, Scenarios: []string{"tags"}, ScenarioShapes: map[string]string{"tags": "shape"}, ValidationPolicySHA256: digest, CandidateImplementationSHA256: digest}
-	r := receipt{Family: "datadog", WireVersion: "v0.5", SchemaVersion: 2, Revision: revision, Profile: "p", Scenario: "tags", ValidationMode: "exact", Outcome: "verified", ProofPlanSHA256: sum(plan), CaptureSHA256: sum(string(capture)), ScenarioShapeSHA256: sum("shape"), ValidationPolicySHA256: digest, CandidateImplementationSHA256: digest, Proofs: []receiptProof{proof}, Coverage: coverage{SchemaVersion: 1, Application: "aiohttp", Scenario: "tags", IntegrationSpans: map[string]int{"http.server": 1, "database": 1}, FieldPolicies: map[string]int{"exact": 3, "normalized": 1, "runtime-validated": 2}, SpanOccurrences: 2, FieldOccurrences: 6}}
+	artifact := compiledValidator{Path: "p.validators/tags.sbc", SourceSHA256: digest, CompilerSHA256: digest, BytecodeSHA256: digest}
+	m := manifest{CompiledValidators: map[string]compiledValidator{"tags": artifact}, Family: "datadog", WireVersion: "v0.5", Profile: "p", Application: "aiohttp", ProofPlan: plan, Scenarios: []string{"tags"}, ScenarioShapes: map[string]string{"tags": "shape"}, ValidationPolicySHA256: digest, CandidateImplementationSHA256: digest}
+	r := receipt{Validator: &artifact, Family: "datadog", WireVersion: "v0.5", SchemaVersion: 2, Revision: revision, Profile: "p", Scenario: "tags", ValidationMode: "exact", Outcome: "verified", ProofPlanSHA256: sum(plan), CaptureSHA256: sum(string(capture)), ScenarioShapeSHA256: sum("shape"), ValidationPolicySHA256: digest, CandidateImplementationSHA256: digest, Proofs: []receiptProof{proof}, Coverage: coverage{SchemaVersion: 1, Application: "aiohttp", Scenario: "tags", IntegrationSpans: map[string]int{"http.server": 1, "database": 1}, FieldPolicies: map[string]int{"exact": 3, "normalized": 1, "runtime-validated": 2}, SpanOccurrences: 2, FieldOccurrences: 6}}
 	if err := validate(revision, []manifest{m}, []receipt{r}, [][]byte{capture}); err != nil {
 		t.Fatal(err)
 	}
@@ -50,6 +53,44 @@ func TestCoverageGateRequiresCompleteExactEvidence(t *testing.T) {
 			}
 		})
 	}
+
+	compiledManifest, compiledReceipt := m, r
+	if err := validate(revision, []manifest{compiledManifest}, []receipt{compiledReceipt}, [][]byte{capture}); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"source", "compiler", "bytecode", "path", "missing"} {
+		t.Run("compiled-"+key, func(t *testing.T) {
+			changed := artifact
+			changedReceipt := compiledReceipt
+			changedReceipt.Validator = &changed
+			switch key {
+			case "source":
+				changed.SourceSHA256 = strings.Repeat("c", 64)
+			case "compiler":
+				changed.CompilerSHA256 = strings.Repeat("c", 64)
+			case "bytecode":
+				changed.BytecodeSHA256 = strings.Repeat("c", 64)
+			case "path":
+				changed.Path = "different.sbc"
+			case "missing":
+				changedReceipt.Validator = nil
+			}
+			if validate(revision, []manifest{compiledManifest}, []receipt{changedReceipt}, [][]byte{capture}) == nil {
+				t.Fatal("accepted mismatched selected validator")
+			}
+		})
+	}
+	missingCompiledManifest, missingCompiledReceipt := m, r
+	missingCompiledManifest.CompiledValidators = nil
+	missingCompiledReceipt.Validator = nil
+	if validate(revision, []manifest{missingCompiledManifest}, []receipt{missingCompiledReceipt}, [][]byte{capture}) == nil {
+		t.Fatal("accepted source-only validator fallback")
+	}
+	extraCompiledManifest := m
+	extraCompiledManifest.CompiledValidators = map[string]compiledValidator{"tags": artifact, "not-a-scenario": artifact}
+	if validate(revision, []manifest{extraCompiledManifest}, []receipt{r}, [][]byte{capture}) == nil {
+		t.Fatal("accepted compiled validator for undeclared scenario")
+	}
 	if validate(revision, []manifest{m}, nil, nil) == nil {
 		t.Fatal("missing receipt passed")
 	}
@@ -76,4 +117,54 @@ func TestCoverageGateRequiresCompleteExactEvidence(t *testing.T) {
 
 func sum(value string) string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(value)))
+}
+
+func TestRetainedCompiledBytecodeBinding(t *testing.T) {
+	newArtifact := func(t *testing.T) (string, manifest, compiledValidator) {
+		t.Helper()
+		directory := t.TempDir()
+		artifact := compiledValidator{
+			Path:           "p.validators/tags.sbc",
+			SourceSHA256:   sum("effective-source"),
+			CompilerSHA256: sum("compiler"),
+			BytecodeSHA256: sum("bytecode"),
+		}
+		path := filepath.Join(directory, artifact.Path)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("bytecode"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return filepath.Join(directory, "p.profile.json"), manifest{Profile: "p", CompiledValidators: map[string]compiledValidator{"tags": artifact}}, artifact
+	}
+
+	manifestPath, m, _ := newArtifact(t)
+	if err := verifyCompiledArtifacts(manifestPath, m); err != nil {
+		t.Fatalf("valid retained bytecode rejected: %v", err)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*manifest, *compiledValidator, string)
+	}{
+		{"missing", func(m *manifest, artifact *compiledValidator, path string) {
+			artifact.Path = "p.validators/missing.sbc"
+		}},
+		{"replaced", func(m *manifest, artifact *compiledValidator, path string) {
+			if err := os.WriteFile(path, []byte("replacement"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"traversal", func(m *manifest, artifact *compiledValidator, path string) { artifact.Path = "../tags.sbc" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			manifestPath, m, artifact := newArtifact(t)
+			path := filepath.Join(filepath.Dir(manifestPath), artifact.Path)
+			test.mutate(&m, &artifact, path)
+			m.CompiledValidators["tags"] = artifact
+			if err := verifyCompiledArtifacts(manifestPath, m); err == nil {
+				t.Fatal("invalid retained bytecode passed")
+			}
+		})
+	}
 }

@@ -1,8 +1,52 @@
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 
 package(default_visibility = ["//visibility:public"])
+
+sh_test(
+    name = "benchmark_datadog_test",
+    srcs = ["benchmark_datadog_test.sh"],
+    data = [
+        "benchmark_datadog.py",
+        "benchmark_datadog_test.py",
+    ],
+)
 
 sh_binary(
     name = "assemble_otel_report",
     srcs = ["assemble_otel_report.sh"],
+)
+
+sh_test(
+    name = "local_oci_repository_test",
+    srcs = ["local_oci_repository_test.sh"],
+    data = [
+        "build_datadog_fixtures.sh",
+        "local_oci_repository.py",
+        "local_oci_repository_test.py",
+    ],
+)
+
+py_library(
+    name = "expand_datadog_shapes_lib",
+    srcs = ["expand_datadog_shapes.py"],
+    imports = ["."],
+)
+
+py_binary(
+    name = "expand_datadog_shapes",
+    srcs = ["expand_datadog_shapes.py"],
+    main = "expand_datadog_shapes.py",
+)
+
+py_test(
+    name = "expand_datadog_shapes_test",
+    srcs = ["expand_datadog_shapes_test.py"],
+    main = "expand_datadog_shapes_test.py",
+    deps = [":expand_datadog_shapes_lib"],
+    data = [
+        "//corpus:datadog/realworld/shape_snapshot/snapshots.json",
+        "//corpus:datadog/realworld/shape_snapshot/hashes.json",
+    ],
 )

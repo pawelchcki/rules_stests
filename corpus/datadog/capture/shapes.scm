@@ -45,7 +45,7 @@
         (loop (cdr headers)
               (if (string=? (string-downcase (caar headers)) key) (+ count 1) count)))))
 (define (web-span? span)
-  (and (member (field 'name span) '("aiohttp.request" "django.request"))
+  (and (member (field 'name span) '("aiohttp.request" "django.request" "rack.request" "gin.request" "http.request"))
        (equal? (field 'type span) "web")))
 (define (string-prefix? prefix value)
   (and (string? value) (<= (string-length prefix) (string-length value))
@@ -68,11 +68,13 @@
 (define (exception-valid? span)
   ; HTTP 5xx may be classified as errors without recording an exception.
   ; Once any exception field is present, the exception must be complete.
-  (if (some (lambda (key) (tag span key)) '("error.type" "error.message" "error.msg" "error.stack"))
+  (if (some (lambda (key) (tag span key)) '("error.type" "error.message" "error.msg" "error.stack" "error.handling_stack"))
       (and (equal? (field 'error span) 1)
            (nonempty-string? (tag span "error.type"))
            (or (string? (tag span "error.message")) (string? (tag span "error.msg")))
-           (nonempty-string? (tag span "error.stack")))
+           (or (nonempty-string? (tag span "error.stack"))
+               (and (equal? (tag span "language") "go")
+                    (nonempty-string? (tag span "error.handling_stack")))))
       #t))
 (define (http-classification? span)
   (if (not (web-span? span)) #t
@@ -113,27 +115,33 @@
 ; SQL operations must stay in the request's trace even when an asynchronous
 ; driver dispatches work to another thread. Follow native parent IDs rather
 ; than relying on the order spans happened to be exported.
+(define (source-http-ancestor? span spans)
+  ; Source-only diagnostic captures predate the sink's indexed ancestry field.
+  ; Resolve only a unique parent, carrying any known high bits along the walk.
+  (let walk ((current span) (high (tag span "_dd.p.tid")) (remaining (length spans)))
+    (let ((parents
+            (let find ((rest spans) (result '()))
+              (if (null? rest) result
+                  (let* ((candidate (car rest))
+                         (candidate-high (tag candidate "_dd.p.tid")))
+                    (find (cdr rest)
+                      (if (and (equal? (field 'trace-id current) (field 'trace-id candidate))
+                               (equal? (field 'parent-id current) (field 'span-id candidate))
+                               (or (not high) (not candidate-high) (equal? high candidate-high)))
+                          (cons candidate result) result)))))))
+      (and (> remaining 0) (pair? parents) (null? (cdr parents))
+           (let ((parent (car parents)))
+             (or (web-span? parent)
+                 (walk parent (or high (tag parent "_dd.p.tid")) (- remaining 1))))))))
+
 (define (database-children? capture)
-  (let* ((spans (items capture 'spans))
-         (limit (length spans))
-         (parents (map (lambda (span)
-                         (cons (list (field 'trace-id span) (field 'span-id span)) span)) spans))
-         (memo '()))
-    (define (http-ancestor? span remaining)
-      (let ((cached (assq span memo)))
-        (if cached (cadr cached)
-            (let* ((parent-entry
-                     (assoc (list (field 'trace-id span) (field 'parent-id span)) parents))
-                   (result
-                     (and (> remaining 0) parent-entry
-                          (or (web-span? (cdr parent-entry))
-                              (http-ancestor? (cdr parent-entry) (- remaining 1))))))
-              (set! memo (cons (list span result) memo))
-              result))))
+  (let ((spans (items capture 'spans)))
     (and (some database-span? spans)
          (every (lambda (span)
                   (or (not (database-span? span))
-                      (http-ancestor? span limit))) spans))))
+                      (if (assq 'http-ancestor span)
+                          (eq? (field 'http-ancestor span) #t)
+                          (source-http-ancestor? span spans)))) spans))))
 
 (define (capture-shape name predicate) (list name predicate))
 (define capture-shapes

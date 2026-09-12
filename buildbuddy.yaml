@@ -2,9 +2,13 @@ actions:
   - name: Full test suite
     visibility: PUBLIC
     container_image: ubuntu-24.04
+    # Keep newly cached fixture exports and installed tools across PR iterations.
+    platform_properties:
+      remote-snapshot-save-policy: always
+      snapshot-read-policy: newest
     resource_requests:
-      # The runner only orchestrates Bazel; all actions execute on the
-      # self-hosted RBE fleet.
+      # Bazel actions execute on the self-hosted RBE fleet; the runner also
+      # builds the two unpublished Datadog OCI fixtures used as inputs.
       cpu: 4
       memory: 8GB
     triggers:
@@ -17,30 +21,68 @@ actions:
     steps:
       - run: |
           set -euo pipefail
+          DATADOG_EVIDENCE="$(mktemp -d "${TMPDIR:-/tmp}/datadog-evidence.XXXXXX")"
+          DATADOG_IMAGES=""
+          archive_datadog_evidence() {
+            status=$?
+            trap - EXIT
+            set +e
+            tools/run_datadog_parity.sh --archive "$DATADOG_IMAGES" "$DATADOG_EVIDENCE"
+            archive_status=$?
+            if (( status == 0 && archive_status != 0 )); then
+              exit "$archive_status"
+            fi
+            exit "$status"
+          }
+          trap archive_datadog_evidence EXIT
           REPORT_REVISION="$(git rev-parse HEAD)"
           # BuildBuddy checks pull requests out at a synthetic merge whose first parent is the PR head.
           if [ "$(git show -s --format=%ce HEAD)" = "ci-runner@buildbuddy.io" ]; then
             REPORT_REVISION="$(git rev-parse HEAD^1)"
           fi
           git checkout --detach "$REPORT_REVISION"
+          if ! command -v podman >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y podman
+          fi
+          mkdir -p "$HOME/.cache"
+          if [[ ! -w "$HOME/.cache" ]]; then
+            sudo chown "$(id -u):$(id -g)" "$HOME/.cache"
+          fi
+          mkdir -p \
+            "$HOME/.cache/buildbuddy" \
+            "$HOME/.cache/rules-stests/datadog-fixtures"
+          DATADOG_IMAGES="$(mktemp -d "${TMPDIR:-/tmp}/datadog-images.XXXXXX")"
+          sudo env CONTAINER_BUILD_NETWORK=host \
+            DATADOG_FIXTURE_CACHE="$HOME/.cache/rules-stests/datadog-fixtures" \
+            tools/build_datadog_fixtures.sh "$DATADOG_IMAGES"
+          mapfile -t IMAGE_FLAGS < "$DATADOG_IMAGES/bazel.flags"
           # No revision is stamped here, so these results stay cacheable across
           # commits; only the report run below needs a revision in its receipts.
           # The report suite is excluded rather than run twice.
           bazel test \
             --config=buildbuddy \
+            --spawn_strategy=remote,local \
             --build_tests_only \
             --test_tag_filters=-otel-report \
+            "${IMAGE_FLAGS[@]}" \
             //...
+          # The parity driver owns the independent fresh executions and their
+          # retained receipts, plus the manual Rails/Gin isolation and feature
+          # suites that wildcard expansion intentionally omits.
+          tools/run_datadog_parity.sh "$DATADOG_IMAGES" "$REPORT_REVISION" "$DATADOG_EVIDENCE"
           # The report run stays uncached: report/cmd/main.go refuses to assemble
           # from a build event file that does not prove --nocache_test_results,
           # because the report claims its evidence came from a fresh run.
           OTEL_TEST_REVISION="$REPORT_REVISION" bazel test \
             --config=buildbuddy \
+            --spawn_strategy=remote,local \
             --nocache_test_results \
             --test_env=OTEL_TEST_REVISION \
             --build_event_json_file=otel-profile.bep.json \
             --nobuild_event_json_file_path_conversion \
             --remote_download_outputs=toplevel \
+            "${IMAGE_FLAGS[@]}" \
             //fixtures:otel_report_suite
           REPORT_BAZEL_CONFIG=buildbuddy \
             REPORT_REPOSITORY=pawelchcki/rules_stests \
@@ -50,8 +92,8 @@ actions:
             bazel test \
               --config=buildbuddy \
               --build_tests_only \
-                //...)
+              //...)
           (cd examples/plugin_agent && \
-            bazel build --config=buildbuddy //:otel_report_manifest)
+            bazel build --config=buildbuddy //:otel_report_manifest //:telemetry_api_check)
           # Files written here are published as BuildBuddy workflow artifacts.
           cp feature-parity-report.html "$BUILDBUDDY_ARTIFACTS_DIRECTORY/opentelemetry-proof-report.html"

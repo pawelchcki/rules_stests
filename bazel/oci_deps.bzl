@@ -1,7 +1,7 @@
 """Creates repositories for the digest-locked RealWorld app images."""
 
 load("@rules_oci//oci:pull.bzl", "oci_pull")
-load("//bazel:oci_images.lock.bzl", "DATADOG_PYTHON", "HURL_TOOL", "OCI_IMAGES", "OTEL_PYTHON", "OTEL_RUBY")
+load("//bazel:oci_images.lock.bzl", "DATADOG_PYTHON", "DATADOG_RUBY", "HURL_TOOL", "OCI_IMAGES", "OTEL_PYTHON", "OTEL_RUBY")
 
 def _oci_deps_impl(module_ctx):
     direct_deps = []
@@ -50,6 +50,15 @@ def _oci_deps_impl(module_ctx):
         is_bzlmod = True,
     )
     direct_deps.extend(["datadog_python", "datadog_python_linux_amd64"])
+
+    oci_pull(
+        name = "datadog_ruby",
+        image = DATADOG_RUBY.repository,
+        digest = DATADOG_RUBY.digest,
+        platforms = ["linux/amd64"],
+        is_bzlmod = True,
+    )
+    direct_deps.extend(["datadog_ruby", "datadog_ruby_linux_amd64"])
 
     if any([module.is_root for module in module_ctx.modules]):
         return module_ctx.extension_metadata(

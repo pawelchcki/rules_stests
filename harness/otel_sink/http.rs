@@ -68,7 +68,10 @@ impl Request {
     }
 }
 
-pub(crate) fn read_request(connection: &OwnedFd) -> Result<Request, RequestError> {
+pub(crate) fn read_request(
+    connection: &OwnedFd,
+    datadog_body_limit: usize,
+) -> Result<Request, RequestError> {
     let mut bytes = Vec::with_capacity(8192);
     let header_end;
     loop {
@@ -194,7 +197,7 @@ pub(crate) fn read_request(connection: &OwnedFd) -> Result<Request, RequestError
             MAX_VALIDATION_SOURCE_BYTES
         }
     } else if (method == "POST" || method == "PUT") && path.starts_with("/v0.") {
-        MAX_JSON_REQUEST_BYTES
+        datadog_body_limit
     } else if method == "POST" && path.starts_with("/v1/") {
         if json_content_type {
             MAX_JSON_REQUEST_BYTES
