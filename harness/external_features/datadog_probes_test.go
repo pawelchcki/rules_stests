@@ -3,8 +3,90 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"sync/atomic"
 	"testing"
+	"time"
 )
+
+func TestPartialWorkloadOutlivesSharedControlTimeout(t *testing.T) {
+	var held atomic.Bool
+	released := make(chan struct{})
+	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/__rules_stests/partial":
+			// The held state becomes visible late enough that the fixed 2.5s
+			// observation window exceeds the shared client's 5s timeout.
+			time.Sleep(3 * time.Second)
+			held.Store(true)
+			select {
+			case <-released:
+				w.WriteHeader(http.StatusOK)
+			case <-r.Context().Done():
+			}
+		case "/__rules_stests/state":
+			json.NewEncoder(w).Encode(map[string]bool{"held": held.Load()})
+		case "/__rules_stests/release":
+			held.Store(false)
+			close(released)
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer app.Close()
+	sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("[]"))
+	}))
+	defer sink.Close()
+
+	oldSink, oldOutput, oldCase := ddProbeSink, ddProbeOutput, activeDatadogCase
+	ddProbeSink, ddProbeOutput, activeDatadogCase = sink.URL, t.TempDir(), ddCase{Name: "partial-test"}
+	t.Cleanup(func() { ddProbeSink, ddProbeOutput, activeDatadogCase = oldSink, oldOutput, oldCase })
+	req, err := http.NewRequest(http.MethodGet, app.URL+"/__rules_stests/partial", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ddPartialWorkload(app.URL, req); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(ddProbeOutput + "/partial-test.early.capture.json"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPartialWorkloadCancelsHeldRequestOnControlFailure(t *testing.T) {
+	canceled := make(chan struct{})
+	started := make(chan struct{})
+	app := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/__rules_stests/partial":
+			close(started)
+			<-r.Context().Done()
+			close(canceled)
+		case "/__rules_stests/state":
+			<-started
+			w.Write([]byte("not-json"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer app.Close()
+	req, err := http.NewRequest(http.MethodGet, app.URL+"/__rules_stests/partial", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ddPartialWorkload(app.URL, req); err == nil {
+		t.Fatal("accepted malformed held-state response")
+	}
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("held request was not canceled after control failure")
+	}
+}
 
 func probeFixture(kind string, partial bool) ([]ddNativeSpan, []byte) {
 	roots := ddBaselineFixture()

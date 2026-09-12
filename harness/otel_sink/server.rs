@@ -34,7 +34,13 @@ pub(crate) fn serve(port: u16, output: &CStr, stress_capture: bool) -> Result<()
     let mut dd_records = Vec::<Record>::new();
     let mut dd_frozen_records = None::<Vec<Record>>;
     let mut dd_validation_stats = ValidationStats::default();
+    let dd_output = alloc::ffi::CString::new(format!(
+        "{}.datadog.json",
+        String::from_utf8_lossy(output.to_bytes())
+    ))
+    .unwrap();
     storage::persist(output, &records)?;
+    storage::persist(dd_output.as_c_str(), &dd_records)?;
     let startup = format!(
         "telemetry_sink: listening on 0.0.0.0:{port}; pretty JSON output: {}\n",
         String::from_utf8_lossy(output.to_bytes())

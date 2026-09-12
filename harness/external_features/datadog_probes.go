@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -42,9 +43,17 @@ func ddProbeCases() []ddCase {
 }
 
 func ddPartialWorkload(base string, req *http.Request) error {
+	ctx, cancel := context.WithCancel(req.Context())
+	defer cancel()
+	req = req.Clone(ctx)
+	// The held request spans polling, observation and release. The shared client
+	// timeout only bounds individual control requests; cancellation below owns
+	// the held request's lifetime and the final select bounds its completion.
+	heldClient := *client
+	heldClient.Timeout = 0
 	done := make(chan error, 1)
 	go func() {
-		resp, err := client.Do(req)
+		resp, err := heldClient.Do(req)
 		if err == nil {
 			io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()

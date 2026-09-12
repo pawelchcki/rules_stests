@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -87,6 +88,7 @@ func main() {
 	}
 	if *compiler != "" {
 		compiledEquivalence(*compiler)
+		reusedOutputStartsFresh(*compiler)
 	}
 	exactMutationCoverage()
 	// v0.4 omits zero/empty defaults. Native dumps preserve absence and exact
@@ -591,4 +593,80 @@ func compiledEquivalence(compiler string) {
 		}
 	}
 	request("POST", "/validate-bytecode?protocol=datadog", "application/vnd.stak.bytecode", []byte{255}, 422)
+}
+
+// A sink restart has fresh in-memory captures, so both persisted protocol files
+// must be reset before the first request can append to either one.
+func reusedOutputStartsFresh(sink string) {
+	directory, err := os.MkdirTemp("", "datadog-sink-restart-")
+	must(err)
+	defer os.RemoveAll(directory)
+	output := filepath.Join(directory, "capture.json")
+
+	first, endpoint := startSink(sink, output)
+	defer stopSink(first)
+	previousEndpoint := ddEndpoint
+	ddEndpoint = endpoint
+	defer func() { ddEndpoint = previousEndpoint }()
+	request("POST", "/v1/traces", "application/json", []byte(`{"resourceSpans":[]}`), 200)
+	request("POST", "/v0.4/traces", "application/msgpack", wire("v0.4", nativeSpan()), 200)
+	stopSink(first)
+
+	second, endpoint := startSink(sink, output)
+	defer stopSink(second)
+	ddEndpoint = endpoint
+	for _, path := range []string{output, output + ".datadog.json"} {
+		contents, err := os.ReadFile(path)
+		must(err)
+		var records []json.RawMessage
+		must(json.Unmarshal(contents, &records))
+		if len(records) != 0 {
+			panic("reused output retained records: " + path)
+		}
+	}
+
+	fresh := nativeSpan()
+	fresh["name"] = "fresh-after-restart"
+	request("POST", "/v0.4/traces", "application/msgpack", wire("v0.4", fresh), 200)
+	persisted, err := os.ReadFile(output + ".datadog.json")
+	must(err)
+	dump := request("GET", "/dump?protocol=datadog", "", nil, 200)
+	var persistedRecords, dumpedRecords []any
+	must(json.Unmarshal(persisted, &persistedRecords))
+	must(json.Unmarshal(dump, &dumpedRecords))
+	if !reflect.DeepEqual(persistedRecords, dumpedRecords) {
+		panic("Datadog persisted output differs from fresh capture")
+	}
+}
+
+func startSink(sink, output string) (*exec.Cmd, string) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	must(err)
+	port := listener.Addr().(*net.TCPAddr).Port
+	must(listener.Close())
+	command := exec.Command(sink, "--port", strconv.Itoa(port), "--output", output)
+	var logs bytes.Buffer
+	command.Stdout, command.Stderr = &logs, &logs
+	must(command.Start())
+	endpoint := fmt.Sprintf("http://127.0.0.1:%d", port)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		response, err := (&http.Client{Timeout: 100 * time.Millisecond}).Get(endpoint + "/healthz")
+		if err == nil {
+			response.Body.Close()
+			if response.StatusCode == http.StatusOK {
+				return command, endpoint
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stopSink(command)
+	panic("restarted sink did not become ready: " + logs.String())
+}
+
+func stopSink(command *exec.Cmd) {
+	if command.Process != nil {
+		_ = command.Process.Kill()
+	}
+	_ = command.Wait()
 }
