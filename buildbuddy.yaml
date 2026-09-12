@@ -45,6 +45,13 @@ actions:
             sudo apt-get update
             sudo apt-get install -y podman
           fi
+          mkdir -p "$HOME/.cache"
+          if [[ ! -w "$HOME/.cache" ]]; then
+            sudo chown "$(id -u):$(id -g)" "$HOME/.cache"
+          fi
+          mkdir -p \
+            "$HOME/.cache/buildbuddy" \
+            "$HOME/.cache/rules-stests/datadog-fixtures"
           DATADOG_IMAGES="$(mktemp -d "${TMPDIR:-/tmp}/datadog-images.XXXXXX")"
           sudo env CONTAINER_BUILD_NETWORK=host \
             DATADOG_FIXTURE_CACHE="$HOME/.cache/rules-stests/datadog-fixtures" \
