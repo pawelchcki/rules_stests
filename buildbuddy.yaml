@@ -36,6 +36,7 @@ actions:
           # The report suite is excluded rather than run twice.
           bazel test \
             --config=buildbuddy \
+            --spawn_strategy=remote,local \
             --build_tests_only \
             --test_tag_filters=-otel-report \
             "${IMAGE_FLAGS[@]}" \
@@ -45,6 +46,7 @@ actions:
           # because the report claims its evidence came from a fresh run.
           OTEL_TEST_REVISION="$REPORT_REVISION" bazel test \
             --config=buildbuddy \
+            --spawn_strategy=remote,local \
             --nocache_test_results \
             --test_env=OTEL_TEST_REVISION \
             --build_event_json_file=otel-profile.bep.json \
