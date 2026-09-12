@@ -90,6 +90,7 @@ for fixture in ruby gin; do
       if flag="$(python3 tools/local_oci_repository.py \
           "$cache_entry" "$repository" --rootfs-digest "$rootfs_digest" 2>"$out/$fixture.build.log")"; then
         printf 'validated fixture cache hit: %s\n' "$cache_entry" > "$out/$fixture.build.log"
+        printf 'Datadog fixture cache hit: %s (reviewed payload verified)\n' "$fixture"
         printf '%s\n' "$flag" >> "$out/bazel.flags"
         continue
       fi
@@ -102,6 +103,7 @@ for fixture in ruby gin; do
     fi
     staging="$(mktemp -d "$cache_root/.building-$fixture-$cache_key.XXXXXX")"
     export_dir="$staging/export"
+    printf 'Datadog fixture cache miss: %s; building reviewed payload\n' "$fixture"
   fi
 
   if "$container_tool" build --timestamp 0 "${container_build_network_args[@]}" -t "$image" "$context" >> "$out/$fixture.build.log" 2>&1; then

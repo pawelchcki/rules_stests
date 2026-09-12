@@ -2,6 +2,10 @@ actions:
   - name: Full test suite
     visibility: PUBLIC
     container_image: ubuntu-24.04
+    # Keep newly cached fixture exports and installed tools across PR iterations.
+    platform_properties:
+      remote-snapshot-save-policy: always
+      snapshot-read-policy: newest
     resource_requests:
       # Bazel actions execute on the self-hosted RBE fleet; the runner also
       # builds the two unpublished Datadog OCI fixtures used as inputs.
