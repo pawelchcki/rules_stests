@@ -2,6 +2,7 @@
 """Regression tests for local OCI repository materialization."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -10,6 +11,7 @@ import unittest
 
 
 HELPER = Path(__file__).with_name("local_oci_repository.py")
+FIXTURE_BUILDER = Path(__file__).with_name("build_datadog_fixtures.sh")
 
 
 def digest(data):
@@ -49,6 +51,25 @@ class LocalOCIRepositoryTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("--override_repository=local_fixture=", result.stdout)
             self.assertEqual(json.loads((directory / "index.json").read_text())["manifests"], [descriptor])
+
+    def test_fixture_builder_surfaces_container_build_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            container_tool = directory / "container-tool"
+            container_tool.write_text("#!/usr/bin/env bash\nprintf 'nested container build unavailable\\n' >&2\nexit 125\n")
+            container_tool.chmod(0o755)
+
+            result = subprocess.run(
+                [FIXTURE_BUILDER, directory / "output"],
+                capture_output=True,
+                check=False,
+                env={**os.environ, "CONTAINER_TOOL": str(container_tool)},
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 125)
+            self.assertIn("nested container build unavailable", result.stderr)
+            self.assertEqual((directory / "output" / "ruby.build.log").read_text(), "nested container build unavailable\n")
 
     def test_rejects_corrupted_manifest_blob(self):
         with tempfile.TemporaryDirectory() as temporary:

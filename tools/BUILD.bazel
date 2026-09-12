@@ -12,6 +12,7 @@ sh_test(
     name = "local_oci_repository_test",
     srcs = ["local_oci_repository_test.sh"],
     data = [
+        "build_datadog_fixtures.sh",
         "local_oci_repository.py",
         "local_oci_repository_test.py",
     ],

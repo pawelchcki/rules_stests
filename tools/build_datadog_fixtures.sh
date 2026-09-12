@@ -19,7 +19,13 @@ for fixture in ruby gin; do
     repository=gin_datadog_realworld_linux_amd64
     image=localhost/rules-stests-gin-datadog:2.10.1
   fi
-  "$container_tool" build --timestamp 0 -t "$image" "$context" > "$out/$fixture.build.log" 2>&1
+  if "$container_tool" build --timestamp 0 -t "$image" "$context" > "$out/$fixture.build.log" 2>&1; then
+    :
+  else
+    status=$?
+    cat "$out/$fixture.build.log" >&2
+    exit "$status"
+  fi
   "$container_tool" save --format oci-dir -o "$out/$fixture" "$image"
   python3 tools/local_oci_repository.py "$out/$fixture" "$repository" >> "$out/bazel.flags"
 done
