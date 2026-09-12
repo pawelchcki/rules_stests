@@ -71,14 +71,38 @@ def verify_original_snapshot(snapshot: Path, revision: str) -> str:
     return resolved
 
 
+def verify_current_checkout() -> str:
+    """Require the measured tree to be exactly the recorded HEAD revision.
+
+    The original side is content-verified because it may be an archive without
+    Git metadata.  The compiled side runs in this checkout, so recording HEAD
+    alone is only meaningful when there are no staged, unstaged, or untracked
+    inputs that Bazel could read.
+    """
+    status = subprocess.check_output(
+        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+        cwd=current,
+        text=True,
+    )
+    if status:
+        raise RuntimeError(
+            "current checkout is dirty; benchmark requires a clean checkout "
+            "matching its recorded HEAD revision"
+        )
+    return subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=current, text=True
+    ).strip()
+
+
 original_revision = verify_original_snapshot(args.original.resolve(), args.original_revision)
+current_revision = verify_current_checkout()
 args.output.mkdir(parents=True, exist_ok=False)
 variants = {
     "original": (args.original.resolve(), ["bazel", "--output_base=" + str(args.original_output_base.resolve())], ["//fixtures:datadog_suite"]),
     "compiled": (current, ["bazel"], ["//fixtures:aiohttp_datadog_hurl_test", "//fixtures:django_datadog_hurl_test", "//fixtures:aiohttp_datadog_v04_hurl_test_tags", "//fixtures:django_datadog_v04_hurl_test_tags"]),
 }
 flags = ["--config=local", f"--jobs={args.jobs}", f"--local_test_jobs={args.jobs}"]
-results = {"originalRevision": original_revision, "currentRevision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(), "executor": platform.platform(), "jobs": args.jobs, "combinations": 34, "buildSeconds": {}, "executions": []}
+results = {"originalRevision": original_revision, "currentRevision": current_revision, "executor": platform.platform(), "jobs": args.jobs, "combinations": 34, "buildSeconds": {}, "executions": []}
 if args.cold_output_root:
     args.cold_output_root.mkdir(parents=True, exist_ok=False)
     results["coldBuildSeconds"] = {}
