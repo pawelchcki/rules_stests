@@ -16,27 +16,53 @@ jobs:
       - uses: bazel-contrib/setup-bazel@8cb04a772ab4c1eb984e9c1b493a182e96c5e425 # 0.19.0
         with:
           bazelisk-cache: true
-      - name: Validate pinned Datadog reference twice
+      - name: Build reviewed local Datadog images
+        run: tools/build_datadog_fixtures.sh "${RUNNER_TEMP}/datadog-images"
+      - name: Validate and retain each independent execution
         shell: bash
         env:
           REVISION: ${{ github.sha }}
         run: |
           set -euo pipefail
-          bazel test --config=local //fixtures:datadog_suite --test_env="TELEMETRY_TEST_REVISION=${REVISION}" --remote_download_outputs=all --nocache_test_results
-          bazel test --config=local //fixtures:datadog_suite --test_env="TELEMETRY_TEST_REVISION=${REVISION}" --remote_download_outputs=all --nocache_test_results
-          args=(--revision "${REVISION}")
-          for manifest in bazel-bin/corpus/python-{aiohttp,django}-datadog-v4-14-0-{v04,v05}.profile.json; do
-            args+=(--manifest "${PWD}/${manifest}")
+          mapfile -t image_flags < "${RUNNER_TEMP}/datadog-images/bazel.flags"
+          bazel build --config=local --jobs=4 "${image_flags[@]}" //tools/datadog_coverage:datadog_coverage
+          for execution in 1 2; do
+            bazel test --config=local --jobs=4 --local_test_jobs=4 "${image_flags[@]}" //fixtures:datadog_suite --test_env="TELEMETRY_TEST_REVISION=${REVISION}" --nocache_test_results
+            tools/retain_datadog_evidence.py --revision "${REVISION}" --output "evidence/execution-${execution}" --gate bazel-bin/tools/datadog_coverage/datadog_coverage_/datadog_coverage
           done
-          while IFS= read -r receipt; do
-            args+=(--receipt "${PWD}/${receipt}")
-            args+=(--capture "${PWD}/${receipt%.json}.capture.json")
-          done < <(find -L bazel-testlogs/fixtures -path '*/test.outputs/datadog/receipts/*.json' ! -name '*.capture.json' -type f | sort)
-          bazel run --config=local //tools/datadog_coverage:datadog_coverage -- "${args[@]}"
+      - name: Four-worker request isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t image_flags < "${RUNNER_TEMP}/datadog-images/bazel.flags"
+          bazel test --config=local --jobs=4 --local_test_jobs=4 "${image_flags[@]}" //fixtures:datadog_parallel_suite --test_arg=--scenario-concurrency=4 --test_arg=--scenario-repetitions=1
+          mkdir -p evidence/parallel
+          find -L bazel-testlogs/fixtures -path '*/test.outputs/stress.*.json' -exec cp --parents '{}' evidence/parallel/ \;
+      - name: Native feature and bootstrap checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t image_flags < "${RUNNER_TEMP}/datadog-images/bazel.flags"
+          bazel test --config=local --jobs=4 --local_test_jobs=4 "${image_flags[@]}" //fixtures:datadog_external_features_suite //harness:datadog_ruby_bootstrap_test //harness:datadog_sink_test //harness/external_features:probe_test //tools/datadog_coverage:datadog_coverage_test
+          mkdir -p evidence/features
+          find -L bazel-testlogs/fixtures -path '*datadog_external_features*/test.outputs/*' -type f -exec cp --parents '{}' evidence/features/ \;
       - name: Shared OTel regressions
-        run: bazel test --config=local //report:report_test //harness:hurl_test_driver_test //harness:otel_sink_test
+        run: bazel test --config=local --jobs=4 --local_test_jobs=4 //fixtures:otel_report_suite //fixtures:external_features_test //report:report_test //harness:app_launcher_test //harness:hurl_test_driver_test //harness:otel_sink_test
       - name: External reference-profile consumers
         working-directory: examples/plugin_agent
         run: |
-          bazel build --config=local //:telemetry_api_check
-          bazel test --config=local //:example_datadog_hurl_test //:example_django_datadog_hurl_test //:datadog_consumer_identity_test
+          bazel build --config=local --jobs=4 //:telemetry_api_check
+          bazel test --config=local --jobs=4 --local_test_jobs=4 //:example_datadog_hurl_test //:example_django_datadog_hurl_test //:datadog_consumer_identity_test
+      - name: Retain verification artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: datadog-evidence
+          path: |
+            evidence/
+            bazel-testlogs/fixtures/**/test.log
+            bazel-testlogs/fixtures/**/test.outputs/**
+            bazel-testlogs/harness/**/test.log
+            examples/plugin_agent/bazel-testlogs/**/test.log
+            ${{ runner.temp }}/datadog-images/*.build.log
+          if-no-files-found: error

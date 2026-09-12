@@ -139,6 +139,11 @@ func main() {
 	run("database wrong trace", strings.Replace(databaseCapture, `(type "") (trace-id "1")`, `(type "") (trace-id "5")`, 1), databaseBody, 409)
 	run("database ancestry cycle", strings.Replace(databaseCapture, `(span-id "3") (parent-id "2")`, `(span-id "3") (parent-id "4")`, 1), databaseBody, 409)
 
+	run("indexed ancestry rejection remains authoritative", strings.Replace(databaseCapture, `(span-id "4")`, `(span-id "4") (http-ancestor #f)`, 1), databaseBody, 409)
+	highCapture := strings.Replace(databaseCapture, `(span-id "2")`, `(span-id "2") (meta (("_dd.p.tid" "aaaaaaaaaaaaaaaa")))`, 1)
+	highCapture = strings.Replace(highCapture, `(span-id "4")`, `(span-id "4") (meta (("_dd.p.tid" "bbbbbbbbbbbbbbbb")))`, 1)
+	run("source ancestry rejects crossed high bits", highCapture, databaseBody, 409)
+
 	exceptionBody := `(import (scheme base) (datadog capture shapes))
  (define capture CAPTURE)
  (assert-capture-shape "exception" 'span/exception-metadata capture)`

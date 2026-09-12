@@ -15,6 +15,16 @@ _SPEC_ANCHOR = Label("@realworld_api_specs//:hurl_all")
 REALWORLD_HURL_CASES = _CASES
 REALWORLD_BASE_HURL_CASES = _BASE_CASES
 
+def _profile_data_impl(ctx):
+    # rules_itest service_test includes data files but does not merge their
+    # runfiles. Expose the cached validator directory as explicit test data.
+    return [DefaultInfo(files = ctx.attr.profile[DefaultInfo].default_runfiles.files)]
+
+_profile_data = rule(
+    implementation = _profile_data_impl,
+    attrs = {"profile": attr.label(mandatory = True)},
+)
+
 def _rootpath(label):
     return "$(rlocationpath {})".format(str(label))
 
@@ -36,6 +46,8 @@ def _realworld_hurl_case_test(name, case, service, otel_sink = None,
             "--telemetry-profile-manifest=" + _rootpath(otel_profile),
         ])
         data.append(otel_profile)
+        _profile_data(name = name + "_profile_data", profile = otel_profile)
+        data.append(":" + name + "_profile_data")
         if otel_xfail:
             args.append("--telemetry-xfail=" + otel_xfail)
     args.append(_rootpath(spec))
@@ -129,3 +141,22 @@ def realworld_hurl_test_suite(name, service, telemetry_sink = None, telemetry_pr
             tests = candidates,
             tags = tags + ["manual"],
         )
+
+def realworld_parallel_hurl_test(name, service, profile, sink, cases, tags = []):
+    specs = [_LOCAL_CASES.get(case) or _SPEC_ANCHOR.same_package_label("hurl/{}.hurl".format(case)) for case in cases]
+    _profile_data(name = name + "_profile_data", profile = profile)
+    service_test(
+        name = name,
+        timeout = "long",
+        services = [service],
+        test = _DRIVER,
+        data = [_HURL_ROOTFS, profile, ":" + name + "_profile_data"] + specs,
+        args = [
+            "--parallel-scenarios",
+            "--service-suffix=" + str(native.package_relative_label(service)),
+            "--hurl-rootfs=" + _rootpath(_HURL_ROOTFS),
+            "--telemetry-profile-manifest=" + _rootpath(profile),
+            "--telemetry-sink-suffix=" + str(native.package_relative_label(sink)),
+        ] + [_rootpath(spec) for spec in specs],
+        tags = tags + ["manual", "datadog-parallel"],
+    )

@@ -241,25 +241,26 @@ func requireReferenceProgram(program []byte, reference *manifestDocument) error 
 }
 
 type manifestDocument struct {
-	Family                        string            `json:"family,omitempty"`
-	WireVersion                   string            `json:"wireVersion,omitempty"`
-	Application                   string            `json:"application,omitempty"`
-	ShapeNamespace                string            `json:"shapeNamespace,omitempty"`
-	ReferenceShapeNamespace       string            `json:"referenceShapeNamespace,omitempty"`
-	TracerVersion                 string            `json:"tracerVersion,omitempty"`
-	ReferenceProfile              string            `json:"referenceProfile,omitempty"`
-	ReferenceProofPlanSHA256      string            `json:"referenceProofPlanSha256,omitempty"`
-	ValidationPolicySHA256        string            `json:"validationPolicySha256,omitempty"`
-	CandidateImplementationSHA256 string            `json:"candidateImplementationSha256,omitempty"`
-	SchemaVersion                 int               `json:"schemaVersion"`
-	Profile                       string            `json:"profile"`
-	Signals                       []string          `json:"signals"`
-	ProofPlan                     string            `json:"proofPlan"`
-	Program                       string            `json:"program"`
-	Libraries                     []string          `json:"libraries"`
-	Imports                       []string          `json:"imports"`
-	Scenarios                     []string          `json:"scenarios"`
-	ScenarioShapes                map[string]string `json:"scenarioShapes"`
+	CompiledValidators            map[string]json.RawMessage `json:"compiledValidators,omitempty"`
+	Family                        string                     `json:"family,omitempty"`
+	WireVersion                   string                     `json:"wireVersion,omitempty"`
+	Application                   string                     `json:"application,omitempty"`
+	ShapeNamespace                string                     `json:"shapeNamespace,omitempty"`
+	ReferenceShapeNamespace       string                     `json:"referenceShapeNamespace,omitempty"`
+	TracerVersion                 string                     `json:"tracerVersion,omitempty"`
+	ReferenceProfile              string                     `json:"referenceProfile,omitempty"`
+	ReferenceProofPlanSHA256      string                     `json:"referenceProofPlanSha256,omitempty"`
+	ValidationPolicySHA256        string                     `json:"validationPolicySha256,omitempty"`
+	CandidateImplementationSHA256 string                     `json:"candidateImplementationSha256,omitempty"`
+	SchemaVersion                 int                        `json:"schemaVersion"`
+	Profile                       string                     `json:"profile"`
+	Signals                       []string                   `json:"signals"`
+	ProofPlan                     string                     `json:"proofPlan"`
+	Program                       string                     `json:"program"`
+	Libraries                     []string                   `json:"libraries"`
+	Imports                       []string                   `json:"imports"`
+	Scenarios                     []string                   `json:"scenarios"`
+	ScenarioShapes                map[string]string          `json:"scenarioShapes"`
 }
 
 func sameStringsPlain(left, right []string) bool {

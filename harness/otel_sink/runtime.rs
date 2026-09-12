@@ -8,8 +8,8 @@ use core::panic::PanicInfo;
 // Native dictionary expansion creates many small strings and map nodes. A
 // segregated allocator avoids a full-heap scan for every allocation/free while
 // retaining the sink's original fixed 64 MiB memory ceiling.
-static mut HEAP: [core::mem::MaybeUninit<u8>; 67108864] =
-    [core::mem::MaybeUninit::uninit(); 67108864];
+static mut HEAP: [core::mem::MaybeUninit<u8>; 536870912] =
+    [core::mem::MaybeUninit::uninit(); 536870912];
 #[global_allocator]
 static ALLOCATOR: talc::Talck<spin::Mutex<()>, talc::ErrOnOom> =
     talc::Talc::new(talc::ErrOnOom).lock();
@@ -28,21 +28,30 @@ _start:
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn rust_start(stack: *const usize) -> ! {
-    // SAFETY: this is the process entry point, before any allocation. HEAP is
-    // exclusively owned by ALLOCATOR from this claim until process exit.
+    let argc = unsafe { *stack };
+    let argv = unsafe { core::slice::from_raw_parts(stack.add(1), argc) };
+    let stress_capture = argv.iter().skip(1).any(|arg| {
+        unsafe { CStr::from_ptr(*arg as *const c_char) }.to_bytes() == b"--stress-capture"
+    });
+    let heap_bytes = if stress_capture {
+        512 * 1024 * 1024
+    } else {
+        64 * 1024 * 1024
+    };
+    // Claim the larger bounded arena only for explicitly requested stress runs.
+    let base = (&raw mut HEAP).cast::<u8>();
     if unsafe {
         ALLOCATOR
             .lock()
-            .claim(talc::Span::from_array(&raw mut HEAP))
+            .claim(talc::Span::new(base, base.add(heap_bytes)))
     }
     .is_err()
     {
         die(b"unable to initialize telemetry sink heap\n");
     }
-    let argc = unsafe { *stack };
-    let argv = unsafe { core::slice::from_raw_parts(stack.add(1), argc) };
     let mut port = 4318u16;
     let mut output = CString::new("otel-sink.json").unwrap();
+    let mut compile_source = None;
     let mut index = 1usize;
     while index < argv.len() {
         let argument = unsafe { CStr::from_ptr(argv[index] as *const c_char) }.to_bytes();
@@ -54,12 +63,34 @@ unsafe extern "C" fn rust_start(stack: *const usize) -> ! {
             let value = unsafe { CStr::from_ptr(argv[index + 1] as *const c_char) }.to_bytes();
             output = CString::new(value).unwrap_or_else(|_| die(b"invalid --output\n"));
             index += 2;
+        } else if argument == b"--stress-capture" {
+            index += 1;
+        } else if argument == b"--compile" && index + 1 < argv.len() {
+            let value = unsafe { CStr::from_ptr(argv[index + 1] as *const c_char) }.to_bytes();
+            compile_source =
+                Some(CString::new(value).unwrap_or_else(|_| die(b"invalid --compile\n")));
+            index += 2;
         } else {
             die(b"usage: telemetry_sink [--port PORT] [--output FILE]\n");
         }
     }
 
-    if let Err(error) = server::serve(port, output.as_c_str()) {
+    if let Some(path) = compile_source {
+        let source =
+            crate::storage::read_bytes(&path).unwrap_or_else(|error| die(error.as_bytes()));
+        match crate::scheme::compile(&source) {
+            Ok((bytecode, _)) => crate::storage::persist_bytes(&output, &bytecode)
+                .unwrap_or_else(|error| die(error.as_bytes())),
+            Err((
+                crate::scheme::EvaluationFailure::Contract(error)
+                | crate::scheme::EvaluationFailure::Fault(error),
+                _,
+            )) => die(error.as_bytes()),
+        }
+        rustix::runtime::exit_group(0)
+    }
+
+    if let Err(error) = server::serve(port, output.as_c_str(), stress_capture) {
         write_stderr(b"telemetry_sink: ");
         write_stderr(error.as_bytes());
         write_stderr(b"\n");

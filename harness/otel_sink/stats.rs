@@ -6,6 +6,7 @@ use serde::Serialize;
 
 #[derive(Serialize)]
 pub(crate) struct Stats {
+    capture_overflow: bool,
     records: usize,
     trace_requests: usize,
     trace_spans: usize,
@@ -14,6 +15,7 @@ pub(crate) struct Stats {
     validation_runs: usize,
     validation_failures: usize,
     validation_last_duration_ms: u64,
+    validation_last_compilation_ms: u64,
     validation_last_calls: usize,
     peak_rss_kib: Option<usize>,
 }
@@ -23,53 +25,66 @@ pub(crate) struct ValidationStats {
     pub(crate) runs: usize,
     pub(crate) failures: usize,
     pub(crate) last_duration_ms: u64,
+    pub(crate) last_compilation_ms: u64,
     pub(crate) last_calls: usize,
+    pub(crate) capture: CaptureCounters,
 }
 
-pub(crate) fn snapshot(
-    frozen: Option<&[Record]>,
-    live: &[Record],
-    validation: &ValidationStats,
-) -> Stats {
-    let mut result = Stats {
-        records: frozen.map(|records| records.len()).unwrap_or(0) + live.len(),
-        trace_requests: 0,
-        trace_spans: 0,
-        metric_requests: 0,
-        log_requests: 0,
-        validation_runs: validation.runs,
-        validation_failures: validation.failures,
-        validation_last_duration_ms: validation.last_duration_ms,
-        validation_last_calls: validation.last_calls,
-        peak_rss_kib: process_peak_rss_kib(),
-    };
-    for record in frozen.into_iter().flatten().chain(live) {
+#[derive(Default)]
+pub(crate) struct CaptureCounters {
+    pub(crate) overflow: bool,
+    pub(crate) records: usize,
+    pub(crate) retained_bytes: usize,
+    trace_requests: usize,
+    trace_spans: usize,
+    metric_requests: usize,
+    log_requests: usize,
+}
+
+impl CaptureCounters {
+    pub(crate) fn add(&mut self, record: &Record) {
+        self.records += 1;
+        self.retained_bytes += record.retained_bytes;
         match record.signal.as_str() {
             "traces" => {
-                result.trace_requests += 1;
-                result.trace_spans += match &record.payload {
+                self.trace_requests += 1;
+                self.trace_spans += match &record.payload {
                     Payload::Traces(payload) => payload
                         .resource_spans
                         .iter()
                         .flat_map(|resource| &resource.scope_spans)
                         .map(|scope| scope.spans.len())
                         .sum(),
-                    Payload::Json(payload) => {
-                        if payload.get("wire_version").is_some() {
-                            crate::datadog::span_count(record)
-                        } else {
-                            otlp::json_trace_span_count(payload)
-                        }
+                    Payload::Json(payload) if payload.get("wire_version").is_some() => {
+                        crate::datadog::span_count(record)
                     }
+                    Payload::Json(payload) => otlp::json_trace_span_count(payload),
                     _ => 0,
                 };
             }
-            "metrics" => result.metric_requests += 1,
-            "logs" => result.log_requests += 1,
+            "metrics" => self.metric_requests += 1,
+            "logs" => self.log_requests += 1,
             _ => {}
         }
     }
-    result
+}
+
+pub(crate) fn snapshot(validation: &ValidationStats) -> Stats {
+    let capture = &validation.capture;
+    Stats {
+        capture_overflow: capture.overflow,
+        records: capture.records,
+        trace_requests: capture.trace_requests,
+        trace_spans: capture.trace_spans,
+        metric_requests: capture.metric_requests,
+        log_requests: capture.log_requests,
+        validation_runs: validation.runs,
+        validation_failures: validation.failures,
+        validation_last_duration_ms: validation.last_duration_ms,
+        validation_last_compilation_ms: validation.last_compilation_ms,
+        validation_last_calls: validation.last_calls,
+        peak_rss_kib: process_peak_rss_kib(),
+    }
 }
 
 pub(crate) fn elapsed_millis(start: rustix::time::Timespec, end: rustix::time::Timespec) -> u64 {

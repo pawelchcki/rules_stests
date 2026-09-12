@@ -32,6 +32,8 @@ type result struct {
 var client = &http.Client{Timeout: 5 * time.Second}
 
 func main() {
+	flag.StringVar(&telemetryProtocol, "protocol", "otlp", "telemetry protocol: otlp or datadog")
+	flag.StringVar(&datadogWire, "wire-version", "v0.5", "Datadog intake wire version")
 	app := flag.String("app", "", "fixture application")
 	launcher := flag.String("launcher", "", "app launcher runfile")
 	expected := flag.String("expected", "", "reviewed outcome JSON runfile")
@@ -51,6 +53,18 @@ func main() {
 	}
 	if *app == "" || *launcher == "" || len(launchArgs) == 0 {
 		fail(fmt.Errorf("--app, --launcher, and --launch-args are required"))
+	}
+	if telemetryProtocol == "datadog" {
+		if datadogWire != "v0.4" && datadogWire != "v0.5" {
+			fail(fmt.Errorf("unsupported Datadog wire version"))
+		}
+		if err := runDatadog(*app, resolve(*launcher), launchArgs); err != nil {
+			fail(err)
+		}
+		return
+	}
+	if telemetryProtocol != "otlp" {
+		fail(fmt.Errorf("unknown protocol %s", telemetryProtocol))
 	}
 	if err := run(*app, resolve(*launcher), resolve(*expected), *discover, launchArgs); err != nil {
 		fail(err)
@@ -188,7 +202,7 @@ func retryPortConflicts(attempt func() ([]byte, error)) ([]byte, error) {
 }
 
 func collectOnce(app, launcher string, args []string, sink, out string, e experiment, attempt int) ([]byte, error) {
-	if _, err := request("POST", sink+"/reset", nil); err != nil {
+	if _, err := request("POST", protocolEndpoint(sink, "/reset"), nil); err != nil {
 		return nil, err
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -217,6 +231,9 @@ func collectOnce(app, launcher string, args []string, sink, out string, e experi
 		env["OTEL_LOGS_EXPORTER"] = "none"
 		env["OTEL_RESOURCE_ATTRIBUTES"] = "process.owner=nonroot"
 	}
+	if telemetryProtocol == "datadog" {
+		env = datadogEnvironment(sink)
+	}
 	for k, v := range e.Env {
 		env[k] = v
 	}
@@ -243,7 +260,7 @@ func collectOnce(app, launcher string, args []string, sink, out string, e experi
 	cmd := exec.Command(launcher, launchArgs...)
 	// Ambient SDK configuration must not change either side of the experiment.
 	for _, entry := range os.Environ() {
-		if !strings.HasPrefix(entry, "OTEL_") && !strings.HasPrefix(entry, "APP_STATE_DIR=") {
+		if !strings.HasPrefix(entry, "OTEL_") && !strings.HasPrefix(entry, "DD_") && !strings.HasPrefix(entry, "APP_STATE_DIR=") {
 			cmd.Env = append(cmd.Env, entry)
 		}
 	}
@@ -353,7 +370,7 @@ observation:
 		}
 		stopped = true
 	}
-	return request("GET", sink+"/dump", nil)
+	return request("GET", protocolEndpoint(sink, "/dump"), nil)
 }
 
 func processTCPPortOwnership(pid, port int) (bool, bool, error) {
@@ -496,6 +513,9 @@ func configurationRejection(app string, e experiment, log string) (observation, 
 }
 
 func workload(base, caseName string, verifyOwnership func() error) error {
+	if telemetryProtocol == "datadog" {
+		return datadogWorkload(base, verifyOwnership)
+	}
 	for i := 0; i < 4; i++ {
 		if err := verifyOwnership(); err != nil {
 			return err

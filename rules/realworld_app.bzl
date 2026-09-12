@@ -108,6 +108,18 @@ def datadog_python_injection(rootfs = Label("//harness:datadog_python_rootfs"), 
         require = [payload + "/sitecustomize.py", payload + "/ddtrace_pkgs"],
     )
 
+def datadog_ruby_injection(rootfs = Label("//harness:datadog_ruby_rootfs")):
+    """Activates a locked, ABI-matched Datadog payload before Rails boots."""
+    payload = "{instrumentation_rootfs}/datadog-ruby"
+    return instrumentation_injection(
+        rootfs = rootfs,
+        env = {
+            "RULES_STESTS_DATADOG_RUBY_ROOT": payload,
+            "RUBYOPT": "-r" + payload + "/activation.rb",
+        },
+        require = [payload + "/activation.rb", payload + "/abi.json", payload + "/specifications"],
+    )
+
 def datadog_env(service = "realworld-datadog", wire_version = "v0.5", sink = Label("//harness:telemetry_sink_service"), extra = {}):
     """Returns deterministic traces-only Datadog intake configuration."""
     if wire_version not in ["v0.4", "v0.5"]:
@@ -119,7 +131,7 @@ def datadog_env(service = "realworld-datadog", wire_version = "v0.5", sink = Lab
         "DD_ENV": "test",
         "DD_VERSION": "1",
         "DD_TRACE_ENABLED": "true",
-        "DD_TRACE_AGENT_URL": "http://127.0.0.1:$${%s}" % str(sink),
+        "DD_TRACE_AGENT_URL": "http://127.0.0.1:$${%s}" % str(native.package_relative_label(sink)),
         "DD_TRACE_API_VERSION": wire_version,
         "DD_TRACE_SAMPLING_RULES": '[{"sample_rate":1.0}]',
         "DD_TRACE_RATE_LIMIT": "-1",

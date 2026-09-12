@@ -101,7 +101,21 @@ pub fn evaluate(
     source: &[u8],
     input: &[u8],
 ) -> Result<(Vec<u8>, usize), (EvaluationFailure, usize)> {
-    let (bytecode, compilation_calls) = compile(source)?;
+    evaluate_timed(source, input, &mut 0)
+}
+
+pub(crate) fn evaluate_timed(
+    source: &[u8],
+    input: &[u8],
+    compilation_ms: &mut u64,
+) -> Result<(Vec<u8>, usize), (EvaluationFailure, usize)> {
+    let started = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
+    let compiled = compile(source);
+    *compilation_ms = crate::stats::elapsed_millis(
+        started,
+        rustix::time::clock_gettime(rustix::time::ClockId::Monotonic),
+    );
+    let (bytecode, compilation_calls) = compiled?;
     match run(
         &bytecode,
         input,
@@ -114,7 +128,20 @@ pub fn evaluate(
     }
 }
 
-fn compile(source: &[u8]) -> Result<(Vec<u8>, usize), (EvaluationFailure, usize)> {
+pub(crate) fn evaluate_bytecode(
+    bytecode: &[u8],
+    input: &[u8],
+) -> Result<(Vec<u8>, usize), (EvaluationFailure, usize)> {
+    run(
+        bytecode,
+        input,
+        "validation",
+        VALIDATOR_HEAP_CELLS,
+        VALIDATOR_CALL_BUDGET,
+    )
+}
+
+pub(crate) fn compile(source: &[u8]) -> Result<(Vec<u8>, usize), (EvaluationFailure, usize)> {
     let mut input = Vec::with_capacity(PRELUDE.len() + source.len() + 1);
     input.extend_from_slice(PRELUDE);
     input.push(b'\n');
