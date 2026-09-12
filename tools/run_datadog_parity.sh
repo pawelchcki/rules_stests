@@ -45,16 +45,18 @@ profiles=(
   //corpus:ruby-rails-datadog-v2-42-0-v04
   //corpus:go-gin-datadog-v2-10-1-v04
 )
-# DefaultInfo for each profile carries its manifest and validator runfiles, so
-# top-level materialization is sufficient for retain_datadog_evidence.py.
+# DefaultInfo for each profile carries its manifest and validator runfiles.
+# Fetch the complete tree: the coverage gate hashes every scenario bytecode.
+downloaded_evidence_regex='.*(\.validators|test\.outputs)($|/.*)'
 bazel build "${remote_args[@]}" --remote_download_outputs=toplevel \
+  "--remote_download_regex=$downloaded_evidence_regex" \
   "${image_flags[@]}" //tools/datadog_coverage:datadog_coverage "${profiles[@]}"
 
-# Remote tests expose test.log under minimal downloading, while the explicit
-# regex fetches only the undeclared output tree retained as parity evidence.
+# Remote tests expose test.log under minimal downloading; the explicit regex
+# fetches the complete validator and undeclared-output trees used as evidence.
 test_download_args=(
   --remote_download_outputs=minimal
-  '--remote_download_regex=.*test\.outputs($|/.*)'
+  "--remote_download_regex=$downloaded_evidence_regex"
 )
 
 for execution in 1 2; do
