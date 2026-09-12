@@ -3,6 +3,15 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 package(default_visibility = ["//visibility:public"])
 
+sh_test(
+    name = "benchmark_datadog_test",
+    srcs = ["benchmark_datadog_test.sh"],
+    data = [
+        "benchmark_datadog.py",
+        "benchmark_datadog_test.py",
+    ],
+)
+
 sh_binary(
     name = "assemble_otel_report",
     srcs = ["assemble_otel_report.sh"],

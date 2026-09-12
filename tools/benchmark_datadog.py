@@ -2,6 +2,7 @@
 """Five uncached executions of the original 34 combinations, on one executor."""
 import argparse
 import json
+import os
 from pathlib import Path
 import platform
 import statistics
@@ -19,7 +20,7 @@ args = parser.parse_args()
 current = Path.cwd()
 
 
-def verify_original_snapshot(snapshot: Path, revision: str) -> str:
+def verify_original_snapshot(snapshot: Path, revision: str, output_base: Path) -> str:
     """Prove that an archive checkout still represents the stated revision.
 
     The benchmark intentionally accepts a Git-archive-style original tree,
@@ -37,6 +38,8 @@ def verify_original_snapshot(snapshot: Path, revision: str) -> str:
     ).split(b"\0")[:-1]
     paths = []
     expected = []
+    expected_paths = set()
+    expected_directories = set()
     for record in records:
         header, path = record.split(b"\t", 1)
         _mode, kind, blob = header.split()
@@ -46,6 +49,11 @@ def verify_original_snapshot(snapshot: Path, revision: str) -> str:
             raise RuntimeError(f"cannot verify newline-containing path {path!r}")
         paths.append(path)
         expected.append(blob)
+        tracked = Path(os.fsdecode(path))
+        expected_paths.add(tracked)
+        parents = {parent for parent in tracked.parents if parent != Path(".")}
+        expected_paths.update(parents)
+        expected_directories.update(parents)
     hashed = subprocess.run(
         ["git", "hash-object", "--no-filters", "--stdin-paths"],
         cwd=snapshot,
@@ -67,6 +75,42 @@ def verify_original_snapshot(snapshot: Path, revision: str) -> str:
         if wanted != found:
             raise RuntimeError(
                 f"original snapshot differs from {resolved} at {path.decode(errors='backslashreplace')}"
+            )
+
+    output_base = output_base.resolve()
+    for directory, names, files in os.walk(snapshot, followlinks=False):
+        parent = Path(directory)
+        relative_parent = parent.relative_to(snapshot)
+        if relative_parent == Path("."):
+            # A real checkout's Git metadata does not participate in Bazel's
+            # source inputs. Archive snapshots simply have no such entry.
+            if ".git" in names:
+                names.remove(".git")
+            files = [name for name in files if name != ".git"]
+        for name in [*names, *files]:
+            path = parent / name
+            relative = path.relative_to(snapshot)
+            if relative in expected_paths:
+                if relative in expected_directories and path.is_symlink():
+                    raise RuntimeError(
+                        f"original snapshot tracked directory is a symlink at {relative}"
+                    )
+                continue
+            if (
+                relative.parent == Path(".")
+                and relative.name.startswith("bazel-")
+                and path.is_symlink()
+            ):
+                try:
+                    path.resolve().relative_to(output_base)
+                except ValueError:
+                    pass
+                else:
+                    if name in names:
+                        names.remove(name)
+                    continue
+            raise RuntimeError(
+                f"original snapshot contains untracked path {relative}"
             )
     return resolved
 
@@ -94,7 +138,9 @@ def verify_current_checkout() -> str:
     ).strip()
 
 
-original_revision = verify_original_snapshot(args.original.resolve(), args.original_revision)
+original_revision = verify_original_snapshot(
+    args.original.resolve(), args.original_revision, args.original_output_base
+)
 current_revision = verify_current_checkout()
 args.output.mkdir(parents=True, exist_ok=False)
 variants = {
