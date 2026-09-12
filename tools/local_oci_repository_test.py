@@ -56,20 +56,25 @@ class LocalOCIRepositoryTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             container_tool = directory / "container-tool"
-            container_tool.write_text("#!/usr/bin/env bash\nprintf 'nested container build unavailable\\n' >&2\nexit 125\n")
+            container_tool.write_text("#!/usr/bin/env bash\nprintf 'nested container build unavailable: %s\\n' \"$*\" >&2\nexit 125\n")
             container_tool.chmod(0o755)
 
             result = subprocess.run(
                 [FIXTURE_BUILDER, directory / "output"],
                 capture_output=True,
                 check=False,
-                env={**os.environ, "CONTAINER_TOOL": str(container_tool)},
+                env={
+                    **os.environ,
+                    "CONTAINER_BUILD_NETWORK": "host",
+                    "CONTAINER_TOOL": str(container_tool),
+                },
                 text=True,
             )
 
             self.assertEqual(result.returncode, 125)
             self.assertIn("nested container build unavailable", result.stderr)
-            self.assertEqual((directory / "output" / "ruby.build.log").read_text(), "nested container build unavailable\n")
+            self.assertIn("--network host", result.stderr)
+            self.assertIn("--network host", (directory / "output" / "ruby.build.log").read_text())
 
     def test_rejects_corrupted_manifest_blob(self):
         with tempfile.TemporaryDirectory() as temporary:

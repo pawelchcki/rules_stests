@@ -28,7 +28,8 @@ actions:
             sudo apt-get install -y podman
           fi
           DATADOG_IMAGES="$(mktemp -d "${TMPDIR:-/tmp}/datadog-images.XXXXXX")"
-          sudo tools/build_datadog_fixtures.sh "$DATADOG_IMAGES"
+          sudo env CONTAINER_BUILD_NETWORK=host \
+            tools/build_datadog_fixtures.sh "$DATADOG_IMAGES"
           mapfile -t IMAGE_FLAGS < "$DATADOG_IMAGES/bazel.flags"
           # No revision is stamped here, so these results stay cacheable across
           # commits; only the report run below needs a revision in its receipts.

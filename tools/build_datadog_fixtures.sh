@@ -7,6 +7,11 @@ mkdir -p "$out"
 out="$(realpath "$out")"
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 container_tool="${CONTAINER_TOOL:-podman}"
+container_build_network="${CONTAINER_BUILD_NETWORK:-}"
+container_build_network_args=()
+if [[ -n "$container_build_network" ]]; then
+  container_build_network_args=(--network "$container_build_network")
+fi
 cd "$root"
 : > "$out/bazel.flags"
 for fixture in ruby gin; do
@@ -19,7 +24,7 @@ for fixture in ruby gin; do
     repository=gin_datadog_realworld_linux_amd64
     image=localhost/rules-stests-gin-datadog:2.10.1
   fi
-  if "$container_tool" build --timestamp 0 -t "$image" "$context" > "$out/$fixture.build.log" 2>&1; then
+  if "$container_tool" build --timestamp 0 "${container_build_network_args[@]}" -t "$image" "$context" > "$out/$fixture.build.log" 2>&1; then
     :
   else
     status=$?
