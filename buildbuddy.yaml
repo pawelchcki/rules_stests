@@ -43,6 +43,7 @@ actions:
           fi
           DATADOG_IMAGES="$(mktemp -d "${TMPDIR:-/tmp}/datadog-images.XXXXXX")"
           sudo env CONTAINER_BUILD_NETWORK=host \
+            DATADOG_FIXTURE_CACHE="$HOME/.cache/rules-stests/datadog-fixtures" \
             tools/build_datadog_fixtures.sh "$DATADOG_IMAGES"
           mapfile -t IMAGE_FLAGS < "$DATADOG_IMAGES/bazel.flags"
           # No revision is stamped here, so these results stay cacheable across

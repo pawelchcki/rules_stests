@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -106,6 +107,83 @@ class LocalOCIRepositoryTest(unittest.TestCase):
             self.assertIn("nested container build unavailable", result.stderr)
             self.assertIn("--network host", result.stderr)
             self.assertIn("--network host", (directory / "output" / "ruby.build.log").read_text())
+
+    def test_fixture_builder_cache_hits_misses_and_rejects_corruption(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            tools = root / "tools"
+            tools.mkdir()
+            builder = tools / "build_datadog_fixtures.sh"
+            shutil.copyfile(FIXTURE_BUILDER, builder)
+            builder.chmod(0o755)
+            validator = tools / "local_oci_repository.py"
+            validator.write_text("""#!/usr/bin/env python3
+import pathlib, sys
+directory = pathlib.Path(sys.argv[1])
+if (directory / "corrupt").exists() or not (directory / "valid").exists():
+    raise SystemExit("invalid cached payload")
+(directory / "BUILD.bazel").write_text("# generated\\n")
+print(f"--override_repository={sys.argv[2]}={directory.resolve()}")
+""")
+            validator.chmod(0o755)
+            for context in (
+                root / "fixtures/agents/datadog-ruby",
+                root / "fixtures/apps/go/realworld-gin",
+            ):
+                context.mkdir(parents=True)
+                (context / "Dockerfile").write_text("FROM scratch\n")
+            counter = root / "build-count"
+            container_tool = root / "container-tool"
+            container_tool.write_text(f"""#!/usr/bin/env bash
+set -eu
+case "$1" in
+  version) echo fake-container-v1 ;;
+  build) printf x >> {counter!s} ;;
+  save)
+    while [[ "$1" != -o ]]; do shift; done
+    mkdir -p "$2"
+    : > "$2/valid"
+    ;;
+  *) exit 2 ;;
+esac
+""")
+            container_tool.chmod(0o755)
+            cache = root / "cache"
+            env = {
+                **os.environ,
+                "CONTAINER_TOOL": str(container_tool),
+                "CONTAINER_BUILD_NETWORK": "host",
+                "DATADOG_FIXTURE_CACHE": str(cache),
+            }
+
+            def run(number):
+                return subprocess.run(
+                    [builder, root / f"output-{number}"],
+                    capture_output=True,
+                    check=False,
+                    env=env,
+                    text=True,
+                )
+
+            first = run(1)
+            self.assertEqual(first.returncode, 0, first.stderr)
+            self.assertEqual(counter.read_text(), "xx")
+            second = run(2)
+            self.assertEqual(second.returncode, 0, second.stderr)
+            self.assertEqual(counter.read_text(), "xx")
+            self.assertIn("validated fixture cache hit", (root / "output-2/ruby.build.log").read_text())
+
+            (root / "fixtures/apps/go/realworld-gin/Dockerfile").write_text("FROM scratch\n# changed\n")
+            changed = run(3)
+            self.assertEqual(changed.returncode, 0, changed.stderr)
+            self.assertEqual(counter.read_text(), "xxx")
+
+            ruby_entry = next(cache.glob("ruby-*"))
+            (ruby_entry / "corrupt").touch()
+            corrupt = run(4)
+            self.assertEqual(corrupt.returncode, 0, corrupt.stderr)
+            self.assertEqual(counter.read_text(), "xxxx")
+            self.assertTrue(list(cache.glob(".rejected-ruby-*")))
 
     def test_rejects_corrupted_manifest_blob(self):
         with tempfile.TemporaryDirectory() as temporary:

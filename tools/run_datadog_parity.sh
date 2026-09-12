@@ -33,15 +33,32 @@ evidence="${3:?usage: run_datadog_parity.sh IMAGE_DIRECTORY REVISION EVIDENCE_DI
 mkdir -p "$evidence"
 
 mapfile -t image_flags < "$images/bazel.flags"
-bazel_args=(
+remote_args=(
   --config=buildbuddy
   --spawn_strategy=remote,local
-  --remote_download_outputs=all
+)
+profiles=(
+  //corpus:python-aiohttp-datadog-v4-14-0-v04
+  //corpus:python-aiohttp-datadog-v4-14-0-v05
+  //corpus:python-django-datadog-v4-14-0-v04
+  //corpus:python-django-datadog-v4-14-0-v05
+  //corpus:ruby-rails-datadog-v2-42-0-v04
+  //corpus:go-gin-datadog-v2-10-1-v04
+)
+# DefaultInfo for each profile carries its manifest and validator runfiles, so
+# top-level materialization is sufficient for retain_datadog_evidence.py.
+bazel build "${remote_args[@]}" --remote_download_outputs=toplevel \
+  "${image_flags[@]}" //tools/datadog_coverage:datadog_coverage "${profiles[@]}"
+
+# Remote tests expose test.log under minimal downloading, while the explicit
+# regex fetches only the undeclared output tree retained as parity evidence.
+test_download_args=(
+  --remote_download_outputs=minimal
+  '--remote_download_regex=.*test\.outputs($|/.*)'
 )
 
-bazel build "${bazel_args[@]}" "${image_flags[@]}" //tools/datadog_coverage:datadog_coverage
 for execution in 1 2; do
-  bazel test "${bazel_args[@]}" \
+  bazel test "${remote_args[@]}" "${test_download_args[@]}" \
     --nocache_test_results \
     --test_env="TELEMETRY_TEST_REVISION=$revision" \
     "${image_flags[@]}" \
@@ -52,7 +69,7 @@ for execution in 1 2; do
     --gate bazel-bin/tools/datadog_coverage/datadog_coverage_/datadog_coverage
 done
 
-bazel test "${bazel_args[@]}" \
+bazel test "${remote_args[@]}" "${test_download_args[@]}" \
   --nocache_test_results \
   "${image_flags[@]}" \
   //fixtures:datadog_parallel_suite \
@@ -63,7 +80,7 @@ find -L bazel-testlogs/fixtures -path '*/test.outputs/stress.*.json' -exec cp -L
 
 # This suite includes manual Rails and Gin feature probes, whose individual
 # tests are intentionally absent from the wildcard full-suite expansion.
-bazel test "${bazel_args[@]}" \
+bazel test "${remote_args[@]}" "${test_download_args[@]}" \
   --nocache_test_results \
   "${image_flags[@]}" \
   //fixtures:datadog_external_features_suite
