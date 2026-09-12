@@ -8,16 +8,19 @@ from pathlib import Path
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("directory", type=Path)
 parser.add_argument("repository")
-parser.add_argument("--digest", required=True)
+parser.add_argument("--digest", help="require this retained manifest digest")
 args = parser.parse_args()
 index = json.loads((args.directory / "index.json").read_text())
-matching = [m for m in index["manifests"] if m["digest"] == args.digest]
-if len(matching) != 1:
-    parser.error("OCI index does not contain exactly one expected manifest")
-manifest = args.directory / "blobs" / "sha256" / args.digest.removeprefix("sha256:")
-if "sha256:" + hashlib.sha256(manifest.read_bytes()).hexdigest() != args.digest:
+manifests = index["manifests"]
+if args.digest:
+    manifests = [manifest for manifest in manifests if manifest["digest"] == args.digest]
+if len(manifests) != 1:
+    parser.error("OCI index does not contain exactly one manifest")
+manifest_digest = manifests[0]["digest"]
+manifest = args.directory / "blobs" / "sha256" / manifest_digest.removeprefix("sha256:")
+if "sha256:" + hashlib.sha256(manifest.read_bytes()).hexdigest() != manifest_digest:
     parser.error("manifest content digest mismatch")
-index["manifests"] = matching
+index["manifests"] = manifests
 (args.directory / "index.json").write_text(json.dumps(index))
 (args.directory / "MODULE.bazel").write_text('module(name = "local_datadog_image")\n')
 (args.directory / "BUILD.bazel").write_text(

@@ -3,8 +3,8 @@ actions:
     visibility: PUBLIC
     container_image: ubuntu-24.04
     resource_requests:
-      # The runner only orchestrates Bazel; all actions execute on the
-      # self-hosted RBE fleet.
+      # Bazel actions execute on the self-hosted RBE fleet; the runner also
+      # builds the two unpublished Datadog OCI fixtures used as inputs.
       cpu: 4
       memory: 8GB
     triggers:
@@ -23,6 +23,13 @@ actions:
             REPORT_REVISION="$(git rev-parse HEAD^1)"
           fi
           git checkout --detach "$REPORT_REVISION"
+          if ! command -v podman >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y podman
+          fi
+          DATADOG_IMAGES="$(mktemp -d "${TMPDIR:-/tmp}/datadog-images.XXXXXX")"
+          sudo tools/build_datadog_fixtures.sh "$DATADOG_IMAGES"
+          mapfile -t IMAGE_FLAGS < "$DATADOG_IMAGES/bazel.flags"
           # No revision is stamped here, so these results stay cacheable across
           # commits; only the report run below needs a revision in its receipts.
           # The report suite is excluded rather than run twice.
@@ -30,6 +37,7 @@ actions:
             --config=buildbuddy \
             --build_tests_only \
             --test_tag_filters=-otel-report \
+            "${IMAGE_FLAGS[@]}" \
             //...
           # The report run stays uncached: report/cmd/main.go refuses to assemble
           # from a build event file that does not prove --nocache_test_results,
@@ -41,6 +49,7 @@ actions:
             --build_event_json_file=otel-profile.bep.json \
             --nobuild_event_json_file_path_conversion \
             --remote_download_outputs=toplevel \
+            "${IMAGE_FLAGS[@]}" \
             //fixtures:otel_report_suite
           REPORT_BAZEL_CONFIG=buildbuddy \
             REPORT_REPOSITORY=pawelchcki/rules_stests \
@@ -50,7 +59,7 @@ actions:
             bazel test \
               --config=buildbuddy \
               --build_tests_only \
-                //...)
+              //...)
           (cd examples/plugin_agent && \
             bazel build --config=buildbuddy //:otel_report_manifest)
           # Files written here are published as BuildBuddy workflow artifacts.
