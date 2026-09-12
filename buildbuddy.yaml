@@ -17,6 +17,20 @@ actions:
     steps:
       - run: |
           set -euo pipefail
+          DATADOG_EVIDENCE="$(mktemp -d "${TMPDIR:-/tmp}/datadog-evidence.XXXXXX")"
+          DATADOG_IMAGES=""
+          archive_datadog_evidence() {
+            status=$?
+            trap - EXIT
+            set +e
+            tools/run_datadog_parity.sh --archive "$DATADOG_IMAGES" "$DATADOG_EVIDENCE"
+            archive_status=$?
+            if (( status == 0 && archive_status != 0 )); then
+              exit "$archive_status"
+            fi
+            exit "$status"
+          }
+          trap archive_datadog_evidence EXIT
           REPORT_REVISION="$(git rev-parse HEAD)"
           # BuildBuddy checks pull requests out at a synthetic merge whose first parent is the PR head.
           if [ "$(git show -s --format=%ce HEAD)" = "ci-runner@buildbuddy.io" ]; then
@@ -41,6 +55,10 @@ actions:
             --test_tag_filters=-otel-report \
             "${IMAGE_FLAGS[@]}" \
             //...
+          # The parity driver owns the independent fresh executions and their
+          # retained receipts, plus the manual Rails/Gin isolation and feature
+          # suites that wildcard expansion intentionally omits.
+          tools/run_datadog_parity.sh "$DATADOG_IMAGES" "$REPORT_REVISION" "$DATADOG_EVIDENCE"
           # The report run stays uncached: report/cmd/main.go refuses to assemble
           # from a build event file that does not prove --nocache_test_results,
           # because the report claims its evidence came from a fresh run.
@@ -64,6 +82,6 @@ actions:
               --build_tests_only \
               //...)
           (cd examples/plugin_agent && \
-            bazel build --config=buildbuddy //:otel_report_manifest)
+            bazel build --config=buildbuddy //:otel_report_manifest //:telemetry_api_check)
           # Files written here are published as BuildBuddy workflow artifacts.
           cp feature-parity-report.html "$BUILDBUDDY_ARTIFACTS_DIRECTORY/opentelemetry-proof-report.html"

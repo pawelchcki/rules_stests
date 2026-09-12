@@ -47,7 +47,7 @@ The complete capability boundaries and remaining coverage gaps are recorded in [
 
 ## Verification scope
 
-These are local executions on the executor identified in the benchmark record. The GitHub Actions workflow is configured but was not run as part of this record, so this document does not claim that CI is green. The Ruby and Gin OCI images were not published. Matching the Ruby rebuild on this executor checks deterministic local inputs; reproducibility across container tools, operating systems, or architectures has not been established.
+These are local executions on the executor identified in the benchmark record. CI now runs in BuildBuddy; this historical local record does not establish the current commit's CI status. The Ruby and Gin OCI images were not published. Matching the Ruby rebuild on this executor checks deterministic local inputs; reproducibility across container tools, operating systems, or architectures has not been established.
 
 ## Reproduction
 

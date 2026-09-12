@@ -15,7 +15,7 @@ The [verification record](datadog-verification.md) distinguishes completed, pend
 
 The 96 combinations retain exact native span shapes, including multiplicities, service identity, routes/resources, HTTP status/error classification, database operations and ancestry, exception metadata, and the reviewed field policy. Ruby Rack/controller/ActiveRecord and Go Gin/Gorm/database/sql layers remain distinct. Candidate captures were reviewed before enabling these shapes; `datadog-shape-review.json` records capture hashes and reviewed counts. Candidate generation does not produce a passing receipt.
 
-Run `//fixtures:datadog_suite`. CI retains and gates each of two independent executions before running the next. `tools/retain_datadog_evidence.py` copies each manifest, compiled validator, receipt, capture, timing artifact, and test log. The gate requires complete scenario/profile coverage and matching revision and validator hashes.
+Run `//fixtures:datadog_suite`. BuildBuddy's Full test suite runs the parity checks on the remote executor fleet, retaining and gating each of two uncached independent executions before running the next. `tools/retain_datadog_evidence.py` copies each manifest, compiled validator, receipt, capture, timing artifact, and test log. The gate requires complete scenario/profile coverage and matching revision and validator hashes. The same BuildBuddy workflow checks concurrent isolation, native features, shared OpenTelemetry regressions, and external consumers; its artifacts retain the Datadog evidence.
 
 ## Upstream-derived feature checks
 
