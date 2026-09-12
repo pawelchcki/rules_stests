@@ -369,7 +369,7 @@ func runDatadog(app, launcher string, args []string) error {
 			result.Status = "failed"
 			result.Detail = err.Error()
 			log, readErr := os.ReadFile(filepath.Join(out, c.Name+".app.log"))
-			if c.Name == "origin" && datadogWire == "v0.4" && readErr == nil && strings.Contains(string(log), "Response: duplicate MessagePack map key") {
+			if knownPythonDuplicateOrigin(app, c, log, readErr) {
 				result.Status = "unsupported"
 				result.Detail = "Pinned Python tracer encodes duplicate origin metadata in v0.4; native intake rejects it. This is not a passing propagation check."
 				result.RejectionLogSHA256 = fmt.Sprintf("%x", sha256.Sum256(log))
@@ -393,6 +393,14 @@ func runDatadog(app, launcher string, args []string) error {
 		return fmt.Errorf("Datadog feature assertions: %s", strings.Join(failures, "; "))
 	}
 	return nil
+}
+
+func knownPythonDuplicateOrigin(app string, c ddCase, log []byte, readErr error) bool {
+	return (app == "aiohttp" || app == "django") &&
+		c.Name == "origin" &&
+		datadogWire == "v0.4" &&
+		readErr == nil &&
+		strings.Contains(string(log), "Response: duplicate MessagePack map key")
 }
 
 func ddMethod(c ddCase) string {

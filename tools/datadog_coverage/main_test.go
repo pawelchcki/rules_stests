@@ -15,8 +15,9 @@ func TestCoverageGateRequiresCompleteExactEvidence(t *testing.T) {
 	capture := []byte("capture")
 	plan := `{"proofs":[{"featureId":"feature","assertion":"assertion","basis":"observed"}]}`
 	proof := receiptProof{FeatureID: "feature", Assertion: "assertion", Basis: "observed", Result: "pass"}
-	m := manifest{Family: "datadog", WireVersion: "v0.5", Profile: "p", Application: "aiohttp", ProofPlan: plan, Scenarios: []string{"tags"}, ScenarioShapes: map[string]string{"tags": "shape"}, ValidationPolicySHA256: digest, CandidateImplementationSHA256: digest}
-	r := receipt{Family: "datadog", WireVersion: "v0.5", SchemaVersion: 2, Revision: revision, Profile: "p", Scenario: "tags", ValidationMode: "exact", Outcome: "verified", ProofPlanSHA256: sum(plan), CaptureSHA256: sum(string(capture)), ScenarioShapeSHA256: sum("shape"), ValidationPolicySHA256: digest, CandidateImplementationSHA256: digest, Proofs: []receiptProof{proof}, Coverage: coverage{SchemaVersion: 1, Application: "aiohttp", Scenario: "tags", IntegrationSpans: map[string]int{"http.server": 1, "database": 1}, FieldPolicies: map[string]int{"exact": 3, "normalized": 1, "runtime-validated": 2}, SpanOccurrences: 2, FieldOccurrences: 6}}
+	artifact := compiledValidator{Path: "p.validators/tags.sbc", SourceSHA256: digest, CompilerSHA256: digest, BytecodeSHA256: digest}
+	m := manifest{CompiledValidators: map[string]compiledValidator{"tags": artifact}, Family: "datadog", WireVersion: "v0.5", Profile: "p", Application: "aiohttp", ProofPlan: plan, Scenarios: []string{"tags"}, ScenarioShapes: map[string]string{"tags": "shape"}, ValidationPolicySHA256: digest, CandidateImplementationSHA256: digest}
+	r := receipt{Validator: &artifact, Family: "datadog", WireVersion: "v0.5", SchemaVersion: 2, Revision: revision, Profile: "p", Scenario: "tags", ValidationMode: "exact", Outcome: "verified", ProofPlanSHA256: sum(plan), CaptureSHA256: sum(string(capture)), ScenarioShapeSHA256: sum("shape"), ValidationPolicySHA256: digest, CandidateImplementationSHA256: digest, Proofs: []receiptProof{proof}, Coverage: coverage{SchemaVersion: 1, Application: "aiohttp", Scenario: "tags", IntegrationSpans: map[string]int{"http.server": 1, "database": 1}, FieldPolicies: map[string]int{"exact": 3, "normalized": 1, "runtime-validated": 2}, SpanOccurrences: 2, FieldOccurrences: 6}}
 	if err := validate(revision, []manifest{m}, []receipt{r}, [][]byte{capture}); err != nil {
 		t.Fatal(err)
 	}
@@ -53,10 +54,7 @@ func TestCoverageGateRequiresCompleteExactEvidence(t *testing.T) {
 		})
 	}
 
-	artifact := compiledValidator{Path: "p.validators/tags.sbc", SourceSHA256: digest, CompilerSHA256: digest, BytecodeSHA256: digest}
 	compiledManifest, compiledReceipt := m, r
-	compiledManifest.CompiledValidators = map[string]compiledValidator{"tags": artifact}
-	compiledReceipt.Validator = &artifact
 	if err := validate(revision, []manifest{compiledManifest}, []receipt{compiledReceipt}, [][]byte{capture}); err != nil {
 		t.Fatal(err)
 	}
@@ -82,8 +80,16 @@ func TestCoverageGateRequiresCompleteExactEvidence(t *testing.T) {
 			}
 		})
 	}
-	if validate(revision, []manifest{m}, []receipt{compiledReceipt}, [][]byte{capture}) == nil {
-		t.Fatal("accepted undeclared compiled validator")
+	missingCompiledManifest, missingCompiledReceipt := m, r
+	missingCompiledManifest.CompiledValidators = nil
+	missingCompiledReceipt.Validator = nil
+	if validate(revision, []manifest{missingCompiledManifest}, []receipt{missingCompiledReceipt}, [][]byte{capture}) == nil {
+		t.Fatal("accepted source-only validator fallback")
+	}
+	extraCompiledManifest := m
+	extraCompiledManifest.CompiledValidators = map[string]compiledValidator{"tags": artifact, "not-a-scenario": artifact}
+	if validate(revision, []manifest{extraCompiledManifest}, []receipt{r}, [][]byte{capture}) == nil {
+		t.Fatal("accepted compiled validator for undeclared scenario")
 	}
 	if validate(revision, []manifest{m}, nil, nil) == nil {
 		t.Fatal("missing receipt passed")

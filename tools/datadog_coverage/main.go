@@ -139,12 +139,18 @@ func validate(revision string, manifests []manifest, receipts []receipt, capture
 			if scenario == "" || declaredScenarios[scenario] || m.ScenarioShapes[scenario] == "" {
 				return fmt.Errorf("incomplete or duplicate Datadog scenario %s/%s", m.Profile, scenario)
 			}
+			if _, compiled := m.CompiledValidators[scenario]; !compiled {
+				return fmt.Errorf("missing compiled validator %s/%s", m.Profile, scenario)
+			}
 			declaredScenarios[scenario] = true
 			key := m.Profile + "\x00" + scenario
 			if _, exists := expected[key]; exists {
 				return fmt.Errorf("duplicate Datadog manifest identity %s/%s", m.Profile, scenario)
 			}
 			expected[key] = m
+		}
+		if len(m.CompiledValidators) != len(declaredScenarios) {
+			return fmt.Errorf("compiled validator scenarios do not match %s", m.Profile)
 		}
 	}
 	seen := map[string]bool{}
