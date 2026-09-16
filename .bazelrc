@@ -2,7 +2,7 @@ common --enable_bzlmod
 
 # Python binaries can be invoked from non-Python tests, so bootstrap them with
 # their registered hermetic runtime instead of requiring python3 on the host.
-common --@rules_python//python/config_settings:bootstrap_impl=script
+common --@@rules_python+//python/config_settings:bootstrap_impl=script
 
 # Remote execution is on by default: every action, tests included, runs on the
 # self-hosted BuildBuddy executor fleet (pool linux-amd64-kvm). The API key is
