@@ -76,6 +76,7 @@ const VOCAB = {
 };
 
 const LABELS = {
+  support: { supported: 'Implemented', unsupported: 'Not implemented', 'n/a': 'Not applicable', unknown: 'Unknown' },
   verification: { verified: 'Verified here', known_gap: 'Documented gap', not_exercised: 'Unknown', not_applicable: 'Not applicable' },
   coverage: { exact_shape: 'Trace structure specified', contract_only: 'Shared telemetry checks only', unavailable: 'No telemetry checks defined', excluded: 'Not in this test suite' },
   receipt: { verified: 'Passed', xfail: 'Expected failure', missing: 'No result for this build' },
@@ -507,33 +508,56 @@ function renderFeatures() {
   const category = $('category').value;
   const language = $('language').value;
   const support = $('support').value;
+  const coverage = $('check-coverage').value;
   const verification = $('verification').value;
   const basis = $('basis').value;
+  const evidenceGap = $('evidence-gap').value;
   const search = $('search').value.trim().toLowerCase();
   const profile = $('feature-profile').value;
   const manifests = data.manifests.filter((m) => (!language || m.language === language) && (!profile || m.profile === profile));
-  const upstreamLanguages = language ? [language] : [...new Set(manifests.map((m) => m.language))];
+  const upstreamLanguages = [...new Set(manifests.map((m) => m.language))].sort();
+
+  function matchingConfiguration(feature, manifest) {
+    const v = verificationFor(feature, manifest.profile);
+    const checks = checksFor(manifest.profile, feature.id);
+    return (!coverage || (checks.length > 0) === (coverage === 'defined')) &&
+      (!verification || v.state === verification) &&
+      (!basis || v.basis === basis || checks.some((c) => c.basis === basis));
+  }
+  function matchingLanguage(feature, lang) {
+    const claim = (feature.support || {})[lang] || 'unknown';
+    const configurations = manifests.filter((m) => m.language === lang);
+    if (!configurations.length || (support && claim !== support)) return false;
+    if (evidenceGap) {
+      if (claim !== 'supported') return false;
+      if (evidenceGap === 'no-checks' && configurations.some((m) => checksFor(m.profile, feature.id).length)) return false;
+      if (evidenceGap === 'no-pass' && configurations.some((m) => verificationFor(feature, m.profile).state === 'verified')) return false;
+    }
+    return !(coverage || verification || basis) || configurations.some((m) => matchingConfiguration(feature, m));
+  }
 
   const matches = data.features.filter((feature) => {
     if (readHash().params.get('feature') && readHash().params.get('feature') !== feature.id) return false;
-    const coverage = $('check-coverage').value;
     if ((language || profile) && !manifests.length) return false;
     if (category && feature.category !== category) return false;
     if (search && !(feature.name.toLowerCase().includes(search) || feature.id.toLowerCase().includes(search))) return false;
-    if ((support || coverage || verification || basis) && !manifests.some(m => {
-      const v=verificationFor(feature,m.profile);
-      const checks=checksFor(m.profile,feature.id);
-      return (!support || ((feature.support || {})[m.language] || 'unknown') === support) &&
-        (!coverage || (checks.length > 0) === (coverage === 'defined')) &&
-        (!verification || v.state===verification) && (!basis || v.basis===basis || checks.some(c=>c.basis===basis));
-    })) return false;
-    return true;
+    return upstreamLanguages.some((lang) => matchingLanguage(feature, lang));
   });
 
-  const header = '<thead><tr><th>Feature</th><th>Upstream</th>' + manifests.map((m) => {
-    const counts = verificationCounts(m.profile);
-    return '<th>' + esc(m.language + ' · ' + m.instrumentationVersion) + '<br><small>' + esc(m.profile) + '</small><br><small>' + counts.verified + ' verified</small></th>';
-  }).join('') + '</tr></thead>';
+  const scope = language ? languageLabel(language) : 'All languages';
+  const supported = matches.flatMap((feature) => upstreamLanguages.map((lang) => ({feature, lang})))
+    .filter(({feature, lang}) => matchingLanguage(feature, lang) && (feature.support || {})[lang] === 'supported');
+  const withChecks = supported.filter(({feature, lang}) => manifests.some((m) => m.language === lang && checksFor(m.profile, feature.id).length));
+  const withPassingEvidence = supported.filter(({feature, lang}) => manifests.some((m) => m.language === lang && verificationFor(feature, m.profile).state === 'verified'));
+  $('capability-summary').innerHTML = '<div><strong>' + supported.length + '</strong><span>Reported implemented, by language</span></div>' +
+    '<div><strong>' + withChecks.length + '</strong><span>With checks defined</span></div>' +
+    '<div><strong>' + withPassingEvidence.length + '</strong><span>Verified in at least one configuration</span></div>';
+  $('capability-source').innerHTML = esc(scope) + ' · ' + matches.length + ' capabilities shown · ' +
+    'Implementation claims: <a href="' + esc(data.metadata.source.url) + '">upstream matrix ' + esc(data.metadata.source.revision) + '</a>. ' +
+    'Evidence counts describe tested configurations, not specification completeness.';
+
+  const header = '<thead><tr><th scope="col">Capability</th>' + upstreamLanguages.map((lang) =>
+    '<th scope="col">' + esc(languageLabel(lang)) + '<small>Upstream claim · local test evidence</small></th>').join('') + '</tr></thead>';
 
   const byCategory = new Map();
   for (const feature of matches) {
@@ -545,26 +569,40 @@ function renderFeatures() {
   for (const entry of byCategory) {
     const name = entry[0];
     const features = entry[1];
-    let verified = 0;
-    for (const feature of features) {
-      for (const manifest of manifests) {
-        const state = (data.verification[feature.id] || {})[manifest.profile];
-        if (state && state.state === 'verified') verified += 1;
-      }
-    }
+    const implemented = features.reduce((sum, feature) => sum + upstreamLanguages.filter((lang) =>
+      matchingLanguage(feature, lang) && (feature.support || {})[lang] === 'supported').length, 0);
+    const checked = features.reduce((sum, feature) => sum + upstreamLanguages.filter((lang) =>
+      matchingLanguage(feature, lang) && manifests.some((m) => m.language === lang && checksFor(m.profile, feature.id).length)).length, 0);
+    const verified = features.reduce((sum, feature) => sum + upstreamLanguages.filter((lang) =>
+      matchingLanguage(feature, lang) && manifests.some((m) => m.language === lang && verificationFor(feature, m.profile).state === 'verified')).length, 0);
     const collapsed = collapsedCategories.has(name);
-    body += '<tr class="category-row"><td colspan="' + (manifests.length + 2) + '">' +
+    body += '<tr class="category-row"><td colspan="' + (upstreamLanguages.length + 1) + '">' +
       '<button type="button" aria-expanded="' + !collapsed + '" data-category="' + esc(name) + '">' + (collapsed ? '▸' : '▾') + ' ' +
-      esc(name) + '</button> <span class="muted">' + features.length + ' features, ' + verified +
-      ' verified cells</span></td></tr>';
+      esc(name) + '</button> <span class="muted">' + features.length + ' capabilities · ' + implemented +
+      ' reported implemented · ' + checked + ' with checks · ' + verified + ' with passing evidence</span></td></tr>';
     if (collapsed) continue;
     body += features.map((feature) => {
-      const cells = manifests.map((manifest) => {
-        const state = (data.verification[feature.id] || {})[manifest.profile] || { state: 'not_exercised', evidence: [] };
-        return '<td>' + healthCell(feature,manifest,state) + '</td>';
+      const cells = upstreamLanguages.map((lang) => {
+        const configurations = manifests.filter((m) => m.language === lang);
+        const claim = (feature.support || {})[lang] || 'unknown';
+        const checked = configurations.filter((m) => checksFor(m.profile, feature.id).length);
+        const passing = configurations.filter((m) => verificationFor(feature, m.profile).state === 'verified');
+        const assertionCount = configurations.reduce((sum, m) => sum + checksFor(m.profile, feature.id).length, 0);
+        const passedExecutions = configurations.reduce((sum, m) => sum + checksFor(m.profile, feature.id)
+          .reduce((count, check) => count + check.passed, 0), 0);
+        const highlighted = matchingLanguage(feature, lang);
+        const evidenceLabel = passing.length ? passing.length + ' of ' + configurations.length + ' configurations verified' :
+          checked.length ? 'Checks defined; no passing evidence' : 'No checks defined';
+        const deepLink = readHash().params.get('feature') === feature.id &&
+          (!profile || configurations.some((m) => m.profile === profile));
+        return '<td class="capability-cell' + (highlighted ? '' : ' filtered-out') + '">' + badge('support', claim) +
+          '<div class="test-evidence">' + esc(evidenceLabel) + ' · ' + assertionCount +
+          ' assertions defined' + (passedExecutions ? ' · ' + passedExecutions + ' passed executions' : '') + '</div>' +
+          '<details data-feature="' + esc(feature.id) + '"' + (deepLink ? ' open' : '') + '><summary>Tested configurations</summary>' +
+          configurations.map((m) => '<div class="configuration-evidence"><strong>' + esc(m.displayName) + '</strong> ' +
+            badge('verification', verificationFor(feature, m.profile).state) +
+            healthCell(feature, m, verificationFor(feature, m.profile)) + '</div>').join('') + '</details></td>';
       }).join('');
-      const upstream = upstreamLanguages.map((lang) =>
-        '<div>' + esc(lang) + ' ' + badge('support', (feature.support || {})[lang] || 'unknown') + '</div>').join('');
       const optionality = feature.optional === 'X'
         ? '<span class="badge state-neutral" title="Optional in the upstream specification">optional</span>'
         : (feature.optional === '*'
@@ -572,15 +610,14 @@ function renderFeatures() {
           : (feature.optional
             ? '<span class="badge state-neutral" title="Upstream optionality">' + esc(feature.optional) + '</span>'
             : ''));
-      return '<tr><td><strong>' + esc(feature.name) + '</strong>' +
+      return '<tr><th scope="row"><strong>' + esc(feature.name) + '</strong>' +
         (feature.group ? '<div class="muted">' + esc(feature.group) + '</div>' : '') +
         (optionality ? '<div>' + optionality + '</div>' : '') +
-        '<a class="evidence" href="' + esc(feature.source) + '">' + esc(feature.id) + '</a></td>' +
-        '<td>' + upstream + '</td>' + cells + '</tr>';
+        '<a class="evidence" href="' + esc(feature.source) + '">' + esc(feature.id) + '</a></th>' + cells + '</tr>';
     }).join('');
   }
   if (!matches.length) {
-    body = '<tr><td colspan="' + (manifests.length + 2) + '" class="muted">No feature matches these filters.</td></tr>';
+    body = '<tr><td colspan="' + (upstreamLanguages.length + 1) + '" class="muted">No capability matches these filters.</td></tr>';
   }
   $('feature-matrix').innerHTML = header + '<tbody>' + body + '</tbody>';
   for (const button of $('feature-matrix').querySelectorAll('button[data-category]')) {
@@ -681,11 +718,12 @@ function syncControlsFromHash() {
     $('differences-only').checked = params.get('differencesOnly') === '1';
     $('hide-scope').checked = params.get('hideScope') === '1';
   } else if (section === 'features') {
-    for (const id of ['category', 'language', 'support', 'verification', 'basis', 'check-coverage']) $(id).value = params.get(id) || '';
+    for (const id of ['category', 'language', 'support', 'verification', 'basis', 'check-coverage', 'evidence-gap']) $(id).value = params.get(id) || '';
     $('feature-profile').value = manifestByProfile.has(params.get('profile')) ? params.get('profile') : '';
     $('search').value = params.get('q') || '';
     if (params.get('verifiedOnly') === '1') $('verification').value = 'verified';
     $('verified-only').checked = $('verification').value === 'verified';
+    document.querySelector('.advanced-filters').open = !!(params.get('profile') || params.get('verification') || params.get('basis') || params.get('check-coverage'));
     // A filtered legacy link must reveal its matches even after manual collapse.
     if (params.toString()) collapsedCategories.clear();
   }
@@ -725,7 +763,7 @@ function compareChanged() {
 function featuresChanged(replace = false) {
   const params = new URLSearchParams();
   for (const [key, id] of [['profile', 'feature-profile'], ['category', 'category'], ['language', 'language'],
-    ['support', 'support'], ['verification', 'verification'], ['basis', 'basis'], ['q', 'search'], ['check-coverage','check-coverage']]) {
+    ['support', 'support'], ['verification', 'verification'], ['basis', 'basis'], ['q', 'search'], ['check-coverage','check-coverage'], ['evidence-gap','evidence-gap']]) {
     if ($(id).value) params.set(key, $(id).value);
   }
   if ($('feature-profile').value) selectedProfile = $('feature-profile').value;
@@ -755,7 +793,7 @@ function setup() {
     $('right').value = left;
     compareChanged();
   });
-  for (const id of ['feature-profile', 'category', 'language', 'support', 'basis','check-coverage']) $(id).addEventListener('change', () => featuresChanged());
+  for (const id of ['feature-profile', 'category', 'language', 'support', 'basis','check-coverage','evidence-gap']) $(id).addEventListener('change', () => featuresChanged());
   $('verification').addEventListener('change', () => {
     $('verified-only').checked = $('verification').value === 'verified';
     featuresChanged();
@@ -791,9 +829,9 @@ function healthCell(feature, manifest, state) {
   const checks = checksFor(manifest.profile, feature.id);
   const counts = checks.reduce((a,c) => [a[0]+c.passed,a[1]+c.expectedFailure,a[2]+c.noResult], [0,0,0]);
   const params = new URLSearchParams({profile:manifest.profile, feature:feature.id});
-  return badge('verification', state.state) + '<p>' + checks.length + ' assertions defined</p><p>' + counts[0] +
+  return '<p>' + checks.length + ' assertions defined</p><p>' + counts[0] +
     ' passed / ' + counts[1] + ' expected failure / ' + counts[2] + ' no result</p>' +
-    '<details data-feature="' + esc(feature.id) + '"' + (readHash().params.get('feature') === feature.id ? ' open' : '') +
+    '<details' + (readHash().params.get('feature') === feature.id ? ' open' : '') +
     '><summary>Checks and evidence</summary><p>Test fixture: RealWorld · ' + esc(manifest.framework) +
     '</p><p>Configuration: ' + esc(manifest.profile) + ' · ' + esc(manifest.instrumentationVersion) + '</p>' +
     '<a href="#health?' + esc(params.toString()) + '">Link to this feature cell</a>' +

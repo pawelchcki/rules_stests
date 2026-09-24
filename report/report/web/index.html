@@ -11,7 +11,7 @@ __STYLE__
 <body>
 <nav class="top">
   <ul>
-    <li><a href="#health">Implementation health</a></li>
+    <li><a href="#health">Capabilities</a></li>
     <li><a href="#parity">RealWorld parity</a></li>
     <li><a href="#receipts">Evidence</a></li>
     <li><a href="#glossary">Glossary</a></li>
@@ -20,7 +20,7 @@ __STYLE__
 
 <header>
   <h1>OpenTelemetry implementation report</h1>
-  <p class="lede">Implementation feature health and RealWorld instrumentation parity, with separate evidence and comparison views.</p>
+  <p class="lede">What OpenTelemetry languages say they implement, and what this repository has actually tested.</p>
 </header>
 
 <main>
@@ -75,23 +75,27 @@ __STYLE__
 
 
   <section class="panel" id="features" hidden>
-    <h2 tabindex="-1">Implementation health</h2>
-    <p class="section-note">Checks defined, results from this build, and upstream support claims are distinct. Counts describe authored assertions and their associated test executions, not completeness against the specification. Configurations remain separate; applications and frameworks are supporting fixtures.</p>
-    <p>Failure attribution, specification interpretation evidence, and undocumented gaps: unavailable or unrecorded. Unknown does not mean zero defects. Upstream claims apply at their recorded language scope.</p>
+    <h2 tabindex="-1">Capabilities</h2>
+    <p class="section-note">Implementation status comes from the upstream OpenTelemetry language matrix. Test evidence comes from this repository's RealWorld suites. A language claim does not certify every framework, version, or configuration.</p>
+    <div id="capability-summary" class="capability-summary" aria-live="polite"></div>
+    <p class="section-note" id="capability-source"></p>
     <details><summary>Language maturity and catalog sources</summary>
       <div class="meta" id="meta"></div><div class="scroll"><table id="maturity"></table></div>
     </details>
     <div class="filters">
-      <label>Implementation<select id="feature-profile"><option value="">All implementations</option></select></label>
-      <label>Category<select id="category"><option value="">All categories</option></select></label>
       <label>Language<select id="language"><option value="">All languages</option></select></label>
-      <label>Upstream support<select id="support"><option value="">Any support</option><option>supported</option><option>unsupported</option><option>n/a</option><option>unknown</option></select></label>
-      <label>Coverage<select id="check-coverage"><option value="">Any coverage</option><option value="defined">Checks defined</option><option value="none">No checks defined</option></select></label>
-      <label>Results from this build<select id="verification"><option value="">Any verification</option><option value="verified">Verified here</option><option value="known_gap">Documented gap</option><option value="not_exercised">Unknown</option><option value="not_applicable">Not applicable</option></select></label>
-      <label>Evidence basis<select id="basis"><option value="">Any basis</option><option>observed</option><option>corroborated</option></select></label>
-      <label>Search<input type="search" id="search" placeholder="feature name or id"></label>
-      <label class="toggle"><input type="checkbox" id="verified-only"> Verified here only</label>
+      <label>Category<select id="category"><option value="">All categories</option></select></label>
+      <label>Implementation status<select id="support"><option value="">Any status</option><option value="supported">Implemented</option><option value="unsupported">Not implemented</option><option value="n/a">Not applicable</option><option value="unknown">Unknown</option></select></label>
+      <label>Test evidence<select id="evidence-gap"><option value="">Any evidence</option><option value="no-checks">Implemented without checks</option><option value="no-pass">Implemented without passing evidence</option></select></label>
+      <label>Search<input type="search" id="search" placeholder="capability name or id"></label>
     </div>
+    <details class="advanced-filters"><summary>More test filters</summary><div class="filters">
+      <label>Configuration<select id="feature-profile"><option value="">All configurations</option></select></label>
+      <label>Checks<select id="check-coverage"><option value="">Any coverage</option><option value="defined">Checks defined</option><option value="none">No checks defined</option></select></label>
+      <label>Result from this build<select id="verification"><option value="">Any result</option><option value="verified">Verified here</option><option value="known_gap">Documented gap</option><option value="not_exercised">Unknown</option><option value="not_applicable">Not applicable</option></select></label>
+      <label>Evidence basis<select id="basis"><option value="">Any basis</option><option>observed</option><option>corroborated</option></select></label>
+      <label class="toggle"><input type="checkbox" id="verified-only"> Verified here only</label>
+    </div></details>
     <div class="scroll"><table id="feature-matrix"></table></div>
   </section>
 
