@@ -209,6 +209,10 @@ details > summary { cursor: pointer; font-weight: 500; }
 .capability-summary > div { border: 1px solid var(--line); border-radius: var(--radius); padding: 13px 16px; background: var(--surface-2); }
 .capability-summary strong { display: block; font-size: 26px; line-height: 1.2; font-variant-numeric: tabular-nums; }
 .capability-summary span { display: block; color: var(--ink-2); font-size: 14px; }
+.category-overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; margin: 14px 0 18px; }
+.category-card { display: flex; flex-direction: column; gap: 3px; border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; background: var(--surface-2); text-decoration: none; color: inherit; }
+.category-card:hover, .category-card:focus, .category-card.selected { border-color: var(--info); background: var(--info-wash); }
+.category-card span, .category-card small { color: var(--ink-2); font-size: 13px; }
 .advanced-filters { margin: 10px 0 16px; }
 #feature-matrix { min-width: 700px; }
 #feature-matrix th:first-child { width: 24%; }
@@ -222,6 +226,7 @@ details > summary { cursor: pointer; font-weight: 500; }
 .configuration-evidence details { margin: 6px 0; }
 .category-row td { background: var(--surface-2); font-weight: 600; color: var(--info); }
 .category-row button { border: none; background: none; padding: 0; color: inherit; font-weight: 600; }
+.topic-row th { background: var(--surface-2); color: var(--ink-2); text-align: left; font-size: 14px; }
 .assertion { color: var(--muted); font-size: 14px; }
 .evidence { display: block; font-size: 14px; margin-top: 3px; }
 
