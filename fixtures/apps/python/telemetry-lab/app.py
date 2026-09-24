@@ -1,6 +1,7 @@
 """Standalone OpenTelemetry API workload; no RealWorld routes or database."""
 
 import argparse
+import io
 import logging
 import os
 import time
@@ -12,10 +13,12 @@ from opentelemetry.sdk._logs.export import LogRecordExporter, LogRecordExportRes
 from opentelemetry.propagators.textmap import Getter, Setter
 from opentelemetry.exporter.prometheus import PrometheusMetricReader
 from opentelemetry.sdk.metrics import MeterProvider as SDKMeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider
-from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult, SimpleSpanProcessor
+from opentelemetry.sdk.trace.export import ConsoleSpanExporter, SpanExporter, SpanExportResult, SimpleSpanProcessor
 from prometheus_client import CollectorRegistry, generate_latest
+from prometheus_client.openmetrics.exposition import generate_latest as generate_openmetrics
 
 
 TRACER = trace.get_tracer("telemetry-lab.python", "1.0.0", schema_url="https://example.test/telemetry-lab/1")
@@ -113,6 +116,33 @@ async def measurements(request):
     finally:
         UPDOWN.add(-1, {"lab.route": "metrics"})
     return web.json_response({"measured": True})
+
+
+async def metric_scope(request):
+    reader = InMemoryMetricReader()
+    provider = SDKMeterProvider(metric_readers=[reader], shutdown_on_exit=False)
+    meter = provider.get_meter("lab.scope.name", "2.3.4", "https://example.test/schema/2")
+    meter.create_counter("lab.scope.counter").add(1)
+    data = reader.get_metrics_data()
+    scopes = [item.scope for resource in data.resource_metrics
+              for item in resource.scope_metrics]
+    result = [{"name": scope.name, "version": scope.version,
+               "schema_url": scope.schema_url} for scope in scopes]
+    provider.shutdown()
+    return web.json_response({"scopes": result})
+
+
+class LabLogObject:
+    def __str__(self):
+        return "abcdefghijklmnop"
+
+
+async def log_object(request):
+    logging.getLogger("telemetry-lab.python").warning(
+        "lab object log", extra={"lab_object": LabLogObject(),
+                                 "lab_bytes": b"abcdefghijklmnop"}
+    )
+    return web.json_response({"emitted": True})
 
 
 async def propagation(request):
@@ -266,6 +296,16 @@ async def trace_exporter(request):
                               "exporter_flushed": exporter.flushed, "shutdown": exporter.shut})
 
 
+async def console_exporter(request):
+    output = io.StringIO()
+    provider = SDKTracerProvider(shutdown_on_exit=False)
+    provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter(out=output)))
+    with provider.get_tracer("lab.console").start_as_current_span("lab.console.span"):
+        pass
+    provider.shutdown()
+    return web.json_response({"output": output.getvalue()})
+
+
 async def prometheus(request):
     registry = CollectorRegistry()
     reader = PrometheusMetricReader(registry=registry)
@@ -282,8 +322,9 @@ async def prometheus(request):
     gauge.set(21, {"lab.route": "one"})
     histogram.record(12, {"lab.route": "one"})
     rendered = generate_latest(registry).decode("utf-8")
+    openmetrics = generate_openmetrics(registry).decode("utf-8")
     provider.shutdown()
-    return web.json_response({"text": rendered})
+    return web.json_response({"text": rendered, "openmetrics": openmetrics})
 
 
 def main():
@@ -297,10 +338,13 @@ def main():
     app.router.add_get("/v1/exceptions", exception)
     app.router.add_get("/v1/lifecycle", span_lifecycle)
     app.router.add_get("/v1/metrics", measurements)
+    app.router.add_get("/v1/metric-scope", metric_scope)
+    app.router.add_get("/v1/log-object", log_object)
     app.router.add_get("/v1/propagation", propagation)
     app.router.add_get("/v1/propagation-custom", propagation_custom)
     app.router.add_get("/v1/log-sdk", log_sdk)
     app.router.add_get("/v1/trace-exporter", trace_exporter)
+    app.router.add_get("/v1/console-exporter", console_exporter)
     app.router.add_get("/v1/prometheus", prometheus)
     web.run_app(app, host=args.host, port=args.port, print=None)
 

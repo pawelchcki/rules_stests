@@ -23,6 +23,7 @@ def python_telemetry_lab_variants():
         "sampler_arg_one": struct(scenario = "sampler-arg-one", env = {"OTEL_TRACES_SAMPLER": "traceidratio", "OTEL_TRACES_SAMPLER_ARG": "1"}),
         "log_count": struct(scenario = "log-count", env = {"OTEL_LOGRECORD_ATTRIBUTE_COUNT_LIMIT": "1"}),
         "log_length": struct(scenario = "log-length", env = {"OTEL_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT": "8"}),
+        "log_length_edge": struct(scenario = "log-length-edge", env = {"OTEL_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT": "8"}),
         "exemplars_off": struct(scenario = "exemplars-off", env = {"OTEL_METRICS_EXEMPLAR_FILTER": "always_off"}),
         "histogram_exponential": struct(scenario = "histogram-exponential", env = {"OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION": "base2_exponential_bucket_histogram"}),
     }.items():

@@ -362,10 +362,12 @@ discrepancies. Its 22 feature IDs are also covered by the standalone lab; see
 [the results and reproduction commands](corpus/EXTERNAL_FEATURES.md).
 
 `//fixtures:telemetry_lab_suite` runs standalone Python, Ruby, and Go API
-workloads and produces accepted report receipts for 122 feature IDs, including
-all 22 from the external suite. This adds 100 distinct IDs beyond the Scheme
+workloads and produces accepted report receipts for 124 feature IDs, including
+all 22 from the external suite. This adds 102 distinct IDs beyond the Scheme
 and external suites; see
 [the lab evidence and reproduction command](corpus/TELEMETRY_LABS.md).
+The Python lab also preserves an expected failure for byte and object-valued
+log attributes that exceed the configured value-length limit.
 
 ## Further reading
 

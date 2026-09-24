@@ -120,6 +120,10 @@ func labWriteReceipt(root, language, scenario string, plan, capture, responses [
 		ProofPlanSHA256: fmt.Sprintf("%x", sha256.Sum256(plan)), CaptureSHA256: fmt.Sprintf("%x", sha256.Sum256(accepted)),
 		ValidationMode: "contract", Outcome: "verified", Proofs: proofs,
 	}
+	if scenario == "log-length-edge" {
+		receipt.Outcome = "xfail"
+		receipt.XFailReason = "Python SDK 1.44.0 exports 16-byte and stringified-object log attributes under an eight-character value limit"
+	}
 	encoded, err := json.MarshalIndent(receipt, "", "  ")
 	if err != nil {
 		return err
@@ -498,7 +502,7 @@ func labVerify(data []byte, language, scenario string) error {
 						return fmt.Errorf("log attribute limit: %d retained, %d dropped", len(attrs), dropped)
 					}
 				}
-				if scenario == "log-length" && labField(labAttribute(record, "lab_long"), "string_value") != "abcdefgh" {
+				if (scenario == "log-length" || scenario == "log-length-edge") && labField(labAttribute(record, "lab_long"), "string_value") != "abcdefgh" {
 					return fmt.Errorf("log value length was not limited to 8")
 				}
 				if scenario == "base" && labField(labAttribute(record, "lab_long"), "string_value") != "abcdefghijklmnop" {
@@ -508,6 +512,34 @@ func labVerify(data []byte, language, scenario string) error {
 		}
 		if !correlatedLog {
 			return fmt.Errorf("Python log did not carry its active span context")
+		}
+		if scenario == "log-length-edge" {
+			found := false
+			for _, record := range labObjects(records, "log_records") {
+				body, _ := labField(record, "body").(map[string]any)
+				value, _ := labField(body, "value").(map[string]any)
+				if labField(value, "string_value") != "lab object log" {
+					continue
+				}
+				found = true
+				got := labField(labAttribute(record, "lab_object"), "string_value")
+				if got != "abcdefghijklmnop" {
+					return fmt.Errorf("log object limit behavior changed: got %q", got)
+				}
+				bytesValue, _ := labField(labAttribute(record, "lab_bytes"), "bytes_value").([]any)
+				if len(bytesValue) != 16 {
+					return fmt.Errorf("log byte limit behavior changed: %v", bytesValue)
+				}
+				for index, item := range bytesValue {
+					value, ok := labUint(item)
+					if !ok || value != uint64('a'+index) {
+						return fmt.Errorf("log byte limit behavior changed: %v", bytesValue)
+					}
+				}
+			}
+			if !found {
+				return fmt.Errorf("object-valued log was not exported")
+			}
 		}
 	}
 	return nil
@@ -614,6 +646,10 @@ func labVerifyMetricExemplars(response labObject) error {
 
 func labVerifyPrometheus(response labObject) error {
 	output, _ := labField(response, "text").(string)
+	openmetrics, _ := labField(response, "openmetrics").(string)
+	if !strings.Contains(openmetrics, "# UNIT lab_duration_milliseconds milliseconds\n") {
+		return fmt.Errorf("Prometheus OpenMetrics output lacks duration UNIT metadata")
+	}
 	for _, line := range []string{
 		"# HELP target_info Target metadata",
 		"# TYPE target_info gauge",
@@ -651,6 +687,18 @@ func labVerifyPrometheus(response labObject) error {
 		if !strings.Contains(line, "otel_scope_name=\"lab.prom.scope\"") || !strings.Contains(line, "otel_scope_version=\"1.2.3\"") {
 			return fmt.Errorf("Prometheus sample lacks scope labels: %s", line)
 		}
+	}
+	return nil
+}
+
+func labVerifyMetricScope(response labObject) error {
+	scopes, _ := labField(response, "scopes").([]any)
+	if len(scopes) != 1 {
+		return fmt.Errorf("metric scope count = %d, want 1", len(scopes))
+	}
+	scope, _ := scopes[0].(map[string]any)
+	if labField(scope, "name") != "lab.scope.name" || labField(scope, "version") != "2.3.4" || labField(scope, "schema_url") != "https://example.test/schema/2" {
+		return fmt.Errorf("metric scope metadata mismatch: %v", scope)
 	}
 	return nil
 }
@@ -736,7 +784,10 @@ func main() {
 		paths = []string{"/v1/spans", "/v1/exceptions", "/v1/metrics", "/v1/propagation"}
 	}
 	if *language == "python" {
-		paths = append(paths, "/v1/lifecycle", "/v1/log-sdk", "/v1/trace-exporter", "/v1/propagation-custom", "/v1/prometheus")
+		paths = append(paths, "/v1/lifecycle", "/v1/log-sdk", "/v1/trace-exporter", "/v1/console-exporter", "/v1/propagation-custom", "/v1/prometheus", "/v1/metric-scope")
+		if *scenario == "log-length-edge" {
+			paths = append(paths, "/v1/log-object")
+		}
 	}
 	if *language == "go" {
 		paths = []string{"/v1/spans", "/v1/exceptions", "/v1/propagation", "/v1/concurrency", "/v1/resources", "/v1/metric-views", "/v1/metric-advanced", "/v1/metric-exporter", "/v1/metric-exemplars", "/v1/sdk-trace"}
@@ -763,6 +814,10 @@ func main() {
 			panic(fmt.Errorf("sampler ratio 1 did not record a span: %s", body))
 		}
 		switch path {
+		case "/v1/metric-scope":
+			if err := labVerifyMetricScope(response); err != nil {
+				panic(err)
+			}
 		case "/v1/sdk-trace":
 			if err := labVerifySDKTrace(response); err != nil {
 				panic(err)
@@ -803,6 +858,15 @@ func main() {
 		case "/v1/trace-exporter":
 			if labField(response, "count") != float64(1) || labField(response, "name") != "lab.exported" || labField(response, "flushed") != true || labField(response, "exporter_flushed") != true || labField(response, "shutdown") != true {
 				panic(fmt.Errorf("Python custom span exporter response: %s", body))
+			}
+		case "/v1/console-exporter":
+			output, _ := labField(response, "output").(string)
+			var exported labObject
+			if err := json.Unmarshal([]byte(output), &exported); err != nil {
+				panic(fmt.Errorf("Python console exporter did not write JSON: %w", err))
+			}
+			if labField(exported, "name") != "lab.console.span" {
+				panic(fmt.Errorf("Python console exporter omitted the span: %s", output))
 			}
 		case "/v1/prometheus":
 			if err := labVerifyPrometheus(response); err != nil {

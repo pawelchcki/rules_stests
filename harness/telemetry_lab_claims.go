@@ -75,6 +75,8 @@ var labClaims = map[string][]string{
 		"baggage.basic-support",
 	},
 	"python": {
+		"exporters.prometheus.unit-metadata",
+		"exporters.standard-output-logging",
 		"exporters.exporter-interface",
 		"exporters.exporter-interface-has-forceflush",
 		"exporters.prometheus.name-sanitization",
@@ -130,6 +132,7 @@ var labVariantClaims = map[string][]string{
 	"sampler-off":           {"environment-variables.otel-traces-sampler"},
 	"sampler-arg-zero":      {"environment-variables.otel-traces-sampler-arg"},
 	"sampler-arg-one":       {}, // Positive control for sampler-arg-zero.
+	"log-length-edge":       {}, // Regression for SDK byte and string-conversion limit gaps.
 	"log-count":             {"environment-variables.otel-logrecord-attribute-count-limit"},
 	"log-length":            {"environment-variables.otel-logrecord-attribute-value-length-limit"},
 	"exemplars-off":         {"environment-variables.otel-metrics-exemplar-filter"},

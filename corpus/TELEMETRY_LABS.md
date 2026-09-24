@@ -20,10 +20,10 @@ REPORT_REVISION="$revision" REPORT_REPOSITORY=owner/repository \
   REPORT_BAZEL_CONFIG=local tools/assemble_otel_report.sh
 ```
 
-The lab suite has **122 distinct catalog IDs with passing receipt-producing
+The lab suite has **124 distinct catalog IDs with passing receipt-producing
 tests**. None overlap the 85 Scheme proof-rule IDs. All 22 IDs from the earlier
 supplemental configuration experiments now have standalone lab proofs, leaving
-**100 IDs new across all three suites**. The catalog test checks those counts
+**102 IDs new across all three suites**. The catalog test checks those counts
 against the pinned matrix. These are feature IDs, not language/feature pairs or
 HTTP requests. The report assembly command above validates and accepts the
 receipts for the current revision.
@@ -54,3 +54,22 @@ hash, and complete proof set before assigning **Verified here**. A claim applies
 only to the pinned SDK, application call, and output asserted by its probe. The
 earlier RealWorld configuration comparisons and their known gaps remain described in
 [External feature experiments](EXTERNAL_FEATURES.md).
+
+## Reproduced Python SDK log limit defect
+
+`python_telemetry_lab_log_length_edge_test` runs the same standalone app with
+`OTEL_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT=8`. Its ordinary string attribute
+is exported as `abcdefgh`. In the same run, a byte attribute is exported as
+the full 16-byte `abcdefghijklmnop`, and an object converted to a string is
+also exported at 16 characters. The [common attribute rules](https://opentelemetry.io/docs/specs/otel/common/)
+require string and byte values to be truncated to the configured length;
+[LogRecord limits](https://opentelemetry.io/docs/specs/otel/logs/sdk/) use those
+rules. The pinned Python SDK 1.44.0 implementation truncates strings before
+returning them but returns bytes and newly converted strings without applying
+the limit. The object case was seen earlier in Django's RealWorld logs; the
+byte case was exposed by this standalone probe.
+
+The scenario emits an `xfail` report receipt with no passing feature claim.
+The test checks the exact oversized outputs, so a future SDK fix changes the
+test result and requires reviewing the expectation. The captured OTLP is saved
+at `bazel-testlogs/fixtures/python_telemetry_lab_log_length_edge_test/test.outputs/python-telemetry-lab-log-length-edge.capture.json`.
