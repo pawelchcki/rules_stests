@@ -361,6 +361,11 @@ all four fixtures, preserving both passing observations and specific known
 discrepancies. It adds 22 feature IDs beyond the Scheme proof corpus; see
 [the results and reproduction commands](corpus/EXTERNAL_FEATURES.md).
 
+`//fixtures:telemetry_lab_suite` runs standalone Python, Ruby, and Go API
+workloads and produces accepted report receipts for 114 feature IDs. This adds
+100 distinct IDs beyond the Scheme and external suites; see
+[the lab evidence and reproduction command](corpus/TELEMETRY_LABS.md).
+
 ## Further reading
 
 See [`corpus/README.md`](corpus/README.md) for the specification model,

@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["main.go", "metrics.go", "sdk_trace.go"])
+
+go_binary(
+    name = "app",
+    srcs = ["main.go", "metrics.go", "sdk_trace.go"],
+    deps = [
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel//baggage",
+        "@io_opentelemetry_go_otel//codes",
+        "@io_opentelemetry_go_otel//propagation",
+        "@io_opentelemetry_go_otel_metric//:metric",
+        "@io_opentelemetry_go_otel_trace//:trace",
+        "@io_opentelemetry_go_otel_exporters_otlp_otlptrace_otlptracehttp//:otlptracehttp",
+        "@io_opentelemetry_go_otel_sdk//resource",
+        "@io_opentelemetry_go_otel_sdk//trace",
+        "@io_opentelemetry_go_otel_sdk//trace/tracetest",
+        "@io_opentelemetry_go_otel_sdk_metric//:metric",
+		"@io_opentelemetry_go_otel_sdk_metric//exemplar",
+        "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+    ],
+)

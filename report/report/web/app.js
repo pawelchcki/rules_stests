@@ -764,8 +764,8 @@ function renderGlossary() {
       '<dl>' + items + '</dl></div>';
   }).join('');
   const trust = '<div><h3>The trust rule</h3><p class="muted">A feature reaches <em>verified</em> only when a ' +
-    'receipt from the current repository revision matches the assembled proof plan, capture, and scenario ' +
-    'shape digests. Manifests cannot declare a feature verified by hand, and an expected failure never ' +
+    'receipt from the current repository revision matches the assembled proof plan and capture digests, ' +
+    'plus the scenario shape digest when one is declared. Manifests cannot declare a feature verified by hand, and an expected failure never ' +
     'produces one.</p>' +
     '<h3>Not exercised in this build</h3><p class="muted">Every language stays in this report even when its ' +
     'container images are unpublished, so the matrix never silently drops an implementation. Such a profile ' +

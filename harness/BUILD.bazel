@@ -164,6 +164,32 @@ go_binary(
     embed = [":api_probe_lib"],
 )
 
+go_binary(
+    name = "telemetry_lab_probe",
+    srcs = ["telemetry_lab_probe.go", "telemetry_lab_claims.go"],
+    deps = ["//report:lib"],
+)
+
+go_binary(
+    name = "telemetry_lab_plan",
+    srcs = ["telemetry_lab_plan.go", "telemetry_lab_claims.go"],
+    deps = ["//report:lib"],
+)
+
+go_test(
+    name = "telemetry_lab_claims_test",
+    srcs = ["telemetry_lab_claims.go", "telemetry_lab_claims_test.go"],
+    data = ["//report:data/spec-compliance-matrix.md", "//harness/external_features:cases.go"] + [
+        "//corpus:otel/proofs/{}.scm".format(name)
+        for name in ["traces", "metrics", "logs", "resource", "exporters", "environment", "propagation"]
+    ],
+    args = ["$(rlocationpath //report:data/spec-compliance-matrix.md)"] + [
+        "$(rlocationpath //corpus:otel/proofs/{}.scm)".format(name)
+        for name in ["traces", "metrics", "logs", "resource", "exporters", "environment", "propagation"]
+    ] + ["$(rlocationpath //harness/external_features:cases.go)"],
+    deps = ["//report:lib"],
+)
+
 go_library(
     name = "hurl_test_driver_lib",
     srcs = ["hurl_test_driver.go", "compiled_validator.go", "parallel_scenarios.go"],

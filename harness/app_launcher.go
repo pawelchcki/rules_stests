@@ -363,6 +363,13 @@ func rubyAppExecution(root string, injection injection, otelRoot, instance, comm
 		return rubyExecution{}, err
 	}
 	arguments := []string{loader, "--library-path", libraryPath, ruby, rails, command}
+	if strings.HasSuffix(command, ".rb") {
+		script, err := resolveRunfile(command)
+		if err != nil {
+			return rubyExecution{}, fmt.Errorf("resolve Ruby application script: %w", err)
+		}
+		arguments = []string{loader, "--library-path", libraryPath, ruby, script}
+	}
 	arguments = append(arguments, args...)
 	// The rootfs is read-only, but `rails server` writes its pidfile under the
 	// application root at tmp/pids/server.pid. Redirect it into the writable
@@ -517,6 +524,13 @@ func pythonAppExecution(root string, injection injection, otelRoot, instance, co
 		return pythonExecution{}, err
 	}
 	arguments := []string{loader, "--library-path", libraryPath, python, "-c", pythonBootstrap, entrypoint, command}
+	if strings.HasSuffix(command, ".py") {
+		script, err := resolveRunfile(command)
+		if err != nil {
+			return pythonExecution{}, fmt.Errorf("resolve Python application script: %w", err)
+		}
+		arguments = []string{loader, "--library-path", libraryPath, python, "-c", pythonBootstrap, script}
+	}
 	arguments = append(arguments, args...)
 	return pythonExecution{loader: loader, arguments: arguments, environment: environment}, nil
 }

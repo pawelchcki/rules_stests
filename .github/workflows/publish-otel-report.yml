@@ -31,6 +31,11 @@ jobs:
         run: |
           node --check report/report/web/app.js
           bazel test --config=local //report:report_test //report:assemble_test
+      - name: Verify standalone telemetry labs
+        run: |
+          bazel test --config=local --nocache_test_results \
+            //harness:telemetry_lab_claims_test \
+            //fixtures:telemetry_lab_suite
       - name: Run fresh receipt-producing tests
         shell: bash
         run: |
@@ -43,7 +48,8 @@ jobs:
             --build_event_json_file=otel-profile.bep.json \
             --nobuild_event_json_file_path_conversion \
             --remote_download_outputs=toplevel \
-            //fixtures:otel_report_suite
+            //fixtures:otel_report_suite \
+            //fixtures:telemetry_lab_suite
       - name: Assemble the report from accepted receipts
         shell: bash
         run: |

@@ -212,6 +212,24 @@ func TestPythonExecutionAppliesPathInjectionAfterIsolation(t *testing.T) {
 	}
 }
 
+func TestPythonExecutionRunsStandaloneScript(t *testing.T) {
+	root := makePythonRoot(t)
+	script := filepath.Join(t.TempDir(), "features.py")
+	if err := os.WriteFile(script, []byte("print('ok')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	execution, err := pythonAppExecution(root, injection{}, "", "features", script, []string{"--port", "1234"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := execution.arguments[len(execution.arguments)-3:]; !reflect.DeepEqual(got, []string{script, "--port", "1234"}) {
+		t.Fatalf("standalone script invocation = %q", got)
+	}
+	if _, err := pythonAppExecution(root, injection{}, "", "features", script+".py", nil, nil); err == nil {
+		t.Fatal("missing Python script was accepted")
+	}
+}
+
 func TestInjectionEnvironmentOverridesBlockedKey(t *testing.T) {
 	environment, err := applyInjection([]string{"KEEP=value"}, injection{environment: []environmentEdit{{key: "RUBYOPT", value: "-rgood"}}}, "", "ruby", false)
 	if err != nil || !strings.Contains(strings.Join(environment, "\n"), "RUBYOPT=-rgood") {
@@ -312,6 +330,17 @@ func TestRubyExecutionIsolatesApplicationAndAgentEnvironment(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(migrate.arguments, " "), "--pid") {
 		t.Fatalf("a non-server command was given a pidfile: %v", migrate.arguments)
+	}
+	script := filepath.Join(t.TempDir(), "features.rb")
+	if err := os.WriteFile(script, []byte("puts 'ok'\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	standalone, err := rubyAppExecution(root, injection{}, "", "features", script, []string{"--port", "1234"}, inherited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := standalone.arguments[len(standalone.arguments)-3:]; !reflect.DeepEqual(got, []string{script, "--port", "1234"}) {
+		t.Fatalf("standalone script invocation = %q", got)
 	}
 
 	otel := t.TempDir()
