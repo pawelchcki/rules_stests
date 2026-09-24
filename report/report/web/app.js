@@ -624,6 +624,7 @@ function renderFeatures() {
     const params = new URLSearchParams(readHash().params);
     params.set('category', name);
     params.delete('topic');
+    params.delete('feature');
     return '<a class="category-card' + (category === name ? ' selected' : '') + '" href="#health?' + esc(params.toString()) + '"><strong>' + esc(name) +
       '</strong><span>' + totals.verified + ' passed tests · ' + totals.missing + ' without passing proof</span>' +
       '<small>' + totals.total + ' capability–language pairs</small></a>';
