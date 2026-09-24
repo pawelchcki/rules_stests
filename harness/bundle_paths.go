@@ -26,6 +26,25 @@ func resolveDirectory(value string) (string, error) {
 	return "", fmt.Errorf("directory %q is not present in runfiles", value)
 }
 
+func resolveRunfile(value string) (string, error) {
+	candidates := []string{value}
+	if runfiles := os.Getenv("RUNFILES_DIR"); runfiles != "" {
+		candidates = append(candidates, filepath.Join(runfiles, value))
+	}
+	if testSrcdir := os.Getenv("TEST_SRCDIR"); testSrcdir != "" {
+		candidates = append(candidates, filepath.Join(testSrcdir, value))
+	}
+	if executable, err := os.Executable(); err == nil {
+		candidates = append(candidates, filepath.Join(executable+".runfiles", value))
+	}
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+			return filepath.Abs(candidate)
+		}
+	}
+	return "", fmt.Errorf("file %q is not present in runfiles", value)
+}
+
 func safePath(root, name string) (string, error) {
 	clean := filepath.Clean(filepath.FromSlash(name))
 	if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {

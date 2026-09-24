@@ -409,6 +409,7 @@ def _report_manifest_impl(ctx):
     registry_matrix = None
     registry_metadata = None
     profile_labels = {target.label: True for target in ctx.attr.profiles}
+    profile_ids = {target[OtelProfileInfo].profile_id: True for target in ctx.attr.profiles}
     for target in ctx.attr.unavailable_profiles:
         if target.label not in profile_labels:
             fail("unavailable report profile {} is not in profiles".format(target.label))
@@ -435,6 +436,39 @@ def _report_manifest_impl(ctx):
             },
             "unavailable": target.label in unavailable,
         })
+    for target in ctx.attr.lab_plans:
+        files = target.files.to_list()
+        if len(files) != 1 or not files[0].basename.endswith(".proof-plan.json"):
+            fail("lab plan {} must provide one normalized JSON file".format(target.label))
+        plan = files[0]
+        profile_id = plan.basename[:-len(".proof-plan.json")]
+        language = profile_id.split("-")[0]
+        if language not in ["go", "python", "ruby"] or profile_id != language + "-telemetry-lab":
+            fail("unsupported lab plan profile {}".format(profile_id))
+        if profile_id in profile_ids:
+            fail("duplicate report profile {}".format(profile_id))
+        profile_ids[profile_id] = True
+        lab_scenarios = ctx.attr.lab_scenarios.get(profile_id, [])
+        if not lab_scenarios:
+            fail("lab profile {} has no scenarios".format(profile_id))
+        spec_name = "main.go" if language == "go" else "app.py" if language == "python" else "app.rb"
+        plans.append(plan)
+        entries.append({
+            "id": profile_id,
+            "repository": "",
+            "spec": "fixtures/apps/{}/telemetry-lab/{}".format(language, spec_name),
+            "plan": plan.path,
+            "scenarios": lab_scenarios,
+            "shapes": {},
+            "shapeSources": {},
+            "unavailable": profile_id in ctx.attr.unavailable_labs,
+        })
+    for profile_id in ctx.attr.lab_scenarios:
+        if profile_id not in [entry["id"] for entry in entries]:
+            fail("lab scenario declaration has no plan for {}".format(profile_id))
+    for profile_id in ctx.attr.unavailable_labs:
+        if profile_id not in profile_ids:
+            fail("unavailable lab {} has no plan".format(profile_id))
     if registry_matrix == None:
         fail("profiles must contain at least one OpenTelemetry profile")
     ctx.actions.write(output, json.encode(entries) + "\n")
@@ -452,6 +486,9 @@ otel_report_manifest = rule(
     attrs = {
         "profiles": attr.label_list(providers = [OtelProfileInfo]),
         "unavailable_profiles": attr.label_list(providers = [OtelProfileInfo]),
+        "lab_plans": attr.label_list(allow_files = [".json"]),
+        "lab_scenarios": attr.string_list_dict(),
+        "unavailable_labs": attr.string_list(),
     },
 )
 

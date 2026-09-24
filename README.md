@@ -358,8 +358,19 @@ receipts.
 
 `//fixtures:external_features_test` compares SDK configuration effects across
 all four fixtures, preserving both passing observations and specific known
-discrepancies. It adds 22 feature IDs beyond the Scheme proof corpus; see
+discrepancies. Its 22 feature IDs are also covered by the standalone lab; see
 [the results and reproduction commands](corpus/EXTERNAL_FEATURES.md).
+
+`//fixtures:telemetry_lab_suite` runs standalone Python, Ruby, and Go API
+workloads and produces accepted report receipts for 136 feature IDs, including
+all 22 from the external suite. Two already had Scheme proof-rule definitions
+but lacked passing receipts. This adds 112 distinct IDs beyond the Scheme
+and external suites; see
+[the lab evidence and reproduction command](corpus/TELEMETRY_LABS.md).
+The Python lab also preserves an expected failure for byte and object-valued
+log attributes that exceed the configured value-length limit.
+Additional expected failures document OpenTracing's hyphenated baggage key
+filtering and Go OTLP HTTP's handling of `Retry-After` seconds.
 
 ## Further reading
 

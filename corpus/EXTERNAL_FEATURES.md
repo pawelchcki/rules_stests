@@ -139,9 +139,11 @@ An improvement or regression changes the expected outcome and fails the suite
 until its evidence is reviewed. `--test_arg=--discover` records results without
 comparing expectations when investigating a new fixture version.
 
-These results are supplemental external observations. They do not mint the
-Scheme proof-plan receipts used by the existing HTML report, and they do not
-increase its **Verified here** counts. Each feature claim is limited to the
-configuration and workload exercised here, rather than general SDK compliance.
+These RealWorld comparisons remain regression tests for SDK differences. Their
+22 feature IDs are now also exercised by the standalone Python telemetry lab,
+which emits accepted report receipts; see [Standalone OpenTelemetry feature
+labs](TELEMETRY_LABS.md). The RealWorld tests themselves do not mint report
+receipts. Each feature claim is limited to the configuration and workload
+exercised here, rather than general SDK compliance.
 Compression is excluded because the current Rust sink only accepts identity
 encoding; its HTTP 415 response must not be counted as an exporter defect.

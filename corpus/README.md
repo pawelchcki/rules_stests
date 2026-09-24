@@ -5,6 +5,8 @@ on the fixture applications, harness, or report implementation.
 
 For additional externally observable configuration coverage and reproduced
 cross-language discrepancies, see [External feature experiments](EXTERNAL_FEATURES.md).
+For standalone API and exporter evidence in each language, see
+[Standalone OpenTelemetry feature labs](TELEMETRY_LABS.md).
 
 ## Library map
 

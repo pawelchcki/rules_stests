@@ -2,7 +2,7 @@ load("@rules_go//go:def.bzl", "go_binary", "go_test")
 
 package(default_visibility = ["//visibility:public"])
 
-exports_files(["expected.json"])
+exports_files(["expected.json", "cases.go"])
 
 go_binary(
     name = "probe",

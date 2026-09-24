@@ -6,7 +6,9 @@ load("//rules:corpus_service.bzl", "corpus_service")
 load("//rules:realworld_app.bzl", "datadog_env", "datadog_python_injection", "datadog_ruby_injection", "otlp_env", "python_auto_injection", "ruby_auto_injection")
 load("//rules:realworld_service_tests.bzl", "realworld_service_tests")
 load("//rules:otel_profile.bzl", "otel_report_manifest")
+load("@rules_itest//:itest.bzl", "service_test")
 load(":external_features.bzl", "datadog_parallel_tests", "datadog_external_feature_tests", "external_feature_tests")
+load(":telemetry_lab.bzl", "python_telemetry_lab_variants")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -30,6 +32,143 @@ _RAILS_ENV = otlp_env(
 _GIN_ENV = otlp_env(
     logs = False,
     extra = {"OTEL_RESOURCE_ATTRIBUTES": "process.owner=nonroot"},
+)
+
+# Standalone SDK workloads exercise APIs that the RealWorld contract never calls.
+# Their source is supplied as a Bazel runfile while the language runtime and
+# instrumentation still come from the locked OCI images.
+genrule(
+    name = "python_telemetry_lab_plan",
+    outs = ["python-telemetry-lab.proof-plan.json"],
+    cmd = "$(location //harness:telemetry_lab_plan) --language=python --out=$@",
+    tools = ["//harness:telemetry_lab_plan"],
+)
+
+genrule(
+    name = "ruby_telemetry_lab_plan",
+    outs = ["ruby-telemetry-lab.proof-plan.json"],
+    cmd = "$(location //harness:telemetry_lab_plan) --language=ruby --out=$@",
+    tools = ["//harness:telemetry_lab_plan"],
+)
+
+genrule(
+    name = "go_telemetry_lab_plan",
+    outs = ["go-telemetry-lab.proof-plan.json"],
+    cmd = "$(location //harness:telemetry_lab_plan) --language=go --out=$@",
+    tools = ["//harness:telemetry_lab_plan"],
+)
+
+corpus_service(
+    name = "python_telemetry_lab_service",
+    rootfs = "//harness:aiohttp_rootfs",
+    runtime = "python",
+    instance = "python-telemetry-lab",
+    command = "$(rlocationpath //fixtures/apps/python/telemetry-lab:app.py)",
+    args = ["--port", "$${PORT}"],
+    data = ["//fixtures/apps/python/telemetry-lab:app.py"],
+    injection = python_auto_injection(),
+    env = otlp_env(extra = {"OTEL_SERVICE_NAME": "python-telemetry-lab", "OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED": "true"}),
+    deps = ["//harness:otel_sink_service"],
+    autoassign_port = True,
+    http_health_check_address = "http://127.0.0.1:$${PORT}/healthz",
+    so_reuseport_aware = True,
+    hygienic = False,
+)
+
+service_test(
+    name = "python_telemetry_lab_test",
+    services = [":python_telemetry_lab_service"],
+    test = "//harness:telemetry_lab_probe",
+    data = ["//fixtures/apps/python/telemetry-lab:app.py", ":python_telemetry_lab_plan"],
+    args = ["--app-suffix=//fixtures:python_telemetry_lab_service", "--sink-suffix=//harness:otel_sink_service", "--language=python", "--source=$(rlocationpath //fixtures/apps/python/telemetry-lab:app.py)", "--proof-plan=$(rlocationpath :python_telemetry_lab_plan)"],
+    tags = ["telemetry"],
+)
+
+python_telemetry_lab_variants()
+
+corpus_service(
+    name = "ruby_telemetry_lab_service",
+    rootfs = "//harness:rails_rootfs",
+    runtime = "ruby",
+    instance = "ruby-telemetry-lab",
+    command = "$(rlocationpath //fixtures/apps/ruby/telemetry-lab:app.rb)",
+    args = ["--port", "$${PORT}"],
+    data = ["//fixtures/apps/ruby/telemetry-lab:app.rb"],
+    injection = ruby_auto_injection(),
+    env = otlp_env(metrics = False, per_signal_endpoints = True, extra = {"OTEL_SERVICE_NAME": "ruby-telemetry-lab", "OTEL_RUBY_ENABLED_INSTRUMENTATIONS": "rack", "OTEL_EXPORTER_OTLP_COMPRESSION": "none"}),
+    deps = ["//harness:otel_sink_service"],
+    autoassign_port = True,
+    http_health_check_address = "http://127.0.0.1:$${PORT}/healthz",
+    so_reuseport_aware = False,
+    hygienic = False,
+    tags = _RAILS_TAGS,
+)
+
+service_test(
+    name = "ruby_telemetry_lab_test",
+    services = [":ruby_telemetry_lab_service"],
+    test = "//harness:telemetry_lab_probe",
+    data = ["//fixtures/apps/ruby/telemetry-lab:app.rb", ":ruby_telemetry_lab_plan"],
+    args = ["--app-suffix=//fixtures:ruby_telemetry_lab_service", "--sink-suffix=//harness:otel_sink_service", "--language=ruby", "--source=$(rlocationpath //fixtures/apps/ruby/telemetry-lab:app.rb)", "--proof-plan=$(rlocationpath :ruby_telemetry_lab_plan)"],
+    tags = ["telemetry"] + _RAILS_TAGS,
+)
+
+corpus_service(
+    name = "go_telemetry_lab_service",
+    exe = "//fixtures/apps/go/telemetry-lab:app",
+    args = ["--port", "$${PORT}"],
+    env = otlp_env(metrics = False, logs = False, extra = {"OTEL_SERVICE_NAME": "go-telemetry-lab"}),
+    deps = ["//harness:otel_sink_service"],
+    autoassign_port = True,
+    http_health_check_address = "http://127.0.0.1:$${PORT}/healthz",
+    so_reuseport_aware = False,
+    hygienic = False,
+)
+
+service_test(
+    name = "go_telemetry_lab_test",
+    services = [":go_telemetry_lab_service"],
+    test = "//harness:telemetry_lab_probe",
+    data = ["//fixtures/apps/go/telemetry-lab:main.go", "//fixtures/apps/go/telemetry-lab:metrics.go", "//fixtures/apps/go/telemetry-lab:sdk_trace.go", ":go_telemetry_lab_plan"],
+    args = ["--app-suffix=//fixtures:go_telemetry_lab_service", "--sink-suffix=//harness:otel_sink_service", "--language=go", "--source=$(rlocationpath //fixtures/apps/go/telemetry-lab:main.go)", "--source-extra=$(rlocationpath //fixtures/apps/go/telemetry-lab:metrics.go)", "--source-extra2=$(rlocationpath //fixtures/apps/go/telemetry-lab:sdk_trace.go)", "--proof-plan=$(rlocationpath :go_telemetry_lab_plan)"],
+    tags = ["telemetry"],
+)
+
+service_test(
+    name = "go_telemetry_lab_retry_after_test",
+    services = [":go_telemetry_lab_service"],
+    test = "//harness:telemetry_lab_probe",
+    data = ["//fixtures/apps/go/telemetry-lab:main.go", "//fixtures/apps/go/telemetry-lab:metrics.go", "//fixtures/apps/go/telemetry-lab:sdk_trace.go", ":go_telemetry_lab_plan"],
+    args = ["--app-suffix=//fixtures:go_telemetry_lab_service", "--sink-suffix=//harness:otel_sink_service", "--language=go", "--scenario=otlp-retry-after", "--source=$(rlocationpath //fixtures/apps/go/telemetry-lab:main.go)", "--source-extra=$(rlocationpath //fixtures/apps/go/telemetry-lab:metrics.go)", "--source-extra2=$(rlocationpath //fixtures/apps/go/telemetry-lab:sdk_trace.go)", "--proof-plan=$(rlocationpath :go_telemetry_lab_plan)"],
+    tags = ["telemetry"],
+)
+
+test_suite(
+    name = "telemetry_lab_suite",
+    tests = [
+        ":go_telemetry_lab_test",
+        ":go_telemetry_lab_retry_after_test",
+        ":python_telemetry_lab_test",
+        ":python_telemetry_lab_links_count_test",
+        ":python_telemetry_lab_link_attributes_test",
+        ":python_telemetry_lab_span_events_test",
+        ":python_telemetry_lab_event_attributes_test",
+        ":python_telemetry_lab_attribute_count_test",
+        ":python_telemetry_lab_span_value_length_test",
+        ":python_telemetry_lab_attribute_value_length_test",
+        ":python_telemetry_lab_resource_attributes_test",
+        ":python_telemetry_lab_default_service_test",
+        ":python_telemetry_lab_disabled_test",
+        ":python_telemetry_lab_sampler_off_test",
+        ":python_telemetry_lab_sampler_arg_zero_test",
+        ":python_telemetry_lab_sampler_arg_one_test",
+        ":python_telemetry_lab_log_count_test",
+        ":python_telemetry_lab_log_length_test",
+        ":python_telemetry_lab_log_length_edge_test",
+        ":python_telemetry_lab_ot_baggage_hyphen_test",
+        ":python_telemetry_lab_exemplars_off_test",
+        ":python_telemetry_lab_histogram_exponential_test",
+    ] + ([":ruby_telemetry_lab_test"] if RUBY_IMAGES_PUBLISHED else []),
 )
 
 corpus_service(
@@ -319,6 +458,13 @@ test_suite(
 otel_report_manifest(
     name = "otel_report_manifest",
     profiles = _REPORT_PROFILES,
+    lab_plans = [":go_telemetry_lab_plan", ":python_telemetry_lab_plan", ":ruby_telemetry_lab_plan"],
+    lab_scenarios = {
+        "go-telemetry-lab": ["base", "otlp-retry-after"],
+        "ruby-telemetry-lab": ["base"],
+        "python-telemetry-lab": ["base", "links-count", "link-attributes", "span-events", "event-attributes", "attribute-count", "span-value-length", "attribute-value-length", "resource-attributes", "default-service", "disabled", "sampler-off", "sampler-arg-zero", "sampler-arg-one", "log-count", "log-length", "log-length-edge", "ot-baggage-hyphen", "exemplars-off", "histogram-exponential"],
+    },
+    unavailable_labs = ["ruby-telemetry-lab"] if not RUBY_IMAGES_PUBLISHED else [],
     # This is an explicit owner declaration, not an inference from missing
     # receipts: an unexpected absent runner remains an assembly failure.
     unavailable_profiles = ["//corpus:ruby-rails-auto-v0-1-0"] if not RUBY_IMAGES_PUBLISHED else [],
