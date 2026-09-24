@@ -358,12 +358,13 @@ receipts.
 
 `//fixtures:external_features_test` compares SDK configuration effects across
 all four fixtures, preserving both passing observations and specific known
-discrepancies. It adds 22 feature IDs beyond the Scheme proof corpus; see
+discrepancies. Its 22 feature IDs are also covered by the standalone lab; see
 [the results and reproduction commands](corpus/EXTERNAL_FEATURES.md).
 
 `//fixtures:telemetry_lab_suite` runs standalone Python, Ruby, and Go API
-workloads and produces accepted report receipts for 114 feature IDs. This adds
-100 distinct IDs beyond the Scheme and external suites; see
+workloads and produces accepted report receipts for 122 feature IDs, including
+all 22 from the external suite. This adds 100 distinct IDs beyond the Scheme
+and external suites; see
 [the lab evidence and reproduction command](corpus/TELEMETRY_LABS.md).
 
 ## Further reading

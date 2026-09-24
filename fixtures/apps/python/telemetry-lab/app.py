@@ -69,7 +69,9 @@ async def spans(request):
         parent.add_event("lab.second", {"lab.order": 2})
         COUNTER.add(1, {"lab.route": "spans"})
         HISTOGRAM.record(12.5, {"lab.route": "spans"})
-        logging.getLogger("telemetry-lab.python").warning("lab span request")
+        logging.getLogger("telemetry-lab.python").warning(
+            "lab span request", extra={"lab_long": "abcdefghijklmnop", "lab_second": "present"}
+        )
         return web.json_response({"recording": parent.is_recording(), "trace_id": format(parent.get_span_context().trace_id, "032x")})
 
 

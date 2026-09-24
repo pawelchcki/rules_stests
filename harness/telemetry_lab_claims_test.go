@@ -94,7 +94,12 @@ func TestLabClaimsAreNewPinnedFeatures(t *testing.T) {
 			newCount++
 		}
 	}
-	if len(unique) != 114 || overlap != 14 || newCount != 100 {
-		t.Fatalf("lab claims: %d total, %d previously supplemental, %d new; want 114/14/100", len(unique), overlap, newCount)
+	for id := range supplementalIDs {
+		if known[id] && existing[id] == "" && !unique[id] {
+			t.Errorf("supplemental feature %s has no telemetry lab proof", id)
+		}
+	}
+	if len(unique) != 122 || overlap != 22 || newCount != 100 {
+		t.Fatalf("lab claims: %d total, %d previously supplemental, %d new; want 122/22/100", len(unique), overlap, newCount)
 	}
 }

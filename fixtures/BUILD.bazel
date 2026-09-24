@@ -147,6 +147,15 @@ test_suite(
         ":python_telemetry_lab_span_value_length_test",
         ":python_telemetry_lab_attribute_value_length_test",
         ":python_telemetry_lab_resource_attributes_test",
+        ":python_telemetry_lab_default_service_test",
+        ":python_telemetry_lab_disabled_test",
+        ":python_telemetry_lab_sampler_off_test",
+        ":python_telemetry_lab_sampler_arg_zero_test",
+        ":python_telemetry_lab_sampler_arg_one_test",
+        ":python_telemetry_lab_log_count_test",
+        ":python_telemetry_lab_log_length_test",
+        ":python_telemetry_lab_exemplars_off_test",
+        ":python_telemetry_lab_histogram_exponential_test",
     ] + ([":ruby_telemetry_lab_test"] if RUBY_IMAGES_PUBLISHED else []),
 )
 
@@ -441,7 +450,7 @@ otel_report_manifest(
     lab_scenarios = {
         "go-telemetry-lab": ["base"],
         "ruby-telemetry-lab": ["base"],
-        "python-telemetry-lab": ["base", "links-count", "link-attributes", "span-events", "event-attributes", "attribute-count", "span-value-length", "attribute-value-length", "resource-attributes"],
+        "python-telemetry-lab": ["base", "links-count", "link-attributes", "span-events", "event-attributes", "attribute-count", "span-value-length", "attribute-value-length", "resource-attributes", "default-service", "disabled", "sampler-off", "sampler-arg-zero", "sampler-arg-one", "log-count", "log-length", "exemplars-off", "histogram-exponential"],
     },
     unavailable_labs = ["ruby-telemetry-lab"] if not RUBY_IMAGES_PUBLISHED else [],
     # This is an explicit owner declaration, not an inference from missing

@@ -125,6 +125,15 @@ var labClaims = map[string][]string{
 }
 
 var labVariantClaims = map[string][]string{
+	"default-service":       {"resource.default-value-for-service-name"},
+	"disabled":              {"environment-variables.otel-sdk-disabled"},
+	"sampler-off":           {"environment-variables.otel-traces-sampler"},
+	"sampler-arg-zero":      {"environment-variables.otel-traces-sampler-arg"},
+	"sampler-arg-one":       {}, // Positive control for sampler-arg-zero.
+	"log-count":             {"environment-variables.otel-logrecord-attribute-count-limit"},
+	"log-length":            {"environment-variables.otel-logrecord-attribute-value-length-limit"},
+	"exemplars-off":         {"environment-variables.otel-metrics-exemplar-filter"},
+	"histogram-exponential": {"environment-variables.otel-exporter-otlp-metrics-default-histogram-aggregation"},
 	"resource-attributes": {
 		"environment-variables.otel-resource-attributes",
 	},

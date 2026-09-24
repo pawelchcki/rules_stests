@@ -5,7 +5,8 @@ small HTTP applications. They do not use RealWorld routes or databases. Python
 and Ruby run with the digest-pinned auto-instrumentation images; Go uses pinned
 Go SDK modules. Each language has one application containing its feature
 endpoints. The Python application is launched under several environment
-configurations because limits and resource settings are set at process startup.
+configurations because SDK settings are read at process startup. These variants
+also carry every feature ID from the earlier supplemental configuration suite.
 
 Run the complete suite and produce current-revision receipts:
 
@@ -19,17 +20,17 @@ REPORT_REVISION="$revision" REPORT_REPOSITORY=owner/repository \
   REPORT_BAZEL_CONFIG=local tools/assemble_otel_report.sh
 ```
 
-The lab suite has **114 distinct catalog IDs with accepted passing receipts**.
-None overlap the 85 Scheme proof-rule IDs. Fourteen overlap the earlier
-supplemental configuration experiments, leaving **100 IDs new across all three
-suites**. The catalog test checks those counts against the pinned matrix. These
-are feature IDs, not language/feature pairs or HTTP requests. A local combined
-run accepted 74 receipts, including 11 lab receipts, and marked 197 distinct
-IDs verified in the assembled report.
+The lab suite has **122 distinct catalog IDs with passing receipt-producing
+tests**. None overlap the 85 Scheme proof-rule IDs. All 22 IDs from the earlier
+supplemental configuration experiments now have standalone lab proofs, leaving
+**100 IDs new across all three suites**. The catalog test checks those counts
+against the pinned matrix. These are feature IDs, not language/feature pairs or
+HTTP requests. The report assembly command above validates and accepts the
+receipts for the current revision.
 
 | Application | Evidence exercised |
 | --- | --- |
-| Python | span lifecycle, links and limits, context and baggage, log SDK, custom carrier accessors, Prometheus metric mapping |
+| Python | span lifecycle, links and limits, context and baggage, log SDK, custom carrier accessors, Prometheus metric mapping, SDK environment settings |
 | Ruby | span attributes and events, baggage |
 | Go | span concurrency and SDK processing, resources, meter views and cardinality, metric exporters and exemplars |
 
@@ -51,5 +52,5 @@ bazel-testlogs/fixtures/go_telemetry_lab_test/test.outputs/receipts/go-telemetry
 The report assembler checks each lab receipt's revision, plan hash, capture
 hash, and complete proof set before assigning **Verified here**. A claim applies
 only to the pinned SDK, application call, and output asserted by its probe. The
-earlier configuration experiments and their known gaps remain described in
+earlier RealWorld configuration comparisons and their known gaps remain described in
 [External feature experiments](EXTERNAL_FEATURES.md).

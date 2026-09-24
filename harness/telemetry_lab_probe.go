@@ -67,13 +67,18 @@ func labPlanProofs(data []byte, language, scenario string) ([]report.ReceiptProo
 	return proofs, nil
 }
 
-func labAcceptedCapture(capture, responses []byte) ([]byte, error) {
+func labAcceptedCapture(capture, responses []byte, scenario string) ([]byte, error) {
 	var records []json.RawMessage
 	if err := json.Unmarshal(capture, &records); err != nil {
 		return nil, err
 	}
 	if len(records) == 0 {
-		return nil, fmt.Errorf("lab receipt needs captured telemetry")
+		if scenario != "disabled" {
+			return nil, fmt.Errorf("lab receipt needs captured telemetry")
+		}
+		// A disabled SDK has no OTLP record to bind the observed HTTP result to.
+		// The probe verifies the empty sink before recording this control result.
+		records = append(records, json.RawMessage(`{"signal":"lab-control"}`))
 	}
 	var first map[string]json.RawMessage
 	if err := json.Unmarshal(records[0], &first); err != nil {
@@ -106,7 +111,7 @@ func labWriteReceipt(root, language, scenario string, plan, capture, responses [
 	if root == "" {
 		return fmt.Errorf("TEST_UNDECLARED_OUTPUTS_DIR is unavailable for lab receipt")
 	}
-	accepted, err := labAcceptedCapture(capture, responses)
+	accepted, err := labAcceptedCapture(capture, responses, scenario)
 	if err != nil {
 		return err
 	}
@@ -265,6 +270,19 @@ func labVerify(data []byte, language, scenario string) error {
 		return err
 	}
 	spans := labObjects(records, "spans")
+	if language == "python" && (scenario == "disabled" || scenario == "sampler-off" || scenario == "sampler-arg-zero") {
+		if len(spans) != 0 {
+			return fmt.Errorf("%s exported %d spans", scenario, len(spans))
+		}
+		if scenario == "disabled" {
+			if len(labObjects(records, "metrics")) != 0 || len(labObjects(records, "log_records")) != 0 {
+				return fmt.Errorf("disabled SDK exported telemetry")
+			}
+		} else if labNamed(labObjects(records, "metrics"), "lab.requests") == nil {
+			return fmt.Errorf("%s produced no positive metric control", scenario)
+		}
+		return nil
+	}
 	parent := labNamed(spans, "lab.parent")
 	child := labNamed(spans, "lab.child.renamed")
 	exception := labNamed(spans, "lab.exception")
@@ -360,6 +378,17 @@ func labVerify(data []byte, language, scenario string) error {
 		}
 	}
 	if language == "python" {
+		if scenario == "default-service" {
+			found := false
+			for _, resourceSpans := range labObjects(records, "resource_spans") {
+				resource, _ := labField(resourceSpans, "resource").(map[string]any)
+				name := fmt.Sprint(labField(labAttribute(resource, "service.name"), "string_value"))
+				found = found || strings.HasPrefix(name, "unknown_service")
+			}
+			if !found {
+				return fmt.Errorf("default service name was not exported")
+			}
+		}
 		if scenario == "resource-attributes" {
 			found := false
 			for _, resourceSpans := range labObjects(records, "resource_spans") {
@@ -431,12 +460,50 @@ func labVerify(data []byte, language, scenario string) error {
 				return fmt.Errorf("missing Python metric %s", name)
 			}
 		}
+		duration := labNamed(metrics, "lab.duration")
+		data, _ := labField(duration, "data").(map[string]any)
+		aggregation := "histogram"
+		if scenario == "histogram-exponential" {
+			aggregation = "exponential_histogram"
+		}
+		if labField(data, aggregation) == nil {
+			return fmt.Errorf("Python histogram aggregation is not %s", aggregation)
+		}
+		requests := labNamed(metrics, "lab.requests")
+		requestData, _ := labField(requests, "data").(map[string]any)
+		sum, _ := labField(requestData, "sum").(map[string]any)
+		points, _ := labField(sum, "data_points").([]any)
+		exemplarCount := 0
+		for _, point := range points {
+			item, _ := point.(map[string]any)
+			exemplars, _ := labField(item, "exemplars").([]any)
+			exemplarCount += len(exemplars)
+		}
+		if scenario == "exemplars-off" && exemplarCount != 0 {
+			return fmt.Errorf("always_off retained %d exemplars", exemplarCount)
+		}
+		if scenario == "base" && exemplarCount == 0 {
+			return fmt.Errorf("baseline emitted no metric exemplars")
+		}
 		correlatedLog := false
 		for _, record := range labObjects(records, "log_records") {
 			body, _ := labField(record, "body").(map[string]any)
 			value, _ := labField(body, "value").(map[string]any)
 			if labField(value, "string_value") == "lab span request" && labField(record, "trace_id") == labField(parent, "trace_id") && labField(record, "span_id") == labField(parent, "span_id") {
 				correlatedLog = true
+				attrs, _ := labField(record, "attributes").([]any)
+				if scenario == "log-count" {
+					dropped, ok := labUint(labField(record, "dropped_attributes_count"))
+					if len(attrs) != 1 || !ok || dropped < 1 {
+						return fmt.Errorf("log attribute limit: %d retained, %d dropped", len(attrs), dropped)
+					}
+				}
+				if scenario == "log-length" && labField(labAttribute(record, "lab_long"), "string_value") != "abcdefgh" {
+					return fmt.Errorf("log value length was not limited to 8")
+				}
+				if scenario == "base" && labField(labAttribute(record, "lab_long"), "string_value") != "abcdefghijklmnop" {
+					return fmt.Errorf("baseline log value was truncated")
+				}
 			}
 		}
 		if !correlatedLog {
@@ -674,6 +741,10 @@ func main() {
 	if *language == "go" {
 		paths = []string{"/v1/spans", "/v1/exceptions", "/v1/propagation", "/v1/concurrency", "/v1/resources", "/v1/metric-views", "/v1/metric-advanced", "/v1/metric-exporter", "/v1/metric-exemplars", "/v1/sdk-trace"}
 	}
+	negative := *language == "python" && (*scenario == "disabled" || *scenario == "sampler-off" || *scenario == "sampler-arg-zero")
+	if negative {
+		paths = []string{"/v1/spans", "/v1/metrics"}
+	}
 	responses := map[string]labObject{}
 	for _, path := range paths {
 		body, err := labRequest(client, "GET", app+path)
@@ -685,6 +756,12 @@ func main() {
 			panic(err)
 		}
 		responses[path] = response
+		if path == "/v1/spans" && negative && labField(response, "recording") != false {
+			panic(fmt.Errorf("%s still recorded a span: %s", *scenario, body))
+		}
+		if path == "/v1/spans" && *scenario == "sampler-arg-one" && labField(response, "recording") != true {
+			panic(fmt.Errorf("sampler ratio 1 did not record a span: %s", body))
+		}
 		switch path {
 		case "/v1/sdk-trace":
 			if err := labVerifySDKTrace(response); err != nil {
@@ -754,6 +831,9 @@ func main() {
 		}
 	}
 	var capture []byte
+	if *scenario == "disabled" {
+		time.Sleep(2 * time.Second)
+	}
 	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
 		capture, err = labRequest(client, "GET", sink+"/dump")
