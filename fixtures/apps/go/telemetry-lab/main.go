@@ -159,6 +159,14 @@ func main() {
 		}
 		respond(w, result)
 	})
+	mux.HandleFunc("GET /v1/otlp-partial", func(w http.ResponseWriter, r *http.Request) {
+		result, err := inspectOTLPPartialSuccess(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		respond(w, result)
+	})
 	mux.HandleFunc("GET /v1/propagation", func(w http.ResponseWriter, r *http.Request) {
 		ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
 		remoteParent := trace.SpanContextFromContext(ctx).IsRemote()

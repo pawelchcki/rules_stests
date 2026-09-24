@@ -4,6 +4,7 @@ package main
 // captured-OTLP checks pass. These IDs are pinned catalog rows, not test names.
 var labClaims = map[string][]string{
 	"go": {
+		"exporters.otlp.partial-success-messages-are-handled-and-logged-for-otlp-http",
 		"metrics.the-metrics-exporter-forceflush-can-inform-the-caller-whether-it-succeeded-failed-or-timed-out",
 		"exporters.otlp.concurrent-sending",
 		"exporters.otlp.honors-non-retryable-responses",
@@ -80,6 +81,8 @@ var labClaims = map[string][]string{
 		"baggage.basic-support",
 	},
 	"python": {
+		"metrics.the-supplied-name-version-and-schema-url-arguments-passed-to-the-meterprovider-are-used-to-create-an-instrumentationscope-instance-stored-in-the-meter",
+		"exporters.otlp.schemaurl-in-resourcelogs-and-scopelogs",
 		"traces.span.no-explicit-parent-span-spancontext-allowed",
 		"context-propagation.jaeger-propagator",
 		"context-propagation.ot-propagator",

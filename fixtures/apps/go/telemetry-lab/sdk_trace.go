@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/baggage"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
@@ -22,6 +23,49 @@ import (
 )
 
 type traceProbeKey struct{}
+
+type labErrorRecorder struct {
+	mu       sync.Mutex
+	messages []string
+}
+
+func (r *labErrorRecorder) Handle(err error) {
+	r.mu.Lock()
+	r.messages = append(r.messages, err.Error())
+	r.mu.Unlock()
+}
+
+func inspectOTLPPartialSuccess(ctx context.Context) (any, error) {
+	message := "lab partial"
+	// ExportTraceServiceResponse.partial_success contains rejected_spans=1
+	// and error_message="lab partial" in protobuf wire format.
+	partial := append([]byte{0x08, 0x01, 0x12, byte(len(message))}, []byte(message)...)
+	response := append([]byte{0x0a, byte(len(partial))}, partial...)
+	requests := 0
+	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		_, _ = w.Write(response)
+	}))
+	defer collector.Close()
+	exporter, err := otlptracehttp.New(ctx, otlptracehttp.WithEndpointURL(collector.URL+"/v1/traces"))
+	if err != nil {
+		return nil, err
+	}
+	recorder := &labErrorRecorder{}
+	previous := otel.GetErrorHandler()
+	otel.SetErrorHandler(recorder)
+	defer otel.SetErrorHandler(previous)
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	_, span := provider.Tracer("lab.partial").Start(ctx, "lab.partial")
+	span.End()
+	if err := provider.Shutdown(ctx); err != nil {
+		return nil, err
+	}
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	return map[string]any{"requests": requests, "messages": recorder.messages}, nil
+}
 
 type traceProbeSampler struct {
 	parentID string

@@ -138,7 +138,9 @@ async def metric_scope(request):
     result = [{"name": scope.name, "version": scope.version,
                "schema_url": scope.schema_url} for scope in scopes]
     provider.shutdown()
-    return web.json_response({"scopes": result})
+    return web.json_response({"scopes": result,
+                              "meter": {"name": meter.name, "version": meter.version,
+                                        "schema_url": meter.schema_url}})
 
 
 class LabLogObject:

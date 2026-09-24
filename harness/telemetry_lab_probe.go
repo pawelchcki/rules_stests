@@ -731,6 +731,10 @@ func labVerifyPrometheus(response labObject) error {
 }
 
 func labVerifyMetricScope(response labObject) error {
+	meter, _ := labField(response, "meter").(map[string]any)
+	if labField(meter, "name") != "lab.scope.name" || labField(meter, "version") != "2.3.4" || labField(meter, "schema_url") != "https://example.test/schema/2" {
+		return fmt.Errorf("metric meter metadata mismatch: %v", meter)
+	}
 	scopes, _ := labField(response, "scopes").([]any)
 	if len(scopes) != 1 {
 		return fmt.Errorf("metric scope count = %d, want 1", len(scopes))
@@ -815,6 +819,17 @@ func labVerifyOTLPHTTP(response labObject, scenario string) error {
 	return nil
 }
 
+func labVerifyOTLPPartialSuccess(response labObject) error {
+	if labField(response, "requests") != float64(1) {
+		return fmt.Errorf("OTLP partial success request count is wrong: %v", response)
+	}
+	messages, _ := labField(response, "messages").([]any)
+	if len(messages) != 1 || !strings.Contains(fmt.Sprint(messages[0]), "lab partial") || !strings.Contains(fmt.Sprint(messages[0]), "1 spans rejected") {
+		return fmt.Errorf("OTLP partial success was not reported through the SDK error handler: %v", messages)
+	}
+	return nil
+}
+
 func main() {
 	appSuffix := flag.String("app-suffix", "", "application service label suffix")
 	sinkSuffix := flag.String("sink-suffix", "", "sink service label suffix")
@@ -884,7 +899,7 @@ func main() {
 		}
 	}
 	if *language == "go" {
-		paths = []string{"/v1/spans", "/v1/exceptions", "/v1/propagation", "/v1/concurrency", "/v1/resources", "/v1/metric-views", "/v1/metric-advanced", "/v1/metric-exporter", "/v1/metric-exemplars", "/v1/sdk-trace", "/v1/otlp-http"}
+		paths = []string{"/v1/spans", "/v1/exceptions", "/v1/propagation", "/v1/concurrency", "/v1/resources", "/v1/metric-views", "/v1/metric-advanced", "/v1/metric-exporter", "/v1/metric-exemplars", "/v1/sdk-trace", "/v1/otlp-http", "/v1/otlp-partial"}
 	}
 	negative := *language == "python" && (*scenario == "disabled" || *scenario == "sampler-off" || *scenario == "sampler-arg-zero")
 	if negative {
@@ -908,6 +923,10 @@ func main() {
 			panic(fmt.Errorf("sampler ratio 1 did not record a span: %s", body))
 		}
 		switch path {
+		case "/v1/otlp-partial":
+			if err := labVerifyOTLPPartialSuccess(response); err != nil {
+				panic(err)
+			}
 		case "/v1/otlp-http":
 			if err := labVerifyOTLPHTTP(response, *scenario); err != nil {
 				panic(err)

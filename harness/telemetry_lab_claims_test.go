@@ -54,6 +54,12 @@ func TestLabClaimsAreNewPinnedFeatures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// These rule definitions had no accepted receipts. The labs now give them
+	// direct runtime evidence while preserving their existing catalog ownership.
+	corroborated := map[string]bool{
+		"metrics.the-supplied-name-version-and-schema-url-arguments-passed-to-the-meterprovider-are-used-to-create-an-instrumentationscope-instance-stored-in-the-meter": true,
+		"exporters.otlp.schemaurl-in-resourcelogs-and-scopelogs": true,
+	}
 	unique := map[string]bool{}
 	for language, claims := range labClaims {
 		seen := map[string]bool{}
@@ -61,7 +67,7 @@ func TestLabClaimsAreNewPinnedFeatures(t *testing.T) {
 			if !known[id] {
 				t.Errorf("%s claims unknown feature %s", language, id)
 			}
-			if existing[id] != "" {
+			if existing[id] != "" && !corroborated[id] {
 				t.Errorf("%s claims already-covered feature %s", language, id)
 			}
 			if seen[id] {
@@ -72,7 +78,7 @@ func TestLabClaimsAreNewPinnedFeatures(t *testing.T) {
 	}
 	for scenario, claims := range labVariantClaims {
 		for _, id := range claims {
-			if !known[id] || existing[id] != "" || unique[id] {
+			if !known[id] || (existing[id] != "" && !corroborated[id]) || unique[id] {
 				t.Errorf("%s variant has invalid or overlapping claim %s", scenario, id)
 			}
 			unique[id] = true
@@ -86,11 +92,15 @@ func TestLabClaimsAreNewPinnedFeatures(t *testing.T) {
 	for _, match := range regexp.MustCompile(`"([a-z][a-z0-9.-]*\.[a-z0-9.-]+)"`).FindAllStringSubmatch(string(supplementalSource), -1) {
 		supplementalIDs[match[1]] = true
 	}
-	newCount, overlap := 0, 0
+	newCount, supplementalOverlap, schemeOverlap := 0, 0, 0
 	for id := range unique {
 		if supplementalIDs[id] {
-			overlap++
-		} else {
+			supplementalOverlap++
+		}
+		if existing[id] != "" {
+			schemeOverlap++
+		}
+		if !supplementalIDs[id] && existing[id] == "" {
 			newCount++
 		}
 	}
@@ -99,7 +109,7 @@ func TestLabClaimsAreNewPinnedFeatures(t *testing.T) {
 			t.Errorf("supplemental feature %s has no telemetry lab proof", id)
 		}
 	}
-	if len(unique) != 133 || overlap != 22 || newCount != 111 {
-		t.Fatalf("lab claims: %d total, %d previously supplemental, %d new; want 133/22/111", len(unique), overlap, newCount)
+	if len(unique) != 136 || supplementalOverlap != 22 || schemeOverlap != 2 || newCount != 112 {
+		t.Fatalf("lab claims: %d total, %d supplemental, %d prior rule definitions, %d new; want 136/22/2/112", len(unique), supplementalOverlap, schemeOverlap, newCount)
 	}
 }

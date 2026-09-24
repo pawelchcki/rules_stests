@@ -20,10 +20,11 @@ REPORT_REVISION="$revision" REPORT_REPOSITORY=owner/repository \
   REPORT_BAZEL_CONFIG=local tools/assemble_otel_report.sh
 ```
 
-The lab suite has **133 distinct catalog IDs with passing receipt-producing
-tests**. None overlap the 85 Scheme proof-rule IDs. All 22 IDs from the earlier
-supplemental configuration experiments now have standalone lab proofs, leaving
-**111 IDs new across all three suites**. The catalog test checks those counts
+The lab suite has **136 distinct catalog IDs with passing receipt-producing
+tests**. Two overlap earlier Scheme proof-rule definitions that lacked accepted
+receipts. All 22 IDs from the earlier supplemental configuration experiments
+now have standalone lab proofs, leaving **112 IDs new across all three suites**.
+The catalog test checks those counts
 against the pinned matrix. These are feature IDs, not language/feature pairs or
 HTTP requests. The report assembly command above validates and accepts the
 receipts for the current revision.
@@ -32,7 +33,7 @@ receipts for the current revision.
 | --- | --- |
 | Python | span lifecycle and explicit roots, links and limits, context and baggage including Jaeger and OpenTracing headers, log SDK and schema URLs, Prometheus metric mapping, SDK environment settings |
 | Ruby | span attributes and events, baggage |
-| Go | span concurrency and SDK processing, resources, meter views and cardinality, metric exporter flush outcomes and exemplars, OTLP HTTP retry and gzip behavior |
+| Go | span concurrency and SDK processing, resources, meter views and cardinality, metric exporter flush outcomes and exemplars, OTLP HTTP retry, gzip, concurrent export, and partial-success handling |
 
 The HTTP probe calls each endpoint and checks both endpoint results and decoded
 OTLP collected by the sink. Go's manual readers and Python's Prometheus reader
@@ -95,4 +96,6 @@ straight to a Go `time.Duration`, which interprets it as nanoseconds. This
 scenario also emits an `xfail` receipt and does not claim throttling support.
 The same in-process collector verifies that `400` is not retried, `503` is
 retried with backoff, gzip payloads can be decompressed, and four exports can
-be sent concurrently.
+be sent concurrently. A separate protobuf partial-success response verifies
+that the Go SDK reports the collector's rejection count and message through
+its error handler.
