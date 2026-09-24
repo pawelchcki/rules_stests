@@ -83,7 +83,8 @@ actions:
             --nobuild_event_json_file_path_conversion \
             --remote_download_outputs=toplevel \
             "${IMAGE_FLAGS[@]}" \
-            //fixtures:otel_report_suite
+            //fixtures:otel_report_suite \
+            //fixtures:telemetry_lab_suite
           REPORT_BAZEL_CONFIG=buildbuddy \
             REPORT_REPOSITORY=pawelchcki/rules_stests \
             REPORT_REVISION="$REPORT_REVISION" \
