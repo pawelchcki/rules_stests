@@ -723,7 +723,8 @@ function syncControlsFromHash() {
     $('search').value = params.get('q') || '';
     if (params.get('verifiedOnly') === '1') $('verification').value = 'verified';
     $('verified-only').checked = $('verification').value === 'verified';
-    document.querySelector('.advanced-filters').open = !!(params.get('profile') || params.get('verification') || params.get('basis') || params.get('check-coverage'));
+    document.querySelector('.advanced-filters').open = !!(params.get('profile') || params.get('verification') ||
+      params.get('verifiedOnly') === '1' || params.get('basis') || params.get('check-coverage'));
     // A filtered legacy link must reveal its matches even after manual collapse.
     if (params.toString()) collapsedCategories.clear();
   }

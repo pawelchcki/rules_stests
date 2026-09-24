@@ -166,7 +166,8 @@ a.tile:hover { border-color: var(--info); text-decoration: none; }
 .scroll { max-width: 100%; overflow: auto; max-height: 74vh; border: 1px solid var(--line); border-radius: var(--radius); }
 table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; border-bottom: 1px solid var(--line); padding: 14px 16px; vertical-align: top; }
-th { position: sticky; top: 0; z-index: 1; background: var(--surface-2); color: var(--ink-2); font-size: 14px; font-weight: 600; }
+th { background: var(--surface-2); color: var(--ink-2); font-size: 14px; font-weight: 600; }
+thead th { position: sticky; top: 0; z-index: 1; }
 tbody tr:hover { background: var(--surface-2); }
 td.numeric, th.numeric { text-align: right; font-variant-numeric: tabular-nums; }
 
