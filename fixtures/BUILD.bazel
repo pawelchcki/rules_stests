@@ -134,10 +134,20 @@ service_test(
     tags = ["telemetry"],
 )
 
+service_test(
+    name = "go_telemetry_lab_retry_after_test",
+    services = [":go_telemetry_lab_service"],
+    test = "//harness:telemetry_lab_probe",
+    data = ["//fixtures/apps/go/telemetry-lab:main.go", "//fixtures/apps/go/telemetry-lab:metrics.go", "//fixtures/apps/go/telemetry-lab:sdk_trace.go", ":go_telemetry_lab_plan"],
+    args = ["--app-suffix=//fixtures:go_telemetry_lab_service", "--sink-suffix=//harness:otel_sink_service", "--language=go", "--scenario=otlp-retry-after", "--source=$(rlocationpath //fixtures/apps/go/telemetry-lab:main.go)", "--source-extra=$(rlocationpath //fixtures/apps/go/telemetry-lab:metrics.go)", "--source-extra2=$(rlocationpath //fixtures/apps/go/telemetry-lab:sdk_trace.go)", "--proof-plan=$(rlocationpath :go_telemetry_lab_plan)"],
+    tags = ["telemetry"],
+)
+
 test_suite(
     name = "telemetry_lab_suite",
     tests = [
         ":go_telemetry_lab_test",
+        ":go_telemetry_lab_retry_after_test",
         ":python_telemetry_lab_test",
         ":python_telemetry_lab_links_count_test",
         ":python_telemetry_lab_link_attributes_test",
@@ -155,6 +165,7 @@ test_suite(
         ":python_telemetry_lab_log_count_test",
         ":python_telemetry_lab_log_length_test",
         ":python_telemetry_lab_log_length_edge_test",
+        ":python_telemetry_lab_ot_baggage_hyphen_test",
         ":python_telemetry_lab_exemplars_off_test",
         ":python_telemetry_lab_histogram_exponential_test",
     ] + ([":ruby_telemetry_lab_test"] if RUBY_IMAGES_PUBLISHED else []),
@@ -449,9 +460,9 @@ otel_report_manifest(
     profiles = _REPORT_PROFILES,
     lab_plans = [":go_telemetry_lab_plan", ":python_telemetry_lab_plan", ":ruby_telemetry_lab_plan"],
     lab_scenarios = {
-        "go-telemetry-lab": ["base"],
+        "go-telemetry-lab": ["base", "otlp-retry-after"],
         "ruby-telemetry-lab": ["base"],
-        "python-telemetry-lab": ["base", "links-count", "link-attributes", "span-events", "event-attributes", "attribute-count", "span-value-length", "attribute-value-length", "resource-attributes", "default-service", "disabled", "sampler-off", "sampler-arg-zero", "sampler-arg-one", "log-count", "log-length", "log-length-edge", "exemplars-off", "histogram-exponential"],
+        "python-telemetry-lab": ["base", "links-count", "link-attributes", "span-events", "event-attributes", "attribute-count", "span-value-length", "attribute-value-length", "resource-attributes", "default-service", "disabled", "sampler-off", "sampler-arg-zero", "sampler-arg-one", "log-count", "log-length", "log-length-edge", "ot-baggage-hyphen", "exemplars-off", "histogram-exponential"],
     },
     unavailable_labs = ["ruby-telemetry-lab"] if not RUBY_IMAGES_PUBLISHED else [],
     # This is an explicit owner declaration, not an inference from missing

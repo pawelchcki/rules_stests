@@ -124,6 +124,14 @@ func labWriteReceipt(root, language, scenario string, plan, capture, responses [
 		receipt.Outcome = "xfail"
 		receipt.XFailReason = "Python SDK 1.44.0 exports 16-byte and stringified-object log attributes under an eight-character value limit"
 	}
+	if scenario == "ot-baggage-hyphen" {
+		receipt.Outcome = "xfail"
+		receipt.XFailReason = "Python OpenTracing propagator 0.65b0 filters a valid hyphenated baggage key from outbound headers"
+	}
+	if scenario == "otlp-retry-after" {
+		receipt.Outcome = "xfail"
+		receipt.XFailReason = "Go OTLP HTTP exporter 1.44.0 treats Retry-After seconds as nanoseconds"
+	}
 	encoded, err := json.MarshalIndent(receipt, "", "  ")
 	if err != nil {
 		return err
@@ -382,6 +390,37 @@ func labVerify(data []byte, language, scenario string) error {
 		}
 	}
 	if language == "python" {
+		root := labNamed(spans, "lab.explicit-root")
+		if root == nil || labField(root, "parent_span_id") != "" || labField(root, "trace_id") == "" {
+			return fmt.Errorf("explicit Python root span has a parent or was not exported")
+		}
+		schemaLog := false
+		for _, resourceLogs := range labObjects(records, "resource_logs") {
+			if labField(resourceLogs, "schema_url") != "https://example.test/schema/resource" {
+				continue
+			}
+			scopeLogs, _ := labField(resourceLogs, "scope_logs").([]any)
+			for _, rawScopeLogs := range scopeLogs {
+				item, _ := rawScopeLogs.(map[string]any)
+				if labField(item, "schema_url") != "https://example.test/schema/scope" {
+					continue
+				}
+				scope, _ := labField(item, "scope").(map[string]any)
+				if labField(scope, "name") != "lab.schema.log" {
+					continue
+				}
+				logs, _ := labField(item, "log_records").([]any)
+				for _, rawLog := range logs {
+					logRecord, _ := rawLog.(map[string]any)
+					body, _ := labField(logRecord, "body").(map[string]any)
+					value, _ := labField(body, "value").(map[string]any)
+					schemaLog = schemaLog || labField(value, "string_value") == "lab schema log"
+				}
+			}
+		}
+		if !schemaLog {
+			return fmt.Errorf("OTLP log resource and scope schema URLs were not exported together")
+		}
 		if scenario == "default-service" {
 			found := false
 			for _, resourceSpans := range labObjects(records, "resource_spans") {
@@ -628,7 +667,7 @@ func labVerifyMetricAdvanced(response labObject) error {
 }
 
 func labVerifyMetricExporter(response labObject) error {
-	if labField(response, "first_value") != float64(5) || labField(response, "first_batch") != float64(1) || labField(response, "first_calls") != float64(1) || labField(response, "first_flushed") != true || labField(response, "controlled_failure") != true || labField(response, "maximum_concurrent") != float64(1) || labField(response, "shutdown") != true || labField(response, "flush") != true {
+	if labField(response, "first_value") != float64(5) || labField(response, "first_batch") != float64(1) || labField(response, "first_calls") != float64(1) || labField(response, "first_flushed") != true || labField(response, "controlled_failure") != true || labField(response, "flush_failure") != true || labField(response, "flush_timeout") != true || labField(response, "provider_flush_timeout") != true || labField(response, "maximum_concurrent") != float64(1) || labField(response, "shutdown") != true || labField(response, "flush") != true {
 		return fmt.Errorf("Go periodic metric exporter contract failed: %v", response)
 	}
 	if calls, _ := labField(response, "calls").(float64); calls < 10 {
@@ -703,6 +742,28 @@ func labVerifyMetricScope(response labObject) error {
 	return nil
 }
 
+func labVerifyLegacyPropagators(response labObject, scenario string) error {
+	wantTrace := "0000000000000000123456789abcdef0"
+	wantSpan := "123456789abcdef0"
+	for _, name := range []string{"jaeger", "ot"} {
+		item, _ := labField(response, name).(map[string]any)
+		if item == nil || labField(item, "trace_id") != wantTrace || labField(item, "span_id") != wantSpan || labField(item, "remote") != true || labField(item, "sampled") != true || labField(item, "baggage") != "lab-value" {
+			return fmt.Errorf("%s propagation did not round-trip trace and baggage: %v", name, item)
+		}
+		carrier, _ := labField(item, "carrier").(map[string]any)
+		if name == "jaeger" {
+			if !strings.HasPrefix(fmt.Sprint(carrier["uber-trace-id"]), wantTrace+":"+wantSpan+":") || carrier["uberctx-labkey"] != "lab-value" || carrier["uberctx-lab-key"] != "hyphen-value" || labField(item, "hyphen_baggage") != "hyphen-value" {
+				return fmt.Errorf("Jaeger headers were not written: %v", carrier)
+			}
+		} else if carrier["ot-tracer-traceid"] != wantSpan || carrier["ot-tracer-spanid"] != wantSpan || carrier["ot-tracer-sampled"] != "true" || carrier["ot-baggage-labkey"] != "lab-value" {
+			return fmt.Errorf("OpenTracing headers were not written: %v", carrier)
+		} else if scenario == "ot-baggage-hyphen" && (carrier["ot-baggage-lab-key"] != nil || labField(item, "hyphen_baggage") != nil) {
+			return fmt.Errorf("OpenTracing hyphenated baggage gap changed: %v", item)
+		}
+	}
+	return nil
+}
+
 func labVerifySDKTrace(response labObject) error {
 	parent := "0102030405060708"
 	if labField(response, "parent_id") != parent || labField(response, "sampler_parent_id") != parent || labField(response, "processor_parent_id") != parent {
@@ -721,6 +782,39 @@ func labVerifySDKTrace(response labObject) error {
 	return nil
 }
 
+func labVerifyOTLPHTTP(response labObject, scenario string) error {
+	concurrent, _ := labField(response, "concurrent").(map[string]any)
+	maximum, _ := labField(concurrent, "maximum").(float64)
+	if concurrent == nil || labField(concurrent, "requests") != float64(4) || labField(concurrent, "successes") != float64(4) || maximum < 2 {
+		return fmt.Errorf("OTLP HTTP exporter did not send concurrently: %v", concurrent)
+	}
+	for _, check := range []struct {
+		name       string
+		requests   float64
+		failed     bool
+		compressed bool
+		minDelay   float64
+	}{
+		{"non-retryable", 1, true, false, 0},
+		{"retryable", 2, false, false, 5},
+		{"throttled", 2, false, false, 0},
+		{"gzip", 1, false, true, 0},
+	} {
+		result, _ := labField(response, check.name).(map[string]any)
+		if result == nil || labField(result, "requests") != check.requests || labField(result, "error") != check.failed || labField(result, "compressed") != check.compressed || labField(result, "payload_valid") != true {
+			return fmt.Errorf("OTLP HTTP %s response contract failed: %v", check.name, result)
+		}
+		delay, _ := labField(result, "elapsed_millis").(float64)
+		if delay < check.minDelay {
+			return fmt.Errorf("OTLP HTTP %s waited %.0f ms, want at least %.0f", check.name, delay, check.minDelay)
+		}
+		if check.name == "throttled" && scenario == "otlp-retry-after" && delay >= 900 {
+			return fmt.Errorf("OTLP HTTP Retry-After gap changed: %.0f ms", delay)
+		}
+	}
+	return nil
+}
+
 func main() {
 	appSuffix := flag.String("app-suffix", "", "application service label suffix")
 	sinkSuffix := flag.String("sink-suffix", "", "sink service label suffix")
@@ -735,8 +829,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, "app-suffix, sink-suffix, source, proof-plan, and python/ruby/go language are required")
 		os.Exit(2)
 	}
-	if *scenario != "base" && (*language != "python" || labVariantClaims[*scenario] == nil) {
-		fmt.Fprintln(os.Stderr, "non-base scenario must be a registered Python variant")
+	if *scenario != "base" && (labVariantClaims[*scenario] == nil || (*language != "python" && !(*language == "go" && *scenario == "otlp-retry-after"))) {
+		fmt.Fprintln(os.Stderr, "non-base scenario must be a registered lab variant")
 		os.Exit(2)
 	}
 	planBytes, err := labSource(*proofPlanPath)
@@ -784,13 +878,13 @@ func main() {
 		paths = []string{"/v1/spans", "/v1/exceptions", "/v1/metrics", "/v1/propagation"}
 	}
 	if *language == "python" {
-		paths = append(paths, "/v1/lifecycle", "/v1/log-sdk", "/v1/trace-exporter", "/v1/console-exporter", "/v1/propagation-custom", "/v1/prometheus", "/v1/metric-scope")
+		paths = append(paths, "/v1/lifecycle", "/v1/explicit-root", "/v1/log-sdk", "/v1/log-schema", "/v1/trace-exporter", "/v1/console-exporter", "/v1/propagation-custom", "/v1/propagation-formats", "/v1/prometheus", "/v1/metric-scope")
 		if *scenario == "log-length-edge" {
 			paths = append(paths, "/v1/log-object")
 		}
 	}
 	if *language == "go" {
-		paths = []string{"/v1/spans", "/v1/exceptions", "/v1/propagation", "/v1/concurrency", "/v1/resources", "/v1/metric-views", "/v1/metric-advanced", "/v1/metric-exporter", "/v1/metric-exemplars", "/v1/sdk-trace"}
+		paths = []string{"/v1/spans", "/v1/exceptions", "/v1/propagation", "/v1/concurrency", "/v1/resources", "/v1/metric-views", "/v1/metric-advanced", "/v1/metric-exporter", "/v1/metric-exemplars", "/v1/sdk-trace", "/v1/otlp-http"}
 	}
 	negative := *language == "python" && (*scenario == "disabled" || *scenario == "sampler-off" || *scenario == "sampler-arg-zero")
 	if negative {
@@ -814,6 +908,22 @@ func main() {
 			panic(fmt.Errorf("sampler ratio 1 did not record a span: %s", body))
 		}
 		switch path {
+		case "/v1/otlp-http":
+			if err := labVerifyOTLPHTTP(response, *scenario); err != nil {
+				panic(err)
+			}
+		case "/v1/explicit-root":
+			if labField(response, "recording") != true || labField(response, "parent_absent") != true {
+				panic(fmt.Errorf("explicit Python root span response: %s", body))
+			}
+		case "/v1/log-schema":
+			if labField(response, "flushed") != true {
+				panic(fmt.Errorf("Python schema log was not flushed: %s", body))
+			}
+		case "/v1/propagation-formats":
+			if err := labVerifyLegacyPropagators(response, *scenario); err != nil {
+				panic(err)
+			}
 		case "/v1/metric-scope":
 			if err := labVerifyMetricScope(response); err != nil {
 				panic(err)

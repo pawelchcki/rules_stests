@@ -10,7 +10,10 @@ from opentelemetry import baggage, context, propagate, trace, metrics
 from opentelemetry.trace import Link, SpanContext, TraceFlags, TraceState, Status, StatusCode
 from opentelemetry.sdk._logs import LoggerProvider, LogRecordProcessor
 from opentelemetry.sdk._logs.export import LogRecordExporter, LogRecordExportResult, SimpleLogRecordProcessor
+from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.propagators.textmap import Getter, Setter
+from opentelemetry.propagators.jaeger import JaegerPropagator
+from opentelemetry.propagators.ot_trace import OTTracePropagator
 from opentelemetry.exporter.prometheus import PrometheusMetricReader
 from opentelemetry.sdk.metrics import MeterProvider as SDKMeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
@@ -88,6 +91,12 @@ async def exception(request):
     return web.json_response({"handled": True})
 
 
+async def explicit_root(request):
+    with TRACER.start_as_current_span("lab.explicit-root", context=context.Context()) as span:
+        return web.json_response({"recording": span.is_recording(),
+                                  "parent_absent": span.parent is None})
+
+
 async def span_lifecycle(request):
     start = time.time_ns() - 100_000_000
     end = start + 50_000_000
@@ -160,6 +169,35 @@ async def propagation(request):
             })
     finally:
         context.detach(token)
+
+
+async def propagation_formats(request):
+    source = trace.SpanContext(
+        trace_id=0x123456789ABCDEF0,
+        span_id=0x123456789ABCDEF0,
+        is_remote=True,
+        trace_flags=TraceFlags(TraceFlags.SAMPLED),
+        trace_state=TraceState(),
+    )
+    original = trace.set_span_in_context(trace.NonRecordingSpan(source), context.Context())
+    original = baggage.set_baggage("labkey", "lab-value", original)
+    original = baggage.set_baggage("lab-key", "hyphen-value", original)
+    result = {}
+    for name, propagator in (("jaeger", JaegerPropagator()), ("ot", OTTracePropagator())):
+        carrier = {}
+        propagator.inject(carrier, context=original)
+        extracted = propagator.extract(carrier, context=context.Context())
+        span = trace.get_current_span(extracted).get_span_context()
+        result[name] = {
+            "carrier": carrier,
+            "trace_id": format(span.trace_id, "032x"),
+            "span_id": format(span.span_id, "016x"),
+            "remote": span.is_remote,
+            "sampled": span.trace_flags.sampled,
+            "baggage": baggage.get_baggage("labkey", extracted),
+            "hyphen_baggage": baggage.get_baggage("lab-key", extracted),
+        }
+    return web.json_response(result)
 
 
 class LabGetter(Getter):
@@ -282,6 +320,21 @@ async def log_sdk(request):
                               "provider_flushed": flushed})
 
 
+async def log_schema(request):
+    provider = LoggerProvider(
+        resource=Resource({"service.name": "lab-schema"},
+                          schema_url="https://example.test/schema/resource"),
+        shutdown_on_exit=False,
+    )
+    provider.add_log_record_processor(SimpleLogRecordProcessor(OTLPLogExporter()))
+    provider.get_logger(
+        "lab.schema.log", schema_url="https://example.test/schema/scope"
+    ).emit(body="lab schema log")
+    flushed = provider.force_flush()
+    provider.shutdown()
+    return web.json_response({"flushed": flushed})
+
+
 async def trace_exporter(request):
     exporter = LabSpanExporter()
     provider = SDKTracerProvider(shutdown_on_exit=False)
@@ -336,13 +389,16 @@ def main():
     app.router.add_get("/healthz", health)
     app.router.add_get("/v1/spans", spans)
     app.router.add_get("/v1/exceptions", exception)
+    app.router.add_get("/v1/explicit-root", explicit_root)
     app.router.add_get("/v1/lifecycle", span_lifecycle)
     app.router.add_get("/v1/metrics", measurements)
     app.router.add_get("/v1/metric-scope", metric_scope)
     app.router.add_get("/v1/log-object", log_object)
     app.router.add_get("/v1/propagation", propagation)
+    app.router.add_get("/v1/propagation-formats", propagation_formats)
     app.router.add_get("/v1/propagation-custom", propagation_custom)
     app.router.add_get("/v1/log-sdk", log_sdk)
+    app.router.add_get("/v1/log-schema", log_schema)
     app.router.add_get("/v1/trace-exporter", trace_exporter)
     app.router.add_get("/v1/console-exporter", console_exporter)
     app.router.add_get("/v1/prometheus", prometheus)

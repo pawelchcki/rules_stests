@@ -1,12 +1,21 @@
 package main
 
 import (
+	"compress/gzip"
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/baggage"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/sdk/instrumentation"
+	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
@@ -18,6 +27,125 @@ type traceProbeSampler struct {
 	parentID string
 	marker   string
 	state    trace.TraceState
+}
+
+func inspectOTLPHTTP(ctx context.Context) (any, error) {
+	start := time.Now()
+	span := tracetest.SpanStub{
+		Name: "lab.http-export", StartTime: start, EndTime: start.Add(time.Millisecond),
+		SpanContext: trace.NewSpanContext(trace.SpanContextConfig{
+			TraceID: trace.TraceID{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+			SpanID:  trace.SpanID{1, 2, 3, 4, 5, 6, 7, 8}, TraceFlags: trace.FlagsSampled,
+		}),
+		Resource: resource.Empty(), InstrumentationScope: instrumentation.Scope{Name: "lab.http-export"},
+	}.Snapshot()
+	results := map[string]any{}
+	for _, mode := range []string{"non-retryable", "retryable", "throttled", "gzip"} {
+		requests := 0
+		validPayload := true
+		compressed := false
+		collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests++
+			if r.Method != http.MethodPost || r.URL.Path != "/v1/traces" || r.Header.Get("Content-Type") != "application/x-protobuf" {
+				validPayload = false
+			}
+			var reader io.Reader = r.Body
+			if r.Header.Get("Content-Encoding") == "gzip" {
+				compressed = true
+				uncompressed, err := gzip.NewReader(r.Body)
+				if err != nil {
+					validPayload = false
+				} else {
+					defer uncompressed.Close()
+					reader = uncompressed
+				}
+			}
+			body, err := io.ReadAll(reader)
+			if err != nil || len(body) == 0 {
+				validPayload = false
+			}
+			if requests == 1 {
+				switch mode {
+				case "non-retryable":
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				case "retryable":
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				case "throttled":
+					w.Header().Set("Retry-After", "1")
+					w.WriteHeader(http.StatusTooManyRequests)
+					return
+				}
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		options := []otlptracehttp.Option{
+			otlptracehttp.WithEndpointURL(collector.URL + "/v1/traces"),
+			otlptracehttp.WithRetry(otlptracehttp.RetryConfig{
+				Enabled: true, InitialInterval: 20 * time.Millisecond,
+				MaxInterval: 20 * time.Millisecond, MaxElapsedTime: 3 * time.Second,
+			}),
+		}
+		if mode == "gzip" {
+			options = append(options, otlptracehttp.WithCompression(otlptracehttp.GzipCompression))
+		}
+		exporter, err := otlptracehttp.New(ctx, options...)
+		if err != nil {
+			collector.Close()
+			return nil, err
+		}
+		began := time.Now()
+		exportErr := exporter.ExportSpans(ctx, []sdktrace.ReadOnlySpan{span})
+		elapsed := time.Since(began)
+		shutdownErr := exporter.Shutdown(ctx)
+		collector.Close()
+		if shutdownErr != nil {
+			return nil, shutdownErr
+		}
+		results[mode] = map[string]any{
+			"requests": requests, "payload_valid": validPayload, "compressed": compressed,
+			"error": exportErr != nil, "elapsed_millis": elapsed.Milliseconds(),
+		}
+	}
+	var concurrentRequests, active, maximum atomic.Int32
+	concurrentCollector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		concurrentRequests.Add(1)
+		current := active.Add(1)
+		for {
+			previous := maximum.Load()
+			if current <= previous || maximum.CompareAndSwap(previous, current) {
+				break
+			}
+		}
+		time.Sleep(40 * time.Millisecond)
+		active.Add(-1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	concurrentExporter, err := otlptracehttp.New(ctx, otlptracehttp.WithEndpointURL(concurrentCollector.URL+"/v1/traces"))
+	if err != nil {
+		concurrentCollector.Close()
+		return nil, err
+	}
+	var workers sync.WaitGroup
+	var successes atomic.Int32
+	for range 4 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			if concurrentExporter.ExportSpans(ctx, []sdktrace.ReadOnlySpan{span}) == nil {
+				successes.Add(1)
+			}
+		}()
+	}
+	workers.Wait()
+	shutdownErr := concurrentExporter.Shutdown(ctx)
+	concurrentCollector.Close()
+	if shutdownErr != nil {
+		return nil, shutdownErr
+	}
+	results["concurrent"] = map[string]any{"requests": concurrentRequests.Load(), "maximum": maximum.Load(), "successes": successes.Load()}
+	return results, nil
 }
 
 func (s *traceProbeSampler) ShouldSample(parameters sdktrace.SamplingParameters) sdktrace.SamplingResult {

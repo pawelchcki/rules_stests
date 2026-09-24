@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -24,15 +25,16 @@ type metricSummary struct {
 }
 
 type labMetricExporter struct {
-	mu        sync.Mutex
-	calls     int
-	active    int
-	maximum   int
-	lastValue int64
-	batchSize int
-	flushed   bool
-	shut      bool
-	failNext  bool
+	mu            sync.Mutex
+	calls         int
+	active        int
+	maximum       int
+	lastValue     int64
+	batchSize     int
+	flushed       bool
+	shut          bool
+	failNext      bool
+	flushFailNext bool
 }
 
 func (*labMetricExporter) Temporality(sdkmetric.InstrumentKind) metricdata.Temporality {
@@ -76,10 +78,18 @@ func (e *labMetricExporter) Export(ctx context.Context, data *metricdata.Resourc
 	}
 	return nil
 }
-func (e *labMetricExporter) ForceFlush(context.Context) error {
+func (e *labMetricExporter) ForceFlush(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	e.mu.Lock()
+	fail := e.flushFailNext
+	e.flushFailNext = false
 	e.flushed = true
 	e.mu.Unlock()
+	if fail {
+		return fmt.Errorf("controlled force-flush failure")
+	}
 	return nil
 }
 func (e *labMetricExporter) Shutdown(context.Context) error {
@@ -114,6 +124,14 @@ func inspectMetricExporter(ctx context.Context) (any, error) {
 	exporter.mu.Unlock()
 	counter.Add(ctx, 1)
 	failure := provider.ForceFlush(ctx) != nil
+	exporter.mu.Lock()
+	exporter.flushFailNext = true
+	exporter.mu.Unlock()
+	flushFailure := provider.ForceFlush(ctx) != nil
+	expired, cancel := context.WithDeadline(ctx, time.Now().Add(-time.Second))
+	defer cancel()
+	flushTimeout := errors.Is(exporter.ForceFlush(expired), context.DeadlineExceeded)
+	providerFlushTimeout := errors.Is(provider.ForceFlush(expired), context.DeadlineExceeded)
 	counter.Add(ctx, 1)
 	var workers sync.WaitGroup
 	failures := make(chan error, 8)
@@ -134,7 +152,7 @@ func inspectMetricExporter(ctx context.Context) (any, error) {
 	exporter.mu.Lock()
 	defer exporter.mu.Unlock()
 	return map[string]any{"first_value": firstValue, "first_batch": firstBatch, "first_calls": firstCalls,
-		"first_flushed": firstFlushed, "controlled_failure": failure, "calls": exporter.calls,
+		"first_flushed": firstFlushed, "controlled_failure": failure, "flush_failure": flushFailure, "flush_timeout": flushTimeout, "provider_flush_timeout": providerFlushTimeout, "calls": exporter.calls,
 		"maximum_concurrent": exporter.maximum, "shutdown": exporter.shut, "flush": exporter.flushed}, nil
 }
 

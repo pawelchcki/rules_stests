@@ -4,6 +4,11 @@ package main
 // captured-OTLP checks pass. These IDs are pinned catalog rows, not test names.
 var labClaims = map[string][]string{
 	"go": {
+		"metrics.the-metrics-exporter-forceflush-can-inform-the-caller-whether-it-succeeded-failed-or-timed-out",
+		"exporters.otlp.concurrent-sending",
+		"exporters.otlp.honors-non-retryable-responses",
+		"exporters.otlp.honors-retryable-responses-with-backoff",
+		"exporters.otlp.otlp-http-gzip-content-encoding-support",
 		"traces.tracerprovider.get-a-tracer-with-scope-attributes",
 		"traces.span-attributes.array-of-primitives-homogeneous",
 		"traces.span-attributes.boolean-type",
@@ -75,6 +80,9 @@ var labClaims = map[string][]string{
 		"baggage.basic-support",
 	},
 	"python": {
+		"traces.span.no-explicit-parent-span-spancontext-allowed",
+		"context-propagation.jaeger-propagator",
+		"context-propagation.ot-propagator",
 		"exporters.prometheus.unit-metadata",
 		"exporters.standard-output-logging",
 		"exporters.exporter-interface",
@@ -127,16 +135,21 @@ var labClaims = map[string][]string{
 }
 
 var labVariantClaims = map[string][]string{
-	"default-service":       {"resource.default-value-for-service-name"},
-	"disabled":              {"environment-variables.otel-sdk-disabled"},
-	"sampler-off":           {"environment-variables.otel-traces-sampler"},
-	"sampler-arg-zero":      {"environment-variables.otel-traces-sampler-arg"},
-	"sampler-arg-one":       {}, // Positive control for sampler-arg-zero.
-	"log-length-edge":       {}, // Regression for SDK byte and string-conversion limit gaps.
-	"log-count":             {"environment-variables.otel-logrecord-attribute-count-limit"},
-	"log-length":            {"environment-variables.otel-logrecord-attribute-value-length-limit"},
-	"exemplars-off":         {"environment-variables.otel-metrics-exemplar-filter"},
-	"histogram-exponential": {"environment-variables.otel-exporter-otlp-metrics-default-histogram-aggregation"},
+	"default-service":   {"resource.default-value-for-service-name"},
+	"disabled":          {"environment-variables.otel-sdk-disabled"},
+	"sampler-off":       {"environment-variables.otel-traces-sampler"},
+	"sampler-arg-zero":  {"environment-variables.otel-traces-sampler-arg"},
+	"sampler-arg-one":   {}, // Positive control for sampler-arg-zero.
+	"log-length-edge":   {}, // Regression for SDK byte and string-conversion limit gaps.
+	"ot-baggage-hyphen": {}, // Regression for OpenTracing header-name filtering.
+	"otlp-retry-after":  {}, // Regression for Go OTLP HTTP Retry-After units.
+	"log-count":         {"environment-variables.otel-logrecord-attribute-count-limit"},
+	"log-length":        {"environment-variables.otel-logrecord-attribute-value-length-limit"},
+	"exemplars-off":     {"environment-variables.otel-metrics-exemplar-filter"},
+	"histogram-exponential": {
+		"environment-variables.otel-exporter-otlp-metrics-default-histogram-aggregation",
+		"exporters.otlp.metric-exporter-configurable-default-aggregation",
+	},
 	"resource-attributes": {
 		"environment-variables.otel-resource-attributes",
 	},
