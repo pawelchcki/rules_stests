@@ -26,12 +26,23 @@ function esc(value) {
 // Each badge state carries a tone, an icon and a definition. Nothing is ever
 // distinguished by colour alone: the icon and the words carry the same meaning.
 const VOCAB = {
+  capability: {
+    title: 'Test-backed capability status',
+    question: 'Did a feature assertion pass in a tested configuration in this build?',
+    states: {
+      verified: ['ok', '✓', 'At least one configuration has an accepted passing feature assertion.'],
+      known_gap: ['bad', '✕', 'A gap is explicitly documented and no configuration passed a feature assertion.'],
+      unverified: ['warn', '?', 'Checks are authored, but no configuration has a passing feature assertion.'],
+      untested: ['neutral', '○', 'No checks are authored for the selected configurations.'],
+      not_applicable: ['neutral', '–', 'Every selected configuration marks this feature as inapplicable.'],
+    },
+  },
   support: {
     title: 'Upstream claim',
     question: 'What does the OpenTelemetry compliance matrix say this language supports?',
     states: {
-      supported: ['ok', '●', 'The upstream matrix lists this feature as implemented for the language.'],
-      unsupported: ['bad', '✕', 'The upstream matrix lists this feature as not implemented.'],
+      supported: ['info', '●', 'The upstream matrix reports support; this is not test proof.'],
+      unsupported: ['neutral', '✕', 'The upstream matrix reports no support; this is not a local test result.'],
       'n/a': ['neutral', '–', 'The feature does not apply to this language.'],
       unknown: ['warn', '?', 'The upstream matrix does not state a position.'],
     },
@@ -76,7 +87,8 @@ const VOCAB = {
 };
 
 const LABELS = {
-  support: { supported: 'Implemented', unsupported: 'Not implemented', 'n/a': 'Not applicable', unknown: 'Unknown' },
+  capability: { verified: 'Implemented (passed test)', known_gap: 'Documented not implemented', unverified: 'Checks, no passing result', untested: 'No checks', not_applicable: 'Not applicable' },
+  support: { supported: 'Reported supported', unsupported: 'Reported unsupported', 'n/a': 'Reported not applicable', unknown: 'Unknown' },
   verification: { verified: 'Verified here', known_gap: 'Documented gap', not_exercised: 'Unknown', not_applicable: 'Not applicable' },
   coverage: { exact_shape: 'Trace structure specified', contract_only: 'Shared telemetry checks only', unavailable: 'No telemetry checks defined', excluded: 'Not in this test suite' },
   receipt: { verified: 'Passed', xfail: 'Expected failure', missing: 'No result for this build' },
@@ -503,10 +515,45 @@ function renderCompare() {
 
 // ------------------------------------------------------------ feature matrix
 const collapsedCategories = new Set();
+const metricTopicStarts = [
+  ['metrics.the-api-provides-a-way-to-set-and-get-a-global-default-meterprovider', 'Meter API'],
+  ['metrics.counter-instrument-is-supported', 'Instruments'],
+  ['metrics.all-methods-of-meterprovider-are-safe-to-be-called-concurrently', 'Provider setup'],
+  ['metrics.there-is-a-way-to-register-views-with-a-meterprovider', 'Views'],
+  ['metrics.the-drop-aggregation-is-available', 'Aggregations'],
+  ['metrics.the-metrics-reader-implementation-supports-registering-metric-exporters', 'Readers and exporters'],
+  ['metrics.the-metrics-sdk-samples-exemplars-from-measurements', 'Exemplars'],
+  ['metrics.a-metric-producer-accepts-an-optional-metric-filter', 'Filtering and limits'],
+].map(([id, topic]) => ({index: data.features.findIndex((feature) => feature.id === id), topic}))
+  .filter((entry) => entry.index >= 0);
+const featureIndex = new Map(data.features.map((feature, index) => [feature.id, index]));
+function featureTopic(feature) {
+  if (feature.group) return feature.group;
+  if (feature.category !== 'Metrics') return 'General';
+  const index = featureIndex.get(feature.id);
+  return [...metricTopicStarts].reverse().find((entry) => index >= entry.index)?.topic || 'Other metrics';
+}
+function populateTopics() {
+  const current = $('topic').value;
+  const topics = [...new Set(data.features.filter((feature) => !$('category').value || feature.category === $('category').value)
+    .map(featureTopic))].sort();
+  $('topic').innerHTML = '<option value="">All topics</option>' + topics.map((name) =>
+    '<option value="' + esc(name) + '">' + esc(name) + '</option>').join('');
+  $('topic').value = topics.includes(current) ? current : '';
+}
+function capabilityStatus(feature, configurations) {
+  if (configurations.some((m) => verificationFor(feature, m.profile).state === 'verified')) return 'verified';
+  if (configurations.some((m) => verificationFor(feature, m.profile).state === 'known_gap')) return 'known_gap';
+  if (configurations.length && configurations.every((m) => verificationFor(feature, m.profile).state === 'not_applicable')) return 'not_applicable';
+  if (configurations.some((m) => checksFor(m.profile, feature.id).length)) return 'unverified';
+  return 'untested';
+}
 
 function renderFeatures() {
   const category = $('category').value;
+  const topic = $('topic').value;
   const language = $('language').value;
+  const proofStatus = $('proof-status').value;
   const support = $('support').value;
   const coverage = $('check-coverage').value;
   const verification = $('verification').value;
@@ -524,7 +571,7 @@ function renderFeatures() {
       (!verification || v.state === verification) &&
       (!basis || v.basis === basis || checks.some((c) => c.basis === basis));
   }
-  function matchingLanguage(feature, lang) {
+  function matchingLanguage(feature, lang, includeProofStatus = true) {
     const claim = (feature.support || {})[lang] || 'unknown';
     const configurations = manifests.filter((m) => m.language === lang);
     if (!configurations.length || (support && claim !== support)) return false;
@@ -533,31 +580,57 @@ function renderFeatures() {
       if (evidenceGap === 'no-checks' && configurations.some((m) => checksFor(m.profile, feature.id).length)) return false;
       if (evidenceGap === 'no-pass' && configurations.some((m) => verificationFor(feature, m.profile).state === 'verified')) return false;
     }
-    return !(coverage || verification || basis) || configurations.some((m) => matchingConfiguration(feature, m));
+    if ((coverage || verification || basis) && !configurations.some((m) => matchingConfiguration(feature, m))) return false;
+    const status = capabilityStatus(feature, configurations);
+    return !includeProofStatus || proofStatus === 'all' ||
+      (proofStatus === 'not-demonstrated' ? status !== 'verified' && status !== 'not_applicable' : status === proofStatus);
   }
 
-  const matches = data.features.filter((feature) => {
+  const scoped = data.features.filter((feature) => {
     if (readHash().params.get('feature') && readHash().params.get('feature') !== feature.id) return false;
     if ((language || profile) && !manifests.length) return false;
     if (category && feature.category !== category) return false;
+    if (topic && featureTopic(feature) !== topic) return false;
     if (search && !(feature.name.toLowerCase().includes(search) || feature.id.toLowerCase().includes(search))) return false;
-    return upstreamLanguages.some((lang) => matchingLanguage(feature, lang));
+    return upstreamLanguages.some((lang) => matchingLanguage(feature, lang, false));
   });
+  const matches = scoped.filter((feature) => upstreamLanguages.some((lang) => matchingLanguage(feature, lang)));
 
   const scope = language ? languageLabel(language) : 'All languages';
-  const supported = matches.flatMap((feature) => upstreamLanguages.map((lang) => ({feature, lang})))
-    .filter(({feature, lang}) => matchingLanguage(feature, lang) && (feature.support || {})[lang] === 'supported');
-  const withChecks = supported.filter(({feature, lang}) => manifests.some((m) => m.language === lang && checksFor(m.profile, feature.id).length));
-  const withPassingEvidence = supported.filter(({feature, lang}) => manifests.some((m) => m.language === lang && verificationFor(feature, m.profile).state === 'verified'));
-  $('capability-summary').innerHTML = '<div><strong>' + supported.length + '</strong><span>Reported implemented, by language</span></div>' +
-    '<div><strong>' + withChecks.length + '</strong><span>With checks defined</span></div>' +
-    '<div><strong>' + withPassingEvidence.length + '</strong><span>Verified in at least one configuration</span></div>';
-  $('capability-source').innerHTML = esc(scope) + ' · ' + matches.length + ' capabilities shown · ' +
-    'Implementation claims: <a href="' + esc(data.metadata.source.url) + '">upstream matrix ' + esc(data.metadata.source.revision) + '</a>. ' +
-    'Evidence counts describe tested configurations, not specification completeness.';
+  const pairs = scoped.flatMap((feature) => upstreamLanguages.filter((lang) => matchingLanguage(feature, lang, false))
+    .map((lang) => ({feature, lang, status: capabilityStatus(feature, manifests.filter((m) => m.language === lang))})));
+  const count = (status) => pairs.filter((pair) => pair.status === status).length;
+  $('capability-summary').innerHTML = '<div><strong>' + count('verified') + '</strong><span>Implemented with a passing test</span></div>' +
+    '<div><strong>' + (count('known_gap') + count('unverified') + count('untested')) + '</strong><span>No passing proof</span></div>' +
+    '<div><strong>' + count('known_gap') + '</strong><span>Documented not implemented</span></div>';
+  $('capability-source').innerHTML = esc(scope) + ' · ' + matches.length + ' capabilities shown · Counts are capability–language pairs' +
+    (language ? ' for the selected language' : '') + '. Test results come from this build; ' +
+    '<a href="' + esc(data.metadata.source.url) + '">upstream catalog ' + esc(data.metadata.source.revision) + '</a> supplies definitions and separate support claims.';
+  const categoryCounts = new Map();
+  const categoryPairs = data.features.filter((feature) =>
+    (!search || feature.name.toLowerCase().includes(search) || feature.id.toLowerCase().includes(search)) &&
+    upstreamLanguages.some((lang) => matchingLanguage(feature, lang, false)))
+    .flatMap((feature) => upstreamLanguages.filter((lang) => matchingLanguage(feature, lang, false))
+      .map((lang) => ({feature, status: capabilityStatus(feature, manifests.filter((m) => m.language === lang))})));
+  for (const pair of categoryPairs) {
+    if (!categoryCounts.has(pair.feature.category)) categoryCounts.set(pair.feature.category, {verified: 0, missing: 0, total: 0});
+    const totals = categoryCounts.get(pair.feature.category);
+    totals.total += 1;
+    if (pair.status === 'verified') totals.verified += 1;
+    else if (pair.status !== 'not_applicable') totals.missing += 1;
+  }
+  $('category-overview').innerHTML = categoryNames().map((name) => {
+    const totals = categoryCounts.get(name) || {verified: 0, missing: 0, total: 0};
+    const params = new URLSearchParams(readHash().params);
+    params.set('category', name);
+    params.delete('topic');
+    return '<a class="category-card' + (category === name ? ' selected' : '') + '" href="#health?' + esc(params.toString()) + '"><strong>' + esc(name) +
+      '</strong><span>' + totals.verified + ' passed tests · ' + totals.missing + ' without passing proof</span>' +
+      '<small>' + totals.total + ' capability–language pairs</small></a>';
+  }).join('');
 
   const header = '<thead><tr><th scope="col">Capability</th>' + upstreamLanguages.map((lang) =>
-    '<th scope="col">' + esc(languageLabel(lang)) + '<small>Upstream claim · local test evidence</small></th>').join('') + '</tr></thead>';
+    '<th scope="col">' + esc(languageLabel(lang)) + '<small>Test-backed status</small></th>').join('') + '</tr></thead>';
 
   const byCategory = new Map();
   for (const feature of matches) {
@@ -569,36 +642,44 @@ function renderFeatures() {
   for (const entry of byCategory) {
     const name = entry[0];
     const features = entry[1];
-    const implemented = features.reduce((sum, feature) => sum + upstreamLanguages.filter((lang) =>
-      matchingLanguage(feature, lang) && (feature.support || {})[lang] === 'supported').length, 0);
-    const checked = features.reduce((sum, feature) => sum + upstreamLanguages.filter((lang) =>
-      matchingLanguage(feature, lang) && manifests.some((m) => m.language === lang && checksFor(m.profile, feature.id).length)).length, 0);
     const verified = features.reduce((sum, feature) => sum + upstreamLanguages.filter((lang) =>
-      matchingLanguage(feature, lang) && manifests.some((m) => m.language === lang && verificationFor(feature, m.profile).state === 'verified')).length, 0);
+      matchingLanguage(feature, lang) && capabilityStatus(feature, manifests.filter((m) => m.language === lang)) === 'verified').length, 0);
     const collapsed = collapsedCategories.has(name);
     body += '<tr class="category-row"><td colspan="' + (upstreamLanguages.length + 1) + '">' +
       '<button type="button" aria-expanded="' + !collapsed + '" data-category="' + esc(name) + '">' + (collapsed ? '▸' : '▾') + ' ' +
-      esc(name) + '</button> <span class="muted">' + features.length + ' capabilities · ' + implemented +
-      ' reported implemented · ' + checked + ' with checks · ' + verified + ' with passing evidence</span></td></tr>';
+      esc(name) + '</button> <span class="muted">' + features.length + ' capabilities · ' + verified +
+      ' capability–language pairs passed a test</span></td></tr>';
     if (collapsed) continue;
-    body += features.map((feature) => {
+    const byTopic = new Map();
+    for (const feature of features) {
+      const topicName = featureTopic(feature);
+      if (!byTopic.has(topicName)) byTopic.set(topicName, []);
+      byTopic.get(topicName).push(feature);
+    }
+    for (const [topicName, topicFeatures] of byTopic) {
+      body += '<tr class="topic-row"><th colspan="' + (upstreamLanguages.length + 1) + '">' + esc(topicName) +
+        ' <span class="muted">· ' + topicFeatures.length + ' capabilities</span></th></tr>';
+      body += topicFeatures.map((feature) => {
       const cells = upstreamLanguages.map((lang) => {
         const configurations = manifests.filter((m) => m.language === lang);
         const claim = (feature.support || {})[lang] || 'unknown';
+        const status = capabilityStatus(feature, configurations);
         const checked = configurations.filter((m) => checksFor(m.profile, feature.id).length);
         const passing = configurations.filter((m) => verificationFor(feature, m.profile).state === 'verified');
         const assertionCount = configurations.reduce((sum, m) => sum + checksFor(m.profile, feature.id).length, 0);
         const passedExecutions = configurations.reduce((sum, m) => sum + checksFor(m.profile, feature.id)
           .reduce((count, check) => count + check.passed, 0), 0);
         const highlighted = matchingLanguage(feature, lang);
+        if (!highlighted) return '<td class="capability-cell filtered-out"><span class="muted">Outside filter</span></td>';
         const evidenceLabel = passing.length ? passing.length + ' of ' + configurations.length + ' configurations verified' :
-          checked.length ? 'Checks defined; no passing evidence' : 'No checks defined';
+          checked.length ? 'Checks authored; no passing proof' : 'No checks authored';
         const deepLink = readHash().params.get('feature') === feature.id &&
           (!profile || configurations.some((m) => m.profile === profile));
-        return '<td class="capability-cell' + (highlighted ? '' : ' filtered-out') + '">' + badge('support', claim) +
+        return '<td class="capability-cell">' + badge('capability', status) +
           '<div class="test-evidence">' + esc(evidenceLabel) + ' · ' + assertionCount +
           ' assertions defined' + (passedExecutions ? ' · ' + passedExecutions + ' passed executions' : '') + '</div>' +
-          '<details data-feature="' + esc(feature.id) + '"' + (deepLink ? ' open' : '') + '><summary>Tested configurations</summary>' +
+          '<details data-feature="' + esc(feature.id) + '"' + (deepLink ? ' open' : '') + '><summary>Configuration results and upstream claim</summary>' +
+          '<p>Upstream claim: ' + badge('support', claim) + '</p>' +
           configurations.map((m) => '<div class="configuration-evidence"><strong>' + esc(m.displayName) + '</strong> ' +
             badge('verification', verificationFor(feature, m.profile).state) +
             healthCell(feature, m, verificationFor(feature, m.profile)) + '</div>').join('') + '</details></td>';
@@ -614,7 +695,8 @@ function renderFeatures() {
         (feature.group ? '<div class="muted">' + esc(feature.group) + '</div>' : '') +
         (optionality ? '<div>' + optionality + '</div>' : '') +
         '<a class="evidence" href="' + esc(feature.source) + '">' + esc(feature.id) + '</a></th>' + cells + '</tr>';
-    }).join('');
+      }).join('');
+    }
   }
   if (!matches.length) {
     body = '<tr><td colspan="' + (upstreamLanguages.length + 1) + '" class="muted">No capability matches these filters.</td></tr>';
@@ -718,7 +800,11 @@ function syncControlsFromHash() {
     $('differences-only').checked = params.get('differencesOnly') === '1';
     $('hide-scope').checked = params.get('hideScope') === '1';
   } else if (section === 'features') {
-    for (const id of ['category', 'language', 'support', 'verification', 'basis', 'check-coverage', 'evidence-gap']) $(id).value = params.get(id) || '';
+    $('category').value = params.get('category') || '';
+    populateTopics();
+    for (const id of ['topic', 'language', 'support', 'verification', 'basis', 'check-coverage', 'evidence-gap']) $(id).value = params.get(id) || '';
+    const legacyFilter = ['feature', 'verification', 'support', 'basis', 'check-coverage', 'evidence-gap', 'verifiedOnly'].some((key) => params.has(key));
+    $('proof-status').value = params.get('proof-status') || (params.get('verifiedOnly') === '1' ? 'verified' : legacyFilter ? 'all' : 'verified');
     $('feature-profile').value = manifestByProfile.has(params.get('profile')) ? params.get('profile') : '';
     $('search').value = params.get('q') || '';
     if (params.get('verifiedOnly') === '1') $('verification').value = 'verified';
@@ -763,7 +849,7 @@ function compareChanged() {
 }
 function featuresChanged(replace = false) {
   const params = new URLSearchParams();
-  for (const [key, id] of [['profile', 'feature-profile'], ['category', 'category'], ['language', 'language'],
+  for (const [key, id] of [['profile', 'feature-profile'], ['category', 'category'], ['topic', 'topic'], ['language', 'language'], ['proof-status', 'proof-status'],
     ['support', 'support'], ['verification', 'verification'], ['basis', 'basis'], ['q', 'search'], ['check-coverage','check-coverage'], ['evidence-gap','evidence-gap']]) {
     if ($(id).value) params.set(key, $(id).value);
   }
@@ -780,6 +866,7 @@ function setup() {
   $('language').insertAdjacentHTML('beforeend', languageNames().map((name) => '<option>' + esc(name) + '</option>').join(''));
   $('scenario').innerHTML = data.scenarios.map((scenario) => '<option>' + esc(scenario) + '</option>').join('');
   $('category').insertAdjacentHTML('beforeend', categoryNames().map((name) => '<option>' + esc(name) + '</option>').join(''));
+  populateTopics();
   for (const id of ['profile', 'coverage-profile']) $(id).addEventListener('change', () => {
     selectedProfile = $(id).value;
     const params = readHash().params;
@@ -794,13 +881,15 @@ function setup() {
     $('right').value = left;
     compareChanged();
   });
-  for (const id of ['feature-profile', 'category', 'language', 'support', 'basis','check-coverage','evidence-gap']) $(id).addEventListener('change', () => featuresChanged());
+  for (const id of ['feature-profile', 'language', 'support', 'basis','check-coverage','evidence-gap', 'topic', 'proof-status']) $(id).addEventListener('change', () => featuresChanged());
+  $('category').addEventListener('change', () => { populateTopics(); featuresChanged(); });
   $('verification').addEventListener('change', () => {
     $('verified-only').checked = $('verification').value === 'verified';
     featuresChanged();
   });
   $('verified-only').addEventListener('change', () => {
     $('verification').value = $('verified-only').checked ? 'verified' : '';
+    $('proof-status').value = $('verified-only').checked ? 'verified' : 'all';
     featuresChanged();
   });
   $('search').addEventListener('input', () => featuresChanged(true));

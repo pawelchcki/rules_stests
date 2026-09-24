@@ -229,13 +229,14 @@ tools/       maintainer and report scripts
 ## Reading the report
 
 `//report:assemble` renders `feature-parity-report.html`, one self-contained HTML
-artifact. Its default **Capabilities** view lists features by category, with language
-columns. Each language cell leads with the upstream implementation claim, then shows
-how many tested configurations have authored checks and accepted passing evidence.
-Expand a cell for configuration-specific assertions, execution results, and sources.
-Filter first by language, category, implementation status, test gaps, or feature text;
-additional test filters are available under **More test filters**. The linked latest
-report is regenerated from `main` after fresh end-to-end tests pass.
+artifact. Its default **Capabilities** view shows only capabilities with a passing
+feature assertion backed by an accepted receipt from this build. The language cells
+lead with that test-backed status. Category cards, topic groups, and filters let you
+find implemented capabilities, authored checks without passing proof, and capabilities
+with no authored checks. No passing proof does not establish that a feature is absent.
+Expand a cell for configuration-specific assertions, execution results, sources, and
+the separate upstream support claim. The linked latest report is regenerated from
+`main` after fresh end-to-end tests pass.
 
 Three dimensions remain independent:
 

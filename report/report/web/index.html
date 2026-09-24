@@ -76,23 +76,26 @@ __STYLE__
 
   <section class="panel" id="features" hidden>
     <h2 tabindex="-1">Capabilities</h2>
-    <p class="section-note">Implementation status comes from the upstream OpenTelemetry language matrix. Test evidence comes from this repository's RealWorld suites. A language claim does not certify every framework, version, or configuration.</p>
+    <p class="section-note">Implemented means at least one tested configuration passed a feature assertion with an accepted receipt from this build. No passing proof means this report cannot establish implementation; it is not proof that the feature is absent. Expand a cell for configuration-specific results and the separate upstream claim.</p>
     <div id="capability-summary" class="capability-summary" aria-live="polite"></div>
     <p class="section-note" id="capability-source"></p>
+    <div id="category-overview" class="category-overview" aria-label="Capability categories"></div>
     <details><summary>Language maturity and catalog sources</summary>
       <div class="meta" id="meta"></div><div class="scroll"><table id="maturity"></table></div>
     </details>
     <div class="filters">
       <label>Language<select id="language"><option value="">All languages</option></select></label>
+      <label>Test-backed status<select id="proof-status"><option value="verified">Implemented (passed test)</option><option value="not-demonstrated">No passing proof</option><option value="known_gap">Documented not implemented</option><option value="unverified">Checks, no passing result</option><option value="untested">No checks</option><option value="not_applicable">Not applicable</option><option value="all">All statuses</option></select></label>
       <label>Category<select id="category"><option value="">All categories</option></select></label>
-      <label>Implementation status<select id="support"><option value="">Any status</option><option value="supported">Implemented</option><option value="unsupported">Not implemented</option><option value="n/a">Not applicable</option><option value="unknown">Unknown</option></select></label>
-      <label>Test evidence<select id="evidence-gap"><option value="">Any evidence</option><option value="no-checks">Implemented without checks</option><option value="no-pass">Implemented without passing evidence</option></select></label>
+      <label>Topic<select id="topic"><option value="">All topics</option></select></label>
       <label>Search<input type="search" id="search" placeholder="capability name or id"></label>
     </div>
     <details class="advanced-filters"><summary>More test filters</summary><div class="filters">
       <label>Configuration<select id="feature-profile"><option value="">All configurations</option></select></label>
       <label>Checks<select id="check-coverage"><option value="">Any coverage</option><option value="defined">Checks defined</option><option value="none">No checks defined</option></select></label>
       <label>Result from this build<select id="verification"><option value="">Any result</option><option value="verified">Verified here</option><option value="known_gap">Documented gap</option><option value="not_exercised">Unknown</option><option value="not_applicable">Not applicable</option></select></label>
+      <label>Upstream claim<select id="support"><option value="">Any claim</option><option value="supported">Reported supported</option><option value="unsupported">Reported unsupported</option><option value="n/a">Reported not applicable</option><option value="unknown">Unknown</option></select></label>
+      <label>Upstream evidence gap<select id="evidence-gap"><option value="">Any</option><option value="no-checks">Reported supported, no checks</option><option value="no-pass">Reported supported, no passing proof</option></select></label>
       <label>Evidence basis<select id="basis"><option value="">Any basis</option><option>observed</option><option>corroborated</option></select></label>
       <label class="toggle"><input type="checkbox" id="verified-only"> Verified here only</label>
     </div></details>
