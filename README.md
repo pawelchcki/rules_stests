@@ -5,6 +5,8 @@ Portable RealWorld conformance suites for telemetry implementations, built on
 ships independent OpenTelemetry and Datadog proof corpora, a test harness, and reference
 applications for Python, Ruby, and Go.
 
+[Latest OpenTelemetry capability report](https://pawelchcki.github.io/rules_stests/) (published from `main`).
+
 ## Plug in an implementation
 
 ```starlark
@@ -227,10 +229,13 @@ tools/       maintainer and report scripts
 ## Reading the report
 
 `//report:assemble` renders `feature-parity-report.html`, one self-contained HTML
-artifact. Its default destination is **Implementation health**: feature categories
-form the matrix rows and tested implementation configurations form the columns.
-Filter by language, configuration/version, category, defined-check coverage,
-verification result, upstream support, evidence basis, or feature text.
+artifact. Its default **Capabilities** view lists features by category, with language
+columns. Each language cell leads with the upstream implementation claim, then shows
+how many tested configurations have authored checks and accepted passing evidence.
+Expand a cell for configuration-specific assertions, execution results, and sources.
+Filter first by language, category, implementation status, test gaps, or feature text;
+additional test filters are available under **More test filters**. The linked latest
+report is regenerated from `main` after fresh end-to-end tests pass.
 
 Three dimensions remain independent:
 

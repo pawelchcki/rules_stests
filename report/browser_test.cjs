@@ -67,7 +67,12 @@ const path = require('node:path');
   await page.goto('about:blank');
   await route('');
   assert.equal(await page.locator('#features').isVisible(),true);
+  assert.match(await page.locator('#feature-matrix thead').innerText(),/Go.*Python.*Ruby/s);
+  assert.doesNotMatch(await page.locator('#feature-matrix thead').innerText(),/v0-65b0/,'capability columns must be languages');
+  assert.match(await page.locator('#feature-matrix').innerText(),/Implemented/);
+  assert.match(await page.locator('#capability-summary').innerText(),/With checks defined/);
   assert.match(await page.locator('#feature-matrix').innerText(),/assertions defined/);
+  assert.equal(await page.locator('#feature-matrix tbody tr th[scope="row"]').first().evaluate(el=>getComputedStyle(el).position),'static','capability row labels must not stick over column headings');
   await page.selectOption('#language','python');
   await page.fill('#search','root');
   await page.click('nav a[href*="#parity"]');await page.waitForTimeout(100);
@@ -100,6 +105,7 @@ const path = require('node:path');
   const savedProfileLink=await page.evaluate(()=>{const cell=coverageByKey.get('python case'),state=cell.state;cell.state='exact_shape';renderCoverageGrid();const href=document.querySelector('#coverage-grid a.evidence').getAttribute('href');cell.state=state;return href;});
   assert.match(savedProfileLink,/profile=python/);
   await route('#overview?profile=python&verification=verified');assert.equal(await page.locator('#features').isVisible(),true);assert.equal(await page.inputValue('#verification'),'verified');
+  await route('#health?verifiedOnly=1');assert.equal(await page.locator('.advanced-filters').getAttribute('open'),'','legacy verified filter must be visible');
   await route('#health?profile=python&feature=traces.span.create-root-span');assert.equal(await page.locator('[data-feature][open]').count(),1);
   // Semantic comparison must ignore only protocol identities/timestamps, retain
   // array and event order, attribute spelling, types, scope, and relationships.

@@ -166,7 +166,8 @@ a.tile:hover { border-color: var(--info); text-decoration: none; }
 .scroll { max-width: 100%; overflow: auto; max-height: 74vh; border: 1px solid var(--line); border-radius: var(--radius); }
 table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; border-bottom: 1px solid var(--line); padding: 14px 16px; vertical-align: top; }
-th { position: sticky; top: 0; z-index: 1; background: var(--surface-2); color: var(--ink-2); font-size: 14px; font-weight: 600; }
+th { background: var(--surface-2); color: var(--ink-2); font-size: 14px; font-weight: 600; }
+thead th { position: sticky; top: 0; z-index: 1; }
 tbody tr:hover { background: var(--surface-2); }
 td.numeric, th.numeric { text-align: right; font-variant-numeric: tabular-nums; }
 
@@ -203,7 +204,22 @@ details > summary { cursor: pointer; font-weight: 500; }
 .row-flag { font-size: 14px; color: var(--ink-2); white-space: nowrap; }
 .empty-side { color: var(--muted); font-style: italic; font-size: 14px; }
 
-/* Feature matrix */
+/* Capability matrix: status first, evidence second. */
+.capability-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 18px 0 12px; }
+.capability-summary > div { border: 1px solid var(--line); border-radius: var(--radius); padding: 13px 16px; background: var(--surface-2); }
+.capability-summary strong { display: block; font-size: 26px; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.capability-summary span { display: block; color: var(--ink-2); font-size: 14px; }
+.advanced-filters { margin: 10px 0 16px; }
+#feature-matrix { min-width: 700px; }
+#feature-matrix th:first-child { width: 24%; }
+#feature-matrix thead small { display: block; font-weight: 400; }
+.capability-cell { min-width: 12rem; }
+.capability-cell.filtered-out { opacity: .55; }
+.test-evidence { margin-top: 6px; color: var(--ink-2); font-size: 14px; }
+.configuration-evidence { border-top: 1px solid var(--line); padding: 10px 0; }
+.configuration-evidence:first-child { border-top: 0; }
+.configuration-evidence p { margin: 4px 0; }
+.configuration-evidence details { margin: 6px 0; }
 .category-row td { background: var(--surface-2); font-weight: 600; color: var(--info); }
 .category-row button { border: none; background: none; padding: 0; color: inherit; font-weight: 600; }
 .assertion { color: var(--muted); font-size: 14px; }
@@ -248,6 +264,7 @@ code, .evidence, td, .span-name { overflow-wrap: anywhere; }
   th, td { padding: 10px; }
   .glossary-grid { grid-template-columns: 1fr; }
   .language-grid { grid-template-columns: 1fr; }
+  .capability-summary { grid-template-columns: 1fr; }
   .row-flag { white-space: normal; }
   .diff-side::before { display: block; font-weight: 600; content: 'Left expectation'; }
   .diff-side + .diff-side::before { content: 'Right expectation'; }
@@ -258,7 +275,6 @@ code, .evidence, td, .span-name { overflow-wrap: anywhere; }
 .capture-trace pre { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 40rem; max-height: 32rem; overflow: auto; }
 .capture-trace table { width: 100%; }
 .capture-trace button { margin: .15rem; }
-#feature-matrix td { min-width: 15rem; }
 #feature-matrix details { max-width: 32rem; overflow-wrap: anywhere; }
 #comparison-context { font-weight: 600; }
 #compare-body { overflow-x: auto; }
