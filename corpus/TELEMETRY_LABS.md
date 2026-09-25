@@ -20,10 +20,12 @@ REPORT_REVISION="$revision" REPORT_REPOSITORY=owner/repository \
   REPORT_BAZEL_CONFIG=local tools/assemble_otel_report.sh
 ```
 
-The lab suite has **136 distinct catalog IDs with passing receipt-producing
-tests**. Two overlap earlier Scheme proof-rule definitions that lacked accepted
-receipts. All 22 IDs from the earlier supplemental configuration experiments
-now have standalone lab proofs, leaving **112 IDs new across all three suites**.
+The lab suite has **141 distinct catalog IDs with passing receipt-producing
+tests**. Seven overlap earlier Scheme proof-rule definitions: two previously lacked
+accepted receipts, four now have shared lab coverage across Go, Python, and
+Ruby, and one adds a Ruby Unicode attribute proof. All 22 IDs from the earlier
+supplemental configuration experiments now have standalone lab proofs, leaving
+**112 IDs new across all three suites**.
 The catalog test checks those counts
 against the pinned matrix. These are feature IDs, not language/feature pairs or
 HTTP requests. The report assembly command above validates and accepts the
@@ -32,7 +34,7 @@ receipts for the current revision.
 | Application | Evidence exercised |
 | --- | --- |
 | Python | span lifecycle and explicit roots, links and limits, context and baggage including Jaeger and OpenTracing headers, log SDK and schema URLs, Prometheus metric mapping, SDK environment settings |
-| Ruby | span attributes and events, baggage |
+| Ruby | span attributes, events, exceptions, status, links and timestamps; context attach and detach, active-span lifecycle, baggage |
 | Go | span concurrency and SDK processing, resources, meter views and cardinality, metric exporter flush outcomes and exemplars, OTLP HTTP retry, gzip, concurrent export, and partial-success handling |
 
 The HTTP probe calls each endpoint and checks both endpoint results and decoded
@@ -55,6 +57,13 @@ hash, and complete proof set before assigning **Verified here**. A claim applies
 only to the pinned SDK, application call, and output asserted by its probe. The
 earlier RealWorld configuration comparisons and their known gaps remain described in
 [External feature experiments](EXTERNAL_FEATURES.md).
+
+Each lab feature ID is bound to a named behavioral check in the normalized plan.
+The probe records checks only after their response or captured telemetry assertions
+pass, and receipt generation rejects any planned ID whose check did not run or
+whose plan binding differs. Receipt assertions include both the check name and
+catalog ID so a report cell can be traced back to the exercised behavior. The
+`*.proofs.json` artifact records the completed checks and the exact proofs.
 
 ## Reproduced Python SDK log limit defect
 

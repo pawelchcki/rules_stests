@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -21,18 +22,20 @@ import (
 type labObject = map[string]any
 
 type labProofEvidence struct {
-	SchemaVersion  int      `json:"schemaVersion"`
-	Language       string   `json:"language"`
-	Scenario       string   `json:"scenario"`
-	CaptureSHA256  string   `json:"captureSha256"`
-	SourceSHA256   string   `json:"sourceSha256"`
-	ResponseSHA256 string   `json:"responseSha256"`
-	FeatureIDs     []string `json:"featureIds"`
+	SchemaVersion  int                   `json:"schemaVersion"`
+	Language       string                `json:"language"`
+	Scenario       string                `json:"scenario"`
+	CaptureSHA256  string                `json:"captureSha256"`
+	SourceSHA256   string                `json:"sourceSha256"`
+	ResponseSHA256 string                `json:"responseSha256"`
+	FeatureIDs     []string              `json:"featureIds"`
+	Checks         []string              `json:"checks"`
+	Proofs         []report.ReceiptProof `json:"proofs"`
 }
 
 var labRevisionPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
-func labPlanProofs(data []byte, language, scenario string) ([]report.ReceiptProof, error) {
+func labPlanProofs(data []byte, language, scenario string, observed map[string]bool) ([]report.ReceiptProof, error) {
 	var plan report.NormalizedProfilePlan
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -55,8 +58,12 @@ func labPlanProofs(data []byte, language, scenario string) ([]report.ReceiptProo
 		if len(proof.Scenarios) != 1 || proof.Scenarios[0] != scenario {
 			continue
 		}
-		if !wanted[proof.FeatureID] || proof.Assertion != "telemetry-lab/"+proof.FeatureID || proof.Basis != "observed" {
+		check := labCheckFor(language, scenario, proof.FeatureID)
+		if !wanted[proof.FeatureID] || check == "" || proof.Assertion != "telemetry-lab/"+check+"/"+proof.FeatureID || proof.Basis != "observed" {
 			return nil, fmt.Errorf("unexpected lab plan proof %s in %s", proof.FeatureID, scenario)
+		}
+		if !observed[check] {
+			return nil, fmt.Errorf("feature %s has no passing %s check in %s/%s", proof.FeatureID, check, language, scenario)
 		}
 		proofs = append(proofs, report.ReceiptProof{FeatureID: proof.FeatureID, Assertion: proof.Assertion, Basis: proof.Basis, Result: "pass"})
 		delete(wanted, proof.FeatureID)
@@ -250,6 +257,8 @@ func labRequest(client *http.Client, method, endpoint string) ([]byte, error) {
 	return data, nil
 }
 
+// These names identify response checks that ran in the probe's path switch.
+// A receipt cannot claim an ID bound to a check whose endpoint was not checked.
 func labNamed(values []labObject, name string) labObject {
 	for _, item := range values {
 		if labField(item, "name") == name {
@@ -274,7 +283,7 @@ func labAttribute(item labObject, key string) labObject {
 	return nil
 }
 
-func labVerify(data []byte, language, scenario string) error {
+func labVerify(data []byte, language, scenario string, observed map[string]bool) error {
 	var records []any
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
@@ -312,6 +321,30 @@ func labVerify(data []byte, language, scenario string) error {
 			return fmt.Errorf("parent lacks %s of kind %s", key, kind)
 		}
 	}
+	observed["capture/span-boolean"] = true
+	observed["capture/span-double"] = true
+	if scenario == "base" {
+		if language == "ruby" && labField(labAttribute(parent, "lab.ümlaut"), "string_value") != "κόσμος" {
+			return fmt.Errorf("Ruby span lost Unicode attribute key or value")
+		}
+		if language == "ruby" {
+			observed["capture/span-unicode"] = true
+		}
+		array := labAttribute(parent, "lab.array")
+		arrayValue, _ := labField(array, "array_value").(map[string]any)
+		values, _ := labField(arrayValue, "values").([]any)
+		if len(values) != 2 {
+			return fmt.Errorf("span array attribute has %d values, want two", len(values))
+		}
+		for index, want := range []string{"red", "blue"} {
+			item, _ := values[index].(map[string]any)
+			value, _ := labField(item, "value").(map[string]any)
+			if labField(value, "string_value") != want {
+				return fmt.Errorf("span array attribute value %d is not %q", index, want)
+			}
+		}
+		observed["capture/span-array"] = true
+	}
 	wantUpdated := "after-start"
 	if language == "python" && (scenario == "span-value-length" || scenario == "attribute-value-length") {
 		wantUpdated = "aft"
@@ -336,6 +369,9 @@ func labVerify(data []byte, language, scenario string) error {
 			return fmt.Errorf("parent event %d is not %s", index, name)
 		}
 	}
+	if scenario == "base" {
+		observed["capture/span-events"] = true
+	}
 	if language == "python" && scenario == "event-attributes" {
 		first, _ := events[0].(map[string]any)
 		attributes, _ := labField(first, "attributes").([]any)
@@ -355,9 +391,33 @@ func labVerify(data []byte, language, scenario string) error {
 	if !foundException {
 		return fmt.Errorf("record_exception exported no exception event")
 	}
+	observed["capture/span-exception"] = true
 	status, _ := labField(exception, "status").(map[string]any)
 	if status == nil || labField(status, "code") == nil {
 		return fmt.Errorf("exception span has no status")
+	}
+	if scenario == "base" {
+		parentStatus, _ := labField(parent, "status").(map[string]any)
+		childStatus, _ := labField(child, "status").(map[string]any)
+		unset, unsetOK := labUint(labField(parentStatus, "code"))
+		ok, okOK := labUint(labField(childStatus, "code"))
+		errorCode, errorOK := labUint(labField(status, "code"))
+		if !unsetOK || !okOK || !errorOK || unset != 0 || ok != 1 || errorCode != 2 || labField(status, "message") != "controlled lab error" {
+			return fmt.Errorf("span status codes or error message do not match unset/ok/error")
+		}
+		observed["capture/span-status"] = true
+		for _, element := range exceptionEvents {
+			event, eventOK := element.(map[string]any)
+			if !eventOK || labField(event, "name") != "exception" {
+				continue
+			}
+			if labField(labAttribute(event, "exception.type"), "string_value") == nil ||
+				labField(labAttribute(event, "exception.message"), "string_value") != "controlled lab error" ||
+				labField(labAttribute(event, "lab.handled"), "bool_value") != true {
+				return fmt.Errorf("record_exception omitted type, message, or extra attribute")
+			}
+		}
+		observed["capture/span-exception-attributes"] = true
 	}
 	if language == "go" {
 		shared := labNamed(spans, "lab.shared")
@@ -388,12 +448,42 @@ func labVerify(data []byte, language, scenario string) error {
 		if workers != 32 {
 			return fmt.Errorf("Go concurrent worker spans = %d, want 32", workers)
 		}
+		observed["capture/concurrency"] = true
+	}
+	if language == "ruby" {
+		linked := labNamed(spans, "lab.linked")
+		if linked == nil {
+			return fmt.Errorf("Ruby linked span was not exported")
+		}
+		links, _ := labField(linked, "links").([]any)
+		if len(links) != 3 {
+			return fmt.Errorf("Ruby linked span has %d links, want three", len(links))
+		}
+		for index, want := range []any{labField(parent, "span_id"), labField(child, "span_id"), labField(parent, "span_id")} {
+			link, _ := links[index].(map[string]any)
+			if labField(link, "span_id") != want {
+				return fmt.Errorf("Ruby link %d does not match its source span", index)
+			}
+		}
+		observed["capture/links"] = true
+		lifecycle := labNamed(spans, "lab.lifecycle")
+		child := labNamed(spans, "lab.lifecycle.child")
+		if lifecycle == nil || child == nil || labField(child, "parent_span_id") != labField(lifecycle, "span_id") {
+			return fmt.Errorf("Ruby lifecycle span or active child was not exported")
+		}
+		start, startOK := labUint(labField(lifecycle, "start_time_unix_nano"))
+		end, endOK := labUint(labField(lifecycle, "end_time_unix_nano"))
+		if !startOK || !endOK || start != 1_700_000_000_123_000_000 || end-start != 50_000_000 {
+			return fmt.Errorf("Ruby explicit span timestamps not preserved: %d %d", start, end)
+		}
+		observed["capture/lifecycle"] = true
 	}
 	if language == "python" {
 		root := labNamed(spans, "lab.explicit-root")
 		if root == nil || labField(root, "parent_span_id") != "" || labField(root, "trace_id") == "" {
 			return fmt.Errorf("explicit Python root span has a parent or was not exported")
 		}
+		observed["capture/root"] = true
 		schemaLog := false
 		for _, resourceLogs := range labObjects(records, "resource_logs") {
 			if labField(resourceLogs, "schema_url") != "https://example.test/schema/resource" {
@@ -421,6 +511,7 @@ func labVerify(data []byte, language, scenario string) error {
 		if !schemaLog {
 			return fmt.Errorf("OTLP log resource and scope schema URLs were not exported together")
 		}
+		observed["capture/schema"] = true
 		if scenario == "default-service" {
 			found := false
 			for _, resourceSpans := range labObjects(records, "resource_spans") {
@@ -488,6 +579,9 @@ func labVerify(data []byte, language, scenario string) error {
 				}
 			}
 		}
+		if scenario == "base" {
+			observed["capture/links"] = true
+		}
 		lifecycle := labNamed(spans, "lab.lifecycle")
 		if lifecycle == nil {
 			return fmt.Errorf("Python lifecycle span is absent")
@@ -497,6 +591,7 @@ func labVerify(data []byte, language, scenario string) error {
 		if !startOK || !endOK || end-start != 50_000_000 {
 			return fmt.Errorf("explicit Python span timestamps not preserved: %d %d", start, end)
 		}
+		observed["capture/lifecycle"] = true
 		metrics := labObjects(records, "metrics")
 		for _, name := range []string{"lab.requests", "lab.active", "lab.duration"} {
 			if labNamed(metrics, name) == nil {
@@ -552,6 +647,7 @@ func labVerify(data []byte, language, scenario string) error {
 		if !correlatedLog {
 			return fmt.Errorf("Python log did not carry its active span context")
 		}
+		observed["capture/log-correlation"] = true
 		if scenario == "log-length-edge" {
 			found := false
 			for _, record := range labObjects(records, "log_records") {
@@ -852,10 +948,6 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	plannedProofs, err := labPlanProofs(planBytes, *language, *scenario)
-	if err != nil {
-		panic(err)
-	}
 	source, err := labSource(*sourcePath)
 	if err != nil {
 		panic(err)
@@ -888,7 +980,7 @@ func main() {
 	if _, err := labRequest(client, "POST", sink+"/reset"); err != nil {
 		panic(err)
 	}
-	paths := []string{"/v1/spans", "/v1/exceptions", "/v1/baggage"}
+	paths := []string{"/v1/spans", "/v1/exceptions", "/v1/baggage", "/v1/lifecycle"}
 	if *language == "python" || *language == "go" {
 		paths = []string{"/v1/spans", "/v1/exceptions", "/v1/metrics", "/v1/propagation"}
 	}
@@ -906,6 +998,7 @@ func main() {
 		paths = []string{"/v1/spans", "/v1/metrics"}
 	}
 	responses := map[string]labObject{}
+	observed := map[string]bool{}
 	for _, path := range paths {
 		body, err := labRequest(client, "GET", app+path)
 		if err != nil {
@@ -927,10 +1020,12 @@ func main() {
 			if err := labVerifyOTLPPartialSuccess(response); err != nil {
 				panic(err)
 			}
+			observed["response/otlp-partial"] = true
 		case "/v1/otlp-http":
 			if err := labVerifyOTLPHTTP(response, *scenario); err != nil {
 				panic(err)
 			}
+			observed["response/otlp-http"] = true
 		case "/v1/explicit-root":
 			if labField(response, "recording") != true || labField(response, "parent_absent") != true {
 				panic(fmt.Errorf("explicit Python root span response: %s", body))
@@ -943,51 +1038,70 @@ func main() {
 			if err := labVerifyLegacyPropagators(response, *scenario); err != nil {
 				panic(err)
 			}
+			observed["response/legacy-propagators"] = true
 		case "/v1/metric-scope":
 			if err := labVerifyMetricScope(response); err != nil {
 				panic(err)
 			}
+			observed["response/metric-scope"] = true
 		case "/v1/sdk-trace":
 			if err := labVerifySDKTrace(response); err != nil {
 				panic(err)
 			}
+			observed["response/sdk-trace"] = true
 		case "/v1/metric-views":
 			if err := labVerifyMetricViews(response); err != nil {
 				panic(err)
 			}
+			observed["response/metric-views"] = true
 		case "/v1/metric-advanced":
 			if err := labVerifyMetricAdvanced(response); err != nil {
 				panic(err)
 			}
+			observed["response/metric-advanced"] = true
 		case "/v1/metric-exporter":
 			if err := labVerifyMetricExporter(response); err != nil {
 				panic(err)
 			}
+			observed["response/metric-exporter"] = true
 		case "/v1/metric-exemplars":
 			if err := labVerifyMetricExemplars(response); err != nil {
 				panic(err)
 			}
+			observed["response/metric-exemplars"] = true
 		case "/v1/resources":
 			merged, _ := labField(response, "merged").(map[string]any)
 			if labField(response, "empty") != float64(0) || labField(merged, "lab.left") != "one" || labField(merged, "lab.right") != "two" {
 				panic(fmt.Errorf("Go empty or merged resource result is wrong: %s", body))
 			}
+			observed["response/resources"] = true
 		case "/v1/concurrency":
 			if labField(response, "workers") != float64(32) {
 				panic(fmt.Errorf("Go concurrent request did not complete: %s", body))
 			}
 		case "/v1/lifecycle":
-			if labField(response, "before") != true || labField(response, "after") != false || labField(response, "attached") != "attached-value" || labField(response, "detached") != nil {
+			if *language == "ruby" {
+				active, _ := labField(response, "active").(string)
+				child, _ := labField(response, "tracer_span").(string)
+				if labField(response, "context_before") != nil || labField(response, "context_attached") != "attached-value" || labField(response, "context_detached") != nil ||
+					labField(response, "recording_before") != true || labField(response, "recording_after") != false ||
+					len(active) != 16 || len(child) != 16 || active == child || labField(response, "restored") != true {
+					panic(fmt.Errorf("Ruby context and span lifecycle response: %s", body))
+				}
+			} else if labField(response, "before") != true || labField(response, "after") != false || labField(response, "attached") != "attached-value" || labField(response, "detached") != nil {
 				panic(fmt.Errorf("Python context and span lifecycle response: %s", body))
 			}
+			observed["response/lifecycle"] = true
 		case "/v1/log-sdk":
 			if labField(response, "count") != float64(1) || labField(response, "scope_name") != "lab.custom.log" || labField(response, "scope_attribute") != "logged" || labField(response, "body") != "lab direct log" || labField(response, "processor_emitted") != float64(1) || labField(response, "processor_flushed") != true || labField(response, "processor_shutdown") != true || labField(response, "exporter_shutdown") != true || labField(response, "exporter_flushed") != true || labField(response, "provider_flushed") != true {
 				panic(fmt.Errorf("Python direct log SDK response: %s", body))
 			}
+			observed["response/log-sdk"] = true
 		case "/v1/trace-exporter":
 			if labField(response, "count") != float64(1) || labField(response, "name") != "lab.exported" || labField(response, "flushed") != true || labField(response, "exporter_flushed") != true || labField(response, "shutdown") != true {
 				panic(fmt.Errorf("Python custom span exporter response: %s", body))
 			}
+			observed["response/trace-exporter"] = true
 		case "/v1/console-exporter":
 			output, _ := labField(response, "output").(string)
 			var exported labObject
@@ -997,10 +1111,12 @@ func main() {
 			if labField(exported, "name") != "lab.console.span" {
 				panic(fmt.Errorf("Python console exporter omitted the span: %s", output))
 			}
+			observed["response/console-exporter"] = true
 		case "/v1/prometheus":
 			if err := labVerifyPrometheus(response); err != nil {
 				panic(err)
 			}
+			observed["response/prometheus"] = true
 		case "/v1/propagation-custom":
 			calls, _ := labField(response, "get_calls").([]any)
 			keys, _ := labField(response, "keys").([]any)
@@ -1009,6 +1125,7 @@ func main() {
 			if labField(response, "remote") != true || len(calls) < 1 || len(keys) != 2 || len(setCalls) < 1 || labField(outgoing, "traceparent") == nil || labField(outgoing, "baggage") == nil || labField(response, "environment_remote") != true || labField(response, "environment_traceparent") == nil {
 				panic(fmt.Errorf("Python custom propagation carrier response: %s", body))
 			}
+			observed["response/propagation-custom"] = true
 		case "/v1/propagation":
 			if labField(response, "remote_parent") != true || labField(response, "baggage") != "lab-value" {
 				panic(fmt.Errorf("context extraction or baggage failed: %s", body))
@@ -1017,10 +1134,12 @@ func main() {
 			if !strings.Contains(fmt.Sprint(labField(carrier, "baggage")), "lab-key=lab-value") || labField(carrier, "traceparent") == nil {
 				panic(fmt.Errorf("context injection failed: %s", body))
 			}
+			observed["response/propagation"] = true
 		case "/v1/baggage":
 			if labField(response, "baggage") != "lab-value" {
 				panic(fmt.Errorf("Ruby baggage API failed: %s", body))
 			}
+			observed["response/baggage"] = true
 		}
 	}
 	var capture []byte
@@ -1028,16 +1147,28 @@ func main() {
 		time.Sleep(2 * time.Second)
 	}
 	deadline := time.Now().Add(8 * time.Second)
+	var captureObserved map[string]bool
 	for time.Now().Before(deadline) {
 		capture, err = labRequest(client, "GET", sink+"/dump")
 		if err == nil {
-			err = labVerify(capture, *language, *scenario)
+			captureObserved = map[string]bool{}
+			err = labVerify(capture, *language, *scenario, captureObserved)
 		}
 		if err == nil {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+	if err != nil {
+		panic(err)
+	}
+	for check := range captureObserved {
+		observed[check] = true
+	}
+	if *scenario != "base" {
+		observed["scenario/"+*scenario] = true
+	}
+	plannedProofs, err := labPlanProofs(planBytes, *language, *scenario, observed)
 	if err != nil {
 		panic(err)
 	}
@@ -1057,10 +1188,15 @@ func main() {
 		if err := os.WriteFile(filepath.Join(output, artifact+".responses.json"), responseBytes, 0o644); err != nil {
 			panic(err)
 		}
-		claims := labClaims[*language]
-		if *scenario != "base" {
-			claims = labVariantClaims[*scenario]
+		claims := make([]string, 0, len(plannedProofs))
+		for _, proof := range plannedProofs {
+			claims = append(claims, proof.FeatureID)
 		}
+		checks := make([]string, 0, len(observed))
+		for check := range observed {
+			checks = append(checks, check)
+		}
+		sort.Strings(checks)
 		evidence := labProofEvidence{
 			SchemaVersion:  1,
 			Language:       *language,
@@ -1069,6 +1205,8 @@ func main() {
 			SourceSHA256:   fmt.Sprintf("%x", sha256.Sum256(source)),
 			ResponseSHA256: fmt.Sprintf("%x", sha256.Sum256(responseBytes)),
 			FeatureIDs:     claims,
+			Checks:         checks,
+			Proofs:         plannedProofs,
 		}
 		encoded, err := json.MarshalIndent(evidence, "", "  ")
 		if err != nil {

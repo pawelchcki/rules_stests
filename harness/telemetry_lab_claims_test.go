@@ -54,11 +54,16 @@ func TestLabClaimsAreNewPinnedFeatures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// These rule definitions had no accepted receipts. The labs now give them
-	// direct runtime evidence while preserving their existing catalog ownership.
+	// Labs can corroborate an earlier Scheme rule in another language or provide
+	// direct runtime evidence where the rule had no accepted receipt.
 	corroborated := map[string]bool{
 		"metrics.the-supplied-name-version-and-schema-url-arguments-passed-to-the-meterprovider-are-used-to-create-an-instrumentationscope-instance-stored-in-the-meter": true,
-		"exporters.otlp.schemaurl-in-resourcelogs-and-scopelogs": true,
+		"exporters.otlp.schemaurl-in-resourcelogs-and-scopelogs":            true,
+		"traces.span-events.addevent":                                       true,
+		"traces.span-exceptions.recordexception":                            true,
+		"traces.span-exceptions.recordexception-with-extra-parameters":      true,
+		"traces.span.set-status-with-statuscode-unset-ok-error":             true,
+		"traces.span-attributes.unicode-support-for-keys-and-string-values": true,
 	}
 	unique := map[string]bool{}
 	for language, claims := range labClaims {
@@ -109,7 +114,7 @@ func TestLabClaimsAreNewPinnedFeatures(t *testing.T) {
 			t.Errorf("supplemental feature %s has no telemetry lab proof", id)
 		}
 	}
-	if len(unique) != 136 || supplementalOverlap != 22 || schemeOverlap != 2 || newCount != 112 {
-		t.Fatalf("lab claims: %d total, %d supplemental, %d prior rule definitions, %d new; want 136/22/2/112", len(unique), supplementalOverlap, schemeOverlap, newCount)
+	if len(unique) != 141 || supplementalOverlap != 22 || schemeOverlap != 7 || newCount != 112 {
+		t.Fatalf("lab claims: %d total, %d supplemental, %d prior rule definitions, %d new; want 141/22/7/112", len(unique), supplementalOverlap, schemeOverlap, newCount)
 	}
 }
