@@ -177,6 +177,12 @@ go_binary(
 )
 
 go_test(
+    name = "telemetry_lab_probe_test",
+    srcs = ["telemetry_lab_probe.go", "telemetry_lab_claims.go", "telemetry_lab_probe_test.go"],
+    deps = ["//report:lib"],
+)
+
+go_test(
     name = "telemetry_lab_claims_test",
     srcs = ["telemetry_lab_claims.go", "telemetry_lab_claims_test.go"],
     data = ["//report:data/spec-compliance-matrix.md", "//harness/external_features:cases.go"] + [

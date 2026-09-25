@@ -41,9 +41,13 @@ func main() {
 	}
 	appendProofs := func(scenario string, ids []string) {
 		for _, id := range ids {
+			check := labCheckFor(*language, scenario, id)
+			if check == "" {
+				panic(fmt.Errorf("feature %s has no behavioral check in %s/%s", id, *language, scenario))
+			}
 			plan.Proofs = append(plan.Proofs, report.ProofPlanProof{
 				FeatureID:      id,
-				Assertion:      "telemetry-lab/" + id,
+				Assertion:      "telemetry-lab/" + check + "/" + id,
 				Basis:          "observed",
 				EvidencePolicy: "lab-capture-and-response",
 				Scenarios:      []string{scenario},
