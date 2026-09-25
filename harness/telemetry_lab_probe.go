@@ -283,7 +283,7 @@ func labAttribute(item labObject, key string) labObject {
 	return nil
 }
 
-func labVerify(data []byte, language, scenario string) error {
+func labVerify(data []byte, language, scenario string, observed map[string]bool) error {
 	var records []any
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
@@ -321,9 +321,14 @@ func labVerify(data []byte, language, scenario string) error {
 			return fmt.Errorf("parent lacks %s of kind %s", key, kind)
 		}
 	}
+	observed["capture/span-boolean"] = true
+	observed["capture/span-double"] = true
 	if scenario == "base" {
 		if language == "ruby" && labField(labAttribute(parent, "lab.ümlaut"), "string_value") != "κόσμος" {
 			return fmt.Errorf("Ruby span lost Unicode attribute key or value")
+		}
+		if language == "ruby" {
+			observed["capture/span-unicode"] = true
 		}
 		array := labAttribute(parent, "lab.array")
 		arrayValue, _ := labField(array, "array_value").(map[string]any)
@@ -338,6 +343,7 @@ func labVerify(data []byte, language, scenario string) error {
 				return fmt.Errorf("span array attribute value %d is not %q", index, want)
 			}
 		}
+		observed["capture/span-array"] = true
 	}
 	wantUpdated := "after-start"
 	if language == "python" && (scenario == "span-value-length" || scenario == "attribute-value-length") {
@@ -363,6 +369,9 @@ func labVerify(data []byte, language, scenario string) error {
 			return fmt.Errorf("parent event %d is not %s", index, name)
 		}
 	}
+	if scenario == "base" {
+		observed["capture/span-events"] = true
+	}
 	if language == "python" && scenario == "event-attributes" {
 		first, _ := events[0].(map[string]any)
 		attributes, _ := labField(first, "attributes").([]any)
@@ -382,6 +391,7 @@ func labVerify(data []byte, language, scenario string) error {
 	if !foundException {
 		return fmt.Errorf("record_exception exported no exception event")
 	}
+	observed["capture/span-exception"] = true
 	status, _ := labField(exception, "status").(map[string]any)
 	if status == nil || labField(status, "code") == nil {
 		return fmt.Errorf("exception span has no status")
@@ -395,6 +405,7 @@ func labVerify(data []byte, language, scenario string) error {
 		if !unsetOK || !okOK || !errorOK || unset != 0 || ok != 1 || errorCode != 2 || labField(status, "message") != "controlled lab error" {
 			return fmt.Errorf("span status codes or error message do not match unset/ok/error")
 		}
+		observed["capture/span-status"] = true
 		for _, element := range exceptionEvents {
 			event, eventOK := element.(map[string]any)
 			if !eventOK || labField(event, "name") != "exception" {
@@ -406,6 +417,7 @@ func labVerify(data []byte, language, scenario string) error {
 				return fmt.Errorf("record_exception omitted type, message, or extra attribute")
 			}
 		}
+		observed["capture/span-exception-attributes"] = true
 	}
 	if language == "go" {
 		shared := labNamed(spans, "lab.shared")
@@ -436,6 +448,7 @@ func labVerify(data []byte, language, scenario string) error {
 		if workers != 32 {
 			return fmt.Errorf("Go concurrent worker spans = %d, want 32", workers)
 		}
+		observed["capture/concurrency"] = true
 	}
 	if language == "ruby" {
 		linked := labNamed(spans, "lab.linked")
@@ -452,6 +465,7 @@ func labVerify(data []byte, language, scenario string) error {
 				return fmt.Errorf("Ruby link %d does not match its source span", index)
 			}
 		}
+		observed["capture/links"] = true
 		lifecycle := labNamed(spans, "lab.lifecycle")
 		child := labNamed(spans, "lab.lifecycle.child")
 		if lifecycle == nil || child == nil || labField(child, "parent_span_id") != labField(lifecycle, "span_id") {
@@ -462,12 +476,14 @@ func labVerify(data []byte, language, scenario string) error {
 		if !startOK || !endOK || start != 1_700_000_000_123_000_000 || end-start != 50_000_000 {
 			return fmt.Errorf("Ruby explicit span timestamps not preserved: %d %d", start, end)
 		}
+		observed["capture/lifecycle"] = true
 	}
 	if language == "python" {
 		root := labNamed(spans, "lab.explicit-root")
 		if root == nil || labField(root, "parent_span_id") != "" || labField(root, "trace_id") == "" {
 			return fmt.Errorf("explicit Python root span has a parent or was not exported")
 		}
+		observed["capture/root"] = true
 		schemaLog := false
 		for _, resourceLogs := range labObjects(records, "resource_logs") {
 			if labField(resourceLogs, "schema_url") != "https://example.test/schema/resource" {
@@ -495,6 +511,7 @@ func labVerify(data []byte, language, scenario string) error {
 		if !schemaLog {
 			return fmt.Errorf("OTLP log resource and scope schema URLs were not exported together")
 		}
+		observed["capture/schema"] = true
 		if scenario == "default-service" {
 			found := false
 			for _, resourceSpans := range labObjects(records, "resource_spans") {
@@ -562,6 +579,9 @@ func labVerify(data []byte, language, scenario string) error {
 				}
 			}
 		}
+		if scenario == "base" {
+			observed["capture/links"] = true
+		}
 		lifecycle := labNamed(spans, "lab.lifecycle")
 		if lifecycle == nil {
 			return fmt.Errorf("Python lifecycle span is absent")
@@ -571,6 +591,7 @@ func labVerify(data []byte, language, scenario string) error {
 		if !startOK || !endOK || end-start != 50_000_000 {
 			return fmt.Errorf("explicit Python span timestamps not preserved: %d %d", start, end)
 		}
+		observed["capture/lifecycle"] = true
 		metrics := labObjects(records, "metrics")
 		for _, name := range []string{"lab.requests", "lab.active", "lab.duration"} {
 			if labNamed(metrics, name) == nil {
@@ -626,6 +647,7 @@ func labVerify(data []byte, language, scenario string) error {
 		if !correlatedLog {
 			return fmt.Errorf("Python log did not carry its active span context")
 		}
+		observed["capture/log-correlation"] = true
 		if scenario == "log-length-edge" {
 			found := false
 			for _, record := range labObjects(records, "log_records") {
@@ -1125,10 +1147,12 @@ func main() {
 		time.Sleep(2 * time.Second)
 	}
 	deadline := time.Now().Add(8 * time.Second)
+	var captureObserved map[string]bool
 	for time.Now().Before(deadline) {
 		capture, err = labRequest(client, "GET", sink+"/dump")
 		if err == nil {
-			err = labVerify(capture, *language, *scenario)
+			captureObserved = map[string]bool{}
+			err = labVerify(capture, *language, *scenario, captureObserved)
 		}
 		if err == nil {
 			break
@@ -1138,14 +1162,8 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	for _, check := range []string{
-		"capture/span-array", "capture/span-boolean", "capture/span-double", "capture/span-events",
-		"capture/span-exception", "capture/span-exception-attributes", "capture/span-status", "capture/span-unicode",
-		"capture/concurrency", "capture/schema", "capture/root", "capture/links", "capture/lifecycle", "capture/log-correlation",
-	} {
-		if _, declared := labClaimsByCheck[*language][check]; declared {
-			observed[check] = true
-		}
+	for check := range captureObserved {
+		observed[check] = true
 	}
 	if *scenario != "base" {
 		observed["scenario/"+*scenario] = true
