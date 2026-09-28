@@ -897,6 +897,98 @@ RAILS = App("rails", "datadog shape rails",
              "sqlite.query": rails_sql, "active_record.instantiation": rails_instantiation})
 
 
+# -- Sinatra on Falcon --------------------------------------------------------
+
+FALCON_PROCESS = "entrypoint.workdir:main,entrypoint.name:server,entrypoint.basedir:bin,entrypoint.type:script,svc.user:true"
+SIGNED_IN_SQL = "SELECT * FROM `users` WHERE (`id` = :id) LIMIT 1"
+
+
+def sinatra_tags(route):
+    return [tag("component", "sinatra"), tag("sinatra.route.path", route), VERSION, metric("_dd.measured", 1)]
+
+
+def sequel_node(sql, clauses=()):
+    return Node("sequel.query", sql, [
+        service("sqlite"), span_type("sql"), tag("_dd.svc_src", "sequel"), tag("component", "sequel"),
+        tag("operation", "query"), tag("span.kind", "client"), tag("db.system", "sqlite"),
+        tag("sequel.db.vendor", "sqlite"), tag("db.instance", "<fixture>/realworld.sqlite3"),
+        tag("sequel.db.name", "<fixture>/realworld.sqlite3"), VERSION, *clauses])
+
+
+def sinatra_request(ctx, span, parent):
+    if len(span.children) != 1 or span.children[0].name != "sinatra.request":
+        return None
+    middle = span.children[0]
+    routes = [child for child in middle.children if child.name == "sinatra.route"]
+    if len(routes) != 1:
+        return None
+    route_span = routes[0]
+    parsed = http_params(ctx, span, "")
+    if not parsed:
+        return None
+    args, params = parsed
+    method, route, status = span.meta["http.method"], span.meta["http.route"], int(span.meta["http.status_code"])
+    resource = f"{method} {route}"
+    content_type = [] if status == 204 else [tag("http.response.headers.content-type", "application/json; charset=utf-8")]
+    hidden = [*request_base(span), tag("component", "rack"), tag("operation", "request"), VERSION,
+              tag("http.base_url", "http://<endpoint>"), *content_type,
+              *([tag("http.route.path", "")] if status == 404 else []), metric("_dd.measured", 1)]
+
+    # The route's outcome and the queries around it.
+    route_clauses = []
+    for clause in exception_clauses(ctx, route_span):
+        kind, message = clause.args
+        text = f"(failure {q(message)})" if kind == "RealWorld::Failure" else clause.text
+        route_clauses.append(Clause("raised", clause.args, text))
+    route_clauses += mark_clauses(ctx, route_span)
+    route_children = render_children(ctx, route_span.children, route_span.service)
+    before = [child for child in middle.children if child is not route_span]
+    before_rendered = render_children(ctx, before, middle.service)
+    signed_in = evaluate_span(ctx.tracer, sequel_node(SIGNED_IN_SQL), APP_SERVICE, ctx.caller)
+    if len(before) == 1 and same(signed_in, before[0]):
+        before_text = ["signed-in"]
+    elif before:
+        before_text = [call("before-filter", [], [child.text for child in before_rendered])]
+    else:
+        before_text = []
+    route_lines = [clause.text for clause in route_clauses] + [child.text for child in route_children]
+    route_text = call("route", [], route_lines)
+    markers = [Rendered(Node("<before>", "", flatten_nodes(before_rendered)), "\n".join(before_text)),
+               Rendered(Node("<route>", "", route_clauses + flatten_nodes(route_children)), route_text)]
+
+    def build(clauses, nodes):
+        before_nodes = next(node for node in nodes if node.name == "<before>").clauses
+        route_node = next(node for node in nodes if node.name == "<route>")
+        url_values = [clause.args[1] for clause in clauses if clause.kind == "tag" and clause.args[0] == "http.url"]
+        sinatra_url = [tag("http.url", url_values[-1].split("?", 1)[0])] if url_values else []
+        route_built = Node("sinatra.route", resource, [
+            span_type("web"), *sinatra_tags(route), tag("operation", "route"),
+            tag("sinatra.app.name", "RealWorld::App"), *route_node.clauses])
+        middle_built = Node("sinatra.request", resource, [
+            span_type("web"), *sinatra_tags(route), tag("operation", "request"), tag("http.method", method),
+            tag("http.status_code", str(status)), *content_type, *sinatra_url, *before_nodes, route_built])
+        return Node("rack.request", resource, clauses + [middle_built])
+
+    rendered = finish(ctx, span, parent, "sinatra-request", args, hidden, params, [], build=lambda clauses, _: build(clauses, [m.node for m in markers]))
+    if rendered is None:
+        return None
+    lines = rendered.text.split("\n")
+    body = [line for line in before_text + [route_text] if line]
+    text = "\n".join(lines) if not body else rendered.text[:-1] + "\n" + "\n".join(indent(item, 1) for item in body) + ")"
+    return Rendered(rendered.node, text)
+
+
+def falcon_sequel(ctx, span, parent):
+    return finish(ctx, span, parent, "sequel", [q(span.resource)], sequel_node(span.resource).clauses, [],
+                  render_children(ctx, span.children, span.service),
+                  build=lambda clauses, nodes: Node("sequel.query", span.resource, clauses + nodes))
+
+
+FALCON = App("falcon", "datadog shape falcon",
+             lambda wire: dd_trace_rb(FALCON_PROCESS), lambda wire: "falcon-app",
+             {"rack.request": sinatra_request, "sequel.query": falcon_sequel})
+
+
 # -- Gin ----------------------------------------------------------------------
 
 GIN_PROCESS = "entrypoint.name:realworld-gin-datadog,entrypoint.type:executable,entrypoint.workdir:state,svc.user:true"
@@ -965,7 +1057,7 @@ GIN = App("gin", "datadog shape gin",
           {"http.request": gin_request, **{f"gorm.{op}": gorm for op in ("query", "create", "update", "delete")},
            "sqlite3.query": database_sql})
 
-APPLICATIONS = {"aiohttp": AIOHTTP, "django": DJANGO, "rails": RAILS, "gin": GIN}
+APPLICATIONS = {"aiohttp": AIOHTTP, "django": DJANGO, "rails": RAILS, "falcon": FALCON, "gin": GIN}
 
 
 def profile_application(profile: str) -> tuple[App, str]:

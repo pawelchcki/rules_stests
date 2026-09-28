@@ -39,6 +39,7 @@ profiles = {
     "python-django-datadog-v4-14-0-v04": "django_datadog_v04",
     "python-django-datadog-v4-14-0-v05": "django_datadog",
     "ruby-rails-datadog-v2-42-0-v04": "rails_datadog",
+    "ruby-falcon-datadog-v2-42-0-v04": "falcon_datadog",
     "go-gin-datadog-v2-10-1-v04": "gin_datadog",
 }
 command = [str(args.gate.resolve()), "--revision", args.revision]

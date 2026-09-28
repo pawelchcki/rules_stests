@@ -1,0 +1,9 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Creates the empty seed database at DATABASE_PATH.
+require "bundler/setup"
+require_relative "../app/database"
+
+RealWorld::SCHEMA.call(RealWorld::DB)
+RealWorld::DB.run("VACUUM")

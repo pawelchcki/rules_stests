@@ -166,6 +166,8 @@ use_repo(
     "datadog_ruby_linux_amd64",
     "django_ninja_realworld",
     "django_ninja_realworld_linux_amd64",
+    "falcon_realworld",
+    "falcon_realworld_linux_amd64",
     "gin_datadog_realworld",
     "gin_datadog_realworld_linux_amd64",
     "gin_realworld",

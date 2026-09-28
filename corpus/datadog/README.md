@@ -15,7 +15,7 @@ intake wire version.
 | `trace-shape.scm` | The language reviewed trace shapes are written in, and the tracer rules it applies |
 | `trace-shape/match.scm` | Exact, order-insensitive comparison of a shape with a capture, with explanations |
 | `shape/tracers.scm` | What dd-trace-py, dd-trace-rb, and dd-trace-go add to spans on their own |
-| `shape/<application>.scm` | The span builders for each application's integrations (aiohttp, Django, Rails, Gin) |
+| `shape/<application>.scm` | The span builders for each application's integrations (aiohttp, Django, Rails, Falcon, Gin) |
 | `realworld/profile/<profile>.scm` | A profile: identity plus the features it claims, by theme |
 | `realworld/shape/<profile>/<scenario>.scm` | The reviewed native traces of one scenario |
 
@@ -90,32 +90,32 @@ SQL text, routes, URLs, and every other value are compared literally.
 `features.json` describes each feature. The profiles claim the features their
 tracer satisfies and say why they skip the others:
 
-| Feature | aiohttp | Django | Rails | Gin |
-| --- | :-: | :-: | :-: | :-: |
-| intake: headers and counts, library headers, semantic validity, chunk coherence | ✓ | ✓ | ✓ | ✓ |
-| traces: native fields, unsigned ids, completion, root span, 128-bit trace ids | ✓ | ✓ | ✓ | ✓ |
-| service: service identity, base service, unified service tags, process identity | ✓ | ✓ | ✓ | ✓ |
-| service: version only on the configured service | – | ✓ | – | ✓ |
-| sampling: priority, decision maker, rule keep | ✓ | ✓ | ✓ | ✓ |
-| propagation: W3C and Datadog parents, caller's sampling priority kept | ✓ | ✓ | ✓ | ✓ |
-| http: classification, server tags, route matches URL | ✓ | ✓ | ✓ | ✓ |
-| http: absolute `http.url` | ✓ | ✓ | – | ✓ |
-| database: spans under the request | ✓ | ✓ | ✓ | ✓ |
-| database: `span.kind` client | ✓ | ✓ | ✓ | – |
-| database: `db.system` | – | ✓ | – | – |
-| errors: exception metadata, errors explained | ✓ | ✓ | ✓ | ✓ |
-| coverage: field policies | ✓ | ✓ | ✓ | ✓ |
+| Feature | aiohttp | Django | Rails | Falcon | Gin |
+| --- | :-: | :-: | :-: | :-: | :-: |
+| intake: headers and counts, library headers, semantic validity, chunk coherence | ✓ | ✓ | ✓ | ✓ | ✓ |
+| traces: native fields, unsigned ids, completion, root span, 128-bit trace ids | ✓ | ✓ | ✓ | ✓ | ✓ |
+| service: service identity, base service, unified service tags, process identity | ✓ | ✓ | ✓ | ✓ | ✓ |
+| service: version only on the configured service | – | ✓ | – | – | ✓ |
+| sampling: priority, decision maker, rule keep | ✓ | ✓ | ✓ | ✓ | ✓ |
+| propagation: W3C and Datadog parents, caller's sampling priority kept | ✓ | ✓ | ✓ | ✓ | ✓ |
+| http: classification, server tags, route matches URL | ✓ | ✓ | ✓ | ✓ | ✓ |
+| http: absolute `http.url` | ✓ | ✓ | – | – | ✓ |
+| database: spans under the request | ✓ | ✓ | ✓ | ✓ | ✓ |
+| database: `span.kind` client | ✓ | ✓ | ✓ | ✓ | – |
+| database: `db.system` | – | ✓ | – | ✓ | – |
+| errors: exception metadata, errors explained | ✓ | ✓ | ✓ | ✓ | ✓ |
+| coverage: field policies | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 The gaps, as observed:
 
 - **aiohttp** (`version` scoping, `db.system`): SQLAlchemy spans report under
   `sqlite` but carry `version`, and they name the database in `sql.db` rather
   than `db.system`.
-- **Rails** (`version` scoping, absolute URL, `db.system`):
-  - Active Record spans report under `sqlite` but carry `version`.
+- **Rails and Falcon** (`version` scoping, absolute URL; Rails also `db.system`):
+  - Active Record and Sequel spans also carry `version`.
   - Rack records a path in `http.url`, with the origin in `http.base_url`
     (system-tests `Test_Meta`, bug APMAPI-922).
-  - Active Record names the database in `active_record.db.vendor`, not `db.system`.
+  - Rails names the database in `active_record.db.vendor`; Sequel sets `db.system`.
 - **Gin** (`span.kind` client, `db.system`): GORM operation spans carry
   neither; their database/sql child spans carry both.
 

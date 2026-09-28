@@ -28,7 +28,7 @@ func TestUpstreamReceiptBindsMethodSourceAndSpanCount(t *testing.T) {
 func ddBaselineFixture() []ddNativeSpan {
 	var result []ddNativeSpan
 	for i := 1; i <= 4; i++ {
-		result = append(result, ddNativeSpan{Start: 100, Duration: 10, TraceID: uint64(i), SpanID: uint64(i), Name: "aiohttp.request", Service: "external-probe", Type: "web", Meta: map[string]string{"probe.request_id": fmt.Sprint(i), "env": "test", "version": "1", "http.method": "GET", "http.status_code": "200", "probe.header": "visible", "http.useragent": "datadog-external-probe"}, Metrics: map[string]float64{"_sampling_priority_v1": 2}})
+		result = append(result, ddNativeSpan{Start: 100, Duration: 10, TraceID: uint64(i), SpanID: uint64(i), Name: "aiohttp.request", Service: "external-probe", Type: "web", Meta: map[string]string{"probe.request_id": fmt.Sprint(i), "span.kind": "server", "env": "test", "version": "1", "http.method": "GET", "http.status_code": "200", "probe.header": "visible", "http.useragent": "datadog-external-probe"}, Metrics: map[string]float64{"_sampling_priority_v1": 2}})
 	}
 	return result
 }
@@ -87,7 +87,7 @@ func TestDatadogNativeAssertionsRejectMutations(t *testing.T) {
 }
 
 func TestDatadogHTTPMetadataMutations(t *testing.T) {
-	for _, key := range []string{"env", "version", "http.method", "http.status_code", "probe.header", "http.useragent", "probe.request_id"} {
+	for _, key := range []string{"env", "version", "http.method", "http.status_code", "probe.header", "http.useragent", "probe.request_id", "span.kind"} {
 		t.Run(key, func(t *testing.T) {
 			spans := ddBaselineFixture()
 			spans[0].Meta[key] = "wrong"
@@ -125,7 +125,7 @@ func TestDuplicateOriginWaiverIsPythonOnly(t *testing.T) {
 			t.Fatalf("Python duplicate-origin failure not recognized for %s", app)
 		}
 	}
-	for _, app := range []string{"rails", "gin"} {
+	for _, app := range []string{"rails", "falcon", "gin"} {
 		if knownPythonDuplicateOrigin(app, origin, log, nil) {
 			t.Fatalf("duplicate-origin failure incorrectly waived for %s", app)
 		}

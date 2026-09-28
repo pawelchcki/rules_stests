@@ -132,13 +132,17 @@ print(f"--override_repository={sys.argv[2]}={directory.resolve()}")
             ):
                 context.mkdir(parents=True)
                 (context / "Dockerfile").write_text("FROM scratch\n")
+            # The Falcon fixture keeps its Dockerfile under oci/, like Rails.
+            (root / "fixtures/apps/ruby/realworld-falcon/oci").mkdir(parents=True)
+            (root / "fixtures/apps/ruby/realworld-falcon/oci/Dockerfile").write_text("FROM scratch\n")
             counter = root / "build-count"
+            builds = root / "build-arguments"
             container_tool = root / "container-tool"
             container_tool.write_text(f"""#!/usr/bin/env bash
 set -eu
 case "$1" in
   version) echo fake-container-v1 ;;
-  build) printf x >> {counter!s} ;;
+  build) printf x >> {counter!s}; printf '%s\n' "$*" >> {builds!s} ;;
   save)
     while [[ "$1" != -o ]]; do shift; done
     mkdir -p "$2"
@@ -167,22 +171,23 @@ esac
 
             first = run(1)
             self.assertEqual(first.returncode, 0, first.stderr)
-            self.assertEqual(counter.read_text(), "xx")
+            self.assertEqual(counter.read_text(), "xxx")
+            self.assertIn("-f fixtures/apps/ruby/realworld-falcon/oci/Dockerfile", builds.read_text())
             second = run(2)
             self.assertEqual(second.returncode, 0, second.stderr)
-            self.assertEqual(counter.read_text(), "xx")
+            self.assertEqual(counter.read_text(), "xxx")
             self.assertIn("validated fixture cache hit", (root / "output-2/ruby.build.log").read_text())
 
             (root / "fixtures/apps/go/realworld-gin/Dockerfile").write_text("FROM scratch\n# changed\n")
             changed = run(3)
             self.assertEqual(changed.returncode, 0, changed.stderr)
-            self.assertEqual(counter.read_text(), "xxx")
+            self.assertEqual(counter.read_text(), "xxxx")
 
             ruby_entry = next(cache.glob("ruby-*"))
             (ruby_entry / "corrupt").touch()
             corrupt = run(4)
             self.assertEqual(corrupt.returncode, 0, corrupt.stderr)
-            self.assertEqual(counter.read_text(), "xxxx")
+            self.assertEqual(counter.read_text(), "xxxxx")
             self.assertTrue(list(cache.glob(".rejected-ruby-*")))
 
     def test_rejects_corrupted_manifest_blob(self):

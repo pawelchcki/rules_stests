@@ -205,6 +205,7 @@ DATADOG_SHAPE_LIBRARIES = [
     "datadog/shape/aiohttp.scm",
     "datadog/shape/django.scm",
     "datadog/shape/rails.scm",
+    "datadog/shape/falcon.scm",
     "datadog/shape/gin.scm",
 ]
 
@@ -231,6 +232,7 @@ DATADOG_SCENARIOS = REALWORLD_BASE_HURL_CASES + ["propagation_datadog"]
 DATADOG_PROFILES = {
     "go-gin-datadog-v2-10-1-v04": struct(implementation = "go-v2.10.1", wire_version = "v0.4"),
     "ruby-rails-datadog-v2-42-0-v04": struct(implementation = "ruby-v2.42.0", wire_version = "v0.4"),
+    "ruby-falcon-datadog-v2-42-0-v04": struct(implementation = "ruby-v2.42.0", wire_version = "v0.4"),
     "python-aiohttp-datadog-v4-14-0-v05": struct(implementation = "python-v4.14.0", wire_version = "v0.5"),
     "python-django-datadog-v4-14-0-v05": struct(implementation = "python-v4.14.0", wire_version = "v0.5"),
     "python-aiohttp-datadog-v4-14-0-v04": struct(implementation = "python-v4.14.0", wire_version = "v0.4"),

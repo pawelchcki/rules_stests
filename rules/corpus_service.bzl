@@ -27,7 +27,8 @@ def corpus_service(
         runtime: "python", "ruby" or "native" for the bundled runtime adapter.
         instance: Lowercase letters, digits, hyphens and underscores; identifies
             writable state under TEST_TMPDIR/rules_stests/<instance>/state.
-        command: Python/Rails command, or rootfs-relative native binary.
+        command: Python entrypoint; Rails command or source-relative Ruby
+            entry script (such as bin/server); or rootfs-relative native binary.
         args: App arguments, including rules_itest substitutions such as $${PORT}.
         injection: Optional struct with rootfs and flags, as returned by
             otel_injection, python_auto_injection or ruby_auto_injection.

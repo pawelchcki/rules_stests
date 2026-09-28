@@ -586,6 +586,7 @@ test_suite(
         ":aiohttp_datadog_v04_hurl_test",
         ":django_datadog_v04_hurl_test",
         ":rails_datadog_hurl_test",
+        ":falcon_datadog_hurl_test",
         ":gin_datadog_hurl_test",
     ],
     tags = ["datadog"],
@@ -614,6 +615,36 @@ realworld_service_tests(
     name = "rails_datadog",
     service = ":rails_datadog_service",
     telemetry_profile = "//corpus:ruby-rails-datadog-v2-42-0-v04",
+    telemetry_sink = "//harness:telemetry_sink_service",
+    scenarios = REALWORLD_BASE_HURL_CASES + ["propagation_datadog"],
+    tags = ["datadog", "manual"],
+)
+
+# Sinatra on Falcon: an async Ruby server whose Async reactor runs every
+# request in its own fiber, with Sequel over SQLite.
+corpus_service(
+    name = "falcon_datadog_service",
+    rootfs = "//harness:falcon_rootfs",
+    runtime = "ruby",
+    instance = "falcon-datadog",
+    command = "bin/server",
+    args = ["--host", "127.0.0.1", "--port", "$${PORT}"],
+    injection = datadog_ruby_injection(),
+    env = datadog_env(service = "falcon-datadog", wire_version = "v0.4"),
+    deps = ["//harness:telemetry_sink_service"],
+    so_reuseport_aware = False,
+    autoassign_port = True,
+    expected_start_duration = "5s",
+    http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+    hygienic = False,
+    shutdown_timeout = "10s",
+    tags = ["manual"],
+)
+
+realworld_service_tests(
+    name = "falcon_datadog",
+    service = ":falcon_datadog_service",
+    telemetry_profile = "//corpus:ruby-falcon-datadog-v2-42-0-v04",
     telemetry_sink = "//harness:telemetry_sink_service",
     scenarios = REALWORLD_BASE_HURL_CASES + ["propagation_datadog"],
     tags = ["datadog", "manual"],

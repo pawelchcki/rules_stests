@@ -109,7 +109,7 @@ def datadog_python_injection(rootfs = Label("//harness:datadog_python_rootfs"), 
     )
 
 def datadog_ruby_injection(rootfs = Label("//harness:datadog_ruby_rootfs")):
-    """Activates a locked, ABI-matched Datadog payload before Rails boots."""
+    """Activates a locked, ABI-matched Datadog payload before the Ruby application boots."""
     payload = "{instrumentation_rootfs}/datadog-ruby"
     return instrumentation_injection(
         rootfs = rootfs,

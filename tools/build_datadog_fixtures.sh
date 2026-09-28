@@ -68,17 +68,28 @@ PY
 # These are the uncompressed rootfs layer identities from the reviewed images
 # declared by the Datadog implementation profiles. OCI envelope metadata and
 # compression may vary across container-tool versions; the executed bytes may not.
-for fixture in ruby gin; do
+for fixture in ruby gin falcon; do
+  dockerfile=""
   if [[ "$fixture" == ruby ]]; then
     context=fixtures/agents/datadog-ruby
     repository=datadog_ruby_linux_amd64
     image=localhost/rules-stests-datadog-ruby:2.42.0
-    rootfs_digest=sha256:29348560d9b27e8642a845e0526d7011e33b11ba7e7367d8eefbaa0fd781e21d
-  else
+    rootfs_digest=sha256:b463ba27fdebf8841551f9c707ad87bc4bc504a4962c10afb3292a87ecafbe3a
+  elif [[ "$fixture" == gin ]]; then
     context=fixtures/apps/go/realworld-gin
     repository=gin_datadog_realworld_linux_amd64
     image=localhost/rules-stests-gin-datadog:2.10.1
     rootfs_digest=sha256:f2532c86ac33814c8ab87c3cc6b64d0d88ad9bdee043bc65982276adbf55e99b
+  else
+    context=fixtures/apps/ruby/realworld-falcon
+    dockerfile=fixtures/apps/ruby/realworld-falcon/oci/Dockerfile
+    repository=falcon_realworld_linux_amd64
+    image=localhost/rules-stests-falcon:0.57.0
+    rootfs_digest=sha256:9e75306ae318163fe2dd63a4689a981fe0ac47abbabe55e827735d4618c7e543
+  fi
+  dockerfile_args=()
+  if [[ -n "$dockerfile" ]]; then
+    dockerfile_args=(-f "$dockerfile")
   fi
 
   export_dir="$out/$fixture"
@@ -106,7 +117,7 @@ for fixture in ruby gin; do
     printf 'Datadog fixture cache miss: %s; building reviewed payload\n' "$fixture"
   fi
 
-  if "$container_tool" build --timestamp 0 "${container_build_network_args[@]}" -t "$image" "$context" >> "$out/$fixture.build.log" 2>&1; then
+  if "$container_tool" build --timestamp 0 "${container_build_network_args[@]}" "${dockerfile_args[@]}" -t "$image" "$context" >> "$out/$fixture.build.log" 2>&1; then
     :
   else
     status=$?
