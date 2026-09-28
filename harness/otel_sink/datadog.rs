@@ -618,8 +618,12 @@ fn server_span(span: &Value) -> bool {
 }
 
 pub(crate) fn capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
+    capture_to_scheme_for_scenario(records, false)
+}
+
+fn capture_to_scheme_for_scenario(records: &[Record], native_ruby_client: bool) -> Result<Vec<u8>, String> {
     let index = NativeIndex::new(records);
-    let trace_shapes = index.as_ref().map_err(|e| e.clone()).and_then(shapes);
+    let trace_shapes = index.as_ref().map_err(|e| e.clone()).and_then(|index| shapes(index, native_ruby_client));
     let mut out = String::from("((protocol datadog)(family \"datadog\")");
     write!(
         out,
@@ -830,7 +834,7 @@ pub(crate) fn capture_to_scheme_with_context(
     if !app.is_empty() || !scenario.is_empty() {
         validate_workload_context(records, app, scenario)?;
     }
-    capture_to_scheme(records)
+    capture_to_scheme_for_scenario(records, app == "rails" && scenario == "native_ruby_client")
 }
 
 fn context_identifier(value: &str) -> bool {
@@ -1131,7 +1135,7 @@ fn node(
     out.push_str(")))");
     Ok(out)
 }
-fn shapes(index: &NativeIndex<'_>) -> Result<String, String> {
+fn shapes(index: &NativeIndex<'_>, native_ruby_client: bool) -> Result<String, String> {
     let mut groups = BTreeMap::<String, usize>::new();
     for trace in index.traces.values() {
         let spans = &trace.spans;
@@ -1143,6 +1147,9 @@ fn shapes(index: &NativeIndex<'_>) -> Result<String, String> {
             // root and client spans only. Do not weaken the server requirement
             // for normal (including Python) workload traces.
             .or_else(|| {
+                if !native_ruby_client {
+                    return None;
+                }
                 spans
                     .iter()
                     .find(|span| {
@@ -1188,7 +1195,7 @@ pub(crate) fn candidate(records: &[Record], app: &str, scenario: &str) -> Result
     }
     Ok(format!(
         "(define scenario-shape\n  '{})\n",
-        pretty_shape(&shapes(&NativeIndex::new(records)?)?)
+        pretty_shape(&shapes(&NativeIndex::new(records)?, app == "rails" && scenario == "native_ruby_client")?)
     )
     .into_bytes())
 }

@@ -96,3 +96,24 @@ func TestNativeClientRequiresExactParentageAndErrors(t *testing.T) {
 		t.Fatal("wrong client parent accepted")
 	}
 }
+
+func TestNativeHasTraceIDHighRequiresExactTag(t *testing.T) {
+	const high = "0123456789abcdef"
+	for _, test := range []struct {
+		name string
+		tags string
+		want bool
+	}{
+		{"single tag", "_dd.p.tid=" + high, true},
+		{"comma-separated tag", "_dd.p.dm=-0,_dd.p.tid=" + high, true},
+		{"trailing junk", "_dd.p.tid=" + high + "junk", false},
+		{"embedded key", "other=_dd.p.tid=" + high, false},
+		{"prefixed key", "prefix_dd.p.tid=" + high, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := nativeHasTraceIDHigh(test.tags, high); got != test.want {
+				t.Fatalf("nativeHasTraceIDHigh(%q) = %t, want %t", test.tags, got, test.want)
+			}
+		})
+	}
+}

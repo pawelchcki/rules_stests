@@ -121,9 +121,19 @@ func nativeRawExchange(endpoint, request string, fragment bool, statuses ...int)
 	}
 	defer connection.Close()
 	if fragment {
-		for i := range request {
-			if _, err = io.WriteString(connection, request[i:i+1]); err != nil {
+		lineEnd := strings.Index(request, "\r\n")
+		if lineEnd < 4 || !strings.HasSuffix(request, "\r\n\r\n") {
+			return fmt.Errorf("invalid fragmented HTTP request")
+		}
+		// Leave the request line and then the header terminator incomplete
+		// across server read opportunities.
+		parts := []string{request[:4], request[4 : lineEnd+2], request[lineEnd+2 : len(request)-2], request[len(request)-2:]}
+		for index, part := range parts {
+			if _, err = io.WriteString(connection, part); err != nil {
 				return err
+			}
+			if index+1 < len(parts) {
+				time.Sleep(100 * time.Millisecond)
 			}
 		}
 	} else if _, err = io.WriteString(connection, request); err != nil {
@@ -430,10 +440,20 @@ func validateNativeWire(spans map[uint64]nativeCapturedSpan, root nativeCaptured
 			return fmt.Errorf("downstream Datadog headers do not match captured HTTP client")
 		}
 		expected := fmt.Sprintf("00-%s%016x-%016x-01", high, trace, parent)
-		if request.Traceparent != expected || !strings.Contains(request.DatadogTags, "_dd.p.tid="+high) {
+		if request.Traceparent != expected || !nativeHasTraceIDHigh(request.DatadogTags, high) {
 			return fmt.Errorf("downstream propagation lost client span or 128-bit trace identity")
 		}
 		seen[parent] = true
 	}
 	return nil
+}
+
+func nativeHasTraceIDHigh(tags, high string) bool {
+	for _, tag := range strings.Split(tags, ",") {
+		key, value, found := strings.Cut(tag, "=")
+		if found && key == "_dd.p.tid" && value == high {
+			return true
+		}
+	}
+	return false
 }
