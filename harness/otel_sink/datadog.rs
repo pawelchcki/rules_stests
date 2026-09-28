@@ -778,7 +778,8 @@ fn capture_to_scheme_for_scenario(records: &[Record], native_ruby_client: bool) 
                                             | "http.response.headers.x-request-id"
                                             | "_dd.p.tid"
                                             | "error.stack"
-                                            | "error.handling_stack" => runtime_fields += 1,
+                                            | "error.handling_stack"
+                                            | "process_id" => runtime_fields += 1,
                                             _ if normalized_meta_value(
                                                 meta_key,
                                                 meta_value,

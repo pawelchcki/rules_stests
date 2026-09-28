@@ -35,6 +35,15 @@
 ; Rails normally contributes a Rack span and a controller child for each
 ; handled request. Authentication before-actions may deliberately halt with a
 ; 401 before ActionController::Metal#process_action starts.
+(define (span-high-bits spans span)
+  (or (tag span "_dd.p.tid")
+      (let ((chunk (field 'chunk-index span)))
+        (and chunk
+             (let ((tagged (filter (lambda (candidate)
+                                     (and (equal? (field 'chunk-index candidate) chunk)
+                                          (tag candidate "_dd.p.tid")))
+                                   spans)))
+               (and (pair? tagged) (tag (car tagged) "_dd.p.tid")))))))
 (define (rails-controller-children? capture)
   (let ((spans (items capture 'spans)))
     (and (some controller-span? spans)
@@ -44,6 +53,7 @@
                  (some (lambda (span)
                          (and (controller-span? span)
                               (equal? (field 'trace-id span) (field 'trace-id server))
+                              (equal? (span-high-bits spans span) (span-high-bits spans server))
                               (equal? (field 'parent-id span) (field 'span-id server))))
                        spans)
                  (equal? (tag server "http.status_code") "401")))
