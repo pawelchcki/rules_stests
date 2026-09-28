@@ -39,11 +39,18 @@
               (web-spans capture))))
 
 ; http.url is the full URL including scheme and host.
+(define (url-authority url)
+  (let ((start (cond ((string-prefix? "http://" url) 7)
+                     ((string-prefix? "https://" url) 8)
+                     (else #f))))
+    (and start
+         (let find ((index start))
+           (if (or (= index (string-length url)) (memv (string-ref url index) '(#\/ #\? #\#)))
+               (substring url start index)
+               (find (+ index 1)))))))
 (define (absolute-url? capture)
   (and (pair? (web-spans capture))
-       (every (lambda (span)
-                (let ((url (tag span "http.url")))
-                  (or (string-prefix? "http://" url) (string-prefix? "https://" url))))
+       (every (lambda (span) (nonempty-string? (url-authority (tag span "http.url"))))
               (web-spans capture))))
 
 ; http.route is the template the request path matched: the same number of

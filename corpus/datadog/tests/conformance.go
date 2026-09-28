@@ -290,6 +290,7 @@ var contractCases = []contractCase{
 	{"span/rule-keep", "local root not kept by the rule", `("_sampling_priority_v1" 2)`, `("_sampling_priority_v1" 1)`},
 	{"span/http-server-tags", "server span without span.kind", `("span.kind" "server") `, ""},
 	{"span/http-absolute-url", "relative URL", `"http://127.0.0.1:8000/api/articles/one?limit=1"`, `"/api/articles/one?limit=1"`},
+	{"span/http-absolute-url", "URL without a host", `"http://127.0.0.1:8000/api/articles/one?limit=1"`, `"http:///api/articles/one?limit=1"`},
 	{"span/http-route-template", "route does not match URL", `("http.route" "api/articles/<slug>")`, `("http.route" "api/profiles/<slug>")`},
 	{"span/database-client", "database span not a client", `("span.kind" "client")`, `("span.kind" "internal")`},
 	{"span/database-system", "database span without db.system", `("db.system" "sqlite")`, ""},
@@ -315,6 +316,23 @@ func contractAssertions(run func(name, value, body string, expected int), expect
 		expect(tc.assertion+" "+tc.name, strings.Replace(contractCapture, tc.old, tc.replacement, 1), body(tc.assertion), 409,
 			"assertion "+tc.assertion+" failed")
 	}
+
+	// A second trace shares the first one's low trace id but not its high bits
+	// or service. Only chunk 1's server span carries the high bits, so its
+	// database span is attributed through its chunk.
+	sameLowID := strings.TrimSuffix(contractCapture, ")))") + `
+  ((name "django.request") (resource "GET api/articles/<slug>") (service "other") (type "web")
+   (trace-id "11803532876627986230") (span-id "3") (parent-id "0") (parent-kind "root") (chunk-index 1) (error 0)
+   (meta (("_dd.p.tid" "6512bd4400000000") ("env" "test") ("version" "1"))) (metrics ()))
+  ((name "sqlite.query") (resource "SELECT 1") (service "sqlite") (type "sql")
+   (trace-id "11803532876627986230") (span-id "4") (parent-id "3") (parent-kind "child") (chunk-index 1) (error 0)
+   (meta (("_dd.base_service" "other") ("env" "test"))) (metrics ())))))`
+	for _, assertion := range []string{"span/base-service", "span/unified-service-tags", "span/version-scoped"} {
+		run(assertion+" keys services by full trace identity", sameLowID, body(assertion), 200)
+	}
+	// Without its chunk's high bits, that database span could belong to either trace.
+	ambiguous := strings.Replace(sameLowID, `(parent-id "3") (parent-kind "child") (chunk-index 1)`, `(parent-id "3") (parent-kind "child") (chunk-index 2)`, 1)
+	expect("span/base-service ambiguous trace identity", ambiguous, body("span/base-service"), 409, "assertion span/base-service failed")
 }
 func must(err error) {
 	if err != nil {

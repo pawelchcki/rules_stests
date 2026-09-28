@@ -10,18 +10,43 @@
   (all-spans capture (lambda (span) (nonempty-string? (field 'service span)))))
 
 ; The configured service is the one each trace's HTTP server span reports.
-(define (trace-services capture)
-  (map (lambda (span) (list (field 'trace-id span) (field 'service span)))
-       (filter web-span? (items capture 'spans))))
-(define (trace-service services span)
-  (let ((entry (assoc (field 'trace-id span) services))) (and entry (cadr entry))))
+; A trace is its low 64-bit id plus the high bits in `_dd.p.tid`, which every
+; span of a chunk shares but only some carry; two traces may share a low id.
+(define (chunk-high-bits spans)
+  (map (lambda (span) (list (field 'chunk-index span) (tag span "_dd.p.tid")))
+       (filter (lambda (span) (and (field 'chunk-index span) (tag span "_dd.p.tid"))) spans)))
+(define (high-bits chunks span)
+  (or (tag span "_dd.p.tid")
+      (let ((entry (and (field 'chunk-index span) (assoc (field 'chunk-index span) chunks))))
+        (and entry (cadr entry)))))
+(define (trace-services spans chunks)
+  (map (lambda (span) (list (field 'trace-id span) (high-bits chunks span) (field 'service span)))
+       (filter web-span? spans)))
+; The configured service of span's trace: #f outside every server span's
+; trace, and 'ambiguous when traces sharing its low id report different
+; services and its high bits cannot tell them apart.
+(define (trace-service services chunks span)
+  (let* ((high (high-bits chunks span))
+         (matching
+           (filter (lambda (entry)
+                     (and (equal? (car entry) (field 'trace-id span))
+                          (or (not high) (not (cadr entry)) (equal? high (cadr entry)))))
+                   services)))
+    (cond ((null? matching) #f)
+          ((every (lambda (entry) (equal? (list-ref entry 2) (list-ref (car matching) 2))) matching)
+           (list-ref (car matching) 2))
+          (else 'ambiguous))))
 (define (for-spans-with-service capture predicate)
-  (let ((services (trace-services capture)))
+  (let* ((spans (items capture 'spans))
+         (chunks (chunk-high-bits spans))
+         (services (trace-services spans chunks)))
     (and (pair? services)
          (every (lambda (span)
-                  (let ((configured (trace-service services span)))
-                    (or (not configured) (predicate span configured))))
-                (items capture 'spans)))))
+                  (let ((configured (trace-service services chunks span)))
+                    (cond ((not configured) #t)
+                          ((eq? configured 'ambiguous) #f)
+                          (else (predicate span configured)))))
+                spans))))
 
 ; A span reported under another service (an integration's own service name)
 ; names the configured service in `_dd.base_service`; spans of the configured
