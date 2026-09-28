@@ -1,5 +1,6 @@
 (define-library (datadog capture traces)
-  (export native-fields? ids-valid? completed? root-present? trace-id-128?)
+  (export native-fields? ids-valid? completed? root-present? trace-id-128?
+          rails-controller-children? http-client?)
   (import (scheme base) (datadog capture base))
   (begin
 
@@ -30,6 +31,26 @@
            (eq? (field 'completed span) #t)))))
 
 (define (root-present? capture) (some root-span? (items capture 'spans)))
+
+; Rails normally contributes a Rack span and a controller child for each
+; handled request. Authentication before-actions may deliberately halt with a
+; 401 before ActionController::Metal#process_action starts.
+(define (rails-controller-children? capture)
+  (let ((spans (items capture 'spans)))
+    (and (some controller-span? spans)
+         (every
+           (lambda (server)
+             (or (not (web-span? server))
+                 (some (lambda (span)
+                         (and (controller-span? span)
+                              (equal? (field 'trace-id span) (field 'trace-id server))
+                              (equal? (field 'parent-id span) (field 'span-id server))))
+                       spans)
+                 (equal? (tag server "http.status_code") "401")))
+           spans))))
+
+(define (http-client? capture)
+  (some http-client-span? (items capture 'spans)))
 
 ; 128-bit trace ids (system-tests parametric/test_128_bit_traceids.py). Each
 ; trace root carries the high 64 bits in `_dd.p.tid` as 16 lowercase hex

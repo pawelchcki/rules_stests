@@ -42,6 +42,13 @@ py_binary(
     main = "datadog_shapes.py",
 )
 
+# Verifies a consumer's native Ruby receipts and paired captures.
+py_binary(
+    name = "verify_native_ruby_receipts",
+    srcs = ["verify_native_ruby_receipts.py"],
+    main = "verify_native_ruby_receipts.py",
+)
+
 # The shape vocabulary and the libraries it depends on.
 _SHAPE_VOCABULARY = ["telemetry/contract-error.scm", "datadog/capture/base.scm"] + DATADOG_SHAPE_LIBRARIES
 

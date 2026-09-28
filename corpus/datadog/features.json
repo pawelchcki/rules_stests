@@ -183,6 +183,14 @@
       "description": "Every error span is a 5xx server span or records its exception."
     },
     {
+      "id": "datadog.traces.rails-controller-children",
+      "binding": "span/rails-controller-children"
+    },
+    {
+      "id": "datadog.traces.http-client",
+      "binding": "span/http-client"
+    },
+    {
       "id": "datadog.coverage.field-policies",
       "binding": "capture/field-policy-coverage",
       "theme": "coverage",

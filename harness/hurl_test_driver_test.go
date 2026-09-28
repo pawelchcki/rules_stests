@@ -352,6 +352,33 @@ func TestDatadogCoverageClassifiesOnlyTraceServiceAsNormalized(t *testing.T) {
 	}
 }
 
+func TestDatadogCoverageRecognizesRailsInventory(t *testing.T) {
+	profile := atomicProfile{Application: "rails", ServerOperation: "rack.request", Scenario: "tags"}
+	capture := []byte(`[{"payload":{"traces":[[{"name":"rack.request","service":"rails-native-fixture","resource":"Users#index","type":"web","trace_id":1,"span_id":2,"parent_id":0,"start":3,"duration":4,"error":0,"meta":{"http.method":"GET","http.status_code":"200"},"metrics":{}},{"name":"rails.action_controller","service":"rails-native-fixture","resource":"Users#index","type":"web","trace_id":1,"span_id":3,"parent_id":2,"start":3,"duration":4,"error":0,"meta":{},"metrics":{}},{"name":"sqlite.query","service":"sqlite","resource":"SELECT ?","type":"sql","trace_id":1,"span_id":4,"parent_id":3,"start":3,"duration":4,"error":0,"meta":{},"metrics":{}},{"name":"http.request","service":"net/http","resource":"GET","type":"http","trace_id":1,"span_id":5,"parent_id":3,"start":3,"duration":4,"error":0,"meta":{},"metrics":{}}]]}}]`)
+	coverage, err := collectDatadogCoverage(capture, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if coverage.IntegrationSpans["http.server"] != 1 || coverage.IntegrationSpans["rails.controller"] != 1 || coverage.IntegrationSpans["database"] != 1 || coverage.IntegrationSpans["http.client"] != 1 {
+		t.Fatalf("Rails inventory was not recognized: %+v", coverage)
+	}
+}
+
+func TestDatadogCoverageRecognizesPublishedGinServer(t *testing.T) {
+	profile := atomicProfile{Application: "gin", Scenario: "tags"}
+	capture := []byte(`[{"payload":{"traces":[[{"name":"gin.request","type":"web","service":"gin-datadog"}]]}}]`)
+	coverage, err := collectDatadogCoverage(capture, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if coverage.IntegrationSpans["http.server"] != 1 {
+		t.Fatalf("Gin server span was not recognized: %+v", coverage)
+	}
+	if datadogServerSpan("http.request", "http", "") {
+		t.Fatal("native HTTP client span was classified as a server")
+	}
+}
+
 func TestNormalizeDatadogEndpointRejectsInvalidLoopbackPorts(t *testing.T) {
 	for _, endpoint := range []string{"http://127.0.0.1:0/api/tags", "http://localhost:999999/api/tags"} {
 		if _, err := normalizeDatadogEndpoint(endpoint); err == nil {

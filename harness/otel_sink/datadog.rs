@@ -732,6 +732,8 @@ pub(crate) fn capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
     }
     let mut http_spans = 0usize;
     let mut database_spans = 0usize;
+    let mut controller_spans = 0usize;
+    let mut http_client_spans = 0usize;
     let mut exact_fields = 0usize;
     let mut normalized_fields = 0usize;
     let mut runtime_fields = 0usize;
@@ -746,6 +748,12 @@ pub(crate) fn capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                 }
                 if text(span.get("type")) == "sql" || name.starts_with("sqlite.") {
                     database_spans += 1;
+                }
+                if name == "rails.action_controller" && text(span.get("type")) == "web" {
+                    controller_spans += 1;
+                }
+                if name == "http.request" && text(span.get("type")) == "http" {
+                    http_client_spans += 1;
                 }
                 if let Some(object) = span.as_object() {
                     for key in object.keys() {
@@ -805,7 +813,7 @@ pub(crate) fn capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
             }
         }
     }
-    write!(out, "))(coverage ((policy-schema 1)(http-spans {http_spans})(database-spans {database_spans})(exact-fields {exact_fields})(normalized-fields {normalized_fields})(runtime-validated-fields {runtime_fields})(unclassified-fields 0)))(trace-shapes ").unwrap();
+    write!(out, "))(coverage ((policy-schema 1)(http-spans {http_spans})(controller-spans {controller_spans})(database-spans {database_spans})(http-client-spans {http_client_spans})(exact-fields {exact_fields})(normalized-fields {normalized_fields})(runtime-validated-fields {runtime_fields})(unclassified-fields 0)))(trace-shapes ").unwrap();
     match trace_shapes {
         Ok(s) => out.push_str(&s),
         Err(_) => out.push_str("#f"),
@@ -847,7 +855,15 @@ fn validate_workload_context(records: &[Record], app: &str, scenario: &str) -> R
         array(payload(record).get("traces")).iter().any(|trace| {
             array(Some(trace))
                 .iter()
-                .any(|span| text(span.get("name")) == expected)
+                .any(|span| {
+                    text(span.get("name")) == if app == "rails" && scenario == "native_ruby_client" { "ruby.http.fixture" } else { expected }
+                        // Rails selects its operation explicitly and needs the
+                        // web type to exclude an accidental client span.  The
+                        // established Python v0.4 probe also covers omitted
+                        // optional defaults, including `type`; retain that
+                        // source-compatible candidate behavior.
+                        && (app != "rails" || text(span.get("type")) == if scenario == "native_ruby_client" { "custom" } else { "web" })
+                })
         })
     }) {
         return Err("Datadog capture does not match workload application".into());
@@ -945,6 +961,12 @@ fn normalized_meta_value(key: &str, value: &Value, service: &str) -> Result<Valu
                 return Err("malformed Datadog trace high bits".into());
             }
             "<trace-id-high>".into()
+        }
+        "process_id" => {
+            if !text.parse::<u64>().is_ok_and(|pid| pid > 0) {
+                return Err("malformed Datadog process_id".into());
+            }
+            "<process-id>".into()
         }
         "error.stack" | "error.handling_stack" => {
             if text.is_empty()
@@ -1117,7 +1139,27 @@ fn shapes(index: &NativeIndex<'_>) -> Result<String, String> {
             .iter()
             .find(|span| server_span(span))
             .map(|span| text(span.get("service")))
-            .ok_or("Datadog trace has no HTTP server span")?;
+            // Only the C-driven Net::HTTP fixture intentionally has a custom
+            // root and client spans only. Do not weaken the server requirement
+            // for normal (including Python) workload traces.
+            .or_else(|| {
+                spans
+                    .iter()
+                    .find(|span| {
+                        text(span.get("name")) == "ruby.http.fixture"
+                            && text(span.get("type")) == "custom"
+                            && parent_id(span) == Some(0)
+                    })
+                    .map(|span| text(span.get("service")))
+            })
+            .filter(|service| !service.is_empty())
+            .ok_or("Datadog trace has no service span")?;
+        let mut ids = BTreeMap::new();
+        for span in spans {
+            if ids.insert(uint(span.get("span_id")).unwrap(), ()).is_some() {
+                return Err("duplicate Datadog span ID".into());
+            }
+        }
         let mut visited = 0;
         let mut roots = Vec::new();
         for root in &trace.roots {

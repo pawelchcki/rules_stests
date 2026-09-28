@@ -1,7 +1,7 @@
 (define-library (datadog profile)
   (export realworld-profile id display-name language framework implementation compose
           family wire-version application shape-namespace service-name signals
-          tracer-version
+          tracer-language tracer-version server-operation
           all scenario observed validate-profile)
   (import (scheme base) (scheme write) (datadog capture shapes)
           (datadog proofs) (datadog trace-shape match) (realworld scenarios))
@@ -17,7 +17,9 @@
 (define (application value) (list 'application value))
 (define (shape-namespace value) (list 'shape-namespace value))
 (define (service-name value) (list 'service-name value))
+(define (tracer-language value) (list 'tracer-language value))
 (define (tracer-version value) (list 'tracer-version value))
+(define (server-operation value) (list 'server-operation value))
 (define (signals . values) (list 'signals values))
 (define (observed . features) (list 'observed features))
 (define (all proof) (list 'claim 'all proof))
@@ -68,6 +70,7 @@
       expected)))
 
 (define (validate-profile profile scenario-name capture validation-mode)
+  (set-server-operation! (profile-field profile 'server-operation))
   (check (eq? (field 'protocol capture) 'datadog) "expected native Datadog capture")
   (check (eq? (field 'semantic-valid capture) #t) "Datadog capture contains semantic violations")
   (check (every (lambda (request)
@@ -75,7 +78,8 @@
                 (items capture 'requests)) "Datadog intake wire version differs from profile")
   (check (every (lambda (request)
                   (and (equal? (header-value request "datadog-meta-lang")
-                               (symbol->string (profile-field profile 'language)))
+                               (or (profile-field profile 'tracer-language)
+                                   (symbol->string (profile-field profile 'language))))
                        (equal? (header-value request "datadog-meta-tracer-version")
                                (profile-field profile 'tracer-version))))
                 (items capture 'requests)) "Datadog tracer identity differs from profile")

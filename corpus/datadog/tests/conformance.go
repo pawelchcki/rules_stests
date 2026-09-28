@@ -166,6 +166,14 @@ func defineCases(run func(name, value, body string, expected int), expect func(n
 	consumerCapture := strings.Replace(capture, `"4.14.0"`, `"`+consumerIdentity+`"`, 1)
 	run("declared consumer tracer identity", consumerCapture, consumerProgram, 200)
 	run("incompatible consumer tracer identity", capture, consumerProgram, 409)
+	railsProgram := strings.Replace(program, `(language 'python)`, `(language 'ruby) (tracer-language "c") (server-operation "rack.request")`, 1)
+	railsProgram = strings.Replace(railsProgram, `"4.14.0"`, `"bazel-dev"`, 1)
+	railsProgram = strings.Replace(railsProgram, `(validate-profile profile 'unicode capture
+ (cons 'exact '(((count 1) (roots (((name "aiohttp.request") (children ()))))))))`, `(validate-profile profile 'unicode capture 'contract)`, 1)
+	railsCapture := strings.Replace(capture, `"aiohttp.request"`, `"rack.request"`, -1)
+	railsCapture = strings.Replace(railsCapture, `"python"`, `"c"`, 1)
+	railsCapture = strings.Replace(railsCapture, `"4.14.0"`, `"bazel-dev"`, 1)
+	run("Rails rack.request server operation", railsCapture, railsProgram, 200)
 	for _, tc := range []testCase{
 		{"zero trace ID", `(trace-id "18446744073709551615")`, `(trace-id "0")`},
 		{"overflow trace ID", `(trace-id "18446744073709551615")`, `(trace-id "18446744073709551616")`},
