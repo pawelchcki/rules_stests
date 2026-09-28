@@ -45,6 +45,9 @@ func TestDatadogNativeAssertionsRejectMutations(t *testing.T) {
 					s.Meta["env"] = c.Environment
 					s.Meta["version"] = c.Version
 				}
+				for key, value := range c.ExpectedTags {
+					s.Meta[key] = value
+				}
 				if c.Bits == 128 {
 					s.Meta["_dd.p.tid"] = "1234567890abcdef"
 				}
@@ -83,6 +86,115 @@ func TestDatadogNativeAssertionsRejectMutations(t *testing.T) {
 				t.Fatal("accepted targeted corruption")
 			}
 		})
+	}
+}
+
+func TestDatadogConfiguredTagsRejectMissingChangedAndBaselineTags(t *testing.T) {
+	baseline := ddBaselineFixture()
+	for _, c := range ddCases() {
+		if len(c.ExpectedTags) == 0 {
+			continue
+		}
+		t.Run(c.Name, func(t *testing.T) {
+			configured := ddBaselineFixture()
+			for i := range configured {
+				for key, value := range c.ExpectedTags {
+					configured[i].Meta[key] = value
+				}
+				if c.Service != "" {
+					configured[i].Service = c.Service
+					configured[i].Meta["env"] = c.Environment
+					configured[i].Meta["version"] = c.Version
+				}
+			}
+			if err := validateDatadogCase(c, baseline, configured); err != nil {
+				t.Fatal(err)
+			}
+			for key := range c.ExpectedTags {
+				for i := range configured {
+					changed := append([]ddNativeSpan(nil), configured...)
+					changed[i].Meta = map[string]string{}
+					for k, v := range configured[i].Meta {
+						changed[i].Meta[k] = v
+					}
+					delete(changed[i].Meta, key)
+					if err := validateDatadogCase(c, baseline, changed); err == nil {
+						t.Fatalf("accepted missing %s on request %d", key, i+1)
+					}
+					changed[i].Meta[key] = "wrong"
+					if err := validateDatadogCase(c, baseline, changed); err == nil {
+						t.Fatalf("accepted changed %s on request %d", key, i+1)
+					}
+				}
+				contaminated := ddBaselineFixture()
+				contaminated[0].Meta[key] = c.ExpectedTags[key]
+				if err := validateDatadogCase(c, contaminated, configured); err == nil {
+					t.Fatalf("accepted baseline containing %s", key)
+				}
+			}
+			if c.Name == "tags-identity-precedence" {
+				for _, field := range []string{"service", "env", "version"} {
+					changed := append([]ddNativeSpan(nil), configured...)
+					changed[2].Meta = map[string]string{}
+					for k, v := range configured[2].Meta {
+						changed[2].Meta[k] = v
+					}
+					switch field {
+					case "service":
+						changed[2].Service = "shadow-service"
+					case "env":
+						changed[2].Meta["env"] = "shadow-env"
+					case "version":
+						changed[2].Meta["version"] = "shadow-version"
+					}
+					if err := validateDatadogCase(c, baseline, changed); err == nil {
+						t.Fatalf("accepted shadow %s", field)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestDatadogConfigurationEvidencePinsSourceAndAgentURL(t *testing.T) {
+	if got := ddSourceURL(ddCase{Source: "test_tracer.py"}); got != datadogUpstream+"test_tracer.py" {
+		t.Fatalf("legacy source changed: %s", got)
+	}
+	if got := ddSourceURL(ddCase{Source: "test_config_consistency.py", SourceRevision: "another-revision"}); got != "https://github.com/DataDog/system-tests/blob/another-revision/tests/parametric/test_config_consistency.py" {
+		t.Fatalf("nonempty revision silently changed: %s", got)
+	}
+	for _, c := range ddCases() {
+		if c.SourceRevision == "" {
+			continue
+		}
+		if got := ddSourceURL(c); got != datadogConfigUpstream+"test_config_consistency.py" {
+			t.Fatalf("incorrect source for %s: %s", c.Name, got)
+		}
+		if c.ReferenceClass == "" || c.ReferenceTest == "" {
+			t.Fatalf("missing upstream test identifier for %s", c.Name)
+		}
+	}
+	c := ddCase{Env: map[string]string{"DD_AGENT_HOST": "invalid-agent-host.invalid", "DD_TRACE_AGENT_PORT": "1", "DD_TRACE_AGENT_URL": "http://127.0.0.1:8126"}}
+	effective := ddEffectiveEnvironment("http://127.0.0.1:8126", c, []string{"--env=DD_TRACE_SQLALCHEMY_ENABLED=true", "--env=DD_TRACE_SQLITE3_ENABLED=false", "--env=DD_TRACE_AGENT_URL=http://wrong.example:8126", "--"})
+	if effective["DD_AGENT_HOST"] != "invalid-agent-host.invalid" || effective["DD_TRACE_AGENT_PORT"] != "1" || effective["DD_TRACE_AGENT_URL"] != "http://127.0.0.1:8126" {
+		t.Fatal("agent precedence evidence lost an effective setting")
+	}
+	if effective["DD_TRACE_SQLALCHEMY_ENABLED"] != "true" || effective["DD_TRACE_SQLITE3_ENABLED"] != "false" {
+		t.Fatal("effective configuration lost launcher injection controls")
+	}
+	c.AgentURLPrecedence = true
+	if err := ddValidateAgentURLPrecedenceConfiguration(c, "http://127.0.0.1:8126"); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"DD_TRACE_AGENT_URL", "DD_AGENT_HOST", "DD_TRACE_AGENT_PORT"} {
+		changed := ddCase{AgentURLPrecedence: true, Env: map[string]string{}}
+		for k, v := range c.Env {
+			changed.Env[k] = v
+		}
+		changed.Env[key] = "other"
+		if err := ddValidateAgentURLPrecedenceConfiguration(changed, "http://127.0.0.1:8126"); err == nil {
+			t.Fatalf("accepted changed %s", key)
+		}
 	}
 }
 

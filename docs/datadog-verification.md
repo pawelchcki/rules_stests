@@ -2,7 +2,25 @@
 
 This record separates observed results, unsupported behavior, and verification limits. The source comparison point and receipt revision are `02bbcbba786bb9462beda4c27a0c73e20109a4fd`; verification ran before commit against the implementation changes on top of that revision. The fixed behavioral reference is [DataDog/system-tests at `ea8a5976064509df0a5232e314b22e7e90ca4d40`](https://github.com/DataDog/system-tests/tree/ea8a5976064509df0a5232e314b22e7e90ca4d40/tests). The checks are independently implemented and do not establish complete upstream parity.
 
-## Current status
+## Post-rebase verification
+
+The current branch is based on `7904241`, which already includes Falcon as the seventh Datadog profile. This branch adds five configuration cases for Falcon and each other profile. The current matrix has 112 exact-shape combinations, 35 new configuration cases across seven profiles, and 36 Python lab cases. The six-profile runs below remain historical evidence for the pre-rebase worktree.
+
+All 11 post-rebase targets passed in fresh BuildBuddy remote runs. The [external-feature run](https://pawel.buildbuddy.io/invocation/e108fc6d-bf5c-4bee-8910-0d5946c04e18) passed seven profile targets and the Go unit target: 242 feature results passed, including all 35 new configuration cases, with the same three earlier unsupported results. The [lab run](https://pawel.buildbuddy.io/invocation/7f2d8b49-2920-48a1-9eae-0c8aa728c5bc) passed both wire-version targets and the Python unit target: all 36 cases passed after exact carrier parsing was added. The 890 retained files under `/tmp/moar-datadog-pr-evidence` have SHA-256 manifest `d401d6cc4c44535a7501de61d6125e8875981de6bf095b245d026e612ac371ec`; capture hashes and lab identities were independently checked. The 112 exact-shape combinations and full CI workflow have not been rerun for this branch.
+
+## Pre-rebase coverage expansion
+
+The earlier acceptance record below belongs to the 96-shape and 30-feature-case implementation at the `ea8a597…` comparison pin. The additional configuration and controlled-span cases use [DataDog/system-tests at `255dc57d719c4d33a1c45a1b41cd517c5cae5878`](https://github.com/DataDog/system-tests/tree/255dc57d719c4d33a1c45a1b41cd517c5cae5878/tests/parametric). The historical pass counts below do not include these new cases.
+
+| Added check | Status | Scope |
+| --- | --- | --- |
+| Five configuration cases per external-feature profile | **Passed in fresh remote run** | All 30 new cases passed across six profiles. The final external-feature execution returned 207 passed case results and the same three prior unsupported results; its six profile targets, Go unit target, and native-sink target passed [BuildBuddy invocation `a82a8380`](https://pawel.buildbuddy.io/invocation/a82a8380-6838-4c25-8bdd-70d2785149be). The result checks `DD_TAGS` parsing, explicit service/environment/version precedence, and actual `DD_TRACE_AGENT_URL` delivery. |
+| Python controlled-span lab | **Passed in fresh remote run** | All 36 cases passed: seven injection and eleven deterministic span-sampling cases per wire version on Python 4.14.0 with v0.4 and v0.5 native intake. Both lab targets and the Python unit target passed [BuildBuddy invocation `9734a342`](https://pawel.buildbuddy.io/invocation/9734a342-3562-4d4e-81b9-3d0f0ceb3686). |
+| BuildBuddy fresh proof and retained evidence | **Pending CI** | `tools/run_datadog_parity.sh` runs `//fixtures:datadog_lab_suite` uncached and archives lab test outputs under `lab/`. |
+
+These were locally initiated BuildBuddy remote executions against the pre-rebase worktree based on `a3c0f23`; they are not a Full test suite CI workflow result. The run artifacts comprise 784 retained files under `/tmp/moar-datadog-evidence` with SHA-256 manifest `00cde10b13f92c58281bb0fdfec46e3d01162b66156f14df0ebe147eb5be9b14`. The final capture hashes, lab identity and workload hashes, and effective Datadog configuration in the new cases were independently checked. The 96 exact-shape combinations had not been rerun for that expansion.
+
+## Earlier acceptance status
 
 | Acceptance item | Status | Observed result and evidence |
 | --- | --- | --- |
@@ -80,6 +98,9 @@ bazel test "${flags[@]}" //fixtures:datadog_parallel_suite \
 bazel test "${flags[@]}" \
   //fixtures:datadog_external_features_suite \
   //harness/external_features:probe_test
+
+bazel test "${flags[@]}" //fixtures:datadog_lab_suite \
+  --nocache_test_results
 ```
 
 The second exact-shape execution must use a different retention directory. Retain and gate execution 1 before starting execution 2 so Bazel cannot overwrite its test outputs.
@@ -96,4 +117,4 @@ tools/benchmark_datadog.py \
   --cold-output-root /tmp/dd-benchmark/cold-builds
 ```
 
-All locally executable acceptance checks listed in this record passed. The three explicitly unsupported feature results remain unsupported and do not count as passes. CI execution and image publication remain outside this local verification result.
+All locally executable checks in the earlier acceptance table passed. The three explicitly unsupported feature results remain unsupported and do not count as passes. The new configuration and lab checks passed in the separate remote runs recorded above. The full CI workflow and its evidence archive have not yet been observed for this worktree.

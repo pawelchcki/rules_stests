@@ -89,3 +89,12 @@ bazel test "${remote_args[@]}" "${test_download_args[@]}" \
   //fixtures:datadog_external_features_suite
 mkdir -p "$evidence/features"
 find -L bazel-testlogs/fixtures -path '*datadog_external_features*/test.outputs/*' -type f -exec cp -L --no-preserve=mode --parents '{}' "$evidence/features/" \;
+
+# The Python SDK lab exercises controlled spans and configuration cases that
+# require a fixture beyond the existing RealWorld services.
+bazel test "${remote_args[@]}" "${test_download_args[@]}" \
+  --nocache_test_results \
+  "${image_flags[@]}" \
+  //fixtures:datadog_lab_suite
+mkdir -p "$evidence/lab"
+find -L bazel-testlogs/fixtures -path '*datadog_lab*/test.outputs/*' -type f -exec cp -L --no-preserve=mode --parents '{}' "$evidence/lab/" \;
