@@ -27,6 +27,11 @@ OCI_IMAGES = {
         digest = "sha256:ee6a879cae36694b99a967fc4ba62b797a269422bd80249f8c7939de07cd0166",
         tree = "unpublished",
     ),
+    "falcon_realworld": struct(
+        repository = "ghcr.io/pawelchcki/rules_stest_apps",
+        digest = "sha256:e6ff3e6066d976206748a4820ad01477fd13a78f982e6b94ef073ca01b3ee0d4",
+        tree = "unpublished",
+    ),
     "rails_realworld": struct(
         repository = "ghcr.io/pawelchcki/rules_stest_apps",
         digest = "sha256:ba5fafa30c4e0e76f06f65ae7981048a03d776eb5366602ddc02ecdcd1f6b88d",
@@ -61,7 +66,7 @@ DATADOG_PYTHON = struct(
 # Built locally; publication is tracked separately from the payload digest.
 DATADOG_RUBY = struct(
     repository = "ghcr.io/pawelchcki/rules_stest_agents",
-    digest = "sha256:534130a20451560dd3183355584916f3173bc8db7f97e20bd2de908f9d473be9",
+    digest = "sha256:eb96229a846b2335a56e0fa2a4b6b454bceebcfe2cfb92b5a7b2841888fb61a8",
     tree = "unpublished",
     version = "2.42.0",
 )

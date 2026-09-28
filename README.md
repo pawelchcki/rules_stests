@@ -115,14 +115,17 @@ package using `PYTHONPATH`. Bazel materializes the package; application processe
 receive the injection and exporter environment. Both Python fixtures run all 16
 scenarios on v0.4 and v0.5 MessagePack. Rails uses a separate Ruby 2.42.0
 tracer payload, with the application Bundler setup loaded first and frozen
-Gemfiles. Gin has a separate binary built with Orchestrion 1.13.0 and
-dd-trace-go 2.10.1. Rails and Gin run all 16 scenarios on v0.4: 96 combinations.
+Gemfiles. The same payload traces an async Ruby application: Sinatra and
+Sequel served by Falcon, with several Async reactor threads and a fiber per
+request (`fixtures/apps/ruby/realworld-falcon`). Gin has a separate binary built
+with Orchestrion 1.13.0 and dd-trace-go 2.10.1. Rails, Falcon, and Gin run all
+16 scenarios on v0.4: 112 combinations.
 Each profile declares its expected intake language and tracer version; the
 shared decoder checks header uniqueness and counts, and the profile enforces
 those declared values.
 
 ```bash
-# Build the reviewed local Ruby/Gin images until their publication is available.
+# Build the reviewed local Ruby, Falcon, and Gin images until their publication is available.
 tools/build_datadog_fixtures.sh /tmp/datadog-images
 mapfile -t image_flags < /tmp/datadog-images/bazel.flags
 bazel test --config=local "${image_flags[@]}" //fixtures:datadog_suite

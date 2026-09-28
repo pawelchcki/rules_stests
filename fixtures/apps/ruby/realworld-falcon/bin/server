@@ -1,0 +1,34 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Serves the RealWorld API with Falcon inside this process. Like Falcon's
+# threaded container, several threads each run an Async reactor over one bound
+# socket, and every request runs in its own fiber. Nothing forks, so the
+# process that answers requests is the one the tracer describes.
+require "bundler/setup"
+require "async"
+require "async/http/endpoint"
+require "falcon/server"
+require_relative "../app/realworld"
+
+host = "127.0.0.1"
+port = 8000
+threads = 4
+arguments = ARGV.dup
+until arguments.empty?
+  case (flag = arguments.shift)
+  when "--host", "--binding" then host = arguments.shift
+  when "--port" then port = Integer(arguments.shift)
+  when "--threads" then threads = Integer(arguments.shift)
+  else abort("usage: server [--host HOST] [--port PORT] [--threads COUNT] (unknown #{flag})")
+  end
+end
+
+endpoint = Async::HTTP::Endpoint.parse("http://#{host}:#{port}")
+bound = Sync { endpoint.bound }
+application = Falcon::Server.rack_middleware(RealWorld::App, cache: false)
+Array.new(threads) do
+  Thread.new do
+    Async { Falcon::Server.new(application, bound, protocol: endpoint.protocol, scheme: endpoint.scheme).run.wait }
+  end
+end.each(&:join)

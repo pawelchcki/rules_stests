@@ -303,12 +303,26 @@ type rubyExecution struct {
 	environment []string
 }
 
+// Rails applications run `bin/rails <command>`. Other Ruby applications name
+// their entry script relative to the application source, such as bin/server.
 func rubyAppExecution(root string, injection injection, otelRoot, instance, command string, args []string, inherited []string) (rubyExecution, error) {
 	appRoot := filepath.Join(root, "opt", "app")
 	loader := filepath.Join(root, "lib64", "ld-linux-x86-64.so.2")
 	ruby := filepath.Join(appRoot, "ruby", "bin", "ruby")
 	rails := filepath.Join(appRoot, "src", "bin", "rails")
-	for label, path := range map[string]string{"dynamic loader": loader, "Ruby runtime": ruby, "Rails launcher": rails} {
+	_, railsErr := os.Stat(rails)
+	isRails := railsErr == nil
+	entry := rails
+	if !isRails && !strings.HasSuffix(command, ".rb") {
+		if !filepath.IsLocal(command) {
+			return rubyExecution{}, fmt.Errorf("Ruby application entry %q must be relative to the application source", command)
+		}
+		entry = filepath.Join(appRoot, "src", command)
+	}
+	for label, path := range map[string]string{"dynamic loader": loader, "Ruby runtime": ruby, "application entry": entry} {
+		if strings.HasSuffix(command, ".rb") && label == "application entry" {
+			continue
+		}
 		if info, err := os.Stat(path); err != nil || info.IsDir() {
 			if err == nil {
 				err = errors.New("is a directory")
@@ -316,10 +330,13 @@ func rubyAppExecution(root string, injection injection, otelRoot, instance, comm
 			return rubyExecution{}, fmt.Errorf("inspect bundled %s: %w", label, err)
 		}
 	}
+	// Rails needs its bundled Prism ahead of the Ruby default gem; other
+	// applications may not bundle Prism at all.
 	prismLibraries, err := filepath.Glob(filepath.Join(appRoot, "bundle", "ruby", "3.3.0", "gems", "prism-*", "lib"))
-	if err != nil || len(prismLibraries) != 1 {
-		return rubyExecution{}, fmt.Errorf("Rails rootfs must contain exactly one bundled Prism library, got %d", len(prismLibraries))
+	if err != nil || len(prismLibraries) > 1 || (isRails && len(prismLibraries) != 1) {
+		return rubyExecution{}, fmt.Errorf("Ruby rootfs must contain at most one bundled Prism library (exactly one for Rails), got %d", len(prismLibraries))
 	}
+	rubyLibrary := append(prismLibraries, filepath.Join(appRoot, "ruby", "lib", "ruby", "3.3.0"), filepath.Join(appRoot, "ruby", "lib", "ruby", "3.3.0", "x86_64-linux"))
 
 	blocked := map[string]bool{
 		"BUNDLE_GEMFILE": true, "BUNDLE_PATH": true, "DATABASE_PATH": true, "GEM_HOME": true, "GEM_PATH": true,
@@ -338,7 +355,9 @@ func rubyAppExecution(root string, injection injection, otelRoot, instance, comm
 	// container runtime, so that declaration never reaches the process. Without
 	// it Rails boots in development against a database seeded and stamped for
 	// production, and its error handling differs from what the profile pins.
-	environment = appendDefaultEnvironment(environment, present, "RAILS_ENV", "production")
+	if isRails {
+		environment = appendDefaultEnvironment(environment, present, "RAILS_ENV", "production")
+	}
 	state := os.Getenv("APP_STATE_DIR")
 	if state == "" {
 		return rubyExecution{}, errors.New("APP_STATE_DIR is required after state preparation")
@@ -350,7 +369,7 @@ func rubyAppExecution(root string, injection injection, otelRoot, instance, comm
 		"GEM_HOME="+filepath.Join(appRoot, "ruby", "lib", "ruby", "gems", "3.3.0"),
 		"GEM_PATH="+filepath.Join(appRoot, "ruby", "lib", "ruby", "gems", "3.3.0"),
 		"REALWORLD_BUNDLE_ROOT="+appRoot,
-		"RUBYLIB="+strings.Join([]string{prismLibraries[0], filepath.Join(appRoot, "ruby", "lib", "ruby", "3.3.0"), filepath.Join(appRoot, "ruby", "lib", "ruby", "3.3.0", "x86_64-linux")}, ":"),
+		"RUBYLIB="+strings.Join(rubyLibrary, ":"),
 	)
 	libraryPath := strings.Join([]string{
 		filepath.Join(root, "lib", "x86_64-linux-gnu"),
@@ -362,7 +381,10 @@ func rubyAppExecution(root string, injection injection, otelRoot, instance, comm
 	if err != nil {
 		return rubyExecution{}, err
 	}
-	arguments := []string{loader, "--library-path", libraryPath, ruby, rails, command}
+	arguments := []string{loader, "--library-path", libraryPath, ruby, entry}
+	if isRails {
+		arguments = append(arguments, command)
+	}
 	if strings.HasSuffix(command, ".rb") {
 		script, err := resolveRunfile(command)
 		if err != nil {
@@ -374,7 +396,7 @@ func rubyAppExecution(root string, injection injection, otelRoot, instance, comm
 	// The rootfs is read-only, but `rails server` writes its pidfile under the
 	// application root at tmp/pids/server.pid. Redirect it into the writable
 	// state directory unless the caller chose a location.
-	if command == "server" && !stringSliceContainsAny(args, "--pid", "-P") {
+	if isRails && command == "server" && !stringSliceContainsAny(args, "--pid", "-P") {
 		arguments = append(arguments, "--pid", filepath.Join(state, "server.pid"))
 	}
 	return rubyExecution{loader: loader, arguments: arguments, environment: environment}, nil
@@ -389,7 +411,7 @@ func execRubyApp(root string, injection injection, otelRoot, instance, command s
 		fmt.Fprintf(os.Stderr, "app_launcher: activating instrumentation for %s from %s\n", instance, otelRoot)
 	}
 	if err := syscall.Exec(execution.loader, execution.arguments, execution.environment); err != nil {
-		return fmt.Errorf("execute Rails app with bundled Ruby: %w", err)
+		return fmt.Errorf("execute Ruby app with bundled Ruby: %w", err)
 	}
 	return nil
 }

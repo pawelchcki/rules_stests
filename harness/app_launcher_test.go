@@ -377,6 +377,40 @@ func TestRubyExecutionIsolatesApplicationAndAgentEnvironment(t *testing.T) {
 	}
 }
 
+func TestRubyExecutionRunsNonRailsEntryScript(t *testing.T) {
+	root := t.TempDir()
+	app := filepath.Join(root, "opt", "app")
+	for _, path := range []string{
+		filepath.Join(root, "lib64", "ld-linux-x86-64.so.2"),
+		filepath.Join(app, "ruby", "bin", "ruby"),
+		filepath.Join(app, "src", "bin", "server"),
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, nil, 0o555); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("APP_STATE_DIR", t.TempDir())
+	execution, err := rubyAppExecution(root, injection{}, "", "falcon", "bin/server", []string{"--port", "1"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := execution.arguments[len(execution.arguments)-3:]; !reflect.DeepEqual(got, []string{filepath.Join(app, "src", "bin", "server"), "--port", "1"}) {
+		t.Fatalf("entry script invocation = %q", got)
+	}
+	joined := strings.Join(execution.environment, "\n")
+	if strings.Contains(joined, "RAILS_ENV") || strings.Contains(joined, "prism") {
+		t.Fatalf("a non-Rails application received Rails configuration:\n%s", joined)
+	}
+	for _, entry := range []string{"/etc/passwd", "../outside", "bin/missing"} {
+		if _, err := rubyAppExecution(root, injection{}, "", "falcon", entry, nil, nil); err == nil {
+			t.Fatalf("entry %q was accepted", entry)
+		}
+	}
+}
+
 func TestPrepareAppStateClonesSeedOnce(t *testing.T) {
 	root := t.TempDir()
 	seed := filepath.Join(root, "opt", "app", "seed", "realworld.sqlite3")

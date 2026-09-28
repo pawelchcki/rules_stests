@@ -52,7 +52,21 @@ def external_feature_tests():
             tests.append(":" + name)
     native.test_suite(name = "external_features_test", tests = tests)
 
+# Applications with native Datadog fixtures. Rails, Falcon, and Gin use
+# locally built images, so their targets are manual.
+_DATADOG_APPS = ["aiohttp", "django", "rails", "falcon", "gin"]
+_LOCAL_DATADOG_APPS = ["rails", "falcon", "gin"]
+
 def _datadog_fixture(app):
+    if app == "falcon":
+        return struct(
+            rootfs = "//harness:falcon_rootfs",
+            runtime = "ruby",
+            command = ["bin/server", "--host", "127.0.0.1", "--port", "$${PORT}"],
+            injection = datadog_ruby_injection(),
+            wires = ["v0.4"],
+            profile = "ruby-falcon-datadog-v2-42-0-",
+        )
     config = REALWORLD_APPS[app]
     return struct(
         rootfs = "//harness:gin_datadog_rootfs" if app == "gin" else config.rootfs,
@@ -68,7 +82,7 @@ def datadog_external_feature_tests():
     adapter = "//harness/upstream_datadog:adapter"
     adapter_runfiles = ":datadog_upstream_adapter_runfiles"
     _runfiles_data(name = adapter_runfiles[1:], target = adapter)
-    for app in ["aiohttp", "django", "rails", "gin"]:
+    for app in _DATADOG_APPS:
         config = _datadog_fixture(app)
         args = ["--runtime=" + config.runtime, "--rootfs=$(rlocationpath {})".format(config.rootfs)]
         data = [config.rootfs, "//harness:app_launcher", adapter, adapter_runfiles, "@datadog_system_tests_headers//file"]
@@ -93,7 +107,7 @@ def datadog_external_feature_tests():
                     "--upstream-datadog-test=$(rlocationpath @datadog_system_tests_headers//file)",
                     "--launch-args='" + json.encode(args) + "'",
                 ],
-                tags = ["datadog", "external-features"] + (["manual"] if app in ["rails", "gin"] else []),
+                tags = ["datadog", "external-features"] + (["manual"] if app in _LOCAL_DATADOG_APPS else []),
             )
             tests.append(":" + name)
     native.test_suite(name = "datadog_external_features_suite", tests = tests)
@@ -101,7 +115,7 @@ def datadog_external_feature_tests():
 def datadog_parallel_tests():
     tests = []
     sink = "//harness:datadog_stress_sink_service"
-    for app in ["aiohttp", "django", "rails", "gin"]:
+    for app in _DATADOG_APPS:
         config = _datadog_fixture(app)
         for wire in config.wires:
             suffix = wire.replace(".", "")
@@ -119,7 +133,7 @@ def datadog_parallel_tests():
                     "DD_TRACE_HEADER_TAGS": "x-rules-stests-request-id:rules_stests.request_id",
                 }),
                 deps = [sink],
-                so_reuseport_aware = app != "rails",
+                so_reuseport_aware = app not in ["rails", "falcon"],
                 autoassign_port = True,
                 expected_start_duration = "5s",
                 http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",

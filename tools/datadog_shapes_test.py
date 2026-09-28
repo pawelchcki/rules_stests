@@ -94,7 +94,7 @@ def main() -> None:
                     failures.append(f"{profile}/{scenario}: rendered shape differs: {status} {output[:500]}")
 
             candidates = sorted(TESTDATA.glob("*/*.scm"))
-            if len(candidates) < 8:
+            if len(candidates) < 10:
                 failures.append("candidate testdata is missing")
             with ThreadPoolExecutor(len(sinks)) as pool:
                 list(pool.map(check_candidate, enumerate(candidates)))
@@ -124,8 +124,8 @@ def main() -> None:
             # Every reviewed shape evaluates within the VM's budgets; one
             # program per profile keeps the vocabulary compiled once.
             reviewed = sorted(Path(shapes).glob("*/*.scm"))
-            if len(reviewed) != 96:
-                failures.append(f"expected 96 reviewed shapes, found {len(reviewed)}")
+            if len(reviewed) != 112:
+                failures.append(f"expected 112 reviewed shapes, found {len(reviewed)}")
             profiles = sorted({path.parent for path in reviewed})
 
             def check_profile(index_and_directory: tuple[int, Path]) -> None:

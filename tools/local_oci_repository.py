@@ -30,7 +30,10 @@ if args.rootfs_digest:
         parser.error("config content digest mismatch")
     config_document = json.loads(config.read_text())
     if config_document.get("rootfs") != {"type": "layers", "diff_ids": [args.rootfs_digest]}:
-        parser.error("OCI image does not contain the expected single-layer rootfs payload")
+        parser.error(
+            f"OCI image does not contain the expected single-layer rootfs payload {args.rootfs_digest} "
+            f"(got {config_document.get('rootfs')})"
+        )
     layers = manifest_document.get("layers", [])
     if len(layers) != 1:
         parser.error("OCI image does not contain exactly one rootfs layer")
@@ -50,7 +53,10 @@ if args.rootfs_digest:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             rootfs_hash.update(chunk)
     if "sha256:" + rootfs_hash.hexdigest() != args.rootfs_digest:
-        parser.error("rootfs layer content does not match the expected payload digest")
+        parser.error(
+            f"rootfs layer content does not match the expected payload digest {args.rootfs_digest} "
+            f"(got sha256:{rootfs_hash.hexdigest()})"
+        )
 index["manifests"] = manifests
 (args.directory / "index.json").write_text(json.dumps(index))
 (args.directory / "MODULE.bazel").write_text('module(name = "local_datadog_image")\n')

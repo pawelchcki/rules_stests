@@ -200,10 +200,13 @@ func decodeDatadog(data []byte) ([]ddNativeSpan, error) {
 	return spans, nil
 }
 
+// ddServers returns the server span of each marked request. Header tags can
+// also land on framework spans below it (dd-trace-rb's sinatra.request), so
+// only the span.kind=server span counts.
 func ddServers(spans []ddNativeSpan) []ddNativeSpan {
 	var servers []ddNativeSpan
 	for _, s := range spans {
-		if s.Meta["probe.request_id"] != "" {
+		if s.Meta["probe.request_id"] != "" && s.Meta["span.kind"] == "server" {
 			servers = append(servers, s)
 		}
 	}
@@ -372,7 +375,8 @@ func runDatadog(app, launcher string, args []string) error {
 	var results []ddResult
 	var failures []string
 	for _, c := range append(ddCases(), ddProbeCases()...) {
-		if app == "rails" {
+		// dd-trace-rb writes chunk metadata on the chunk's last span.
+		if rubyApp(app) {
 			c.ChunkMetadataPosition = "last"
 		}
 		control, controlHash := baseline, baselineHash
@@ -472,3 +476,6 @@ func knownGoManualDropRule(c ddCase, baseline, spans []ddNativeSpan) bool {
 	}
 	return children == 16
 }
+
+// rubyApp reports whether app is traced by dd-trace-rb.
+func rubyApp(app string) bool { return app == "rails" || app == "falcon" }

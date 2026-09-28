@@ -111,11 +111,42 @@ module RulesStestsDatadog
     end
   end
 
-  class ProbeRailtie < Rails::Railtie
-    initializer "rules_stests.datadog.probes", before: :build_middleware_stack do |app|
-      ActiveRecord::ConnectionAdapters::AbstractAdapter.prepend(SQLMarkers)
-      ActiveSupport::Notifications::Instrumenter.prepend(CachedSQLMarkers)
-      app.middleware.use(Probes)
+  if defined?(Rails::Railtie)
+    class ProbeRailtie < Rails::Railtie
+      initializer "rules_stests.datadog.probes", before: :build_middleware_stack do |app|
+        ActiveRecord::ConnectionAdapters::AbstractAdapter.prepend(SQLMarkers)
+        ActiveSupport::Notifications::Instrumenter.prepend(CachedSQLMarkers)
+        app.middleware.use(Probes)
+      end
     end
   end
+
+  # Sequel statements are marked before the Sequel integration records them:
+  # this module is prepended over the integration's own.
+  module SequelMarkers
+    %i[execute execute_ddl execute_dui execute_insert].each do |method|
+      define_method(method) do |sql, *arguments, &block|
+        sql = RulesStestsDatadog.marked_sql(sql) if sql.is_a?(String)
+        super(sql, *arguments, &block)
+      end
+    end
+  end
+
+  # Probes run directly inside the Rack server span, ahead of Sinatra's own
+  # request span, so probe routes and before-filter SQL are covered too.
+  module SinatraProbes
+    def setup_middleware(builder, *arguments, &block)
+      super.tap do
+        framework = Datadog::Tracing::Contrib::Sinatra::Framework
+        if framework.middlewares(builder).include?(Datadog::Tracing::Contrib::Rack::TraceMiddleware)
+          framework.add_middleware_after(Datadog::Tracing::Contrib::Rack::TraceMiddleware, Probes, builder)
+        else
+          framework.add_middleware(Probes, builder)
+        end
+      end
+    end
+  end
+
+  Sequel::Dataset.prepend(SequelMarkers) if defined?(Sequel::Dataset)
+  Sinatra::Base.singleton_class.prepend(SinatraProbes) if defined?(Sinatra::Base)
 end

@@ -8,7 +8,7 @@ actions:
       snapshot-read-policy: newest
     resource_requests:
       # Bazel actions execute on the self-hosted RBE fleet; the runner also
-      # builds the two unpublished Datadog OCI fixtures used as inputs.
+      # builds the three unpublished Datadog OCI fixtures used as inputs.
       cpu: 4
       memory: 8GB
     triggers:

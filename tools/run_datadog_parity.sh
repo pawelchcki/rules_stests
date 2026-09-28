@@ -43,6 +43,7 @@ profiles=(
   //corpus:python-django-datadog-v4-14-0-v04
   //corpus:python-django-datadog-v4-14-0-v05
   //corpus:ruby-rails-datadog-v2-42-0-v04
+  //corpus:ruby-falcon-datadog-v2-42-0-v04
   //corpus:go-gin-datadog-v2-10-1-v04
 )
 # DefaultInfo for each profile carries its manifest and validator runfiles.

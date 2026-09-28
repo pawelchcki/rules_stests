@@ -11,11 +11,16 @@ The [verification record](datadog-verification.md) distinguishes completed, pend
 | aiohttp | Python 4.14.0 | v0.4 and v0.5 | 16 each |
 | Django | Python 4.14.0 | v0.4 and v0.5 | 16 each |
 | Rails | Ruby 2.42.0, Ruby ABI 3.3 | v0.4 | 16 |
+| Sinatra on Falcon (async) | Ruby 2.42.0, Ruby ABI 3.3 | v0.4 | 16 |
 | Gin | Go 2.10.1, Orchestrion 1.13.0 | v0.4 | 16 |
 
-The 96 combinations retain exact native span shapes, including multiplicities, service identity, routes/resources, HTTP status/error classification, database operations and ancestry, exception metadata, and the reviewed field policy. Ruby Rack/controller/ActiveRecord and Go Gin/Gorm/database/sql layers remain distinct. Candidate captures were reviewed before enabling these shapes; `datadog-shape-review.json` records capture hashes and reviewed counts. Candidate generation does not produce a passing receipt.
+The 112 combinations retain exact native span shapes, including multiplicities, service identity, routes/resources, HTTP status/error classification, database operations and ancestry, exception metadata, and the reviewed field policy. Ruby Rack/controller/ActiveRecord, Rack/Sinatra/Sequel, and Go Gin/Gorm/database/sql layers remain distinct. Candidate captures were reviewed before enabling these shapes; `datadog-shape-review.json` records capture hashes and reviewed counts. Candidate generation does not produce a passing receipt.
 
-The checked-in shapes under `corpus/datadog/realworld/shape/<profile>/<scenario>.scm` are written with the builders in `corpus/datadog/shape/`: one library per application's integrations, and `tracers.scm` for what each tracer adds on its own. They evaluate to the canonical datum the sink reports, and `corpus/datadog/trace-shape/match.scm` compares the two exactly. It ignores only the order of traces, siblings, tags, metrics, and native field names, and it reports the first difference with its span path. The readable form replaced the compact snapshot of the 96 files reviewed at `d6d6b5a86d8d47c52916e3ec5feab42df6a13414`. Each rendered file was checked in the sink's Scheme VM to evaluate to exactly its reviewed datum. `corpus/datadog/README.md` explains how to read them.
+The checked-in shapes under `corpus/datadog/realworld/shape/<profile>/<scenario>.scm` are written with the builders in `corpus/datadog/shape/`: one library per application's integrations, and `tracers.scm` for what each tracer adds on its own. They evaluate to the canonical datum the sink reports, and `corpus/datadog/trace-shape/match.scm` compares the two exactly. It ignores only the order of traces, siblings, tags, metrics, and native field names, and it reports the first difference with its span path. The readable form replaced the compact snapshot of the 96 files reviewed at `d6d6b5a86d8d47c52916e3ec5feab42df6a13414`; the 16 Falcon shapes were reviewed from their first candidates in the same form. Each rendered file was checked in the sink's Scheme VM to evaluate to exactly its reviewed datum. `corpus/datadog/README.md` explains how to read them.
+
+## The async Ruby application
+
+`fixtures/apps/ruby/realworld-falcon` implements the RealWorld API with Sinatra and Sequel on Falcon. Four threads each run an Async reactor over one bound socket; every request runs in its own fiber, and Sequel checks out connections per fiber. The application binds every SQL value, so Sequel span resources keep their placeholders. dd-trace-rb records three spans per request (`rack.request`, `sinatra.request`, `sinatra.route`). It puts a before filter's queries under `sinatra.request` and records the application's rejection exceptions on the route span. The parallel suite exercises cross-thread and cross-fiber context isolation with overlapping requests. The native feature suite runs all 30 checks.
 
 ## Contract features
 
@@ -39,10 +44,10 @@ Every profile claims each feature its tracer satisfies. It claims the propagatio
   - the route template matching the request path
 - **Errors:** every error span is explained.
 
-All six profiles claim W3C and Datadog propagation, including keeping the caller's sampling priority. Each check follows the corresponding [system-tests](https://github.com/DataDog/system-tests/tree/ea8a5976064509df0a5232e314b22e7e90ca4d40/tests) assertion where one exists; the predicate names it. Four features are not claimed everywhere because the pinned tracers differ from the upstream expectation. The profiles record why:
+All seven profiles claim W3C and Datadog propagation, including keeping the caller's sampling priority. Each check follows the corresponding [system-tests](https://github.com/DataDog/system-tests/tree/ea8a5976064509df0a5232e314b22e7e90ca4d40/tests) assertion where one exists; the predicate names it. Four features are not claimed everywhere because the pinned tracers differ from the upstream expectation. The profiles record why:
 
-- `version` appears on SQLAlchemy and Active Record spans reported under `sqlite`.
-- Rack's `http.url` is a path (upstream bug APMAPI-922).
+- `version` appears on SQLAlchemy, Active Record, and Sequel spans reported under `sqlite`.
+- Rack's `http.url` is a path (upstream bug APMAPI-922), for Rails and Falcon alike.
 - GORM operation spans carry no `span.kind`.
 - `db.system` is missing from some database spans:
   - aiohttp and Rails name the database in other tags.

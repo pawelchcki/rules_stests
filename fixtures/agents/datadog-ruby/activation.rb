@@ -50,9 +50,17 @@ module RulesStestsDatadog
       # Bundler's require hook consults activated metadata, not GEM_PATH.
       Gem.loaded_specs[spec.name] = spec
     end
-    require "rails"
-    require "active_record"
-    require "action_controller/railtie"
+    if Gem.loaded_specs.key?("railties")
+      # Rails auto-instrumentation runs from a Railtie once the app has loaded.
+      require "rails"
+      require "active_record"
+      require "action_controller/railtie"
+    else
+      # Elsewhere auto-instrumentation patches only libraries already loaded,
+      # once, so load the application's instrumented libraries first.
+      %w[sinatra/base sequel].each { |path| require path if Gem.loaded_specs.key?(path.split("/").first) }
+      require "net/http"
+    end
     require "datadog/auto_instrument"
     if ENV["RULES_STESTS_PROBES"] == "true"
       Datadog.configure do |config|

@@ -28,8 +28,10 @@ corpus_service(
 )
 ```
 
-`python` and `ruby` use the existing bundled runtime layouts and take an
-entrypoint/Rails command; `native` takes a rootfs-relative executable path.
+`python` and `ruby` use the existing bundled runtime layouts. `python` takes
+an entrypoint; `ruby` takes a Rails command when the rootfs bundles Rails and
+otherwise an entry script relative to the application source (for example
+`bin/server`). `native` takes a rootfs-relative executable path.
 The optional `injection` accepts the existing `otel_injection`,
 `python_auto_injection`, and `ruby_auto_injection` configurations, plus neutral
 `instrumentation_injection` and `datadog_python_injection`. The macro

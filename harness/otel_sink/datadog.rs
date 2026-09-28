@@ -839,7 +839,7 @@ fn validate_workload_context(records: &[Record], app: &str, scenario: &str) -> R
     let expected = match app {
         "aiohttp" => "aiohttp.request",
         "django" => "django.request",
-        "rails" => "rack.request",
+        "rails" | "falcon" => "rack.request",
         "gin" => "http.request",
         _ => return Err("unknown Datadog application context".into()),
     };
@@ -962,7 +962,7 @@ fn normalized_meta_value(key: &str, value: &Value, service: &str) -> Result<Valu
         "http.base_url" => normalize_endpoint(&format!("{text}/"))?
             .trim_end_matches('/')
             .into(),
-        "db.name" | "sql.db" | "active_record.db.name" | "db.instance"
+        "db.name" | "sql.db" | "active_record.db.name" | "sequel.db.name" | "db.instance"
             if text.ends_with("realworld.sqlite3") =>
         {
             "<fixture>/realworld.sqlite3".into()
