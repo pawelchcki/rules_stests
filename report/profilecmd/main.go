@@ -177,7 +177,7 @@ func main() {
 		}
 		document := manifestDocument{
 			Family: plan.Family, WireVersion: plan.WireVersion, Application: plan.Application,
-			ShapeNamespace: plan.ShapeNamespace, TracerVersion: plan.TracerVersion, ServerOperation: plan.ServerOperation,
+			ShapeNamespace: plan.ShapeNamespace, TracerLanguage: plan.TracerLanguage, TracerVersion: plan.TracerVersion, ServerOperation: plan.ServerOperation,
 			SchemaVersion: plan.SchemaVersion, Profile: profileID, Signals: signals,
 			ProofPlan: string(encoded), Program: string(program), Libraries: libraries,
 			Imports: importNames, Scenarios: scenarios, ScenarioShapes: shapes,
@@ -247,6 +247,7 @@ type manifestDocument struct {
 	Application                   string                     `json:"application,omitempty"`
 	ShapeNamespace                string                     `json:"shapeNamespace,omitempty"`
 	ReferenceShapeNamespace       string                     `json:"referenceShapeNamespace,omitempty"`
+	TracerLanguage                string                     `json:"tracerLanguage,omitempty"`
 	TracerVersion                 string                     `json:"tracerVersion,omitempty"`
 	ServerOperation               string                     `json:"serverOperation,omitempty"`
 	ReferenceProfile              string                     `json:"referenceProfile,omitempty"`

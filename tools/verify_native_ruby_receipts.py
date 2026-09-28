@@ -50,13 +50,42 @@ def proof_key(proof):
     return tuple(proof[field] for field in ("featureId", "assertion", "basis"))
 
 
+def flatten_spans(records):
+    """Carry the containing chunk's 128-bit trace identity into each span."""
+    chunks = []
+    for record in records:
+        for trace in record["payload"]["traces"]:
+            if not trace:
+                continue
+            low_ids = {span["trace_id"] for span in trace}
+            highs = {span["meta"].get("_dd.p.tid") for span in trace
+                     if span["meta"].get("_dd.p.tid") is not None}
+            require(len(low_ids) == 1 and len(highs) <= 1,
+                    "Datadog chunk mixes trace identities")
+            low = next(iter(low_ids))
+            high = next(iter(highs), None)
+            chunks.append((trace, low, high))
+    spans = []
+    for index, (trace, low, high) in enumerate(chunks):
+        if high is None:
+            # An untagged chunk cannot safely borrow high bits from another
+            # chunk with the same low ID.
+            high = ("untagged-chunk", index)
+        for span in trace:
+            spans.append({**span, "_trace_identity": (low, high)})
+    return spans
+
+
+def span_key(span):
+    return span["_trace_identity"], span["span_id"]
+
+
 def has_ancestor(span, spans, predicate):
     """Follow a local parent chain without relying on export order."""
-    by_id = {(candidate["trace_id"], candidate["span_id"]): candidate
-             for candidate in spans}
+    by_id = {span_key(candidate): candidate for candidate in spans}
     remaining = len(spans)
     while span["parent_id"] and remaining:
-        span = by_id.get((span["trace_id"], span["parent_id"]))
+        span = by_id.get((span["_trace_identity"], span["parent_id"]))
         if span is None:
             return False
         if predicate(span):
@@ -200,8 +229,7 @@ def verify(manifest, testlogs, revision, policy):
                 f"{scenario}: incomplete, duplicate, or failing proofs")
         coverage = receipt["coverage"]
         records = json.loads(capture_bytes)
-        spans = [span for record in records for trace in record["payload"]["traces"]
-                 for span in trace]
+        spans = flatten_spans(records)
         require(spans, f"{scenario}: empty capture")
         require(coverage["schemaVersion"] == 1 and coverage["application"] == policy["application"] and
                 coverage["scenario"] == scenario and coverage["unclassifiedFields"] == 0,
@@ -246,7 +274,7 @@ def verify(manifest, testlogs, revision, policy):
             high = span["meta"].get("_dd.p.tid")
             require(high is None or re.fullmatch(r"[0-9a-f]{16}", high),
                     f"{scenario}: invalid high trace ID")
-            identity = (span["trace_id"], span["span_id"])
+            identity = span_key(span)
             require(identity not in identities, f"{scenario}: duplicate completed span")
             identities.add(identity)
             if span["name"] == "rack.request" and span["type"] == "web":
@@ -291,12 +319,12 @@ def verify(manifest, testlogs, revision, policy):
                     f"{scenario}: Net::HTTP spans are not children of the fixture root")
         else:
             require(all(span["parent_id"] in {server["span_id"] for server in servers
-                                               if server["trace_id"] == span["trace_id"]}
+                                               if server["_trace_identity"] == span["_trace_identity"]}
                         for span in controllers),
                     f"{scenario}: controller is not a direct Rack child")
-            controllers_by_server = {(span["trace_id"], span["parent_id"])
+            controllers_by_server = {(span["_trace_identity"], span["parent_id"])
                                      for span in controllers}
-            require(all((server["trace_id"], server["span_id"]) in controllers_by_server or
+            require(all(span_key(server) in controllers_by_server or
                         server["meta"].get("http.status_code") == "401"
                         for server in servers),
                     f"{scenario}: Rack span lacks controller without a halted 401")

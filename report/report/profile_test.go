@@ -297,4 +297,8 @@ func TestCompileRailsDatadogServerOperation(t *testing.T) {
 			t.Fatalf("Rails profile with %q server operation error = %v", operation, err)
 		}
 	}
+	missingOperation := strings.Replace(source, `(server-operation "rack.request")`, "", 1)
+	if _, err := compileProfileFixture(missingOperation, profileTestImplementation, profileTestRules, profileTestShapes); err == nil || !strings.Contains(err.Error(), "require server-operation") {
+		t.Fatalf("Rails profile without a server operation error = %v", err)
+	}
 }

@@ -364,6 +364,39 @@ func TestDatadogCoverageRecognizesRailsInventory(t *testing.T) {
 	}
 }
 
+func TestLoadRailsDatadogProfileRequiresMatchingTracerIdentity(t *testing.T) {
+	plan := normalizedProofPlan{SchemaVersion: 2, Profile: "ruby-test", Family: "datadog", WireVersion: "v0.4", Application: "rails", ShapeNamespace: "datadog.realworld.shape.test", TracerLanguage: "c", TracerVersion: "bazel-dev", ServerOperation: "rack.request"}
+	encodedPlan, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := atomicProfileManifest{SchemaVersion: 2, Profile: "ruby-test", Family: "datadog", WireVersion: "v0.4", Application: "rails", ShapeNamespace: plan.ShapeNamespace, TracerLanguage: "c", TracerVersion: "bazel-dev", ServerOperation: "rack.request", ValidationPolicySHA256: strings.Repeat("a", 64), CandidateImplementationSHA256: strings.Repeat("b", 64), ProofPlan: string(encodedPlan), Program: "(validate-profile)", Libraries: []string{"library"}, Scenarios: []string{"native_malformed"}, Signals: []string{"traces"}}
+	path := filepath.Join(t.TempDir(), "manifest.json")
+	load := func() (atomicProfile, error) {
+		contents, err := json.Marshal(manifest)
+		if err != nil {
+			return atomicProfile{}, err
+		}
+		if err := os.WriteFile(path, contents, 0600); err != nil {
+			return atomicProfile{}, err
+		}
+		return loadAtomicProfile(path, "native_malformed", "validate")
+	}
+	profile, err := load()
+	if err != nil || profile.TracerLanguage != "c" {
+		t.Fatalf("valid C tracer identity: profile=%+v err=%v", profile, err)
+	}
+	manifest.TracerLanguage = "ruby"
+	if _, err := load(); err == nil || !strings.Contains(err.Error(), "normalized proof plan does not match") {
+		t.Fatalf("mismatched tracer language error = %v", err)
+	}
+	manifest.TracerLanguage = "c"
+	manifest.ServerOperation = ""
+	if _, err := load(); err == nil || !strings.Contains(err.Error(), "invalid Datadog manifest identity") {
+		t.Fatalf("missing Rails server operation error = %v", err)
+	}
+}
+
 func TestDatadogCoverageRecognizesPublishedGinServer(t *testing.T) {
 	profile := atomicProfile{Application: "gin", Scenario: "tags"}
 	capture := []byte(`[{"payload":{"traces":[[{"name":"gin.request","type":"web","service":"gin-datadog"}]]}}]`)

@@ -43,10 +43,23 @@ py_binary(
 )
 
 # Verifies a consumer's native Ruby receipts and paired captures.
+py_library(
+    name = "verify_native_ruby_receipts_lib",
+    srcs = ["verify_native_ruby_receipts.py"],
+    imports = ["."],
+)
+
 py_binary(
     name = "verify_native_ruby_receipts",
     srcs = ["verify_native_ruby_receipts.py"],
     main = "verify_native_ruby_receipts.py",
+)
+
+py_test(
+    name = "verify_native_ruby_receipts_test",
+    srcs = ["verify_native_ruby_receipts_test.py"],
+    main = "verify_native_ruby_receipts_test.py",
+    deps = [":verify_native_ruby_receipts_lib"],
 )
 
 # The shape vocabulary and the libraries it depends on.

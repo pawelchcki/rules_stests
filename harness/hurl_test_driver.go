@@ -224,6 +224,7 @@ type atomicProfileManifest struct {
 	WireVersion                   string                       `json:"wireVersion,omitempty"`
 	Application                   string                       `json:"application,omitempty"`
 	ShapeNamespace                string                       `json:"shapeNamespace,omitempty"`
+	TracerLanguage                string                       `json:"tracerLanguage,omitempty"`
 	TracerVersion                 string                       `json:"tracerVersion,omitempty"`
 	ServerOperation               string                       `json:"serverOperation,omitempty"`
 	ReferenceProfile              string                       `json:"referenceProfile,omitempty"`
@@ -257,6 +258,7 @@ type normalizedProofPlan struct {
 	WireVersion      string `json:"wireVersion,omitempty"`
 	Application      string `json:"application,omitempty"`
 	ShapeNamespace   string `json:"shapeNamespace,omitempty"`
+	TracerLanguage   string `json:"tracerLanguage,omitempty"`
 	TracerVersion    string `json:"tracerVersion,omitempty"`
 	ServerOperation  string `json:"serverOperation,omitempty"`
 	ReferenceProfile string `json:"referenceProfile,omitempty"`
@@ -277,6 +279,7 @@ type atomicProfile struct {
 	Compiled                                                                         *compiledValidator
 	Bytecode                                                                         []byte
 	Family, WireVersion, Application, ShapeNamespace, TracerVersion, ServerOperation string
+	TracerLanguage                                                                   string
 	ReferenceProfile, ReferenceShapeNamespace                                        string
 	ReferenceProofPlanSHA256, ValidationPolicySHA256, CandidateImplementationSHA256  string
 	ID, Scenario, Program, ValidationMode                                            string
@@ -320,7 +323,7 @@ func loadAtomicProfile(value, scenario, mode string) (atomicProfile, error) {
 		return profile, fmt.Errorf("invalid profile id: %w", err)
 	}
 	if manifest.SchemaVersion == 2 {
-		if manifest.Family != "datadog" || (manifest.WireVersion != "v0.4" && manifest.WireVersion != "v0.5") || manifest.Application == "" || manifest.ShapeNamespace == "" || manifest.TracerVersion == "" || (manifest.Application == "rails" && manifest.ServerOperation != "" && manifest.ServerOperation != "rack.request") {
+		if manifest.Family != "datadog" || (manifest.WireVersion != "v0.4" && manifest.WireVersion != "v0.5") || manifest.Application == "" || manifest.ShapeNamespace == "" || manifest.TracerVersion == "" || (manifest.Application == "rails" && manifest.ServerOperation != "rack.request") {
 			return profile, errors.New("invalid Datadog manifest identity")
 		}
 		if !sha256Digest.MatchString(manifest.ValidationPolicySHA256) || !sha256Digest.MatchString(manifest.CandidateImplementationSHA256) {
@@ -333,11 +336,12 @@ func loadAtomicProfile(value, scenario, mode string) (atomicProfile, error) {
 		if _, err := schemeLibraryName(manifest.ShapeNamespace); err != nil {
 			return profile, err
 		}
-	} else if manifest.Family != "" || manifest.WireVersion != "" || manifest.Application != "" || manifest.ShapeNamespace != "" || manifest.TracerVersion != "" || manifest.ServerOperation != "" {
+	} else if manifest.Family != "" || manifest.WireVersion != "" || manifest.Application != "" || manifest.ShapeNamespace != "" || manifest.TracerLanguage != "" || manifest.TracerVersion != "" || manifest.ServerOperation != "" {
 		return profile, errors.New("legacy manifest must not declare a telemetry family")
 	}
 	profile.Family, profile.WireVersion = manifest.Family, manifest.WireVersion
 	profile.Application, profile.ShapeNamespace = manifest.Application, manifest.ShapeNamespace
+	profile.TracerLanguage = manifest.TracerLanguage
 	profile.TracerVersion = manifest.TracerVersion
 	profile.ServerOperation = manifest.ServerOperation
 	profile.ReferenceProfile, profile.ReferenceShapeNamespace = manifest.ReferenceProfile, manifest.ReferenceShapeNamespace
@@ -371,7 +375,7 @@ func loadAtomicProfile(value, scenario, mode string) (atomicProfile, error) {
 	if err := decoder.Decode(&plan); err != nil {
 		return profile, fmt.Errorf("decode normalized proof plan: %w", err)
 	}
-	if plan.SchemaVersion != manifest.SchemaVersion || plan.Profile != profile.ID || plan.Family != profile.Family || plan.WireVersion != profile.WireVersion || plan.Application != manifest.Application || plan.ShapeNamespace != manifest.ShapeNamespace || plan.TracerVersion != manifest.TracerVersion || plan.ServerOperation != manifest.ServerOperation || plan.ReferenceProfile != manifest.ReferenceProfile {
+	if plan.SchemaVersion != manifest.SchemaVersion || plan.Profile != profile.ID || plan.Family != profile.Family || plan.WireVersion != profile.WireVersion || plan.Application != manifest.Application || plan.ShapeNamespace != manifest.ShapeNamespace || plan.TracerLanguage != manifest.TracerLanguage || plan.TracerVersion != manifest.TracerVersion || plan.ServerOperation != manifest.ServerOperation || plan.ReferenceProfile != manifest.ReferenceProfile {
 		return profile, errors.New("normalized proof plan does not match profile")
 	}
 	for _, proof := range plan.Proofs {

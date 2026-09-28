@@ -182,7 +182,7 @@ func CompileTelemetryProfile(profileSource string, implementationSources []strin
 		if len(plan.Signals) != 1 || plan.Signals[0] != "traces" {
 			return plan, fmt.Errorf("Datadog profiles support traces only")
 		}
-		if plan.Application == "rails" && plan.ServerOperation != "" && plan.ServerOperation != "rack.request" {
+		if plan.Application == "rails" && plan.ServerOperation != "rack.request" {
 			return plan, fmt.Errorf("Rails Datadog profiles require server-operation rack.request")
 		}
 		plan.SchemaVersion = 2
