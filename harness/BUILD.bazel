@@ -5,7 +5,9 @@ load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
 load("//rules:oci_rootfs.bzl", "oci_rootfs")
 load("//rules:corpus_service.bzl", "corpus_service")
 load("//bazel:oci_images.lock.bzl", "OTEL_RUBY_PUBLISHED", "RUBY_IMAGES_PUBLISHED")
+load("//corpus:registry.bzl", "DATADOG_CAPTURE_LIBRARIES", "datadog_library_args", "datadog_library_labels")
 load("//corpus:registry.bzl", "OTEL_CORE_LIBRARIES")
+load("//harness:scheme_bytecode.bzl", "scheme_bytecode_bundles")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -63,6 +65,12 @@ genrule(
     srcs = ["//corpus:" + path for path in OTEL_CORE_LIBRARIES],
     outs = ["scheme/otel_core.scm"],
     cmd = "cat $(SRCS) > $@",
+)
+
+go_library(
+    name = "schemebytecode",
+    srcs = ["schemebytecode/schemebytecode.go"],
+    importpath = "github.com/pawelchcki/rules_stests/harness/schemebytecode",
 )
 
 go_library(
@@ -268,6 +276,15 @@ oci_rootfs(
 go_binary(
     name = "datadog_sink_probe",
     srcs = ["datadog_sink_probe.go"],
+    deps = [":schemebytecode"],
+)
+
+# The probe's fixed validation programs, compiled at build time.
+_SINK_PROBE_BYTECODE = scheme_bytecode_bundles(
+    name = "datadog_sink_probe_bytecode",
+    libraries = datadog_library_labels(DATADOG_CAPTURE_LIBRARIES),
+    probe = ":datadog_sink_probe",
+    shards = 2,
 )
 
 service_test(
@@ -275,11 +292,9 @@ service_test(
     timeout = "long",
     args = [
         "--service-suffix=//harness:telemetry_sink_service",
-        "--assertions=$(rootpath //corpus:datadog/capture/shapes.scm)",
         "--compiler=$(rootpath :telemetry_sink)",
-        "--contract-errors=$(rootpath //corpus:telemetry/contract-error.scm)",
-    ],
-    data = [":telemetry_sink", "//corpus:datadog/capture/shapes.scm", "//corpus:telemetry/contract-error.scm"],
+    ] + _SINK_PROBE_BYTECODE.args + datadog_library_args(DATADOG_CAPTURE_LIBRARIES),
+    data = [":telemetry_sink"] + _SINK_PROBE_BYTECODE.data + datadog_library_labels(DATADOG_CAPTURE_LIBRARIES),
     services = [":telemetry_sink_service"],
     test = ":datadog_sink_probe",
 )

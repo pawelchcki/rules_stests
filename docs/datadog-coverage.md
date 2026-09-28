@@ -15,7 +15,38 @@ The [verification record](datadog-verification.md) distinguishes completed, pend
 
 The 96 combinations retain exact native span shapes, including multiplicities, service identity, routes/resources, HTTP status/error classification, database operations and ancestry, exception metadata, and the reviewed field policy. Ruby Rack/controller/ActiveRecord and Go Gin/Gorm/database/sql layers remain distinct. Candidate captures were reviewed before enabling these shapes; `datadog-shape-review.json` records capture hashes and reviewed counts. Candidate generation does not produce a passing receipt.
 
-The checked-in shape sources use shared definitions under `corpus/datadog/realworld/shape_snapshot/`. Bazel expands them into the original per-scenario Scheme libraries at the existing public labels. A SHA-256 lock records all 96 reviewed source files from commit `d6d6b5a86d8d47c52916e3ec5feab42df6a13414`; expansion must reproduce those bytes exactly. This preserves field presence and values, tree ordering, parent-child relationships, multiplicities, and the source consumed by the cached validator compiler. Generated expanded libraries remain available as build outputs rather than repeated checked-in literals.
+The checked-in shapes under `corpus/datadog/realworld/shape/<profile>/<scenario>.scm` are written with the builders in `corpus/datadog/shape/`: one library per application's integrations, and `tracers.scm` for what each tracer adds on its own. They evaluate to the canonical datum the sink reports, and `corpus/datadog/trace-shape/match.scm` compares the two exactly. It ignores only the order of traces, siblings, tags, metrics, and native field names, and it reports the first difference with its span path. The readable form replaced the compact snapshot of the 96 files reviewed at `d6d6b5a86d8d47c52916e3ec5feab42df6a13414`. Each rendered file was checked in the sink's Scheme VM to evaluate to exactly its reviewed datum. `corpus/datadog/README.md` explains how to read them.
+
+## Contract features
+
+Every profile claims each feature its tracer satisfies. It claims the propagation features in the propagation scenarios and all other features in every scenario:
+
+- **Intake:**
+  - library identity headers (Datadog-Meta-Lang, -Lang-Interpreter, -Lang-Version, -Tracer-Version)
+  - trace counts
+  - chunk coherence
+- **Trace structure:** 128-bit trace ids (`_dd.p.tid` format and agreement, timestamped generated ids).
+- **Service identity:**
+  - `_dd.base_service`
+  - unified service tags
+  - process identity (`language`, `runtime-id`, `process_id`)
+- **Sampling:**
+  - trace-root priorities, with rates only on roots
+  - the `_dd.p.dm` decision maker
+  - the configured rule keeping every locally started trace
+- **HTTP server spans:**
+  - `span.kind`, component, method, status, route, URL, and user agent
+  - the route template matching the request path
+- **Errors:** every error span is explained.
+
+All six profiles claim W3C and Datadog propagation, including keeping the caller's sampling priority. Each check follows the corresponding [system-tests](https://github.com/DataDog/system-tests/tree/ea8a5976064509df0a5232e314b22e7e90ca4d40/tests) assertion where one exists; the predicate names it. Four features are not claimed everywhere because the pinned tracers differ from the upstream expectation. The profiles record why:
+
+- `version` appears on SQLAlchemy and Active Record spans reported under `sqlite`.
+- Rack's `http.url` is a path (upstream bug APMAPI-922).
+- GORM operation spans carry no `span.kind`.
+- `db.system` is missing from some database spans:
+  - aiohttp and Rails name the database in other tags.
+  - Gin's GORM operation spans lack it, though its database/sql spans carry `db.system`.
 
 Run `//fixtures:datadog_suite`. BuildBuddy's Full test suite runs the parity checks on the remote executor fleet, retaining and gating each of two uncached independent executions before running the next. `tools/retain_datadog_evidence.py` copies each manifest, compiled validator, receipt, capture, timing artifact, and test log. The gate requires complete scenario/profile coverage and matching revision and validator hashes. The same BuildBuddy workflow checks concurrent isolation, native features, shared OpenTelemetry regressions, and external consumers; its artifacts retain the Datadog evidence.
 
@@ -52,7 +83,7 @@ Targeted mutations cover moved SQL spans, wrong parents, duplicate/missing reque
 
 ## Validator execution and compatibility
 
-Bazel compiles every effective Datadog Scheme validator to a cached bytecode artifact. Runtime execution stays in the bounded VM. Source validation remains available for diagnostic probes and profiles without a compiled artifact. Hand-written Scheme captures without indexed ancestry use a bounded parent walk that rejects ambiguous parents and crossed high bits; an explicit indexed rejection remains authoritative. Manifests and receipts bind source, compiler, and bytecode SHA-256 digests; mismatches fail. The compiler identity is the Bazel-produced sink executable, within the same trusted build boundary as the manifest.
+Bazel compiles every effective Datadog Scheme validator to a cached bytecode artifact. The conformance and sink probes compile their fixed programs the same way, in parallel shards (`harness/scheme_bytecode.bzl`). Each compilation recompiles the VM prelude, which costs seconds per program. Runtime execution stays in the bounded VM. Source validation remains available for diagnostic probes and profiles without a compiled artifact. Hand-written Scheme captures without indexed ancestry use a bounded parent walk that rejects ambiguous parents and crossed high bits; an explicit indexed rejection remains authoritative. Manifests and receipts bind source, compiler, and bytecode SHA-256 digests; mismatches fail. The compiler identity is the Bazel-produced sink executable, within the same trusted build boundary as the manifest.
 
 Native topology uses an index of full trace identity and span ID plus child adjacency. Untagged partial chunks inherit high bits only through unambiguous parent relationships. Intake counters are incremental; ingestion appends only new records while complete dumps and failure artifacts remain available. Snapshot/quiescence safeguards are preserved.
 

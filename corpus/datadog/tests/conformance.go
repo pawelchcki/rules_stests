@@ -9,10 +9,11 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/pawelchcki/rules_stests/harness/schemebytecode"
 )
 
 const capture = `'((protocol datadog) (semantic-valid #t)
@@ -23,7 +24,7 @@ const capture = `'((protocol datadog) (semantic-valid #t)
   (type "web") (error 0) (trace-id "18446744073709551615") (span-id "18446744073709551614") (parent-id "0")
   (start "18446744073709550000") (duration "1000") (ids-valid #t) (completed #t)
   (meta (("http.method" "GET") ("http.status_code" "404"))) (metrics (("_dd.measured" 1))))))
- (trace-shapes (((count 1) (root ((name "aiohttp.request") (children ())))))))`
+ (trace-shapes (((count 1) (roots (((name "aiohttp.request") (children ()))))))))`
 
 const program = `
 (import (scheme base) (datadog capture shapes) (datadog profile) (datadog catalog))
@@ -34,17 +35,79 @@ const program = `
                  span/http-classification span/exception-metadata span/service-present
                  request/headers-and-counts capture/semantic-valid))))
 (validate-profile profile 'unicode capture
- (cons 'exact '(((count 1) (root ((name "aiohttp.request") (children ())))))))
+ (cons 'exact '(((count 1) (roots (((name "aiohttp.request") (children ()))))))))
 `
 
 type testCase struct{ name, old, replacement string }
+
+// probeCase is one validation program and the response it must produce.
+type probeCase struct {
+	name     string
+	source   []byte
+	status   int
+	contains string
+}
 
 func main() {
 	filter := flag.String("filter", "", "run cases whose names contain this text")
 	endpoint := flag.String("endpoint", "", "sink URL, otherwise read ASSIGNED_PORTS")
 	suffix := flag.String("service-suffix", "//harness:telemetry_sink_service", "sink service label suffix")
-	library := flag.String("shape-library", "corpus/datadog/capture/shapes.scm", "Datadog capture library path")
+	compileTo := flag.String("compile-to", "", "write the cases' bytecode to this bundle and exit")
+	compileShard := flag.String("compile-shard", "", "compile only shard k/n of the cases")
+	compiler := flag.String("compiler", "", "telemetry sink used by --compile-to")
+	var bytecode schemebytecode.Paths
+	flag.Var(&bytecode, "bytecode", "precompiled bundle written by --compile-to (repeatable)")
 	flag.Parse()
+	// Positional arguments are the Scheme libraries, in dependency order.
+	libraries := flag.Args()
+	if len(libraries) == 0 {
+		must(fmt.Errorf("usage: conformance [flags] LIBRARY..."))
+	}
+	// Cases that exercise one capture assertion compile only the assertion
+	// libraries; the profile cases compile the whole bundle.
+	var source, assertions strings.Builder
+	for _, path := range libraries {
+		data, err := os.ReadFile(path)
+		must(err)
+		source.Write(data)
+		source.WriteByte('\n')
+		if strings.Contains(path, "/capture/") || strings.HasSuffix(path, "/contract-error.scm") {
+			assertions.Write(data)
+			assertions.WriteByte('\n')
+		}
+	}
+	var cases []probeCase
+	expect := func(name, value, body string, expected int, contains string) {
+		bundle := source.String()
+		if !strings.Contains(body, "(datadog profile)") {
+			bundle = assertions.String()
+		}
+		cases = append(cases, probeCase{name, []byte(bundle + strings.Replace(body, "CAPTURE", value, 1)), expected, contains})
+	}
+	run := func(name, value, body string, expected int) {
+		contains := ""
+		if expected == 200 && body == program {
+			contains = "[[DATADOG-PROOF-V2|"
+		}
+		expect(name, value, body, expected, contains)
+	}
+	defineCases(run, expect)
+
+	if *compileTo != "" {
+		programs := make([]schemebytecode.Program, 0, len(cases))
+		for _, tc := range cases {
+			programs = append(programs, schemebytecode.Program{Name: tc.name, Source: tc.source})
+		}
+		programs, err := schemebytecode.Shard(programs, *compileShard)
+		must(err)
+		must(schemebytecode.WriteBundle(*compileTo, *compiler, programs))
+		return
+	}
+	compiled, err := schemebytecode.ReadBundles(bytecode)
+	must(err)
+	if compiled != nil && len(compiled.Programs) != len(cases) {
+		must(fmt.Errorf("bytecode bundles hold %d programs for %d cases", len(compiled.Programs), len(cases)))
+	}
 	if *endpoint == "" {
 		var ports map[string]json.RawMessage
 		must(json.Unmarshal([]byte(os.Getenv("ASSIGNED_PORTS")), &ports))
@@ -66,33 +129,35 @@ func main() {
 	if *endpoint == "" {
 		must(fmt.Errorf("sink endpoint missing"))
 	}
-	root := filepath.Dir(filepath.Dir(*library))
-	var source strings.Builder
-	for _, path := range []string{"../telemetry/contract-error.scm", "catalog.scm", "capture/shapes.scm", "proofs.scm", "trace-shape.scm", "../realworld/scenarios.scm", "profile.scm"} {
-		data, err := os.ReadFile(filepath.Join(root, path))
-		must(err)
-		source.Write(data)
-		source.WriteByte('\n')
-	}
 	client := &http.Client{Timeout: 60 * time.Second}
-	run := func(name, value, body string, expected int) {
-		if *filter != "" && !strings.Contains(name, *filter) {
-			return
+	for _, tc := range cases {
+		if *filter != "" && !strings.Contains(tc.name, *filter) {
+			continue
 		}
-		payload := source.String() + strings.Replace(body, "CAPTURE", value, 1)
-		response, err := client.Post(*endpoint+"/validate?protocol=datadog", "text/x-scheme", bytes.NewBufferString(payload))
+		path, contentType, body := "/validate?protocol=datadog", "text/x-scheme", tc.source
+		if compiled != nil {
+			program, err := compiled.Bytecode(tc.name, tc.source)
+			must(err)
+			path, contentType, body = "/validate-bytecode?protocol=datadog", "application/vnd.stak.bytecode", program
+		}
+		response, err := client.Post(*endpoint+path, contentType, bytes.NewReader(body))
 		must(err)
 		output, err := io.ReadAll(response.Body)
 		response.Body.Close()
 		must(err)
-		if response.StatusCode != expected {
-			must(fmt.Errorf("%s: got HTTP %d, want %d: %s", name, response.StatusCode, expected, output))
+		if response.StatusCode != tc.status {
+			must(fmt.Errorf("%s: got HTTP %d, want %d: %s", tc.name, response.StatusCode, tc.status, output))
 		}
-		if expected == 200 && body == program && !bytes.Contains(output, []byte("[[DATADOG-PROOF-V2|")) {
-			must(fmt.Errorf("%s: no Datadog proof markers: %s", name, output))
+		if !bytes.Contains(output, []byte(tc.contains)) {
+			must(fmt.Errorf("%s: output lacks %q: %s", tc.name, tc.contains, output))
 		}
-		fmt.Println("PASS", name)
+		fmt.Println("PASS", tc.name)
 	}
+}
+
+// defineCases declares every case: `run` expects a status, and `expect` also
+// requires text in the response.
+func defineCases(run func(name, value, body string, expected int), expect func(name, value, body string, expected int, contains string)) {
 	run("unsigned IDs and default 404 classification", capture, program, 200)
 	run("wide metric integers remain lossless", strings.Replace(capture,
 		`("_dd.measured" 1)`, `("_dd.measured" 1) ("wide.unsigned" "18446744073709551615") ("wide.signed" "-9223372036854775808")`, 1), program, 200)
@@ -159,7 +224,7 @@ func main() {
 		{"9965072336285547154", "8c1e0a5b6d2f4739"},
 		{"11276220234964099125", "b3f7d21c9e6a4805"},
 	} {
-		propagationSpans = append(propagationSpans, fmt.Sprintf(`((name "aiohttp.request") (type "web") (trace-id "%s") (parent-id "67667974448284343") (meta (("_dd.p.tid" "%s"))))`, identity[0], identity[1]))
+		propagationSpans = append(propagationSpans, fmt.Sprintf(`((name "aiohttp.request") (type "web") (trace-id "%s") (parent-id "67667974448284343") (meta (("_dd.p.tid" "%s"))) (metrics (("_sampling_priority_v1" 1))))`, identity[0], identity[1]))
 	}
 	propagationCapture := "'((spans (" + strings.Join(propagationSpans, " ") + ")))"
 	for _, shape := range []string{"span/datadog-parent", "span/tracecontext-parent"} {
@@ -175,7 +240,113 @@ func main() {
 			run(shape+" "+tc.name, strings.Replace(propagationCapture, tc.old, tc.replacement, 1), body, 409)
 		}
 	}
+	callerBody := `(import (scheme base) (datadog capture shapes))
+ (define capture CAPTURE)
+ (assert-capture-shape "propagation" 'span/caller-sampling-kept capture)`
+	run("continued traces keep the caller's priority", propagationCapture, callerBody, 200)
+	for _, tc := range []testCase{
+		{"continued trace reprioritized", `("_sampling_priority_v1" 1)`, `("_sampling_priority_v1" 2)`},
+		{"continued trace re-sampled by rule", `("_sampling_priority_v1" 1)`, `("_sampling_priority_v1" 1) ("_dd.rule_psr" 1)`},
+	} {
+		run(tc.name, strings.Replace(propagationCapture, tc.old, tc.replacement, 1), callerBody, 409)
+	}
 
+	contractAssertions(run, expect)
+}
+
+// A capture that satisfies every themed contract assertion, and one mutation
+// per assertion that must fail that assertion by name.
+const contractCapture = `'((requests (((headers (("Datadog-Meta-Lang" "python") ("Datadog-Meta-Lang-Interpreter" "CPython")
+  ("Datadog-Meta-Lang-Version" "3.12.1") ("Datadog-Meta-Tracer-Version" "4.14.0"))))))
+ (spans (
+  ((name "django.request") (resource "GET api/articles/<slug>") (service "svc") (type "web")
+   (trace-id "11803532876627986230") (span-id "1") (parent-id "0") (parent-kind "root") (chunk-index 0) (error 0)
+   (meta (("_dd.p.dm" "-3") ("_dd.p.tid" "6512bd4300000000") ("env" "test") ("version" "1")
+          ("language" "python") ("runtime-id" "0f6a6b8e-1d2c-4c3b-9a8f-7e6d5c4b3a29")
+          ("span.kind" "server") ("component" "django") ("http.method" "GET") ("http.status_code" "200")
+          ("http.route" "api/articles/<slug>") ("http.url" "http://127.0.0.1:8000/api/articles/one?limit=1")
+          ("http.useragent" "hurl/8.0.1")))
+   (metrics (("_sampling_priority_v1" 2) ("_dd.rule_psr" 1) ("_dd.limit_psr" 1) ("process_id" 42))))
+  ((name "sqlite.query") (resource "SELECT 1") (service "sqlite") (type "sql")
+   (trace-id "11803532876627986230") (span-id "2") (parent-id "1") (parent-kind "child") (chunk-index 0) (error 1)
+   (meta (("_dd.base_service" "svc") ("env" "test") ("span.kind" "client") ("db.system" "sqlite")
+          ("error.type" "sqlite3.IntegrityError") ("error.message" "constraint failed")))
+   (metrics ())))))`
+
+type contractCase struct{ assertion, name, old, replacement string }
+
+var contractCases = []contractCase{
+	{"request/library-headers", "missing language version header", `("Datadog-Meta-Lang-Version" "3.12.1")`, ""},
+	{"capture/chunk-coherence", "chunk mixes traces", `(trace-id "11803532876627986230") (span-id "2")`, `(trace-id "5") (span-id "2")`},
+	{"span/trace-id-128", "generated high bits without timestamp", `"6512bd4300000000"`, `"0000000000000001"`},
+	{"span/trace-id-128", "uppercase high bits", `"6512bd4300000000"`, `"6512BD4300000000"`},
+	{"span/base-service", "integration span without base service", `("_dd.base_service" "svc") `, ""},
+	{"span/unified-service-tags", "service span without version", `("env" "test") ("version" "1")`, `("env" "test")`},
+	{"span/version-scoped", "integration span with version", `("_dd.base_service" "svc")`, `("_dd.base_service" "svc") ("version" "1")`},
+	{"span/process-identity", "malformed runtime id", `"0f6a6b8e-1d2c-4c3b-9a8f-7e6d5c4b3a29"`, `"not-a-runtime-id"`},
+	{"span/process-identity", "zero process id", `("process_id" 42)`, `("process_id" 0)`},
+	{"span/process-identity", "negative process id", `("process_id" 42)`, `("process_id" -42)`},
+	{"span/process-identity", "non-numeric process id", `("process_id" 42)`, `("process_id" "pid")`},
+	{"span/sampling-priority", "sampling rate on a child", `(metrics ())`, `(metrics (("_dd.rule_psr" 1)))`},
+	{"span/decision-maker", "decision maker inside a chunk", `("_dd.base_service" "svc")`, `("_dd.base_service" "svc") ("_dd.p.dm" "-3")`},
+	{"span/decision-maker", "malformed decision maker", `("_dd.p.dm" "-3")`, `("_dd.p.dm" "3")`},
+	{"span/rule-keep", "local root not kept by the rule", `("_sampling_priority_v1" 2)`, `("_sampling_priority_v1" 1)`},
+	{"span/http-server-tags", "server span without span.kind", `("span.kind" "server") `, ""},
+	{"span/http-absolute-url", "relative URL", `"http://127.0.0.1:8000/api/articles/one?limit=1"`, `"/api/articles/one?limit=1"`},
+	{"span/http-absolute-url", "URL without a host", `"http://127.0.0.1:8000/api/articles/one?limit=1"`, `"http:///api/articles/one?limit=1"`},
+	{"span/http-absolute-url", "URL with only a port", `"http://127.0.0.1:8000/api/articles/one?limit=1"`, `"http://:8000/api/articles/one?limit=1"`},
+	{"span/http-absolute-url", "URL with only userinfo", `"http://127.0.0.1:8000/api/articles/one?limit=1"`, `"http://user@/api/articles/one?limit=1"`},
+	{"span/http-absolute-url", "URL with a malformed port", `"http://127.0.0.1:8000/api/articles/one?limit=1"`, `"http://127.0.0.1:80a/api/articles/one?limit=1"`},
+	{"span/http-route-template", "route does not match URL", `("http.route" "api/articles/<slug>")`, `("http.route" "api/profiles/<slug>")`},
+	{"span/database-client", "database span not a client", `("span.kind" "client")`, `("span.kind" "internal")`},
+	{"span/database-system", "database span without db.system", `("db.system" "sqlite")`, ""},
+	{"span/errors-explained", "unexplained error", `("error.type" "sqlite3.IntegrityError") `, ""},
+}
+
+func contractAssertions(run func(name, value, body string, expected int), expect func(name, value, body string, expected int, contains string)) {
+	body := func(assertion string) string {
+		return `(import (scheme base) (datadog capture shapes))
+ (define capture CAPTURE)
+ (assert-capture-shape "contract" '` + assertion + ` capture)`
+	}
+	seen := map[string]bool{}
+	for _, tc := range contractCases {
+		if !seen[tc.assertion] {
+			seen[tc.assertion] = true
+			run(tc.assertion+" contract baseline", contractCapture, body(tc.assertion), 200)
+		}
+		if !strings.Contains(contractCapture, tc.old) {
+			must(fmt.Errorf("missing mutation anchor %s", tc.name))
+		}
+		// The mutation must fail this assertion, not another check.
+		expect(tc.assertion+" "+tc.name, strings.Replace(contractCapture, tc.old, tc.replacement, 1), body(tc.assertion), 409,
+			"assertion "+tc.assertion+" failed")
+	}
+
+	// Hosts may be IPv6 literals, and a tracer may report its process id as a float.
+	for _, tc := range []testCase{
+		{"span/http-absolute-url", `"http://127.0.0.1:8000/`, `"http://user@[::1]:8000/`},
+		{"span/process-identity", `("process_id" 42)`, `("process_id" 42.0)`},
+	} {
+		run(tc.name+" accepts "+tc.replacement, strings.Replace(contractCapture, tc.old, tc.replacement, 1), body(tc.name), 200)
+	}
+
+	// A second trace shares the first one's low trace id but not its high bits
+	// or service. Only chunk 1's server span carries the high bits, so its
+	// database span is attributed through its chunk.
+	sameLowID := strings.TrimSuffix(contractCapture, ")))") + `
+  ((name "django.request") (resource "GET api/articles/<slug>") (service "other") (type "web")
+   (trace-id "11803532876627986230") (span-id "3") (parent-id "0") (parent-kind "root") (chunk-index 1) (error 0)
+   (meta (("_dd.p.tid" "6512bd4400000000") ("env" "test") ("version" "1"))) (metrics ()))
+  ((name "sqlite.query") (resource "SELECT 1") (service "sqlite") (type "sql")
+   (trace-id "11803532876627986230") (span-id "4") (parent-id "3") (parent-kind "child") (chunk-index 1) (error 0)
+   (meta (("_dd.base_service" "other") ("env" "test"))) (metrics ())))))`
+	for _, assertion := range []string{"span/base-service", "span/unified-service-tags", "span/version-scoped"} {
+		run(assertion+" keys services by full trace identity", sameLowID, body(assertion), 200)
+	}
+	// Without its chunk's high bits, that database span could belong to either trace.
+	ambiguous := strings.Replace(sameLowID, `(parent-id "3") (parent-kind "child") (chunk-index 1)`, `(parent-id "3") (parent-kind "child") (chunk-index 2)`, 1)
+	expect("span/base-service ambiguous trace identity", ambiguous, body("span/base-service"), 409, "assertion span/base-service failed")
 }
 func must(err error) {
 	if err != nil {
