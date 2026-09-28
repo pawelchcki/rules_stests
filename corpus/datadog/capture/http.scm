@@ -48,9 +48,37 @@
            (if (or (= index (string-length url)) (memv (string-ref url index) '(#\/ #\? #\#)))
                (substring url start index)
                (find (+ index 1)))))))
+; The authority's host: after any userinfo, before any port, and inside the
+; brackets of an IPv6 literal.
+(define (port-suffix? text index)
+  (or (= index (string-length text))
+      (and (char=? (string-ref text index) #\:)
+           (every (lambda (c) (and (char>=? c #\0) (char<=? c #\9)))
+                  (string->list (substring text (+ index 1) (string-length text)))))))
+(define (url-host url)
+  (let ((authority (url-authority url)))
+    (and authority
+         (let* ((host-start
+                  (let find ((index (string-length authority)))
+                    (cond ((= index 0) 0)
+                          ((char=? (string-ref authority (- index 1)) #\@) index)
+                          (else (find (- index 1))))))
+                (host-port (substring authority host-start (string-length authority)))
+                (length (string-length host-port)))
+           (if (and (> length 0) (char=? (string-ref host-port 0) #\[))
+               (let find ((index 1))
+                 (cond ((= index length) #f)
+                       ((char=? (string-ref host-port index) #\])
+                        (and (port-suffix? host-port (+ index 1)) (substring host-port 1 index)))
+                       (else (find (+ index 1)))))
+               (let find ((index 0))
+                 (cond ((= index length) host-port)
+                       ((char=? (string-ref host-port index) #\:)
+                        (and (port-suffix? host-port index) (substring host-port 0 index)))
+                       (else (find (+ index 1))))))))))
 (define (absolute-url? capture)
   (and (pair? (web-spans capture))
-       (every (lambda (span) (nonempty-string? (url-authority (tag span "http.url"))))
+       (every (lambda (span) (nonempty-string? (url-host (tag span "http.url"))))
               (web-spans capture))))
 
 ; http.route is the template the request path matched: the same number of

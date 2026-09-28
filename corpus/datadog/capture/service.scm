@@ -92,6 +92,11 @@
                           (char=? (string-ref value index) #\-)
                           (hex-string? (string (string-ref value index)) 1))
                       (loop (+ index 1))))))))
+; The sink hands a process id over as a number or, past the VM's exact
+; integers, a decimal string; either way it is a positive integer. (The VM
+; reads numbers as integers, so it cannot see a fractional id.)
+(define (process-id? value)
+  (or (nonzero-decimal? value) (and (number? value) (integer? value) (>= value 1))))
 (define (process-identity? capture)
   (let* ((spans (items capture 'spans))
          (roots (filter trace-root? spans)))
@@ -99,7 +104,7 @@
          (every (lambda (span)
                   (and (nonempty-string? (tag span "language"))
                        (runtime-id? (tag span "runtime-id"))
-                       (metric span "process_id")))
+                       (process-id? (metric span "process_id"))))
                 roots)
          (single-value? (filter present? (map (lambda (span) (tag span "language")) spans)))
          (single-value? (filter present? (map (lambda (span) (tag span "runtime-id")) spans)))

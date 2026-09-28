@@ -284,6 +284,9 @@ var contractCases = []contractCase{
 	{"span/unified-service-tags", "service span without version", `("env" "test") ("version" "1")`, `("env" "test")`},
 	{"span/version-scoped", "integration span with version", `("_dd.base_service" "svc")`, `("_dd.base_service" "svc") ("version" "1")`},
 	{"span/process-identity", "malformed runtime id", `"0f6a6b8e-1d2c-4c3b-9a8f-7e6d5c4b3a29"`, `"not-a-runtime-id"`},
+	{"span/process-identity", "zero process id", `("process_id" 42)`, `("process_id" 0)`},
+	{"span/process-identity", "negative process id", `("process_id" 42)`, `("process_id" -42)`},
+	{"span/process-identity", "non-numeric process id", `("process_id" 42)`, `("process_id" "pid")`},
 	{"span/sampling-priority", "sampling rate on a child", `(metrics ())`, `(metrics (("_dd.rule_psr" 1)))`},
 	{"span/decision-maker", "decision maker inside a chunk", `("_dd.base_service" "svc")`, `("_dd.base_service" "svc") ("_dd.p.dm" "-3")`},
 	{"span/decision-maker", "malformed decision maker", `("_dd.p.dm" "-3")`, `("_dd.p.dm" "3")`},
@@ -291,6 +294,9 @@ var contractCases = []contractCase{
 	{"span/http-server-tags", "server span without span.kind", `("span.kind" "server") `, ""},
 	{"span/http-absolute-url", "relative URL", `"http://127.0.0.1:8000/api/articles/one?limit=1"`, `"/api/articles/one?limit=1"`},
 	{"span/http-absolute-url", "URL without a host", `"http://127.0.0.1:8000/api/articles/one?limit=1"`, `"http:///api/articles/one?limit=1"`},
+	{"span/http-absolute-url", "URL with only a port", `"http://127.0.0.1:8000/api/articles/one?limit=1"`, `"http://:8000/api/articles/one?limit=1"`},
+	{"span/http-absolute-url", "URL with only userinfo", `"http://127.0.0.1:8000/api/articles/one?limit=1"`, `"http://user@/api/articles/one?limit=1"`},
+	{"span/http-absolute-url", "URL with a malformed port", `"http://127.0.0.1:8000/api/articles/one?limit=1"`, `"http://127.0.0.1:80a/api/articles/one?limit=1"`},
 	{"span/http-route-template", "route does not match URL", `("http.route" "api/articles/<slug>")`, `("http.route" "api/profiles/<slug>")`},
 	{"span/database-client", "database span not a client", `("span.kind" "client")`, `("span.kind" "internal")`},
 	{"span/database-system", "database span without db.system", `("db.system" "sqlite")`, ""},
@@ -315,6 +321,14 @@ func contractAssertions(run func(name, value, body string, expected int), expect
 		// The mutation must fail this assertion, not another check.
 		expect(tc.assertion+" "+tc.name, strings.Replace(contractCapture, tc.old, tc.replacement, 1), body(tc.assertion), 409,
 			"assertion "+tc.assertion+" failed")
+	}
+
+	// Hosts may be IPv6 literals, and a tracer may report its process id as a float.
+	for _, tc := range []testCase{
+		{"span/http-absolute-url", `"http://127.0.0.1:8000/`, `"http://user@[::1]:8000/`},
+		{"span/process-identity", `("process_id" 42)`, `("process_id" 42.0)`},
+	} {
+		run(tc.name+" accepts "+tc.replacement, strings.Replace(contractCapture, tc.old, tc.replacement, 1), body(tc.name), 200)
 	}
 
 	// A second trace shares the first one's low trace id but not its high bits
