@@ -1,6 +1,7 @@
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
+load("//corpus:registry.bzl", "DATADOG_SHAPE_LIBRARIES", "datadog_library_args", "datadog_library_labels")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -29,24 +30,33 @@ sh_test(
 )
 
 py_library(
-    name = "expand_datadog_shapes_lib",
-    srcs = ["expand_datadog_shapes.py"],
+    name = "datadog_shapes_lib",
+    srcs = ["datadog_shapes.py"],
     imports = ["."],
 )
 
+# Renders sink shape candidates in the readable vocabulary of corpus/datadog/shape.
 py_binary(
-    name = "expand_datadog_shapes",
-    srcs = ["expand_datadog_shapes.py"],
-    main = "expand_datadog_shapes.py",
+    name = "datadog_shapes",
+    srcs = ["datadog_shapes.py"],
+    main = "datadog_shapes.py",
 )
 
+# The shape vocabulary and the libraries it depends on.
+_SHAPE_VOCABULARY = ["telemetry/contract-error.scm", "datadog/capture/base.scm"] + DATADOG_SHAPE_LIBRARIES
+
 py_test(
-    name = "expand_datadog_shapes_test",
-    srcs = ["expand_datadog_shapes_test.py"],
-    main = "expand_datadog_shapes_test.py",
-    deps = [":expand_datadog_shapes_lib"],
+    name = "datadog_shapes_test",
+    size = "medium",
+    srcs = ["datadog_shapes_test.py"],
+    main = "datadog_shapes_test.py",
+    args = [
+        "$(rootpath //harness:telemetry_sink)",
+        "corpus/datadog/realworld/shape",
+    ] + datadog_library_args(_SHAPE_VOCABULARY),
     data = [
-        "//corpus:datadog/realworld/shape_snapshot/snapshots.json",
-        "//corpus:datadog/realworld/shape_snapshot/hashes.json",
-    ],
+        "//corpus:datadog_reviewed_shapes",
+        "//harness:telemetry_sink",
+    ] + datadog_library_labels(_SHAPE_VOCABULARY) + glob(["testdata/datadog_candidates/**"]),
+    deps = [":datadog_shapes_lib"],
 )

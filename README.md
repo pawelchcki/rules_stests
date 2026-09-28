@@ -151,8 +151,11 @@ targets run `telemetry_sink` and accept both protocols. Existing
 
 Datadog dump, stats, reset, validation, and candidate operations use
 `?protocol=datadog`; unqualified operations retain OTLP behavior. The Datadog
-corpus asserts native intake metadata, IDs, completion, propagation, HTTP
-classification, and exact parent/child trees. Shapes retain all native span
+corpus checks features in nine themes: intake, trace structure, service
+identity, sampling, propagation, HTTP, database, errors, and evidence
+coverage. It also checks exact parent/child trees, written with per-integration
+builders. [`corpus/datadog/README.md`](corpus/datadog/README.md) explains how to
+read the contract. Shapes retain all native span
 fields, complete metadata and metrics, and field presence. This includes HTTP
 URLs and user agents, Django metadata, `sql.db`, `db.row_count`, service and
 sampling tags, and SQLite commit spans without a `sql` type. SQL resources and
@@ -187,7 +190,8 @@ digest, and the validation-policy digest.
 Set `TELEMETRY_TEST_REVISION` to the current 40-character commit to emit Datadog
 schema-v2 receipts under test outputs `datadog/receipts`. Shape candidates are
 under `datadog/shape`; candidate suites have the `_shape_candidates` suffix and
-are manual targets. OTel receipts retain schema v1 and accept
+are manual targets. `bazel run //tools:datadog_shapes` renders candidates in the
+readable shape vocabulary for review. OTel receipts retain schema v1 and accept
 `OTEL_TEST_REVISION` as a fallback. Datadog evidence stays outside the OTel HTML
 report; Datadog HTML reporting is deferred.
 Each verified receipt also contains machine-readable application/scenario,

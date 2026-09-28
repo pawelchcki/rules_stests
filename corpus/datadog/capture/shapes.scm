@@ -1,189 +1,64 @@
 (define-library (datadog capture shapes)
-  (export capture-shapes assert-capture-shape field items every some
-          tag header-value web-span? database-span? check decimal? nonempty-string?)
-  (import (scheme base) (scheme char) (scheme write) (telemetry contract-error))
+  (export capture-shapes assert-capture-shape
+          field items every some tag metric header-value web-span? database-span?
+          check decimal? nonempty-string?)
+  (import (scheme base)
+          (datadog capture base)
+          (datadog capture intake)
+          (datadog capture traces)
+          (datadog capture service)
+          (datadog capture sampling)
+          (datadog capture propagation)
+          (datadog capture http)
+          (datadog capture database)
+          (datadog capture errors)
+          (datadog capture coverage))
   (begin
 
-; Datadog integers are decimal strings: Stak's integer range must never round
-; unsigned IDs or nanosecond timestamps before a proof inspects them.
-(define (field key object)
-  (let ((entry (and (pair? object) (assq key object))))
-    (and entry (pair? (cdr entry)) (cadr entry))))
-(define (items object key)
-  (let ((value (field key object))) (if (list? value) value '())))
-(define (every predicate values)
-  (or (null? values) (and (predicate (car values)) (every predicate (cdr values)))))
-(define (some predicate values)
-  (and (pair? values) (or (predicate (car values)) (some predicate (cdr values)))))
-(define (nonempty-string? value)
-  (and (string? value) (> (string-length value) 0)))
-(define (decimal? value)
-  (and (nonempty-string? value)
-       (or (= (string-length value) 1) (not (char=? (string-ref value 0) #\0)))
-       (every (lambda (c) (and (char>=? c #\0) (char<=? c #\9))) (string->list value))))
-(define (metric-number? value)
-  (or (number? value) (decimal? value)
-      (and (nonempty-string? value) (> (string-length value) 1)
-           (char=? (string-ref value 0) #\-)
-           (decimal? (substring value 1 (string-length value))))))
-(define (nonzero-decimal? value) (and (decimal? value) (not (string=? value "0"))))
-(define (uint64? value)
-  (and (decimal? value)
-       (or (< (string-length value) 20)
-           (and (= (string-length value) 20)
-                (not (string<? "18446744073709551615" value))))))
-(define (tag span key)
-  (let ((entry (assoc key (items span 'meta)))) (and entry (cadr entry))))
-(define (header-value request key)
-  (let loop ((headers (items request 'headers)))
-    (cond ((null? headers) #f)
-          ((string=? (string-downcase (caar headers)) key) (cadr (car headers)))
-          (else (loop (cdr headers))))))
-(define (header-count request key)
-  (let loop ((headers (items request 'headers)) (count 0))
-    (if (null? headers) count
-        (loop (cdr headers)
-              (if (string=? (string-downcase (caar headers)) key) (+ count 1) count)))))
-(define (web-span? span)
-  (and (member (field 'name span) '("aiohttp.request" "django.request" "rack.request" "gin.request" "http.request"))
-       (equal? (field 'type span) "web")))
-(define (string-prefix? prefix value)
-  (and (string? value) (<= (string-length prefix) (string-length value))
-       (string=? prefix (substring value 0 (string-length prefix)))))
-(define (database-span? span)
-  ; dd-trace-py emits sqlite.connection.commit without the "sql" type. Name
-  ; classification is therefore part of the database inventory policy.
-  (or (equal? (field 'type span) "sql")
-      (string-prefix? "sqlite." (field 'name span))))
-(define (all-spans capture predicate)
-  (and (pair? (items capture 'spans)) (every predicate (items capture 'spans))))
-(define (check condition message)
-  (telemetry-check condition "DATADOG-CONTRACT-V2" "Datadog contract sentinel" message))
-
-(define (ids-valid? span)
-  (and (every (lambda (key) (uint64? (field key span))) '(trace-id span-id parent-id))
-       (nonzero-decimal? (field 'trace-id span))
-       (nonzero-decimal? (field 'span-id span))
-       (eq? (field 'ids-valid span) #t)))
-(define (exception-valid? span)
-  ; HTTP 5xx may be classified as errors without recording an exception.
-  ; Once any exception field is present, the exception must be complete.
-  (if (some (lambda (key) (tag span key)) '("error.type" "error.message" "error.msg" "error.stack" "error.handling_stack"))
-      (and (equal? (field 'error span) 1)
-           (nonempty-string? (tag span "error.type"))
-           (or (string? (tag span "error.message")) (string? (tag span "error.msg")))
-           (or (nonempty-string? (tag span "error.stack"))
-               (and (equal? (tag span "language") "go")
-                    (nonempty-string? (tag span "error.handling_stack")))))
-      #t))
-(define (http-classification? span)
-  (if (not (web-span? span)) #t
-      (let ((status (tag span "http.status_code")))
-        (and (decimal? status)
-             (= (string-length status) 3)
-             (not (string<? status "100")) (string<? status "600")
-             (member (tag span "http.method") '("GET" "POST" "PUT" "DELETE" "PATCH" "HEAD" "OPTIONS"))
-             (equal? (field 'error span) (if (string<? status "500") 0 1))))))
-(define propagated-parent "67667974448284343")
-(define propagated-ids
-  '(("11803532876627986230" "4bf92f3577b34da6")
-    ("9965072336285547154" "8c1e0a5b6d2f4739")
-    ("11276220234964099125" "b3f7d21c9e6a4805")))
-(define (propagated? capture)
-  (every (lambda (id)
-           (some (lambda (span)
-                   (and (web-span? span)
-                        (equal? (field 'trace-id span) (car id))
-                        (equal? (field 'parent-id span) propagated-parent)
-                        (equal? (tag span "_dd.p.tid") (cadr id))))
-                 (items capture 'spans)))
-         propagated-ids))
-(define (request-valid? request)
-  (and (member (field 'method request) '("POST" "PUT"))
-       (member (field 'wire-version request) '("v0.4" "v0.5"))
-       (equal? (field 'path request) (string-append "/" (field 'wire-version request) "/traces"))
-       (equal? (field 'content-type request) "application/msgpack")
-       (every (lambda (key) (= (header-count request key) 1))
-              '("datadog-meta-lang" "datadog-meta-tracer-version" "x-datadog-trace-count"))
-       (nonempty-string? (header-value request "datadog-meta-lang"))
-       (nonempty-string? (header-value request "datadog-meta-tracer-version"))
-       (decimal? (field 'trace-count request))
-       (equal? (header-value request "x-datadog-trace-count") (field 'trace-count request))
-       (equal? (field 'trace-count request) (number->string (field 'chunk-count request)))
-       (> (field 'span-count request) 0)))
-
-; SQL operations must stay in the request's trace even when an asynchronous
-; driver dispatches work to another thread. Follow native parent IDs rather
-; than relying on the order spans happened to be exported.
-(define (source-http-ancestor? span spans)
-  ; Source-only diagnostic captures predate the sink's indexed ancestry field.
-  ; Resolve only a unique parent, carrying any known high bits along the walk.
-  (let walk ((current span) (high (tag span "_dd.p.tid")) (remaining (length spans)))
-    (let ((parents
-            (let find ((rest spans) (result '()))
-              (if (null? rest) result
-                  (let* ((candidate (car rest))
-                         (candidate-high (tag candidate "_dd.p.tid")))
-                    (find (cdr rest)
-                      (if (and (equal? (field 'trace-id current) (field 'trace-id candidate))
-                               (equal? (field 'parent-id current) (field 'span-id candidate))
-                               (or (not high) (not candidate-high) (equal? high candidate-high)))
-                          (cons candidate result) result)))))))
-      (and (> remaining 0) (pair? parents) (null? (cdr parents))
-           (let ((parent (car parents)))
-             (or (web-span? parent)
-                 (walk parent (or high (tag parent "_dd.p.tid")) (- remaining 1))))))))
-
-(define (database-children? capture)
-  (let ((spans (items capture 'spans)))
-    (and (some database-span? spans)
-         (every (lambda (span)
-                  (or (not (database-span? span))
-                      (if (assq 'http-ancestor span)
-                          (eq? (field 'http-ancestor span) #t)
-                          (source-http-ancestor? span spans)))) spans))))
-
+; Every executable assertion a Datadog proof rule can name, by theme. Each
+; predicate receives the decoded capture and lives in the theme's library.
 (define (capture-shape name predicate) (list name predicate))
 (define capture-shapes
   (list
-    (capture-shape 'span/database-children database-children?)
-    (capture-shape 'span/native-fields
-      (lambda (capture)
-        (all-spans capture
-          (lambda (span)
-            (and (every (lambda (key) (nonempty-string? (field key span))) '(name service resource))
-                 (string? (field 'type span))
-                 (memv (field 'error span) '(0 1))
-                 (every (lambda (entry) (and (string? (car entry)) (string? (cadr entry)))) (items span 'meta))
-                 (every (lambda (entry) (and (string? (car entry)) (metric-number? (cadr entry)))) (items span 'metrics)))))))
-    (capture-shape 'span/ids-valid (lambda (capture) (all-spans capture ids-valid?)))
-    (capture-shape 'span/completed
-      (lambda (capture)
-        (all-spans capture (lambda (span)
-          (and (nonzero-decimal? (field 'start span)) (decimal? (field 'duration span))
-               (eq? (field 'completed span) #t))))))
-    (capture-shape 'span/root-present
-      (lambda (capture) (some (lambda (span) (equal? (field 'parent-id span) "0")) (items capture 'spans))))
-    (capture-shape 'span/http-classification
-      (lambda (capture) (and (some web-span? (items capture 'spans)) (all-spans capture http-classification?))))
-    (capture-shape 'span/exception-metadata (lambda (capture) (all-spans capture exception-valid?)))
-    (capture-shape 'span/service-present
-      (lambda (capture) (all-spans capture (lambda (span) (nonempty-string? (field 'service span))))))
-    (capture-shape 'request/headers-and-counts
-      (lambda (capture) (and (pair? (items capture 'requests)) (every request-valid? (items capture 'requests)))))
-    (capture-shape 'capture/semantic-valid
-      (lambda (capture) (eq? (field 'semantic-valid capture) #t)))
-    (capture-shape 'capture/field-policy-coverage
-      (lambda (capture)
-        (let ((coverage (field 'coverage capture)))
-          (and (= (field 'policy-schema coverage) 1)
-               (> (field 'http-spans coverage) 0)
-               (> (+ (field 'exact-fields coverage)
-                     (field 'normalized-fields coverage)
-                     (field 'runtime-validated-fields coverage)) 0)
-               (= (field 'unclassified-fields coverage) 0)))))
+    ; Intake requests
+    (capture-shape 'request/headers-and-counts headers-and-counts?)
+    (capture-shape 'request/library-headers library-headers?)
+    (capture-shape 'capture/semantic-valid semantic-valid?)
+    (capture-shape 'capture/chunk-coherence chunk-coherence?)
+    ; Span structure and identifiers
+    (capture-shape 'span/native-fields native-fields?)
+    (capture-shape 'span/ids-valid ids-valid?)
+    (capture-shape 'span/completed completed?)
+    (capture-shape 'span/root-present root-present?)
+    (capture-shape 'span/trace-id-128 trace-id-128?)
+    ; Service identity
+    (capture-shape 'span/service-present service-present?)
+    (capture-shape 'span/base-service base-service?)
+    (capture-shape 'span/unified-service-tags unified-service-tags?)
+    (capture-shape 'span/version-scoped version-scoped?)
+    (capture-shape 'span/process-identity process-identity?)
+    ; Sampling
+    (capture-shape 'span/sampling-priority sampling-priority?)
+    (capture-shape 'span/decision-maker decision-maker?)
+    (capture-shape 'span/rule-keep rule-keep?)
+    ; Propagation
     (capture-shape 'span/tracecontext-parent propagated?)
-    (capture-shape 'span/datadog-parent propagated?)))
+    (capture-shape 'span/datadog-parent propagated?)
+    (capture-shape 'span/caller-sampling-kept caller-sampling-kept?)
+    ; HTTP server spans
+    (capture-shape 'span/http-classification http-classification?)
+    (capture-shape 'span/http-server-tags server-tags?)
+    (capture-shape 'span/http-absolute-url absolute-url?)
+    (capture-shape 'span/http-route-template route-matches-url?)
+    ; Database spans
+    (capture-shape 'span/database-children database-children?)
+    (capture-shape 'span/database-client client-spans?)
+    (capture-shape 'span/database-system database-system?)
+    ; Errors
+    (capture-shape 'span/exception-metadata exception-metadata?)
+    (capture-shape 'span/errors-explained errors-explained?)
+    ; Evidence quality
+    (capture-shape 'capture/field-policy-coverage field-policy-coverage?)))
 
 (define (assert-capture-shape feature shape capture)
   (let ((entry (assq shape capture-shapes)))

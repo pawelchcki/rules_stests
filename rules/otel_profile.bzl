@@ -135,7 +135,7 @@ def _profile_impl(ctx):
     for source in core_libraries:
         if source.short_path.endswith((ctx.attr.family or "otel") + "/capture/shapes.scm"):
             capture_shapes = source
-        elif "/otel/proofs/" in source.short_path or source.short_path.endswith("datadog/proofs.scm"):
+        elif "/otel/proofs/" in source.short_path or "/datadog/proofs/" in source.short_path or source.short_path.endswith("datadog/proofs.scm"):
             proof_rule_tables.append(source)
     if not capture_shapes:
         fail("core_libraries must contain the family capture/shapes.scm")

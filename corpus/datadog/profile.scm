@@ -4,7 +4,7 @@
           tracer-version
           all scenario observed validate-profile)
   (import (scheme base) (scheme write) (datadog capture shapes)
-          (datadog proofs) (datadog trace-shape) (realworld scenarios))
+          (datadog proofs) (datadog trace-shape match) (realworld scenarios))
   (begin
 (define (id value) (list 'id value))
 (define (display-name value) (list 'display-name value))

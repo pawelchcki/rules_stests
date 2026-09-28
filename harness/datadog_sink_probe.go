@@ -20,6 +20,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/pawelchcki/rules_stests/harness/schemebytecode"
 )
 
 var ddEndpoint string
@@ -28,10 +30,34 @@ var ddClient = http.DefaultClient
 
 func main() {
 	suffix := flag.String("service-suffix", "telemetry_sink_service", "assigned sink service suffix")
-	assertions := flag.String("assertions", "", "Datadog capture assertion library")
 	compiler := flag.String("compiler", "", "Scheme compiler executable")
-	contractErrors := flag.String("contract-errors", "", "Shared contract error library")
+	compileTo := flag.String("compile-to", "", "write the fixed validation programs' bytecode to this bundle and exit")
+	compileShard := flag.String("compile-shard", "", "compile only shard k/n of the programs")
+	var bytecode schemebytecode.Paths
+	flag.Var(&bytecode, "bytecode", "precompiled bundle written by --compile-to (repeatable)")
 	flag.Parse()
+	// Positional arguments are the capture assertion libraries, in dependency order.
+	if flag.NArg() == 0 {
+		panic("usage: datadog_sink_probe [flags] LIBRARY...")
+	}
+	for _, path := range flag.Args() {
+		library, err := os.ReadFile(path)
+		must(err)
+		ddAssertions = append(append(ddAssertions, library...), byte('\n'))
+	}
+	if *compileTo != "" {
+		programs := make([]schemebytecode.Program, 0, len(validationPrograms))
+		for _, assertions := range validationPrograms {
+			programs = append(programs, schemebytecode.Program{Name: assertions, Source: validationSource(assertions)})
+		}
+		programs, err := schemebytecode.Shard(programs, *compileShard)
+		must(err)
+		must(schemebytecode.WriteBundle(*compileTo, *compiler, programs))
+		return
+	}
+	var err error
+	precompiled, err = schemebytecode.ReadBundles(bytecode)
+	must(err)
 	var ports map[string]json.RawMessage
 	must(json.Unmarshal([]byte(os.Getenv("ASSIGNED_PORTS")), &ports))
 	for label, raw := range ports {
@@ -47,14 +73,6 @@ func main() {
 	}
 	if ddEndpoint == "" {
 		panic("missing assigned sink port")
-	}
-	var err error
-	ddAssertions, err = os.ReadFile(*assertions)
-	must(err)
-	if *contractErrors != "" {
-		shared, err := os.ReadFile(*contractErrors)
-		must(err)
-		ddAssertions = append(append(shared, byte('\n')), ddAssertions...)
 	}
 	info := request("GET", "/info", "", nil, 200)
 	if !bytes.Contains(info, []byte("/v0.5/traces")) || bytes.Contains(info, []byte("/v0.3")) {
@@ -324,13 +342,45 @@ func request(method, path, contentType string, body []byte, status int) []byte {
 	}
 	return data
 }
-func validate(assertions string, status int) {
+
+// validationPrograms lists every assertion set validate is called with. Their
+// programs read the capture from the sink, so they are fixed and compiled once
+// at build time (see --compile-to).
+var validationPrograms = []string{
+	"span/native-fields span/ids-valid span/completed span/http-classification span/exception-metadata request/headers-and-counts capture/semantic-valid",
+	"span/native-fields span/ids-valid span/completed capture/semantic-valid",
+	"span/exception-metadata capture/semantic-valid",
+	"capture/semantic-valid",
+	"capture/semantic-valid span/database-children",
+	"request/headers-and-counts span/native-fields span/ids-valid span/completed capture/semantic-valid",
+	// Single assertions the native-span mutations must fail.
+	"span/native-fields",
+	"span/ids-valid",
+	"span/completed",
+	"span/http-classification",
+	"span/exception-metadata",
+}
+
+var precompiled *schemebytecode.Bundle
+
+func validationSource(assertions string) []byte {
 	source := append([]byte{}, ddAssertions...)
 	source = append(source, []byte("\n(import (scheme base) (scheme read) (datadog capture shapes))\n(define capture (read))\n")...)
 	for _, assertion := range strings.Fields(assertions) {
 		source = append(source, []byte(fmt.Sprintf("(assert-capture-shape \"probe\" '%s capture)\n", assertion))...)
 	}
-	request("POST", "/validate?protocol=datadog", "text/x-scheme", source, status)
+	return source
+}
+
+func validate(assertions string, status int) {
+	source := validationSource(assertions)
+	if precompiled == nil {
+		request("POST", "/validate?protocol=datadog", "text/x-scheme", source, status)
+		return
+	}
+	bytecode, err := precompiled.Bytecode(assertions, source)
+	must(err)
+	request("POST", "/validate-bytecode?protocol=datadog", "application/vnd.stak.bytecode", bytecode, status)
 }
 func checkStats(protocol string, requests, spans int) {
 	var stats map[string]any

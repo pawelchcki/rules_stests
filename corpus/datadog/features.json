@@ -3,56 +3,190 @@
   "family": "datadog",
   "features": [
     {
-      "id": "datadog.traces.native-fields",
-      "binding": "span/native-fields"
-    },
-    {
-      "id": "datadog.traces.unsigned-identifiers",
-      "binding": "span/ids-valid"
-    },
-    {
-      "id": "datadog.traces.completed",
-      "binding": "span/completed"
-    },
-    {
-      "id": "datadog.traces.root-span",
-      "binding": "span/root-present"
-    },
-    {
-      "id": "datadog.traces.http-classification",
-      "binding": "span/http-classification"
-    },
-    {
-      "id": "datadog.traces.exception-metadata",
-      "binding": "span/exception-metadata"
-    },
-    {
-      "id": "datadog.traces.service-identity",
-      "binding": "span/service-present"
-    },
-    {
       "id": "datadog.intake.headers-and-counts",
-      "binding": "request/headers-and-counts"
+      "binding": "request/headers-and-counts",
+      "theme": "intake",
+      "description": "Every trace request is a msgpack POST/PUT to /vX.Y/traces whose single X-Datadog-Trace-Count matches its chunks."
+    },
+    {
+      "id": "datadog.intake.library-headers",
+      "binding": "request/library-headers",
+      "theme": "intake",
+      "description": "Every trace request names the library: Datadog-Meta-Lang, -Lang-Interpreter, -Lang-Version, and -Tracer-Version, once each."
     },
     {
       "id": "datadog.intake.semantic-validity",
-      "binding": "capture/semantic-valid"
+      "binding": "capture/semantic-valid",
+      "theme": "intake",
+      "description": "Every request and span decodes into the native schema without semantic violations."
+    },
+    {
+      "id": "datadog.intake.chunk-coherence",
+      "binding": "capture/chunk-coherence",
+      "theme": "intake",
+      "description": "Every span of a trace chunk carries the chunk's trace id."
+    },
+    {
+      "id": "datadog.traces.native-fields",
+      "binding": "span/native-fields",
+      "theme": "traces",
+      "description": "Spans carry a name, service, resource, type, error flag, string meta, and numeric metrics."
+    },
+    {
+      "id": "datadog.traces.unsigned-identifiers",
+      "binding": "span/ids-valid",
+      "theme": "traces",
+      "description": "Trace, span, and parent ids are lossless unsigned 64-bit integers; trace and span ids are nonzero."
+    },
+    {
+      "id": "datadog.traces.completed",
+      "binding": "span/completed",
+      "theme": "traces",
+      "description": "Every span was finished: a nonzero start and a duration."
+    },
+    {
+      "id": "datadog.traces.root-span",
+      "binding": "span/root-present",
+      "theme": "traces",
+      "description": "The capture contains a trace root."
+    },
+    {
+      "id": "datadog.traces.128-bit-trace-ids",
+      "binding": "span/trace-id-128",
+      "theme": "traces",
+      "description": "Trace roots carry the high 64 trace-id bits in _dd.p.tid; generated ids start with a timestamp."
+    },
+    {
+      "id": "datadog.traces.service-identity",
+      "binding": "span/service-present",
+      "theme": "service",
+      "description": "Every span names its service."
+    },
+    {
+      "id": "datadog.service.base-service",
+      "binding": "span/base-service",
+      "theme": "service",
+      "description": "Spans reported under an integration's service name the configured service in _dd.base_service."
+    },
+    {
+      "id": "datadog.service.unified-service-tags",
+      "binding": "span/unified-service-tags",
+      "theme": "service",
+      "description": "Trace roots carry env, spans of the configured service carry version, each with one value."
+    },
+    {
+      "id": "datadog.service.version-scoped",
+      "binding": "span/version-scoped",
+      "theme": "service",
+      "description": "Spans reported under another service carry no version."
+    },
+    {
+      "id": "datadog.service.process-identity",
+      "binding": "span/process-identity",
+      "theme": "service",
+      "description": "Trace roots name the process: language, runtime-id, and process_id, the same on every span."
+    },
+    {
+      "id": "datadog.sampling.priority",
+      "binding": "span/sampling-priority",
+      "theme": "sampling",
+      "description": "Trace roots carry a sampling priority; chunks agree on it; sampling rates appear only on roots."
+    },
+    {
+      "id": "datadog.sampling.decision-maker",
+      "binding": "span/decision-maker",
+      "theme": "sampling",
+      "description": "Traces the tracer starts record the decision maker _dd.p.dm, only on roots or chunk heads."
+    },
+    {
+      "id": "datadog.sampling.rule-keep",
+      "binding": "span/rule-keep",
+      "theme": "sampling",
+      "description": "The configured sampling rule keeps every trace the tracer starts (priority 2, decision maker -3)."
     },
     {
       "id": "datadog.propagation.tracecontext",
-      "binding": "span/tracecontext-parent"
+      "binding": "span/tracecontext-parent",
+      "theme": "propagation",
+      "description": "A W3C traceparent continues the caller's 128-bit trace under the caller's span."
     },
     {
       "id": "datadog.propagation.datadog",
-      "binding": "span/datadog-parent"
+      "binding": "span/datadog-parent",
+      "theme": "propagation",
+      "description": "Datadog headers continue the caller's 128-bit trace under the caller's span."
+    },
+    {
+      "id": "datadog.propagation.tracecontext-sampling",
+      "binding": "span/tracecontext-sampling",
+      "theme": "propagation",
+      "description": "A trace continued from a sampled traceparent keeps priority 1 and adds no rule decision."
+    },
+    {
+      "id": "datadog.propagation.datadog-sampling",
+      "binding": "span/datadog-sampling",
+      "theme": "propagation",
+      "description": "A trace continued from x-datadog-sampling-priority keeps that priority and adds no rule decision."
+    },
+    {
+      "id": "datadog.traces.http-classification",
+      "binding": "span/http-classification",
+      "theme": "http",
+      "description": "Server spans carry a valid method and status; only 5xx responses mark them as errors."
+    },
+    {
+      "id": "datadog.http.server-tags",
+      "binding": "span/http-server-tags",
+      "theme": "http",
+      "description": "Server spans carry span.kind server, component, method, status, route, URL, and user agent."
+    },
+    {
+      "id": "datadog.http.absolute-url",
+      "binding": "span/http-absolute-url",
+      "theme": "http",
+      "description": "Server spans record http.url as a full URL with scheme and host."
+    },
+    {
+      "id": "datadog.http.route-template",
+      "binding": "span/http-route-template",
+      "theme": "http",
+      "description": "http.route is the template the request path matched."
     },
     {
       "id": "datadog.traces.database-children",
-      "binding": "span/database-children"
+      "binding": "span/database-children",
+      "theme": "database",
+      "description": "Database spans descend from the request's server span."
+    },
+    {
+      "id": "datadog.database.client-spans",
+      "binding": "span/database-client",
+      "theme": "database",
+      "description": "Database spans are span.kind client."
+    },
+    {
+      "id": "datadog.database.system",
+      "binding": "span/database-system",
+      "theme": "database",
+      "description": "Database spans name the database in db.system."
+    },
+    {
+      "id": "datadog.traces.exception-metadata",
+      "binding": "span/exception-metadata",
+      "theme": "errors",
+      "description": "A recorded exception is complete: error flag, type, message, and stack."
+    },
+    {
+      "id": "datadog.errors.explained",
+      "binding": "span/errors-explained",
+      "theme": "errors",
+      "description": "Every error span is a 5xx server span or records its exception."
     },
     {
       "id": "datadog.coverage.field-policies",
-      "binding": "capture/field-policy-coverage"
+      "binding": "capture/field-policy-coverage",
+      "theme": "coverage",
+      "description": "Every native field is classified as exact, normalized, or runtime-validated."
     }
   ]
 }
