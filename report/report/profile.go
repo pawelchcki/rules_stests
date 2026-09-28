@@ -70,7 +70,7 @@ func CompileTelemetryProfile(profileSource string, implementationSources []strin
 	plan := NormalizedProfilePlan{SchemaVersion: 1, Sources: map[string]string{}}
 	seenClaims := map[string]bool{}
 	seenSingleton := map[string]bool{}
-	singletonClauses := stringSet([]string{"id", "family", "wire-version", "application", "shape-namespace", "tracer-version", "server-operation", "display-name", "language", "framework", "service-name", "signals", "implementation"})
+	singletonClauses := stringSet([]string{"id", "family", "wire-version", "application", "shape-namespace", "tracer-language", "tracer-version", "server-operation", "display-name", "language", "framework", "service-name", "signals", "implementation"})
 	for _, clause := range expression.list[1:] {
 		clauseName := head(clause)
 		if singletonClauses[clauseName] {
@@ -85,14 +85,17 @@ func CompileTelemetryProfile(profileSource string, implementationSources []strin
 				return plan, fmt.Errorf("profile id clause is malformed")
 			}
 			plan.Profile = atomValue(unquote(clause.list[1]))
-		case "family", "wire-version", "application", "shape-namespace", "tracer-version", "server-operation":
+		case "family", "wire-version", "application", "shape-namespace", "tracer-language", "tracer-version", "server-operation":
 			if len(clause.list) != 2 {
 				return plan, fmt.Errorf("profile %s clause is malformed", head(clause))
 			}
-			if (clauseName == "tracer-version" || clauseName == "server-operation") && !clause.list[1].str {
+			if (clauseName == "tracer-language" || clauseName == "tracer-version" || clauseName == "server-operation") && !clause.list[1].str {
 				return plan, fmt.Errorf("profile %s clause must contain a string", clauseName)
 			}
 			value := atomValue(unquote(clause.list[1]))
+			if clauseName == "tracer-language" && value == "" {
+				return plan, fmt.Errorf("profile tracer-language clause is empty")
+			}
 			switch head(clause) {
 			case "family":
 				plan.Family = value
@@ -102,6 +105,8 @@ func CompileTelemetryProfile(profileSource string, implementationSources []strin
 				plan.Application = value
 			case "shape-namespace":
 				plan.ShapeNamespace = value
+			case "tracer-language":
+				plan.TracerLanguage = value
 			case "tracer-version":
 				plan.TracerVersion = value
 			case "server-operation":
@@ -181,7 +186,7 @@ func CompileTelemetryProfile(profileSource string, implementationSources []strin
 			return plan, fmt.Errorf("Rails Datadog profiles require server-operation rack.request")
 		}
 		plan.SchemaVersion = 2
-	} else if plan.WireVersion != "" || plan.Application != "" || plan.ShapeNamespace != "" || plan.TracerVersion != "" || plan.ServerOperation != "" {
+	} else if plan.WireVersion != "" || plan.Application != "" || plan.ShapeNamespace != "" || plan.TracerLanguage != "" || plan.TracerVersion != "" || plan.ServerOperation != "" {
 		return plan, fmt.Errorf("telemetry identity requires a family")
 	}
 	sort.Slice(plan.Proofs, func(i, j int) bool { return plan.Proofs[i].FeatureID < plan.Proofs[j].FeatureID })
