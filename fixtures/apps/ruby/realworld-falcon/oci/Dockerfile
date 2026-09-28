@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1.7
 ARG SOURCE_DATE_EPOCH=0
-FROM golang:1.25-alpine@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS launcher
+FROM docker.io/library/golang:1.25-alpine@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS launcher
 WORKDIR /src
 COPY oci/launcher.go ./launcher.go
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w -buildid=" -o /out/app ./launcher.go
 
-FROM ruby:3.3.12-slim-bookworm@sha256:df209d82bb55aeb26b9b08922ee22c15f19b3458455690132dc07a5c52dc1c99 AS builder
+FROM docker.io/library/ruby:3.3.12-slim-bookworm@sha256:df209d82bb55aeb26b9b08922ee22c15f19b3458455690132dc07a5c52dc1c99 AS builder
 ARG SOURCE_DATE_EPOCH
 ENV BUNDLE_DEPLOYMENT=1 BUNDLE_FROZEN=1 BUNDLE_WITHOUT=development BUNDLE_PATH=/opt/app/bundle \
     SOURCE_DATE_EPOCH=0
