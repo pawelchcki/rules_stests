@@ -74,7 +74,9 @@ type NormalizedProfilePlan struct {
 	WireVersion      string            `json:"wireVersion,omitempty"`
 	Application      string            `json:"application,omitempty"`
 	ShapeNamespace   string            `json:"shapeNamespace,omitempty"`
+	TracerLanguage   string            `json:"tracerLanguage,omitempty"`
 	TracerVersion    string            `json:"tracerVersion,omitempty"`
+	ServerOperation  string            `json:"serverOperation,omitempty"`
 	ReferenceProfile string            `json:"referenceProfile,omitempty"`
 	SchemaVersion    int               `json:"schemaVersion"`
 	Profile          string            `json:"profile"`

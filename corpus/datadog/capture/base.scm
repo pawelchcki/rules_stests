@@ -2,7 +2,8 @@
   (export field items every some count filter present? all-spans check
           nonempty-string? decimal? nonzero-decimal? uint64? metric-number?
           string-prefix? lowercase-hex? hex-string? tag metric header-value header-count
-          web-span? database-span? root-span? trace-root?)
+          web-span? database-span? controller-span? http-client-span?
+          set-server-operation! root-span? trace-root?)
   (import (scheme base) (scheme char) (telemetry contract-error))
   (begin
 
@@ -84,9 +85,25 @@
          (items request 'headers)))
 
 ; The HTTP server span each RealWorld request produces.
+(define selected-server-operation #f)
+(define (set-server-operation! operation) (set! selected-server-operation operation))
 (define (web-span? span)
-  (and (member (field 'name span) '("aiohttp.request" "django.request" "rack.request" "gin.request" "http.request"))
+  (and (if selected-server-operation
+           (equal? (field 'name span) selected-server-operation)
+           (member (field 'name span) '("aiohttp.request" "django.request" "rack.request" "gin.request" "http.request")))
        (equal? (field 'type span) "web")))
+(define (controller-span? span)
+  (and (equal? (field 'name span) "rails.action_controller")
+       (equal? (field 'type span) "web")
+       (nonempty-string? (field 'resource span))
+       (nonempty-string? (tag span "rails.route.action"))
+       (nonempty-string? (tag span "rails.route.controller"))))
+(define (http-client-span? span)
+  (and (equal? (field 'name span) "http.request")
+       (equal? (field 'type span) "http")
+       (equal? (tag span "span.kind") "client")
+       (nonempty-string? (tag span "http.method"))
+       (nonempty-string? (tag span "http.url"))))
 ; dd-trace-py emits sqlite.connection.commit without the "sql" type, so name
 ; classification is part of the database inventory.
 (define (database-span? span)

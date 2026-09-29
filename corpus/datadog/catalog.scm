@@ -2,6 +2,7 @@
   (export
     request/headers-and-counts request/library-headers capture/semantic-valid capture/chunk-coherence
     span/native-fields span/ids-valid span/completed span/root-present
+    span/rails-controller-children span/http-client
     span/trace-id-128 span/service-present span/base-service span/unified-service-tags
     span/version-scoped span/process-identity span/sampling-priority span/decision-maker
     span/rule-keep span/tracecontext-parent span/datadog-parent span/tracecontext-sampling span/datadog-sampling
@@ -23,6 +24,8 @@
 (define span/completed "datadog.traces.completed")
 (define span/root-present "datadog.traces.root-span")
 (define span/trace-id-128 "datadog.traces.128-bit-trace-ids")
+(define span/rails-controller-children "datadog.traces.rails-controller-children")
+(define span/http-client "datadog.traces.http-client")
 ; service
 (define span/service-present "datadog.traces.service-identity")
 (define span/base-service "datadog.service.base-service")

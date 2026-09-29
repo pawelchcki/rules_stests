@@ -1,5 +1,6 @@
 """Public API for rules_stests."""
 
+load("//rules:native_service_test.bzl", _native_service_test = "native_service_test")
 load("//rules:corpus_service.bzl", _corpus_service = "corpus_service")
 load("//rules:realworld_service_tests.bzl", _realworld_service_tests = "realworld_service_tests")
 load("//rules:hurl_test.bzl", _REALWORLD_HURL_CASES = "REALWORLD_HURL_CASES", _realworld_hurl_test_suite = "realworld_hurl_test_suite")
@@ -30,3 +31,5 @@ datadog_python_injection = _datadog_python_injection
 instrumentation_injection = _instrumentation_injection
 
 datadog_ruby_injection = _datadog_ruby_injection
+
+native_service_test = _native_service_test

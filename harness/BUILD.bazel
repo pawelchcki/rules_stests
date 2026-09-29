@@ -43,7 +43,9 @@ rust_binary(
     rustc_flags = [
         "-Copt-level=2",
         "-Cpanic=abort",
-        "-Clink-arg=-nostartfiles",
+        "-Crelocation-model=static",
+        "-Clink-arg=-nostdlib",
+        "-Clink-arg=-no-pie",
     ],
     deps = all_crate_deps(normal = True),
 )
@@ -206,7 +208,7 @@ go_test(
 
 go_library(
     name = "hurl_test_driver_lib",
-    srcs = ["hurl_test_driver.go", "compiled_validator.go", "parallel_scenarios.go"],
+    srcs = ["hurl_test_driver.go", "compiled_validator.go", "parallel_scenarios.go", "native_scenarios.go"],
     importpath = "github.com/pawelchcki/rules_stests/harness/hurl_test_driver",
     visibility = ["//visibility:private"],
 )
@@ -222,7 +224,7 @@ go_binary(
 
 go_test(
     name = "hurl_test_driver_test",
-    srcs = ["hurl_test_driver_test.go", "compiled_validator_test.go", "parallel_scenarios_test.go"],
+    srcs = ["hurl_test_driver_test.go", "compiled_validator_test.go", "parallel_scenarios_test.go", "native_scenarios_test.go"],
     embed = [":hurl_test_driver_lib"],
 )
 

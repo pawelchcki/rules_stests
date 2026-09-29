@@ -13,6 +13,7 @@
     (family 'datadog)
     (wire-version "v0.4")
     (application "rails")
+    (server-operation "rack.request")
     (shape-namespace "datadog.realworld.shape.ruby-rails-datadog-v2-42-0-v04")
     (implementation (compose ddtrace-ruby-v2.42.0))
     (service-name "rails-datadog")

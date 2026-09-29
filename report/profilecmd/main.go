@@ -177,7 +177,7 @@ func main() {
 		}
 		document := manifestDocument{
 			Family: plan.Family, WireVersion: plan.WireVersion, Application: plan.Application,
-			ShapeNamespace: plan.ShapeNamespace, TracerVersion: plan.TracerVersion,
+			ShapeNamespace: plan.ShapeNamespace, TracerLanguage: plan.TracerLanguage, TracerVersion: plan.TracerVersion, ServerOperation: plan.ServerOperation,
 			SchemaVersion: plan.SchemaVersion, Profile: profileID, Signals: signals,
 			ProofPlan: string(encoded), Program: string(program), Libraries: libraries,
 			Imports: importNames, Scenarios: scenarios, ScenarioShapes: shapes,
@@ -211,7 +211,7 @@ func validateAndApplyReference(plan *report.NormalizedProfilePlan, reference man
 	if reference.SchemaVersion != 2 || reference.Family != "datadog" || reference.Profile == "" || reference.ShapeNamespace == "" || reference.Program == "" || len(reference.ScenarioShapes) == 0 ||
 		!digestRE.MatchString(reference.ValidationPolicySHA256) || reference.ValidationPolicySHA256 != validationPolicySHA256 ||
 		reference.Family != plan.Family || reference.WireVersion != plan.WireVersion || reference.Application != plan.Application ||
-		!sameProofContracts(referencePlan.Proofs, plan.Proofs) || !sameStringsPlain(reference.Signals, plan.Signals) {
+		len(referencePlan.Proofs) == 0 || !containsProofContracts(referencePlan.Proofs, plan.Proofs) || !sameStringsPlain(reference.Signals, plan.Signals) {
 		return fmt.Errorf("candidate profile does not match complete Datadog reference contract")
 	}
 	if len(reference.ScenarioShapes) != len(scenarios) {
@@ -247,7 +247,9 @@ type manifestDocument struct {
 	Application                   string                     `json:"application,omitempty"`
 	ShapeNamespace                string                     `json:"shapeNamespace,omitempty"`
 	ReferenceShapeNamespace       string                     `json:"referenceShapeNamespace,omitempty"`
+	TracerLanguage                string                     `json:"tracerLanguage,omitempty"`
 	TracerVersion                 string                     `json:"tracerVersion,omitempty"`
+	ServerOperation               string                     `json:"serverOperation,omitempty"`
 	ReferenceProfile              string                     `json:"referenceProfile,omitempty"`
 	ReferenceProofPlanSHA256      string                     `json:"referenceProofPlanSha256,omitempty"`
 	ValidationPolicySHA256        string                     `json:"validationPolicySha256,omitempty"`
@@ -274,12 +276,19 @@ func sameStringsPlain(left, right []string) bool {
 	}
 	return true
 }
-func sameProofContracts(left, right []report.ProofPlanProof) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for i := range left {
-		if left[i].FeatureID != right[i].FeatureID || left[i].Assertion != right[i].Assertion || left[i].Basis != right[i].Basis || left[i].EvidencePolicy != right[i].EvidencePolicy || !sameStringsPlain(left[i].Scenarios, right[i].Scenarios) {
+
+// A candidate may add proofs while retaining every reviewed reference proof.
+// The imported shapes, program, and validation policy remain unchanged.
+func containsProofContracts(required, candidate []report.ProofPlanProof) bool {
+	for _, want := range required {
+		found := false
+		for _, got := range candidate {
+			if want.FeatureID == got.FeatureID && want.Assertion == got.Assertion && want.Basis == got.Basis && want.EvidencePolicy == got.EvidencePolicy && sameStringsPlain(want.Scenarios, got.Scenarios) {
+				found = true
+				break
+			}
+		}
+		if !found {
 			return false
 		}
 	}

@@ -9,7 +9,10 @@
 (define (field-policy-coverage? capture)
   (let ((coverage (field 'coverage capture)))
     (and (= (field 'policy-schema coverage) 1)
-         (> (field 'http-spans coverage) 0)
+         ; A client-only fixture has no server span but still supplies real
+         ; HTTP field coverage through its client spans.
+         (> (+ (field 'http-spans coverage)
+               (field 'http-client-spans coverage)) 0)
          (> (+ (field 'exact-fields coverage)
                (field 'normalized-fields coverage)
                (field 'runtime-validated-fields coverage)) 0)
