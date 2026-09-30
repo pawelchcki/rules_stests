@@ -24,12 +24,12 @@ OTEL_RUBY = struct(
 OCI_IMAGES = {
     "gin_datadog_realworld": struct(
         repository = "ghcr.io/pawelchcki/rules_stest_apps",
-        digest = "sha256:ee6a879cae36694b99a967fc4ba62b797a269422bd80249f8c7939de07cd0166",
+        digest = "sha256:956b8f16663c746809c7ba2a03f0eb382a376326b0a80e90e6ffef03b0bd979c",
         tree = "3e3c29c2f28bc232eba4d3911d0399abfb009b8e",
     ),
     "falcon_realworld": struct(
         repository = "ghcr.io/pawelchcki/rules_stest_apps",
-        digest = "sha256:e6ff3e6066d976206748a4820ad01477fd13a78f982e6b94ef073ca01b3ee0d4",
+        digest = "sha256:cb33e3a413455659d7d107cdf015a46941d921539c7865b1bc0509c443c426b0",
         tree = "792881ec6bc8bb91e8e7f0ed2d45974006291808",
     ),
     "rails_realworld": struct(
@@ -66,7 +66,7 @@ DATADOG_PYTHON = struct(
 # Published after verifying the reviewed payload digest and anonymous pull.
 DATADOG_RUBY = struct(
     repository = "ghcr.io/pawelchcki/rules_stest_agents",
-    digest = "sha256:eb96229a846b2335a56e0fa2a4b6b454bceebcfe2cfb92b5a7b2841888fb61a8",
+    digest = "sha256:a4108f167bca41cf7659161a3fa7fdd16515cc94c630687a59ecb98b286c05c3",
     tree = "1f1b230330b94d6d5198b9efcfebd4e4844bd3ef",
     version = "2.42.0",
 )
