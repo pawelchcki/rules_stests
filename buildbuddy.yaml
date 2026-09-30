@@ -2,13 +2,13 @@ actions:
   - name: Full test suite
     visibility: PUBLIC
     container_image: ubuntu-24.04
-    # Keep newly cached fixture exports and installed tools across PR iterations.
+    # Keep runner caches and installed tools across PR iterations.
     platform_properties:
       remote-snapshot-save-policy: always
       snapshot-read-policy: newest
     resource_requests:
-      # Bazel actions execute on the self-hosted RBE fleet; the runner also
-      # builds the three unpublished Datadog OCI fixtures used as inputs.
+      # Bazel actions execute on the self-hosted RBE fleet. Fixtures are
+      # anonymously pulled from the digest-locked published packages.
       cpu: 4
       memory: 8GB
     triggers:
@@ -41,21 +41,10 @@ actions:
             REPORT_REVISION="$(git rev-parse HEAD^1)"
           fi
           git checkout --detach "$REPORT_REVISION"
-          if ! command -v podman >/dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y podman
-          fi
-          mkdir -p "$HOME/.cache"
-          if [[ ! -w "$HOME/.cache" ]]; then
-            sudo chown "$(id -u):$(id -g)" "$HOME/.cache"
-          fi
-          mkdir -p \
-            "$HOME/.cache/buildbuddy" \
-            "$HOME/.cache/rules-stests/datadog-fixtures"
           DATADOG_IMAGES="$(mktemp -d "${TMPDIR:-/tmp}/datadog-images.XXXXXX")"
-          sudo env CONTAINER_BUILD_NETWORK=host \
-            DATADOG_FIXTURE_CACHE="$HOME/.cache/rules-stests/datadog-fixtures" \
-            tools/build_datadog_fixtures.sh "$DATADOG_IMAGES"
+          # Keep the parity driver's optional local-image interface, with no
+          # overrides when using the published fixtures.
+          : > "$DATADOG_IMAGES/bazel.flags"
           mapfile -t IMAGE_FLAGS < "$DATADOG_IMAGES/bazel.flags"
           # No revision is stamped here, so these results stay cacheable across
           # commits; only the report run below needs a revision in its receipts.
@@ -71,6 +60,7 @@ actions:
           # retained receipts, plus the manual Rails/Gin isolation and feature
           # suites that wildcard expansion intentionally omits.
           tools/run_datadog_parity.sh "$DATADOG_IMAGES" "$REPORT_REVISION" "$DATADOG_EVIDENCE"
+          cp "$DATADOG_EVIDENCE/datadog-report.html" "$BUILDBUDDY_ARTIFACTS_DIRECTORY/datadog-report.html"
           # The report run stays uncached: report/cmd/main.go refuses to assemble
           # from a build event file that does not prove --nocache_test_results,
           # because the report claims its evidence came from a fresh run.

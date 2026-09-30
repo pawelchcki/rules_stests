@@ -1,8 +1,58 @@
 # Datadog verification record
 
-This record separates observed results, unsupported behavior, and verification limits. The source comparison point and receipt revision are `02bbcbba786bb9462beda4c27a0c73e20109a4fd`; verification ran before commit against the implementation changes on top of that revision. The fixed behavioral reference is [DataDog/system-tests at `ea8a5976064509df0a5232e314b22e7e90ca4d40`](https://github.com/DataDog/system-tests/tree/ea8a5976064509df0a5232e314b22e7e90ca4d40/tests). The checks are independently implemented and do not establish complete upstream parity.
+This record separates current 112-case evidence from the historical 96-case acceptance and performance comparison. The fixed behavioral reference is [DataDog/system-tests at `ea8a5976064509df0a5232e314b22e7e90ca4d40`](https://github.com/DataDog/system-tests/tree/ea8a5976064509df0a5232e314b22e7e90ca4d40/tests). The checks are independently implemented and do not establish complete upstream parity.
 
-## Current status
+## Current matrix and publication
+
+The matrix contains **seven profiles and 112 scenarios**: aiohttp and Django each run 16 scenarios on both v0.4 and v0.5; Rails, Falcon, and Gin each run 16 on v0.4. The implementation was updated from `origin/main` at `a9c7e40794755fe78f04b45b27a778b2e3c22aee`, whose [Full test suite](https://pawel.buildbuddy.io/invocation/7adf096e-97b5-4cef-adb0-62bb61ffe20d) and [Pages publication](https://github.com/pawelchcki/rules_stests/actions/runs/36547338400) passed.
+
+Ruby, Gin, and Falcon were published on 2026-10-01 using `tools/publish_datadog_fixtures.sh`. Each anonymously pulled manifest and uncompressed rootfs layer matched its reviewed digest. No manifest or payload digest changed during publication. The source-tree identities are recorded in `bazel/oci_images.lock.bzl`.
+
+| Fixture | Published image | Manifest SHA-256 |
+| --- | --- | --- |
+| Ruby tracer 2.42.0 | `ghcr.io/pawelchcki/rules_stest_agents` | `eb96229a846b2335a56e0fa2a4b6b454bceebcfe2cfb92b5a7b2841888fb61a8` |
+| Gin / Go tracer 2.10.1 | `ghcr.io/pawelchcki/rules_stest_apps` | `ee6a879cae36694b99a967fc4ba62b797a269422bd80249f8c7939de07cd0166` |
+| Falcon | `ghcr.io/pawelchcki/rules_stest_apps` | `e6ff3e6066d976206748a4820ad01477fd13a78f982e6b94ef073ca01b3ee0d4` |
+
+BuildBuddy now consumes these published locks without rebuilding local fixtures. Its parity driver retains two uncached executions and generates a standalone Datadog HTML report after independently rechecking both with the coverage gate. The Pages workflow publishes the report at `datadog-report.html` after fresh local acceptance and retains its raw evidence in an Actions artifact. Publication from the new workflow starts when the change reaches `main`.
+
+## Current acceptance evidence
+
+These executions used implementation commit `e6ea9196e120ea1f682fc163ddebff299a1beff5`, consuming the published images without local repository overrides. Subsequent verification-document changes do not alter the tested implementation.
+
+| Acceptance item | Observed result | Evidence |
+| --- | --- | --- |
+| First fresh exact-shape execution | **112/112 passed; 7 profiles gated** | [BuildBuddy execution](https://pawel.buildbuddy.io/invocation/8879b352-6f10-4807-8f98-6e96a0d10488); retained at `/tmp/datadog-closeout-evidence/execution-1`. |
+| Second independent execution | **112/112 passed; 7 profiles gated** | [BuildBuddy execution](https://pawel.buildbuddy.io/invocation/9855d256-7586-4e49-bee9-41dfb7bc98b6); retained at `/tmp/datadog-closeout-evidence/execution-2`. |
+| Concurrent isolation, 4 workers × 1 repetition | **7/7 profiles passed** | [BuildBuddy execution](https://pawel.buildbuddy.io/invocation/05985a65-5e68-4826-be34-9d16c1d466d6); each retained result has `assertionsPassed: true`, no failures, and observed overlap 4. |
+| Full concurrent stress, 32 workers × 3 repetitions | **7/7 profiles passed** | [BuildBuddy execution](https://pawel.buildbuddy.io/invocation/2f5c59f7-2db2-4bce-aa6b-d545d85a9707); each retained result has `assertionsPassed: true`, no failures, overlap 32, and 489 ledger entries. Capture/ledger hashes were independently rechecked under `/tmp/datadog-closeout-evidence/full-stress`. |
+| External-feature profiles | **207 passed; 3 unsupported; 0 failures** | [BuildBuddy execution](https://pawel.buildbuddy.io/invocation/8ef9c99a-4bd4-4141-af97-cf5fb3ba6891); all seven targets passed, retaining 210 results under `/tmp/datadog-closeout-evidence/features`. Unsupported cases remain Python v0.4 origin on aiohttp and Django, plus Gin manual-drop/keep-rule interaction. |
+| Repository regressions | **259/259 targets passed** | [BuildBuddy execution](https://pawel.buildbuddy.io/invocation/8aef8c6c-899d-42f2-a7e6-13f63821649c); 61 executed and 198 were cached. This includes the final report mutation tests, Ruby receipt validation, sink, launcher, profile/report logic, bootstrap checks, telemetry labs, and non-report fixture tests. Receipt-producing OTel report targets are separately run uncached by CI. |
+| Independent consumer and exported API | **74/74 tests passed; manifest/API builds passed** | [Consumer tests](https://pawel.buildbuddy.io/invocation/ccf0aa02-3ff0-4b00-85b2-32e5fe880ca1) were all cached; [manifest/API build](https://pawel.buildbuddy.io/invocation/cb6bb885-83bf-4b36-a06d-82a095fec118) passed. |
+| Standalone HTML report | **Passed receipt revalidation and browser checks** | `/tmp/datadog-closeout-evidence/datadog-report.html`, SHA-256 `870016dcc9191fc2dc307455ee02225252d4af6f0f3de09b01d7ac83be74c963`; Chromium checks at 1440px and 390px cover filtering, expandable proofs, clearing filters, page errors, and page overflow. |
+| Fixture publication | **All three published and anonymously verified** | `/tmp/datadog-closeout-publication.log`, SHA-256 `a88ee0a8aaa6a24927df2eb136020c8c34f613456b653e37822dc029321720cf`. |
+
+Both receipt gates report `7 profiles, 112 scenarios`; each gate-log SHA-256 is `baed8f2ade1ca64d2e8506908b8851f5b07cf9d467413fd80dbbe9243482fca7`. The complete manifests, bytecode, captures, receipts, logs, and timings remain in their separate retention directories.
+
+An initial [112-case attempt](https://pawel.buildbuddy.io/invocation/c5827bd2-f999-45c3-a6ab-b5ceac6b3b33) passed 111 cases and failed Rails `feed` when Puma encountered `EADDRINUSE` on its assigned port. That attempt was excluded from acceptance; its log and test artifacts were preserved at `/tmp/datadog-closeout-port-collision.log` and `/tmp/datadog-closeout-failed-feed`. Both complete executions above then passed without test retries or changes to validation.
+
+## Reproduce the current evidence
+
+The full driver runs the two exact-shape executions, their retention gates, report generation, the four-worker concurrent suite, and the external-feature suite. Use an empty image-override file to consume the published locks:
+
+```sh
+images=$(mktemp -d /tmp/datadog-images.XXXXXX)
+evidence=$(mktemp -d /tmp/datadog-evidence.XXXXXX)
+: > "$images/bazel.flags"
+tools/run_datadog_parity.sh "$images" "$(git rev-parse HEAD)" "$evidence"
+# Set DATADOG_BAZEL_CONFIG=local for four local build/test jobs instead of RBE.
+```
+
+Each execution is retained and gated before the next starts. Report generation rechecks the current bytes instead of trusting stored success logs. Unit mutations reject changed capture/bytecode, wrong revision, missing proofs, xfails, unclassified fields, reused directories, missing receipts, and differing contracts between executions. Scenario and feature counts remain distinct across repeated runs; occurrence counts explicitly describe the final run.
+
+## Historical 96-case acceptance
+
+The source comparison point and receipt revision below are `02bbcbba786bb9462beda4c27a0c73e20109a4fd`; verification ran before commit against the implementation changes on top of that revision. This historical six-profile record predates Falcon and the current publication and reporting work.
 
 | Acceptance item | Status | Observed result and evidence |
 | --- | --- | --- |
@@ -18,7 +68,7 @@ This record separates observed results, unsupported behavior, and verification l
 | OTel, report, launcher, sink, and external-feature regressions | **Passed** | 71 of 71 targets passed: 67 executed fresh and four unchanged unit targets were cached. This covers all four OTel RealWorld fixtures, OTel profile variants, the four shared external-feature fixtures, report, launcher, OTel sink, and Ruby bootstrap tests. Log: `/tmp/dd-otel-regressions.log`, SHA-256 `ee7c5b7ac4b0b57b18f4853ff2953c4ccc6d555a3cf34eee27684e5e9c39af2f`. |
 | Five-run warmed benchmark and cold-build report | **Passed** | All 340 attempts passed across five uncached 34-case runs per variant. The original median test window was 117.881 seconds and the compiled median was 69.353 seconds, a 41.17% reduction. Fresh action-cache builds took 88.249 and 247.621 seconds respectively; downloaded repositories may be shared. Result: `/tmp/dd-benchmark/final-results/results.json`, SHA-256 `2bce95607325b43fc8e828cf6c321adb145c1331ca2c0661a820982a05344ce8`. |
 
-## Benchmark executions
+## Historical benchmark executions
 
 The acceptance metric uses the first test-attempt start through the last test-attempt finish. Invocation wall time is retained separately. Every row contains exactly 34 uncached passing attempts.
 
@@ -33,7 +83,7 @@ The acceptance metric uses the first test-attempt start through the last test-at
 
 The measured reduction is **41.17%**, satisfying the required minimum of 40%. Warm build preparation took 4.161 seconds for the original and 4.526 seconds for the compiled implementation. Cold build cost is reported independently above and is not included in the warmed test-window comparison.
 
-## Unsupported feature results
+## Historical unsupported feature results
 
 Unsupported results never count as passed. The completed feature run recorded exactly these cases:
 
@@ -45,11 +95,11 @@ Unsupported results never count as passed. The completed feature run recorded ex
 
 The complete capability boundaries and remaining coverage gaps are recorded in [datadog-coverage.md](datadog-coverage.md#deliberate-boundaries-and-remaining-gaps).
 
-## Verification scope
+## Historical verification scope
 
 These are local executions on the executor identified in the benchmark record. CI now runs in BuildBuddy; this historical local record does not establish the current commit's CI status. The Ruby and Gin OCI images were not published. Matching the Ruby rebuild on this executor checks deterministic local inputs; reproducibility across container tools, operating systems, or architectures has not been established.
 
-## Reproduction
+## Historical reproduction
 
 All Bazel commands use the local executor with four build and test jobs and the reviewed local OCI layouts:
 

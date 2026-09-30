@@ -33,10 +33,12 @@ evidence="${3:?usage: run_datadog_parity.sh IMAGE_DIRECTORY REVISION EVIDENCE_DI
 mkdir -p "$evidence"
 
 mapfile -t image_flags < "$images/bazel.flags"
-remote_args=(
-  --config=buildbuddy
-  --spawn_strategy=remote,local
-)
+bazel_args=(--config="${DATADOG_BAZEL_CONFIG:-buildbuddy}")
+if [[ "${DATADOG_BAZEL_CONFIG:-buildbuddy}" == local ]]; then
+  bazel_args+=(--jobs=4 --local_test_jobs=4)
+else
+  bazel_args+=(--spawn_strategy=remote,local)
+fi
 profiles=(
   //corpus:python-aiohttp-datadog-v4-14-0-v04
   //corpus:python-aiohttp-datadog-v4-14-0-v05
@@ -49,7 +51,7 @@ profiles=(
 # DefaultInfo for each profile carries its manifest and validator runfiles.
 # Fetch the complete tree: the coverage gate hashes every scenario bytecode.
 downloaded_evidence_regex='.*(\.validators|test\.outputs)($|/.*)'
-bazel build "${remote_args[@]}" --remote_download_outputs=toplevel \
+bazel build "${bazel_args[@]}" --remote_download_outputs=toplevel \
   "--remote_download_regex=$downloaded_evidence_regex" \
   "${image_flags[@]}" //tools/datadog_coverage:datadog_coverage "${profiles[@]}"
 
@@ -61,7 +63,7 @@ test_download_args=(
 )
 
 for execution in 1 2; do
-  bazel test "${remote_args[@]}" "${test_download_args[@]}" \
+  bazel test "${bazel_args[@]}" "${test_download_args[@]}" \
     --nocache_test_results \
     --test_env="TELEMETRY_TEST_REVISION=$revision" \
     "${image_flags[@]}" \
@@ -72,7 +74,14 @@ for execution in 1 2; do
     --gate bazel-bin/tools/datadog_coverage/datadog_coverage_/datadog_coverage
 done
 
-bazel test "${remote_args[@]}" "${test_download_args[@]}" \
+python3 tools/datadog_report.py \
+  --revision "$revision" \
+  --execution "$evidence/execution-1" \
+  --execution "$evidence/execution-2" \
+  --gate bazel-bin/tools/datadog_coverage/datadog_coverage_/datadog_coverage \
+  --output "$evidence/datadog-report.html"
+
+bazel test "${bazel_args[@]}" "${test_download_args[@]}" \
   --nocache_test_results \
   "${image_flags[@]}" \
   //fixtures:datadog_parallel_suite \
@@ -83,7 +92,7 @@ find -L bazel-testlogs/fixtures -path '*/test.outputs/stress.*.json' -exec cp -L
 
 # This suite includes manual Rails and Gin feature probes, whose individual
 # tests are intentionally absent from the wildcard full-suite expansion.
-bazel test "${remote_args[@]}" "${test_download_args[@]}" \
+bazel test "${bazel_args[@]}" "${test_download_args[@]}" \
   --nocache_test_results \
   "${image_flags[@]}" \
   //fixtures:datadog_external_features_suite
