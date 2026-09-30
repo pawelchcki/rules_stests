@@ -352,6 +352,66 @@ func TestDatadogCoverageClassifiesOnlyTraceServiceAsNormalized(t *testing.T) {
 	}
 }
 
+func TestDatadogCoverageRecognizesRailsInventory(t *testing.T) {
+	profile := atomicProfile{Application: "rails", ServerOperation: "rack.request", Scenario: "tags"}
+	capture := []byte(`[{"payload":{"traces":[[{"name":"rack.request","service":"rails-native-fixture","resource":"Users#index","type":"web","trace_id":1,"span_id":2,"parent_id":0,"start":3,"duration":4,"error":0,"meta":{"http.method":"GET","http.status_code":"200"},"metrics":{}},{"name":"rails.action_controller","service":"rails-native-fixture","resource":"Users#index","type":"web","trace_id":1,"span_id":3,"parent_id":2,"start":3,"duration":4,"error":0,"meta":{},"metrics":{}},{"name":"sqlite.query","service":"sqlite","resource":"SELECT ?","type":"sql","trace_id":1,"span_id":4,"parent_id":3,"start":3,"duration":4,"error":0,"meta":{},"metrics":{}},{"name":"http.request","service":"net/http","resource":"GET","type":"http","trace_id":1,"span_id":5,"parent_id":3,"start":3,"duration":4,"error":0,"meta":{},"metrics":{}}]]}}]`)
+	coverage, err := collectDatadogCoverage(capture, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if coverage.IntegrationSpans["http.server"] != 1 || coverage.IntegrationSpans["rails.controller"] != 1 || coverage.IntegrationSpans["database"] != 1 || coverage.IntegrationSpans["http.client"] != 1 {
+		t.Fatalf("Rails inventory was not recognized: %+v", coverage)
+	}
+}
+
+func TestLoadRailsDatadogProfileRequiresMatchingTracerIdentity(t *testing.T) {
+	plan := normalizedProofPlan{SchemaVersion: 2, Profile: "ruby-test", Family: "datadog", WireVersion: "v0.4", Application: "rails", ShapeNamespace: "datadog.realworld.shape.test", TracerLanguage: "c", TracerVersion: "bazel-dev", ServerOperation: "rack.request"}
+	encodedPlan, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := atomicProfileManifest{SchemaVersion: 2, Profile: "ruby-test", Family: "datadog", WireVersion: "v0.4", Application: "rails", ShapeNamespace: plan.ShapeNamespace, TracerLanguage: "c", TracerVersion: "bazel-dev", ServerOperation: "rack.request", ValidationPolicySHA256: strings.Repeat("a", 64), CandidateImplementationSHA256: strings.Repeat("b", 64), ProofPlan: string(encodedPlan), Program: "(validate-profile)", Libraries: []string{"library"}, Scenarios: []string{"native_malformed"}, Signals: []string{"traces"}}
+	path := filepath.Join(t.TempDir(), "manifest.json")
+	load := func() (atomicProfile, error) {
+		contents, err := json.Marshal(manifest)
+		if err != nil {
+			return atomicProfile{}, err
+		}
+		if err := os.WriteFile(path, contents, 0600); err != nil {
+			return atomicProfile{}, err
+		}
+		return loadAtomicProfile(path, "native_malformed", "validate")
+	}
+	profile, err := load()
+	if err != nil || profile.TracerLanguage != "c" {
+		t.Fatalf("valid C tracer identity: profile=%+v err=%v", profile, err)
+	}
+	manifest.TracerLanguage = "ruby"
+	if _, err := load(); err == nil || !strings.Contains(err.Error(), "normalized proof plan does not match") {
+		t.Fatalf("mismatched tracer language error = %v", err)
+	}
+	manifest.TracerLanguage = "c"
+	manifest.ServerOperation = ""
+	if _, err := load(); err == nil || !strings.Contains(err.Error(), "invalid Datadog manifest identity") {
+		t.Fatalf("missing Rails server operation error = %v", err)
+	}
+}
+
+func TestDatadogCoverageRecognizesPublishedGinServer(t *testing.T) {
+	profile := atomicProfile{Application: "gin", Scenario: "tags"}
+	capture := []byte(`[{"payload":{"traces":[[{"name":"gin.request","type":"web","service":"gin-datadog"}]]}}]`)
+	coverage, err := collectDatadogCoverage(capture, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if coverage.IntegrationSpans["http.server"] != 1 {
+		t.Fatalf("Gin server span was not recognized: %+v", coverage)
+	}
+	if datadogServerSpan("http.request", "http", "") {
+		t.Fatal("native HTTP client span was classified as a server")
+	}
+}
+
 func TestNormalizeDatadogEndpointRejectsInvalidLoopbackPorts(t *testing.T) {
 	for _, endpoint := range []string{"http://127.0.0.1:0/api/tags", "http://localhost:999999/api/tags"} {
 		if _, err := normalizeDatadogEndpoint(endpoint); err == nil {

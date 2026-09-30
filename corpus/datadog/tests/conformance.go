@@ -166,6 +166,26 @@ func defineCases(run func(name, value, body string, expected int), expect func(n
 	consumerCapture := strings.Replace(capture, `"4.14.0"`, `"`+consumerIdentity+`"`, 1)
 	run("declared consumer tracer identity", consumerCapture, consumerProgram, 200)
 	run("incompatible consumer tracer identity", capture, consumerProgram, 409)
+	railsProgram := strings.Replace(program, `(language 'python)`, `(language 'ruby) (tracer-language "c") (server-operation "rack.request")`, 1)
+	railsProgram = strings.Replace(railsProgram, `"4.14.0"`, `"bazel-dev"`, 1)
+	railsProgram = strings.Replace(railsProgram, `(validate-profile profile 'unicode capture
+ (cons 'exact '(((count 1) (roots (((name "aiohttp.request") (children ()))))))))`, `(validate-profile profile 'unicode capture 'contract)`, 1)
+	railsCapture := strings.Replace(capture, `"aiohttp.request"`, `"rack.request"`, -1)
+	railsCapture = strings.Replace(railsCapture, `"python"`, `"c"`, 1)
+	railsCapture = strings.Replace(railsCapture, `"4.14.0"`, `"bazel-dev"`, 1)
+	run("Rails rack.request server operation", railsCapture, railsProgram, 200)
+	controllerBody := `(import (scheme base) (datadog capture shapes))
+ (define capture CAPTURE)
+ (assert-capture-shape "rails controller" 'span/rails-controller-children capture)`
+	controllerA := `((name "rails.action_controller") (type "web") (resource "Tags#index") (trace-id "1") (span-id "3") (parent-id "2") (chunk-index 0) (meta (("rails.route.action" "index") ("rails.route.controller" "Tags"))))`
+	controllerB := `((name "rails.action_controller") (type "web") (resource "Tags#index") (trace-id "1") (span-id "3") (parent-id "2") (chunk-index 1) (meta (("rails.route.action" "index") ("rails.route.controller" "Tags"))))`
+	controllerCapture := `'((spans (
+  ((name "rack.request") (type "web") (trace-id "1") (span-id "2") (chunk-index 0) (meta (("_dd.p.tid" "aaaaaaaaaaaaaaaa"))))
+  ((name "rack.request") (type "web") (trace-id "1") (span-id "2") (chunk-index 1) (meta (("_dd.p.tid" "bbbbbbbbbbbbbbbb"))))
+  ` + controllerA + `
+  ` + controllerB + `)))`
+	run("Rails controllers pair with full trace identity", controllerCapture, controllerBody, 200)
+	run("Rails controller from another 128-bit trace", strings.Replace(controllerCapture, controllerA, "", 1), controllerBody, 409)
 	for _, tc := range []testCase{
 		{"zero trace ID", `(trace-id "18446744073709551615")`, `(trace-id "0")`},
 		{"overflow trace ID", `(trace-id "18446744073709551615")`, `(trace-id "18446744073709551616")`},

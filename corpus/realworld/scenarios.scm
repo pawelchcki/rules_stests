@@ -6,7 +6,15 @@
 ; Startup health checks are reset before each workload and are intentionally
 ; absent from these portable request shapes.
 (define scenario-shapes
-  '((articles
+  '((native_concurrency
+      (80 "GET" "/api/tags" 200)
+      (80 "GET" "/api/tags" 200 external))
+    (native_malformed (4 "GET" "/api/tags" 200))
+    (native_exceptions
+      (1 "POST" "/api/users" 500)
+      (1 "GET" "/api/tags" 200))
+    (native_ruby_client)
+    (articles
       (1 "DELETE" "/api/articles/{slug}" 204)
       (6 "GET" "/api/articles" 200)
       (3 "GET" "/api/articles/{slug}" 200)

@@ -7,6 +7,8 @@ applications for Python, Ruby, and Go.
 
 [Latest OpenTelemetry capability report](https://pawelchcki.github.io/rules_stests/) (published from `main`).
 
+[Latest Datadog tracing evidence](https://pawelchcki.github.io/rules_stests/datadog-report.html) (published from `main` after two fresh gated executions).
+
 ## Plug in an implementation
 
 ```starlark
@@ -125,10 +127,8 @@ shared decoder checks header uniqueness and counts, and the profile enforces
 those declared values.
 
 ```bash
-# Build the reviewed local Ruby, Falcon, and Gin images until their publication is available.
-tools/build_datadog_fixtures.sh /tmp/datadog-images
-mapfile -t image_flags < /tmp/datadog-images/bazel.flags
-bazel test --config=local "${image_flags[@]}" //fixtures:datadog_suite
+# Ruby, Falcon, and Gin use anonymously readable, digest-pinned GHCR images.
+bazel test --config=local //fixtures:datadog_suite
 ```
 
 For a custom service, use `datadog_python_injection(aiohttp = True)` for aiohttp (the default for Django is
@@ -196,13 +196,33 @@ under `datadog/shape`; candidate suites have the `_shape_candidates` suffix and
 are manual targets. `bazel run //tools:datadog_shapes` renders candidates in the
 readable shape vocabulary for review. OTel receipts retain schema v1 and accept
 `OTEL_TEST_REVISION` as a fallback. Datadog evidence stays outside the OTel HTML
-report; Datadog HTML reporting is deferred.
+report. The separate Datadog HTML report shows each profile's verified scenarios,
+features, span counts, field-policy counts, and per-scenario proof assertions.
+It rechecks retained captures and compiled validators with the coverage gate
+before rendering. BuildBuddy publishes it alongside the complete evidence archive;
+the Pages workflow publishes it after two fresh independent executions.
 Each verified receipt also contains machine-readable application/scenario,
 integration-span, and exact/normalized/runtime field-policy counts. Candidates,
 contract-only runs, xfails, missing scenarios, or nonzero unclassified fields
 cannot serve as complete parity evidence.
 CI can enforce this trust boundary with `//tools/datadog_coverage:datadog_coverage`,
 passing the current revision plus each profile manifest and emitted receipt.
+
+For a local report, retain two independent executions as described in
+[`docs/datadog-verification.md`](docs/datadog-verification.md), then run:
+
+```sh
+python3 tools/datadog_report.py --revision "$(git rev-parse HEAD)" \
+  --execution /tmp/datadog-reproduction/execution-1 \
+  --execution /tmp/datadog-reproduction/execution-2 \
+  --gate bazel-bin/tools/datadog_coverage/datadog_coverage_/datadog_coverage \
+  --output datadog-report.html
+```
+
+Maintainers rebuild reviewed payloads with `tools/build_datadog_fixtures.sh` and
+publish them with `tools/publish_datadog_fixtures.sh` after registry login. The
+publication workflow checks the payload digests, verifies anonymous pulls, and
+proposes updated locks when their source trees change.
 
 ## Public API
 

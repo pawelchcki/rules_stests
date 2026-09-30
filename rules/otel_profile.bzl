@@ -149,10 +149,11 @@ def _profile_impl(ctx):
     arguments.add("--capture-shapes=" + capture_shapes.path)
     policy_sources = []
     if ctx.attr.family == "datadog":
-        policy_sources = [ctx.file._datadog_policy_source]
+        policy_sources = [ctx.file._datadog_policy_source, ctx.file._native_policy_source, ctx.file._harness_policy_source]
         for source in core_libraries:
             arguments.add("--policy-library=" + source.path)
-        arguments.add("--policy-source=" + ctx.file._datadog_policy_source.path)
+        for source in policy_sources:
+            arguments.add("--policy-source=" + source.path)
     arguments.add("--out=" + plan.path)
     arguments.add("--manifest-out=" + source_manifest.path)
     arguments.add("--profile-id=" + ctx.attr.profile_id)
@@ -246,6 +247,8 @@ otel_profile = rule(
         ),
         "program": attr.label(allow_single_file = [".scm"], default = Label("//corpus:realworld/programs/validate_profile.scm")),
         "_datadog_policy_source": attr.label(allow_single_file = True, default = Label("//harness:otel_sink/datadog.rs")),
+        "_native_policy_source": attr.label(allow_single_file = True, default = Label("//harness:native_scenarios.go")),
+        "_harness_policy_source": attr.label(allow_single_file = True, default = Label("//harness:hurl_test_driver.go")),
         "_validator_builder": attr.label(default = Label("//harness:compile_validators"), executable = True, cfg = "exec"),
         "_scheme_compiler": attr.label(default = Label("//harness:telemetry_sink"), executable = True, cfg = "exec"),
         "_compiler": attr.label(
@@ -282,6 +285,7 @@ def otel_realworld_profile(
         scenario_shapes = {},
         shape_root = None,
         scenarios = REALWORLD_BASE_HURL_CASES,
+        consumer_scenarios = [],
         standard_registry = Label("//corpus:otel_standard_registry"),
         core_libraries = Label("//corpus:core_libraries"),
         program = Label("//corpus:realworld/programs/validate_profile.scm"),
@@ -291,7 +295,7 @@ def otel_realworld_profile(
         fail("shape_root and scenario_shapes are mutually exclusive")
     if not scenarios:
         fail("scenarios must contain at least one RealWorld scenario")
-    unknown_scenarios = [scenario for scenario in scenarios if scenario not in REALWORLD_HURL_CASES]
+    unknown_scenarios = [scenario for scenario in scenarios if scenario not in REALWORLD_HURL_CASES + consumer_scenarios]
     if unknown_scenarios:
         fail("scenarios contains unknown RealWorld scenarios: {}".format(", ".join(sorted(unknown_scenarios))))
     if len({scenario: True for scenario in scenarios}) != len(scenarios):
@@ -399,6 +403,7 @@ def datadog_realworld_profile(
         family = "datadog",
         wire_version = wire_version,
         scenarios = scenarios if scenarios != None else REALWORLD_BASE_HURL_CASES,
+        consumer_scenarios = ["native_concurrency", "native_malformed", "native_exceptions", "native_ruby_client"],
         **kwargs
     )
 

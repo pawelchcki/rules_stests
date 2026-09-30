@@ -1,7 +1,7 @@
 (define-library (datadog capture shapes)
   (export capture-shapes assert-capture-shape
           field items every some tag metric header-value web-span? database-span?
-          check decimal? nonempty-string?)
+          set-server-operation! check decimal? nonempty-string?)
   (import (scheme base)
           (datadog capture base)
           (datadog capture intake)
@@ -27,6 +27,8 @@
     (capture-shape 'capture/chunk-coherence chunk-coherence?)
     ; Span structure and identifiers
     (capture-shape 'span/native-fields native-fields?)
+    (capture-shape 'span/rails-controller-children rails-controller-children?)
+    (capture-shape 'span/http-client http-client?)
     (capture-shape 'span/ids-valid ids-valid?)
     (capture-shape 'span/completed completed?)
     (capture-shape 'span/root-present root-present?)

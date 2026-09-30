@@ -108,7 +108,20 @@ func TestCheckedInProfilePlanSnapshotsAndDescriptorOwnership(t *testing.T) {
 		t.Skip("profile plan runfiles are supplied by Bazel")
 	}
 	runfile := func(path string) string {
-		return filepath.Join(os.Getenv("TEST_SRCDIR"), os.Getenv("TEST_WORKSPACE"), path)
+		root := os.Getenv("TEST_SRCDIR")
+		candidate := filepath.Join(root, os.Getenv("TEST_WORKSPACE"), path)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+		// Under bzlmod this test may execute in the main workspace while its
+		// corpus runfiles remain below the canonical external repository name.
+		// Keep the assertion repository-independent rather than assuming the
+		// test's own workspace owns every profile input.
+		matches, err := filepath.Glob(filepath.Join(root, "*", path))
+		if err == nil && len(matches) == 1 {
+			return matches[0]
+		}
+		return candidate
 	}
 	type expectation struct {
 		proofs, observed int
@@ -253,5 +266,39 @@ func TestCompileDatadogIdentityAndLegacySchema(t *testing.T) {
 	data, _ := json.Marshal(legacy)
 	if legacy.SchemaVersion != 1 || bytes.Contains(data, []byte(`"family"`)) || bytes.Contains(data, []byte(`"wireVersion"`)) {
 		t.Fatalf("legacy schema changed: %s", data)
+	}
+}
+
+func TestCompileRailsDatadogServerOperation(t *testing.T) {
+	source := strings.Replace(profileTestSource, "(id 'test-profile)", `(id 'test-profile) (family 'datadog) (wire-version "v0.4") (application "rails") (shape-namespace "datadog.realworld.shape.test-profile") (tracer-version "bazel-dev") (server-operation "rack.request")`, 1)
+	source = strings.Replace(source, `(language 'python)`, `(language 'ruby) (tracer-language "c")`, 1)
+	plan, err := compileProfileFixture(source, profileTestImplementation, profileTestRules, profileTestShapes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.SchemaVersion != 2 || plan.Application != "rails" || plan.TracerLanguage != "c" || plan.ServerOperation != "rack.request" {
+		t.Fatalf("wrong Rails Datadog identity: %+v", plan)
+	}
+	for _, bad := range []struct {
+		name, replacement, want string
+	}{
+		{"duplicate", `(tracer-language "c") (tracer-language "ruby")`, "duplicate profile tracer-language clause"},
+		{"symbol", `(tracer-language 'c)`, "must contain a string"},
+		{"empty", `(tracer-language "")`, "profile tracer-language clause is empty"},
+	} {
+		invalid := strings.Replace(source, `(tracer-language "c")`, bad.replacement, 1)
+		if _, err := compileProfileFixture(invalid, profileTestImplementation, profileTestRules, profileTestShapes); err == nil || !strings.Contains(err.Error(), bad.want) {
+			t.Fatalf("%s tracer language error = %v", bad.name, err)
+		}
+	}
+	for _, operation := range []string{"http.request"} {
+		invalid := strings.Replace(source, `(server-operation "rack.request")`, `(server-operation "`+operation+`")`, 1)
+		if _, err := compileProfileFixture(invalid, profileTestImplementation, profileTestRules, profileTestShapes); err == nil || !strings.Contains(err.Error(), "require server-operation") {
+			t.Fatalf("Rails profile with %q server operation error = %v", operation, err)
+		}
+	}
+	missingOperation := strings.Replace(source, `(server-operation "rack.request")`, "", 1)
+	if _, err := compileProfileFixture(missingOperation, profileTestImplementation, profileTestRules, profileTestShapes); err == nil || !strings.Contains(err.Error(), "require server-operation") {
+		t.Fatalf("Rails profile without a server operation error = %v", err)
 	}
 }

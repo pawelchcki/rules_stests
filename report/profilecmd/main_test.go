@@ -27,6 +27,13 @@ func TestReferenceProfileMustBeCompleteAndCompatible(t *testing.T) {
 	if plan.ReferenceProfile != "reference" {
 		t.Fatal("reference identity was not applied")
 	}
+	superset := plan
+	superset.Proofs = append(append([]report.ProofPlanProof{}, plan.Proofs...), report.ProofPlanProof{
+		FeatureID: "span/controller-child", Assertion: "span/controller-child", Basis: "observed", EvidencePolicy: "runtime",
+	})
+	if err := validateAndApplyReference(&superset, reference, []string{"articles", "tags"}, policyDigest); err != nil {
+		t.Fatalf("candidate with extra proof: %v", err)
+	}
 
 	tests := []struct {
 		name   string
