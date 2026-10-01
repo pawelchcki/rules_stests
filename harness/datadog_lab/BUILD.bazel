@@ -1,0 +1,17 @@
+load("@rules_python//python:defs.bzl", "py_binary", "py_test")
+
+package(default_visibility = ["//visibility:public"])
+
+py_binary(
+    name = "probe",
+    srcs = ["probe.py"],
+    main = "probe.py",
+    python_version = "PY3",
+)
+
+py_test(
+    name = "probe_unit_test",
+    srcs = ["probe_test.py", "probe.py"],
+    main = "probe_test.py",
+    python_version = "PY3",
+)

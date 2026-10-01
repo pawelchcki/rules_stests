@@ -9,12 +9,14 @@ load("//rules:otel_profile.bzl", "otel_report_manifest")
 load("@rules_itest//:itest.bzl", "service_test")
 load(":external_features.bzl", "datadog_parallel_tests", "datadog_external_feature_tests", "external_feature_tests")
 load(":telemetry_lab.bzl", "python_telemetry_lab_variants")
+load(":datadog_lab.bzl", "datadog_lab_tests")
 
 package(default_visibility = ["//visibility:public"])
 
 external_feature_tests()
 datadog_external_feature_tests()
 datadog_parallel_tests()
+datadog_lab_tests()
 
 _PYTHON_ARGS = ["--host", "127.0.0.1", "--port", "$${PORT}"]
 _PYTHON_ENV = otlp_env(extra = {

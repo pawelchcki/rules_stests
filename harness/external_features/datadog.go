@@ -14,6 +14,8 @@ import (
 )
 
 const datadogUpstream = "https://github.com/DataDog/system-tests/blob/ea8a5976064509df0a5232e314b22e7e90ca4d40/tests/parametric/"
+const datadogConfigRevision = "255dc57d719c4d33a1c45a1b41cd517c5cae5878"
+const datadogConfigUpstream = "https://github.com/DataDog/system-tests/blob/" + datadogConfigRevision + "/tests/parametric/"
 const datadogHeadersSourceSHA256 = "eae879d44ecf020bb1f4a2899d78f2027c9942e556baf406932c2f9ad6905b43"
 
 var telemetryProtocol = "otlp"
@@ -36,6 +38,10 @@ type ddCase struct {
 	ChunkMetadataPosition         string
 	Partial                       bool
 	UpstreamMethod                string
+	SourceRevision                string
+	ReferenceClass, ReferenceTest string
+	ExpectedTags                  map[string]string
+	AgentURLPrecedence            bool
 }
 
 type ddNativeSpan struct {
@@ -56,17 +62,18 @@ type ddNativeSpan struct {
 }
 
 type ddResult struct {
-	Name                 string `json:"name"`
-	Status               string `json:"status"`
-	Source               string `json:"source"`
-	BaselineSHA256       string `json:"baselineSha256"`
-	CaptureSHA256        string `json:"captureSha256"`
-	Configuration        ddCase `json:"configuration"`
-	Detail               string `json:"detail,omitempty"`
-	EarlyCaptureSHA256   string `json:"earlyCaptureSha256,omitempty"`
-	RejectionLogSHA256   string `json:"rejectionLogSha256,omitempty"`
-	UpstreamMethod       string `json:"upstreamMethod,omitempty"`
-	UpstreamSourceSHA256 string `json:"upstreamSourceSha256,omitempty"`
+	Name                   string            `json:"name"`
+	Status                 string            `json:"status"`
+	Source                 string            `json:"source"`
+	BaselineSHA256         string            `json:"baselineSha256"`
+	CaptureSHA256          string            `json:"captureSha256"`
+	Configuration          ddCase            `json:"configuration"`
+	EffectiveConfiguration map[string]string `json:"effectiveConfiguration,omitempty"`
+	Detail                 string            `json:"detail,omitempty"`
+	EarlyCaptureSHA256     string            `json:"earlyCaptureSha256,omitempty"`
+	RejectionLogSHA256     string            `json:"rejectionLogSha256,omitempty"`
+	UpstreamMethod         string            `json:"upstreamMethod,omitempty"`
+	UpstreamSourceSHA256   string            `json:"upstreamSourceSha256,omitempty"`
 }
 
 func ddCases() []ddCase {
@@ -89,6 +96,11 @@ func ddCases() []ddCase {
 		{Name: "malformed", Source: "test_headers_datadog.py", Headers: map[string]string{"x-datadog-trace-id": "not-a-number", "x-datadog-parent-id": "987654321"}},
 		{Name: "precedence", Source: "test_headers_precedence.py", Env: map[string]string{"DD_TRACE_PROPAGATION_STYLE_EXTRACT": "datadog,tracecontext"}, Headers: map[string]string{"x-datadog-trace-id": "123456789", "x-datadog-parent-id": "987654321", "x-datadog-tags": "_dd.p.tid=1234567890abcdef", "traceparent": "00-aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb-cccccccccccccccc-01"}, Propagated: true},
 		{Name: "identity", Source: "test_tracer.py", Env: map[string]string{"DD_SERVICE": "configured-service", "DD_ENV": "configured-env", "DD_VERSION": "configured-version"}, Service: "configured-service", Environment: "configured-env", Version: "configured-version"},
+		{Name: "tags-comma", Source: "test_config_consistency.py", SourceRevision: datadogConfigRevision, ReferenceClass: "Test_Config_Tags", ReferenceTest: "test_comma_space_tag_separation", Env: map[string]string{"DD_TAGS": "probe.config.comma:alpha,probe.config.second:beta"}, ExpectedTags: map[string]string{"probe.config.comma": "alpha", "probe.config.second": "beta"}},
+		{Name: "tags-space", Source: "test_config_consistency.py", SourceRevision: datadogConfigRevision, ReferenceClass: "Test_Config_Tags", ReferenceTest: "test_comma_space_tag_separation", Env: map[string]string{"DD_TAGS": "probe.config.space:alpha probe.config.next:beta"}, ExpectedTags: map[string]string{"probe.config.space": "alpha", "probe.config.next": "beta"}},
+		{Name: "tags-colon-value", Source: "test_config_consistency.py", SourceRevision: datadogConfigRevision, ReferenceClass: "Test_Config_Tags", ReferenceTest: "test_comma_space_tag_separation", Env: map[string]string{"DD_TAGS": "probe.config.colon:alpha:beta:gamma"}, ExpectedTags: map[string]string{"probe.config.colon": "alpha:beta:gamma"}},
+		{Name: "tags-identity-precedence", Source: "test_config_consistency.py", SourceRevision: datadogConfigRevision, ReferenceClass: "Test_Config_Tags", ReferenceTest: "test_dd_service_override", Env: map[string]string{"DD_TAGS": "service:shadow-service,env:shadow-env,version:shadow-version,probe.config.precedence:visible", "DD_SERVICE": "configured-service", "DD_ENV": "configured-env", "DD_VERSION": "configured-version"}, Service: "configured-service", Environment: "configured-env", Version: "configured-version", ExpectedTags: map[string]string{"probe.config.precedence": "visible"}},
+		{Name: "agent-url-precedence", Source: "test_config_consistency.py", SourceRevision: datadogConfigRevision, ReferenceClass: "Test_Config_TraceAgentURL", ReferenceTest: "test_dd_trace_agent_http_url_nonexistent", Env: map[string]string{"DD_AGENT_HOST": "invalid-agent-host.invalid", "DD_TRACE_AGENT_PORT": "1"}, AgentURLPrecedence: true},
 		{Name: "sample-one", Source: "test_trace_sampling.py", Env: map[string]string{"DD_TRACE_SAMPLING_RULES": "[{\"sample_rate\":1}]"}, Priority: &keep},
 		{Name: "sample-zero", Source: "test_trace_sampling.py", Env: map[string]string{"DD_TRACE_SAMPLING_RULES": "[{\"sample_rate\":0}]"}, Priority: &drop},
 		{Name: "rule-precedence", Source: "test_trace_sampling.py", Env: map[string]string{"DD_TRACE_SAMPLING_RULES": "[{\"service\":\"external-probe\",\"sample_rate\":0},{\"sample_rate\":1}]"}, Priority: &drop},
@@ -108,6 +120,43 @@ func datadogEnvironment(sink string) map[string]string {
 		"DD_INSTRUMENTATION_TELEMETRY_ENABLED":        "false", "DD_REMOTE_CONFIGURATION_ENABLED": "false", "DD_RUNTIME_METRICS_ENABLED": "false",
 		"DD_PROFILING_ENABLED": "false", "DD_APPSEC_ENABLED": "false", "DD_IAST_ENABLED": "false", "DD_TRACE_STARTUP_LOGS": "false",
 	}
+}
+
+func ddEffectiveEnvironment(sink string, c ddCase, launchArgs []string) map[string]string {
+	env := map[string]string{}
+	for _, arg := range launchArgs {
+		if !strings.HasPrefix(arg, "--env=DD_") {
+			continue
+		}
+		key, value, found := strings.Cut(strings.TrimPrefix(arg, "--env="), "=")
+		if found {
+			env[key] = value
+		}
+	}
+	for key, value := range datadogEnvironment(sink) {
+		env[key] = value
+	}
+	for key, value := range c.Env {
+		env[key] = value
+	}
+	return env
+}
+
+func ddSourceURL(c ddCase) string {
+	if c.SourceRevision != "" {
+		return "https://github.com/DataDog/system-tests/blob/" + c.SourceRevision + "/tests/parametric/" + c.Source
+	}
+	return datadogUpstream + c.Source
+}
+
+func ddValidateAgentURLPrecedenceConfiguration(c ddCase, sink string) error {
+	if !c.AgentURLPrecedence {
+		return nil
+	}
+	if c.Env["DD_TRACE_AGENT_URL"] != sink || c.Env["DD_AGENT_HOST"] != "invalid-agent-host.invalid" || c.Env["DD_TRACE_AGENT_PORT"] != "1" {
+		return fmt.Errorf("agent URL precedence case lost its valid URL or invalid host/port control")
+	}
+	return nil
 }
 
 func protocolEndpoint(sink, path string) string {
@@ -221,6 +270,13 @@ func validateDatadogCase(c ddCase, baseline, spans []ddNativeSpan) error {
 	if len(ddServers(baseline)) != expected {
 		return fmt.Errorf("baseline does not retain all four request identifiers")
 	}
+	for _, b := range ddServers(baseline) {
+		for key := range c.ExpectedTags {
+			if _, present := b.Meta[key]; present {
+				return fmt.Errorf("baseline already contains configured tag %q", key)
+			}
+		}
+	}
 	if c.Disabled {
 		if len(spans) != 0 {
 			return fmt.Errorf("disabled tracer exported %d spans", len(spans))
@@ -250,6 +306,11 @@ func validateDatadogCase(c ddCase, baseline, spans []ddNativeSpan) error {
 		}
 		if s.Service != service || s.Meta["env"] != env || s.Meta["version"] != version {
 			return fmt.Errorf("incorrect service/environment/version")
+		}
+		for key, want := range c.ExpectedTags {
+			if got, present := s.Meta[key]; !present || got != want {
+				return fmt.Errorf("incorrect configured tag %q: got %q, want %q", key, got, want)
+			}
 		}
 		status, errorFlag := "200", 0
 		if c.Kind == "exception" {
@@ -375,6 +436,14 @@ func runDatadog(app, launcher string, args []string) error {
 	var results []ddResult
 	var failures []string
 	for _, c := range append(ddCases(), ddProbeCases()...) {
+		if c.AgentURLPrecedence {
+			// The effective URL must be present in the case itself, so the
+			// retained configuration proves which endpoint won precedence.
+			c.Env["DD_TRACE_AGENT_URL"] = sink
+		}
+		if err := ddValidateAgentURLPrecedenceConfiguration(c, sink); err != nil {
+			return fmt.Errorf("%s: %w", c.Name, err)
+		}
 		// dd-trace-rb writes chunk metadata on the chunk's last span.
 		if rubyApp(app) {
 			c.ChunkMetadataPosition = "last"
@@ -395,7 +464,10 @@ func runDatadog(app, launcher string, args []string) error {
 		if err != nil {
 			return fmt.Errorf("%s: %w", c.Name, err)
 		}
-		result := ddResult{Name: c.Name, Status: "passed", Source: datadogUpstream + c.Source, BaselineSHA256: controlHash, CaptureSHA256: fmt.Sprintf("%x", sha256.Sum256(data)), Configuration: c}
+		result := ddResult{Name: c.Name, Status: "passed", Source: ddSourceURL(c), BaselineSHA256: controlHash, CaptureSHA256: fmt.Sprintf("%x", sha256.Sum256(data)), Configuration: c}
+		if c.SourceRevision != "" {
+			result.EffectiveConfiguration = ddEffectiveEnvironment(sink, c, args)
+		}
 		validationErr := validateDatadogCase(c, control, spans)
 		upstreamSHA := ""
 		if validationErr == nil {
