@@ -9,6 +9,7 @@ load("//rules:otel_profile.bzl", "otel_report_manifest")
 load("@rules_itest//:itest.bzl", "service_test")
 load(":external_features.bzl", "external_feature_tests")
 load(":telemetry_lab.bzl", "python_telemetry_lab_variants")
+load("//fixtures:ruby_matrix.bzl", "ruby_app_matrix")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -490,3 +491,5 @@ otel_report_manifest(
     # receipts: an unexpected absent runner remains an assembly failure.
     unavailable_profiles = ["//corpus:ruby-rails-auto-v0-1-0"] if not RUBY_IMAGES_PUBLISHED else [],
 )
+
+ruby_app_matrix(name = "ruby_matrix_suite")

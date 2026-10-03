@@ -7,6 +7,7 @@ _LAUNCHER = Label("//harness:app_launcher")
 def corpus_service(
         name,
         rootfs = None,
+        ruby_rootfs = None,
         runtime = None,
         instance = None,
         command = None,
@@ -24,6 +25,8 @@ def corpus_service(
     Args:
         name: Name of the itest_service target.
         rootfs: Materialized app directory label; mutually exclusive with exe.
+        ruby_rootfs: Optional separate Ruby runtime directory label, containing
+            usr/local and its loader/libraries; requires runtime = "ruby".
         runtime: "python", "ruby" or "native" for the bundled runtime adapter.
         instance: Lowercase letters, digits, hyphens and underscores; identifies
             writable state under TEST_TMPDIR/rules_stests/<instance>/state.
@@ -39,8 +42,8 @@ def corpus_service(
             port assignment and shutdown timeout.
     """
     if exe != None:
-        if rootfs != None or runtime != None or instance != None or command != None or injection != None:
-            fail("exe cannot be combined with rootfs, runtime, instance, command or injection")
+        if rootfs != None or ruby_rootfs != None or runtime != None or instance != None or command != None or injection != None:
+            fail("exe cannot be combined with rootfs, ruby_rootfs, runtime, instance, command or injection")
         itest_service(name = name, exe = exe, args = args, data = data, **kwargs)
         return
     if rootfs == None:
@@ -57,6 +60,11 @@ def corpus_service(
         "--rootfs=$(rlocationpath {})".format(rootfs),
     ]
     launcher_data = data + [rootfs]
+    if ruby_rootfs:
+        if runtime != "ruby":
+            fail("ruby_rootfs requires runtime = ruby")
+        launcher_args.append("--ruby-rootfs=$(rlocationpath {})".format(ruby_rootfs))
+        launcher_data.append(ruby_rootfs)
     if injection:
         launcher_args.extend(injection.flags)
         launcher_data.append(injection.rootfs)

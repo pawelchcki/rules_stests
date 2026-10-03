@@ -1,0 +1,48 @@
+# encoding: utf-8
+require "io/wait"
+require "webrick/utils"
+# WEBrick computes its default server name while loading config.rb. This
+# localhost fixture must not resolve the executor hostname through host NSS
+# plugins, which may use a newer libc than the pinned historical interpreter.
+module WEBrick
+  module Utils
+    def self.getservername
+      "localhost"
+    end
+  end
+end
+require "webrick"
+require "rack"
+require "rack/handler/webrick"
+require_relative "../app/realworld"
+
+host, port = "127.0.0.1", 8000
+until ARGV.empty?
+  flag = ARGV.shift
+  case flag
+  when "--host", "--binding" then host = ARGV.shift
+  when "--port" then port = Integer(ARGV.shift)
+  else abort("unknown server option: #{flag}")
+  end
+end
+
+module RealWorld
+  class HTTPHandler < Rack::Handler::WEBrick
+    def service(request, response)
+      # Favorite/follow POSTs have no body. HTTP framing gives them an empty
+      # body, but historical WEBrick otherwise rejects them with HTTP 411.
+      if !request["content-length"] && !request["transfer-encoding"]
+        request.header["content-length"] = ["0"]
+      end
+      super
+    end
+  end
+end
+
+server = WEBrick::HTTPServer.new(:BindAddress => host, :Port => port, :ServerName => "localhost",
+  :DoNotReverseLookup => true,
+  :AccessLog => [], :Logger => WEBrick::Log.new($stderr, WEBrick::Log::WARN))
+server.mount("/", RealWorld::HTTPHandler, RealWorld::App)
+trap("TERM") { server.shutdown }
+trap("INT") { server.shutdown }
+server.start

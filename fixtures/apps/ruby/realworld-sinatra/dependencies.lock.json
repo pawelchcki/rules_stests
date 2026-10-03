@@ -1,0 +1,238 @@
+{
+  "schemaVersion": 1,
+  "gemSets": {
+    "legacy": [
+      {
+        "name": "sinatra",
+        "version": "1.4.8",
+        "sha256": "18cb20ffabf31484b02d8606e450fbf040b52aea6147755a07718e9e0ffddd2f"
+      },
+      {
+        "name": "rack",
+        "version": "1.6.13",
+        "sha256": "207e60f917a7b47cb858a6e813500bc6042a958c2ca9eeb64631b19cde702173"
+      },
+      {
+        "name": "rack-protection",
+        "version": "1.5.5",
+        "sha256": "5a9f0d56ef96b616a242138986dc930aca76f6efa24f998e8683164538e5c057"
+      },
+      {
+        "name": "tilt",
+        "version": "2.0.11",
+        "sha256": "7b180fc472cbdeb186c85d31c0f2d1e61a2c0d77e1d9fd0ca28482a9d972d6a0"
+      },
+      {
+        "name": "sequel",
+        "version": "4.49.0",
+        "sha256": "88bac1b5e4b30423aac40342dafabbcd2ba4622ff81eeed7dbf75e0b8c221704"
+      },
+      {
+        "name": "sqlite3",
+        "version": "1.3.13",
+        "sha256": "b138a22e0dbbb69be08540671dabf602599437e389a54054bb177f6ed1fd2e06"
+      },
+      {
+        "name": "bcrypt",
+        "version": "3.1.11",
+        "sha256": "a0fc22135205c851f46e8a661de8be242d54951cbd2c37a6fad5c8069b2645b4"
+      },
+      {
+        "name": "jwt",
+        "version": "1.5.6",
+        "sha256": "842b43dbc2dc605113556a96ec59241b325e15cbec160a8f8b222e4142f89f88"
+      },
+      {
+        "name": "unicode_utils",
+        "version": "1.4.0",
+        "sha256": "b922d0cf2313b6b7136ada6645ce7154ffc86418ca07d53b058efe9eb72f2a40"
+      }
+    ],
+    "classic": [
+      {
+        "name": "sinatra",
+        "version": "2.2.4",
+        "sha256": "3e31e9f7ffc89ce3fdd7770c9a4183150d76b6bdcc7322cf38f84303d3016c72"
+      },
+      {
+        "name": "rack",
+        "version": "2.2.21",
+        "sha256": "14e2f72f0765455fe424ff601588ac5ce84e95784f59e99251ffe1527152f739"
+      },
+      {
+        "name": "rack-protection",
+        "version": "2.2.4",
+        "sha256": "82663dceaacffadd31a2936fdead448b8fd8e324891d52c38b2482faa2ced1b4"
+      },
+      {
+        "name": "tilt",
+        "version": "2.0.11",
+        "sha256": "7b180fc472cbdeb186c85d31c0f2d1e61a2c0d77e1d9fd0ca28482a9d972d6a0"
+      },
+      {
+        "name": "sequel",
+        "version": "5.63.0",
+        "sha256": "c713da084aaada86425bdf64b0bb2f85fda963e15c79186bc2ea3dc52a897f7d"
+      },
+      {
+        "name": "sqlite3",
+        "version": "1.4.4",
+        "sha256": "5d81cac1341d43260ce9673e146f41d28db0d09ec67e76a35ee8089686513cfc"
+      },
+      {
+        "name": "bcrypt",
+        "version": "3.1.22",
+        "sha256": "1f0072e88c2d705d94aff7f2c5cb02eb3f1ec4b8368671e19112527489f29032"
+      },
+      {
+        "name": "jwt",
+        "version": "1.5.6",
+        "sha256": "842b43dbc2dc605113556a96ec59241b325e15cbec160a8f8b222e4142f89f88"
+      },
+      {
+        "name": "mustermann",
+        "version": "2.0.2",
+        "sha256": "cbe651b6c039e4cefa635b8087398ff59d74f83591064926cc62d37ac4c7e054"
+      },
+      {
+        "name": "ruby2_keywords",
+        "version": "0.0.5",
+        "sha256": "ffd13740c573b7301cf7a2e61fc857b2a8e3d3aff32545d6f8300d8bae10e3ef"
+      },
+      {
+        "name": "unicode_utils",
+        "version": "1.4.0",
+        "sha256": "b922d0cf2313b6b7136ada6645ce7154ffc86418ca07d53b058efe9eb72f2a40"
+      }
+    ],
+    "current": [
+      {
+        "name": "sinatra",
+        "version": "2.2.4",
+        "sha256": "3e31e9f7ffc89ce3fdd7770c9a4183150d76b6bdcc7322cf38f84303d3016c72"
+      },
+      {
+        "name": "rack",
+        "version": "2.2.21",
+        "sha256": "14e2f72f0765455fe424ff601588ac5ce84e95784f59e99251ffe1527152f739"
+      },
+      {
+        "name": "rack-protection",
+        "version": "2.2.4",
+        "sha256": "82663dceaacffadd31a2936fdead448b8fd8e324891d52c38b2482faa2ced1b4"
+      },
+      {
+        "name": "tilt",
+        "version": "2.0.11",
+        "sha256": "7b180fc472cbdeb186c85d31c0f2d1e61a2c0d77e1d9fd0ca28482a9d972d6a0"
+      },
+      {
+        "name": "sequel",
+        "version": "5.63.0",
+        "sha256": "c713da084aaada86425bdf64b0bb2f85fda963e15c79186bc2ea3dc52a897f7d"
+      },
+      {
+        "name": "sqlite3",
+        "version": "2.8.1",
+        "sha256": "acd0ac7912a4d92b2484b5befb6faa8d496497eb1e38bdbe8d7818fb8d05d726"
+      },
+      {
+        "name": "bcrypt",
+        "version": "3.1.22",
+        "sha256": "1f0072e88c2d705d94aff7f2c5cb02eb3f1ec4b8368671e19112527489f29032"
+      },
+      {
+        "name": "jwt",
+        "version": "1.5.6",
+        "sha256": "842b43dbc2dc605113556a96ec59241b325e15cbec160a8f8b222e4142f89f88"
+      },
+      {
+        "name": "mustermann",
+        "version": "2.0.2",
+        "sha256": "cbe651b6c039e4cefa635b8087398ff59d74f83591064926cc62d37ac4c7e054"
+      },
+      {
+        "name": "ruby2_keywords",
+        "version": "0.0.5",
+        "sha256": "ffd13740c573b7301cf7a2e61fc857b2a8e3d3aff32545d6f8300d8bae10e3ef"
+      },
+      {
+        "name": "webrick",
+        "version": "1.8.2",
+        "sha256": "431746a349199546ff9dd272cae10849c865f938216e41c402a6489248f12f21"
+      },
+      {
+        "name": "mini_portile2",
+        "version": "2.8.9",
+        "sha256": "0cd7c7f824e010c072e33f68bc02d85a00aeb6fce05bb4819c03dfd3c140c289"
+      },
+      {
+        "name": "unicode_utils",
+        "version": "1.4.0",
+        "sha256": "b922d0cf2313b6b7136ada6645ce7154ffc86418ca07d53b058efe9eb72f2a40"
+      }
+    ],
+    "classic_webrick": [
+      {
+        "name": "sinatra",
+        "version": "2.2.4",
+        "sha256": "3e31e9f7ffc89ce3fdd7770c9a4183150d76b6bdcc7322cf38f84303d3016c72"
+      },
+      {
+        "name": "rack",
+        "version": "2.2.21",
+        "sha256": "14e2f72f0765455fe424ff601588ac5ce84e95784f59e99251ffe1527152f739"
+      },
+      {
+        "name": "rack-protection",
+        "version": "2.2.4",
+        "sha256": "82663dceaacffadd31a2936fdead448b8fd8e324891d52c38b2482faa2ced1b4"
+      },
+      {
+        "name": "tilt",
+        "version": "2.0.11",
+        "sha256": "7b180fc472cbdeb186c85d31c0f2d1e61a2c0d77e1d9fd0ca28482a9d972d6a0"
+      },
+      {
+        "name": "sequel",
+        "version": "5.63.0",
+        "sha256": "c713da084aaada86425bdf64b0bb2f85fda963e15c79186bc2ea3dc52a897f7d"
+      },
+      {
+        "name": "sqlite3",
+        "version": "1.4.4",
+        "sha256": "5d81cac1341d43260ce9673e146f41d28db0d09ec67e76a35ee8089686513cfc"
+      },
+      {
+        "name": "bcrypt",
+        "version": "3.1.22",
+        "sha256": "1f0072e88c2d705d94aff7f2c5cb02eb3f1ec4b8368671e19112527489f29032"
+      },
+      {
+        "name": "jwt",
+        "version": "1.5.6",
+        "sha256": "842b43dbc2dc605113556a96ec59241b325e15cbec160a8f8b222e4142f89f88"
+      },
+      {
+        "name": "mustermann",
+        "version": "2.0.2",
+        "sha256": "cbe651b6c039e4cefa635b8087398ff59d74f83591064926cc62d37ac4c7e054"
+      },
+      {
+        "name": "ruby2_keywords",
+        "version": "0.0.5",
+        "sha256": "ffd13740c573b7301cf7a2e61fc857b2a8e3d3aff32545d6f8300d8bae10e3ef"
+      },
+      {
+        "name": "webrick",
+        "version": "1.8.2",
+        "sha256": "431746a349199546ff9dd272cae10849c865f938216e41c402a6489248f12f21"
+      },
+      {
+        "name": "unicode_utils",
+        "version": "1.4.0",
+        "sha256": "b922d0cf2313b6b7136ada6645ce7154ffc86418ca07d53b058efe9eb72f2a40"
+      }
+    ]
+  }
+}

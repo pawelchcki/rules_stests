@@ -24,6 +24,7 @@ func TestLaunchArgsPreserveApplicationFlags(t *testing.T) {
 func TestLaunchArgsRejectInvalidConfiguration(t *testing.T) {
 	for _, args := range [][]string{
 		{},
+		{"--runtime=python", "--instance=sample", "--rootfs=root", "--ruby-rootfs=ruby", "--", "serve"},
 		{"--runtime=unknown", "--instance=sample", "--rootfs=root", "--", "serve"},
 		{"--runtime=python", "--instance=../escape", "--rootfs=root", "--", "serve"},
 		{"--runtime=python", "--instance=sample", "--", "serve"},
@@ -296,6 +297,9 @@ func TestRubyExecutionIsolatesApplicationAndAgentEnvironment(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(app, "bundle", "ruby", "3.3.0", "gems", "prism-1.9.0", "lib"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(app, "ruby", "lib", "ruby", "3.3.0", "x86_64-linux"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	state := t.TempDir()
 	t.Setenv("APP_STATE_DIR", state)
 	inherited := []string{"RUBYOPT=-rbad", "GEM_HOME=/host", "BUNDLE_GEMFILE=/host/Gemfile", "KEEP=value"}
@@ -391,6 +395,9 @@ func TestRubyExecutionRunsNonRailsEntryScript(t *testing.T) {
 		if err := os.WriteFile(path, nil, 0o555); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := os.MkdirAll(filepath.Join(app, "ruby", "lib", "ruby", "3.3.0", "x86_64-linux"), 0o755); err != nil {
+		t.Fatal(err)
 	}
 	t.Setenv("APP_STATE_DIR", t.TempDir())
 	execution, err := rubyAppExecution(root, injection{}, "", "falcon", "bin/server", []string{"--port", "1"}, nil)
@@ -527,5 +534,76 @@ func TestNeutralInjectionRejectsAmbiguousRootsAndMissingPlaceholders(t *testing.
 		if _, _, err := parseAppArgs(args); err == nil {
 			t.Errorf("accepted invalid neutral injection %q", args)
 		}
+	}
+}
+
+func TestRubyExecutionUsesSeparateRuntimeThroughRunfileSymlinks(t *testing.T) {
+	for _, abi := range []string{"1.9.1", "4.0.0"} {
+		t.Run(abi, func(t *testing.T) {
+			root, runtime := t.TempDir(), t.TempDir()
+			app := filepath.Join(root, "opt", "app")
+			prefix := filepath.Join(runtime, "usr", "local")
+			for _, path := range []string{
+				filepath.Join(runtime, "lib64", "ld-linux-x86-64.so.2"),
+				filepath.Join(prefix, "bin", "ruby"),
+				filepath.Join(app, "src", "bin", "server"),
+			} {
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, nil, 0o555); err != nil {
+					t.Fatal(err)
+				}
+			}
+			stdlib := filepath.Join(prefix, "lib", "ruby", abi)
+			if err := os.MkdirAll(filepath.Join(stdlib, "x86_64-linux"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			links := t.TempDir()
+			appLink, runtimeLink := filepath.Join(links, "app"), filepath.Join(links, "runtime")
+			for link, target := range map[string]string{appLink: root, runtimeLink: runtime} {
+				if err := os.Symlink(target, link); err != nil {
+					t.Fatal(err)
+				}
+			}
+			state := t.TempDir()
+			t.Setenv("APP_STATE_DIR", state)
+			execution, err := rubyAppExecutionWithRuntime(appLink, runtimeLink, injection{}, "", "matrix", "bin/server", nil,
+				[]string{"GEM_PATH=/host", "RUBYLIB=/host", "LD_LIBRARY_PATH=/host"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if execution.loader != filepath.Join(runtime, "lib64", "ld-linux-x86-64.so.2") ||
+				execution.arguments[3] != filepath.Join(prefix, "bin", "ruby") ||
+				execution.arguments[4] != filepath.Join(app, "src", "bin", "server") {
+				t.Fatalf("app and interpreter paths are not independent and canonical: %v", execution.arguments)
+			}
+			joined := strings.Join(execution.environment, "\n")
+			for _, expected := range []string{
+				"GEM_HOME=" + filepath.Join(app, "bundle", "ruby", abi),
+				"GEM_PATH=" + filepath.Join(app, "bundle", "ruby", abi) + ":" + filepath.Join(prefix, "lib", "ruby", "gems", abi),
+				"RUBYLIB=" + stdlib + ":" + filepath.Join(stdlib, "x86_64-linux"),
+				"DATABASE_PATH=" + filepath.Join(state, "realworld.sqlite3"),
+			} {
+				if !strings.Contains(joined, expected+"\n") {
+					t.Fatalf("missing %q in environment:\n%s", expected, joined)
+				}
+			}
+			if strings.Contains(joined, links) || strings.Contains(joined, "/host") {
+				t.Fatalf("symlink or host paths leaked into Ruby environment:\n%s", joined)
+			}
+		})
+	}
+}
+
+func TestRubyExecutionRejectsAmbiguousLibraryABI(t *testing.T) {
+	prefix := t.TempDir()
+	for _, abi := range []string{"2.7.0", "3.3.0"} {
+		if err := os.MkdirAll(filepath.Join(prefix, "lib", "ruby", abi, "x86_64-linux"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := rubyLibraryPaths(prefix); err == nil {
+		t.Fatal("accepted multiple interpreter ABIs")
 	}
 }

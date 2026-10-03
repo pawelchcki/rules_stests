@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 1,
+  "runtimes": [
+    {
+      "series": "1.9.3",
+      "version": "1.9.3",
+      "image": "docker.io/library/ruby@sha256:c296bd581b8c1ee0585a77cafc0b14342356cea30a10fa2c9f82370909665149",
+      "schema": 1,
+      "gems": "legacy",
+      "patchlevel": 551,
+      "abi": "1.9.1"
+    },
+    {
+      "series": "2.0",
+      "version": "2.0.0",
+      "image": "docker.io/library/ruby@sha256:c684068f2ff9eb4165374d8252ba30d70e655658f25abf8d95e744f0b6b53212",
+      "schema": 1,
+      "gems": "legacy",
+      "patchlevel": 648,
+      "abi": "2.0.0"
+    },
+    {
+      "series": "2.1",
+      "version": "2.1.10",
+      "image": "docker.io/library/ruby@sha256:8454fe7dead78b72fe6d83cc86db621286cea6ac6cc36fa25cb8eb66be905bf3",
+      "schema": 2,
+      "gems": "legacy",
+      "abi": "2.1.0"
+    },
+    {
+      "series": "2.2",
+      "version": "2.2.10",
+      "image": "docker.io/library/ruby@sha256:fdf76dc91b8edc756bfd025935410bdc08fc1249f6712c812c14ef7b3eb6672b",
+      "schema": 2,
+      "gems": "legacy",
+      "abi": "2.2.0"
+    },
+    {
+      "series": "2.3",
+      "version": "2.3.8",
+      "image": "docker.io/library/ruby@sha256:123e007078c28a391347910eb5971bca27b7ba0ec92dd246ea25bc1f5eba77f2",
+      "schema": 2,
+      "gems": "classic",
+      "abi": "2.3.0"
+    },
+    {
+      "series": "2.4",
+      "version": "2.4.10",
+      "image": "docker.io/library/ruby@sha256:8adfd668bcb30ce65e29a669251a07d40b36e52ccf4b6c264115c18f2d02088a",
+      "schema": 2,
+      "gems": "classic",
+      "abi": "2.4.0"
+    },
+    {
+      "series": "2.5",
+      "version": "2.5.9",
+      "image": "docker.io/library/ruby@sha256:94808dd25d747505dc45cb2e0227159bfeec3c48c2eab45c4306bc82e40d731c",
+      "schema": 2,
+      "gems": "classic",
+      "abi": "2.5.0"
+    },
+    {
+      "series": "2.6",
+      "version": "2.6.10",
+      "image": "docker.io/library/ruby@sha256:4bf1908183ce6f95caaac76ff90d7b0915ae204a58a391da96dd87ccf4465b15",
+      "schema": 2,
+      "gems": "classic",
+      "abi": "2.6.0"
+    },
+    {
+      "series": "2.7",
+      "version": "2.7.8",
+      "image": "docker.io/library/ruby@sha256:6f5edecc661089c5638975ccf2fefd34c68f04ffc804145c8b1d6e577e2aba84",
+      "schema": 2,
+      "gems": "classic",
+      "abi": "2.7.0"
+    },
+    {
+      "series": "3.0",
+      "version": "3.0.7",
+      "image": "docker.io/library/ruby@sha256:8adf52c40a7e8d85d162e198413a520e3ce1f801ee3e16e51df909f56095ffce",
+      "schema": 2,
+      "gems": "classic_webrick",
+      "abi": "3.0.0"
+    },
+    {
+      "series": "3.1",
+      "version": "3.1.7",
+      "image": "docker.io/library/ruby@sha256:3de84de95cdf04926d484c1dcd8d68e411ee6e3e2d542323c802eafe51f80f08",
+      "schema": 2,
+      "gems": "current",
+      "abi": "3.1.0"
+    },
+    {
+      "series": "3.2",
+      "version": "3.2.11",
+      "image": "docker.io/library/ruby@sha256:5854bac8d687d034731d0a4464095c3e61028ee33187a82ab3064d8fbd683787",
+      "schema": 2,
+      "gems": "current",
+      "abi": "3.2.0"
+    },
+    {
+      "series": "3.3",
+      "version": "3.3.12",
+      "image": "docker.io/library/ruby@sha256:53012760b6eee24268541775b379a96578301ba0ade9b8d60d39cb50360a4cf7",
+      "schema": 2,
+      "gems": "current",
+      "abi": "3.3.0"
+    },
+    {
+      "series": "3.4",
+      "version": "3.4.11",
+      "image": "docker.io/library/ruby@sha256:018085be495d8b3b2222e525fe30fe51890312e0a3ec0f68711e4ecb9054ef1f",
+      "schema": 2,
+      "gems": "current",
+      "abi": "3.4.0"
+    },
+    {
+      "series": "4.0",
+      "version": "4.0.7",
+      "image": "docker.io/library/ruby@sha256:a807e3cf7b1a832e7fa3117fb6dd128a6e96bdeeeaa0682c3cf541b7e06a14ea",
+      "schema": 2,
+      "gems": "current",
+      "abi": "4.0.0"
+    }
+  ]
+}

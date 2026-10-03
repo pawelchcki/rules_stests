@@ -1,0 +1,17 @@
+exports_files([
+    "matrix.json",
+    "parity/server.rb",
+    "dependencies.lock.json",
+    "build.rb",
+    "sqlite_compat.c",
+])
+
+filegroup(
+    name = "sources",
+    srcs = glob([
+        "app/**",
+        "bin/**",
+        "test/**",
+    ]),
+    visibility = ["//visibility:public"],
+)
