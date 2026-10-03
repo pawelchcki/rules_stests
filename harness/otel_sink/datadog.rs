@@ -338,7 +338,11 @@ fn valid_span(span: &Value) -> bool {
         })
         && span
             .get("meta_struct")
-            .is_none_or(|v| v.as_object().is_some_and(|m| m.is_empty()))
+            .is_none_or(|v| v.as_object().is_some_and(|m| {
+                m.values().all(|bytes| bytes.as_array().is_some_and(|bytes| {
+                    bytes.iter().all(|byte| byte.as_u64().is_some_and(|n| n <= 255))
+                }))
+            }))
         && span
             .get("span_links")
             .is_none_or(|v| v.as_array().is_some_and(|a| a.is_empty()))

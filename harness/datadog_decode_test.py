@@ -88,6 +88,25 @@ class DecodeTests(unittest.TestCase):
     def test_duplicate_json_metadata_remains_rejected(self):
         self.request("/v0.4/traces", b'[[{"meta":{"x":"one","x":"one"}}]]', "application/json", expected=400)
 
+    def test_security_reports_are_negotiated_and_binary_is_retained(self):
+        self.assertTrue(json.loads(self.request("/info"))["span_meta_structs"])
+        self.request("/reset?protocol=datadog", b"")
+        report = pairs([("vulnerabilities", b"\x90")])
+        span = pairs([("trace_id", b"\x01"), ("span_id", b"\x02"),
+                      ("service", text("security")), ("name", text("request")),
+                      ("resource", text("GET /")), ("start", b"\x01"), ("duration", b"\x01"),
+                      ("meta_struct", pairs([("iast", b"\xc4" + bytes([len(report)]) + report)]))])
+        self.request("/v0.4/traces", b"\x91\x91" + span)
+        capture = json.loads(self.request("/dump?protocol=datadog"))
+        self.assertEqual(capture[0]["payload"]["traces"][0][0]["meta_struct"], {"iast": list(report)})
+        self.assertIn(b"(semantic-valid #t)", self.request("/dump.scm?protocol=datadog"))
+
+    def test_security_binary_is_still_bounded(self):
+        # A declared bin32 value must not allocate or read beyond the decoder's
+        # shared budget, even when the network request itself is tiny.
+        span = pairs([("meta_struct", pairs([("iast", b"\xc6\xff\xff\xff\xff")]))])
+        self.request("/v0.4/traces", b"\x91\x91" + span, expected=400)
+
 
 if __name__ == "__main__":
     unittest.main(argv=[sys.argv[0]])
