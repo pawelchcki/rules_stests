@@ -169,7 +169,7 @@ fn handle_connection(
     let output = if is_dd { dd_output.as_c_str() } else { output };
     request.path = path.to_string();
     if request.method == "GET" && path == "/info" {
-        respond(connection, 200, "application/json", b"{\"endpoints\":[\"/v0.4/traces\",\"/v0.5/traces\"],\"client_drop_p0s\":false,\"span_events\":false}\n");
+        respond(connection, 200, "application/json", b"{\"endpoints\":[\"/v0.4/traces\",\"/v0.5/traces\"],\"client_drop_p0s\":false,\"span_events\":false,\"span_meta_structs\":true}\n");
         return;
     }
     if request.method == "GET" && request.path == "/healthz" {
