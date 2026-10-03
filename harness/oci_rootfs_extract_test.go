@@ -192,6 +192,36 @@ func TestPreserveEmptyDirectoriesRetainsNestedLeavesAndModes(t *testing.T) {
 	}
 }
 
+func TestPreserveEmptyDirectoryWithoutSearchPermission(t *testing.T) {
+	root := t.TempDir()
+	leaf := filepath.Join(root, "empty")
+	if err := os.Mkdir(leaf, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(leaf, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(leaf, 0o700)
+	// This mode was accepted by extraction's existing directory/link walk.
+	if err := removeDanglingSymlinks(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := preserveEmptyDirectories(root); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(leaf)
+	if err != nil || info.Mode().Perm() != 0o400 {
+		t.Fatalf("directory mode: %v, %v; want 400", info, err)
+	}
+	if err := os.Chmod(leaf, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	marker, err := os.Stat(filepath.Join(leaf, treeArtifactDirectoryMarker))
+	if err != nil || marker.Size() != 0 || marker.Mode().Perm() != 0o444 {
+		t.Fatalf("leaf marker: %v, %v", marker, err)
+	}
+}
+
 func TestExtractOCIPreservesOnlyEmptyDirectoriesRemainingAfterWhiteouts(t *testing.T) {
 	layout := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(layout, "blobs", "sha256"), 0o755); err != nil {

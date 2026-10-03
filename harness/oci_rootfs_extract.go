@@ -136,8 +136,8 @@ func preserveEmptyDirectories(root string) error {
 
 func preserveEmptyDirectory(path string, target os.FileInfo) (result error) {
 	mode := target.Mode().Perm()
-	if mode&0o200 == 0 {
-		if err := os.Chmod(path, mode|0o200); err != nil {
+	if mode&0o700 != 0o700 {
+		if err := os.Chmod(path, mode|0o700); err != nil {
 			return fmt.Errorf("make empty OCI directory writable %s: %w", path, err)
 		}
 		defer func() {
