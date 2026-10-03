@@ -153,6 +153,143 @@ func TestRemoveDanglingSymlinksPreservesReadOnlyEmptyTarget(t *testing.T) {
 	}
 }
 
+func TestPreserveEmptyDirectoriesRetainsNestedLeavesAndModes(t *testing.T) {
+	root := t.TempDir()
+	for _, mode := range []os.FileMode{0o555, 0o755, 0o700} {
+		leaf := filepath.Join(root, fmt.Sprintf("mode-%o", mode), "tmp", "pids")
+		if err := os.MkdirAll(leaf, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(leaf, mode); err != nil {
+			t.Fatal(err)
+		}
+		defer os.Chmod(leaf, 0o755)
+	}
+	if err := os.WriteFile(filepath.Join(root, "Gemfile"), []byte("source"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := preserveEmptyDirectories(root); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, mode := range []os.FileMode{0o555, 0o755, 0o700} {
+		leaf := filepath.Join(root, fmt.Sprintf("mode-%o", mode), "tmp", "pids")
+		marker, err := os.Stat(filepath.Join(leaf, treeArtifactDirectoryMarker))
+		if err != nil || marker.Size() != 0 || marker.Mode().Perm() != 0o444 {
+			t.Fatalf("leaf marker: %v, %v", marker, err)
+		}
+		info, err := os.Stat(leaf)
+		if err != nil || info.Mode().Perm() != mode {
+			t.Fatalf("leaf mode: %v, %v; want %o", info, err, mode)
+		}
+		if _, err := os.Stat(filepath.Join(filepath.Dir(leaf), treeArtifactDirectoryMarker)); !os.IsNotExist(err) {
+			t.Fatalf("nonempty ancestor received a marker: %v", err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, treeArtifactDirectoryMarker)); !os.IsNotExist(err) {
+		t.Fatalf("nonempty root received a marker: %v", err)
+	}
+}
+
+func TestPreserveEmptyDirectoryWithoutSearchPermission(t *testing.T) {
+	root := t.TempDir()
+	leaf := filepath.Join(root, "empty")
+	if err := os.Mkdir(leaf, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(leaf, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(leaf, 0o700)
+	// This mode was accepted by extraction's existing directory/link walk.
+	if err := removeDanglingSymlinks(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := preserveEmptyDirectories(root); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(leaf)
+	if err != nil || info.Mode().Perm() != 0o400 {
+		t.Fatalf("directory mode: %v, %v; want 400", info, err)
+	}
+	if err := os.Chmod(leaf, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	marker, err := os.Stat(filepath.Join(leaf, treeArtifactDirectoryMarker))
+	if err != nil || marker.Size() != 0 || marker.Mode().Perm() != 0o444 {
+		t.Fatalf("leaf marker: %v, %v", marker, err)
+	}
+}
+
+func TestExtractOCIPreservesOnlyEmptyDirectoriesRemainingAfterWhiteouts(t *testing.T) {
+	layout := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(layout, "blobs", "sha256"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeBlob := func(contents []byte, mediaType string) descriptor {
+		digest := fmt.Sprintf("sha256:%x", sha256.Sum256(contents))
+		path, err := blobPath(layout, digest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, contents, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return descriptor{Digest: digest, MediaType: mediaType, Size: int64(len(contents))}
+	}
+	var layers []descriptor
+	for _, headers := range [][]tar.Header{
+		{
+			{Name: "kept/cache", Typeflag: tar.TypeDir, Mode: 0o755},
+			{Name: "removed/pids", Typeflag: tar.TypeDir, Mode: 0o755},
+			{Name: "after-cleanup/gone", Typeflag: tar.TypeSymlink, Linkname: "../removed/pids"},
+		},
+		{
+			{Name: "kept/.wh..wh..opq", Mode: 0o644},
+			{Name: ".wh.removed", Mode: 0o644},
+		},
+	} {
+		var layer bytes.Buffer
+		writer := tar.NewWriter(&layer)
+		for _, header := range headers {
+			if err := writer.WriteHeader(&header); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		layers = append(layers, writeBlob(layer.Bytes(), "application/vnd.oci.image.layer.v1.tar"))
+	}
+	manifestJSON, err := json.Marshal(manifest{Layers: layers})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestDescriptor := writeBlob(manifestJSON, "application/vnd.oci.image.manifest.v1+json")
+	indexJSON, err := json.Marshal(index{Manifests: []descriptor{manifestDescriptor}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(layout, "index.json"), indexJSON, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "rootfs")
+	if err := extractOCI(layout, root, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"kept", "after-cleanup"} {
+		if _, err := os.Stat(filepath.Join(root, path, treeArtifactDirectoryMarker)); err != nil {
+			t.Fatalf("empty directory %s lost its marker: %v", path, err)
+		}
+	}
+	for _, path := range []string{"kept/cache", "removed", "after-cleanup/gone"} {
+		if _, err := os.Lstat(filepath.Join(root, path)); !os.IsNotExist(err) {
+			t.Fatalf("removed entry %s was retained: %v", path, err)
+		}
+	}
+}
+
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil

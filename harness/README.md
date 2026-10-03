@@ -34,7 +34,7 @@ otherwise an entry script relative to the application source (for example
 `bin/server`). `native` takes a rootfs-relative executable path.
 The optional `injection` accepts the existing `otel_injection`,
 `python_auto_injection`, and `ruby_auto_injection` configurations, plus neutral
-`instrumentation_injection` and `datadog_python_injection`. The macro
+`instrumentation_injection`. Datadog presets are supplied by `rules_datadog_stests`. The macro
 declares app/agent runfiles and forwards service environment, dependencies,
 health checks and lifecycle settings to `rules_itest`. Fixtures and examples
 call `corpus_service` explicitly for each service, including instrumentation

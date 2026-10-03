@@ -1,42 +1,16 @@
 # Plug-in agent example
 
-This module consumes `rules_stests` through the public API. It exercises a
-generic Python injection, a consumer-defined contract-mode profile using the
-Python preset, a consumer-defined Datadog profile, and an explicit Gin rootfs
-for compile-time instrumentation.
-Every service has its own `corpus_service` declaration; `realworld_service_tests`
-separately attaches checks to its label.
+This module consumes the public `rules_stests` API. It exercises a generic
+Python injection, a consumer-defined OpenTelemetry profile, and an explicit
+Gin rootfs for compile-time instrumentation. Each service declares its own
+`corpus_service`; `realworld_service_tests` attaches checks to its label.
 
-Run `bazel test --build_tests_only //...` to analyze and build every suite, or
-run one sharded suite such as `bazel test //:aiohttp_otel_hurl_test`.
+Run `bazel test --build_tests_only //...`, or one sharded suite such as
+`bazel test //:aiohttp_otel_hurl_test`. Build `//:otel_report_manifest` to check
+consumer-owned profile compilation across repository boundaries.
 
-An Orchestrion, LoongSuite, or other compile-time Go integration uses the same
-Gin declaration: build the vendored `fixtures/apps/go/realworld-gin` app with
-the tool into a `FROM scratch` image, then substitute only `rootfs`,
-`command`, and the test suite's `profile`.
+The local override is for repository CI. Published consumers should choose
+an immutable `rules_stests` revision. When assembling reports, set
+`REPORT_RULESET_SOURCE_ROOT` to that revision's GitHub source URL.
 
-The local override is for this repository's CI. Published consumers should
-remove it and select a released `rules_stests` version.
-
-When assembling a report, set `REPORT_RULESET_SOURCE_ROOT` to
-`https://github.com/pawelchcki/rules_stests/blob/<rules_stests-commit>` using the
-immutable commit that supplies the selected module version.
-
-Build `//:telemetry_api_check` to compile consumer-owned OTel and Datadog
-manifests and check the shared `TelemetryProfileInfo` provider, protocol
-identity, and default injection/sink labels across repository boundaries.
-Run `//:example_datadog_hurl_test` and `//:example_django_datadog_hurl_test`
-to exercise both applications against the published 4.14.0 reference profiles.
-Run `//:datadog_consumer_identity_test` for the controlled native emitter: its
-declared `consumer-tracer/1.0` identity is accepted and 4.14.0 output is rejected
-against that declaration.
-The consumer profiles own their candidate declarations and tracer identity, but
-inherit the complete reviewed scenario, proof, application, wire, and exact-shape
-contract. Their receipts and candidates remain separate from the OTel report.
-
-Datadog's aiohttp server integration needs `datadog_python_injection(aiohttp =
-True)`: the launcher calls the package's `trace_app` hook before the server
-starts. The same option enables Datadog’s SQLAlchemy integration for the
-aiohttp fixture’s asynchronous SQLite engine, preserving request parentage
-before database work enters aiosqlite’s worker thread. Django uses the default
-injection without this aiohttp option.
+Datadog consumer profiles and their API checks belong to `rules_datadog_stests`.

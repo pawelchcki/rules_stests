@@ -67,6 +67,9 @@ func extractOCI(layoutArg, root string, singlePayload bool, zstdTool ...string) 
 	if err := removeDanglingSymlinks(root); err != nil {
 		return err
 	}
+	if err := preserveEmptyDirectories(root); err != nil {
+		return err
+	}
 	marker := filepath.Join(root, ".rules-stests-manifest")
 	if err := os.WriteFile(marker, []byte(manifestDigest+"\n"), 0o444); err != nil {
 		return fmt.Errorf("write extraction marker: %w", err)
@@ -97,28 +100,55 @@ func removeDanglingSymlinks(root string) error {
 				return fmt.Errorf("inspect OCI symlink directory %s: %w", path, err)
 			}
 			if len(children) == 0 {
-				return preserveEmptySymlinkTarget(path, target)
+				return preserveEmptyDirectory(path, target)
 			}
 		}
 		return nil
 	})
 }
 
-func preserveEmptySymlinkTarget(path string, target os.FileInfo) (result error) {
+// Bazel's cached tree artifacts retain files and symlinks, but omit empty
+// directories. A marker in every empty leaf also retains its ancestors, so
+// applications can use image-provided directories without modifying the
+// immutable rootfs after a cache hit. Run after all layers and link cleanup.
+func preserveEmptyDirectories(root string) error {
+	return filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() {
+			return nil
+		}
+		children, err := os.ReadDir(path)
+		if err != nil {
+			return fmt.Errorf("inspect OCI directory %s: %w", path, err)
+		}
+		if len(children) != 0 {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		return preserveEmptyDirectory(path, info)
+	})
+}
+
+func preserveEmptyDirectory(path string, target os.FileInfo) (result error) {
 	mode := target.Mode().Perm()
-	if mode&0o200 == 0 {
-		if err := os.Chmod(path, mode|0o200); err != nil {
-			return fmt.Errorf("make empty OCI symlink target writable %s: %w", path, err)
+	if mode&0o700 != 0o700 {
+		if err := os.Chmod(path, mode|0o700); err != nil {
+			return fmt.Errorf("make empty OCI directory writable %s: %w", path, err)
 		}
 		defer func() {
 			if err := os.Chmod(path, mode); err != nil && result == nil {
-				result = fmt.Errorf("restore empty OCI symlink target mode %s: %w", path, err)
+				result = fmt.Errorf("restore empty OCI directory mode %s: %w", path, err)
 			}
 		}()
 	}
 	marker := filepath.Join(path, treeArtifactDirectoryMarker)
 	if err := os.WriteFile(marker, nil, 0o444); err != nil {
-		return fmt.Errorf("preserve empty OCI symlink target %s: %w", path, err)
+		return fmt.Errorf("preserve empty OCI directory %s: %w", path, err)
 	}
 	return nil
 }

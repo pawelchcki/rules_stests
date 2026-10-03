@@ -5,7 +5,6 @@ load("@rules_rs//rs:rust_binary.bzl", "rust_binary")
 load("//rules:oci_rootfs.bzl", "oci_rootfs")
 load("//rules:corpus_service.bzl", "corpus_service")
 load("//bazel:oci_images.lock.bzl", "OTEL_RUBY_PUBLISHED", "RUBY_IMAGES_PUBLISHED")
-load("//corpus:registry.bzl", "DATADOG_CAPTURE_LIBRARIES", "datadog_library_args", "datadog_library_labels")
 load("//corpus:registry.bzl", "OTEL_CORE_LIBRARIES")
 load("//harness:scheme_bytecode.bzl", "scheme_bytecode_bundles")
 
@@ -148,7 +147,6 @@ go_library(
         "bundle_paths.go",
     ],
     importpath = "github.com/pawelchcki/rules_stests/harness/app_launcher",
-    visibility = ["//visibility:private"],
 )
 
 go_binary(
@@ -270,79 +268,14 @@ oci_rootfs(
     tags = [] if OTEL_RUBY_PUBLISHED else ["manual"],
 )
 
-oci_rootfs(
-    name = "datadog_python_rootfs",
-    image = "@datadog_python_linux_amd64",
-)
-
-go_binary(
-    name = "datadog_sink_probe",
-    srcs = ["datadog_sink_probe.go"],
-    deps = [":schemebytecode"],
-)
-
-# The probe's fixed validation programs, compiled at build time.
-_SINK_PROBE_BYTECODE = scheme_bytecode_bundles(
-    name = "datadog_sink_probe_bytecode",
-    libraries = datadog_library_labels(DATADOG_CAPTURE_LIBRARIES),
-    probe = ":datadog_sink_probe",
-    shards = 2,
-)
-
-service_test(
-    name = "datadog_sink_test",
-    timeout = "long",
-    args = [
-        "--service-suffix=//harness:telemetry_sink_service",
-        "--compiler=$(rootpath :telemetry_sink)",
-    ] + _SINK_PROBE_BYTECODE.args + datadog_library_args(DATADOG_CAPTURE_LIBRARIES),
-    data = [":telemetry_sink"] + _SINK_PROBE_BYTECODE.data + datadog_library_labels(DATADOG_CAPTURE_LIBRARIES),
-    services = [":telemetry_sink_service"],
-    test = ":datadog_sink_probe",
-)
-
 go_binary(
     name = "compile_validators",
     embed = [":hurl_test_driver_lib"],
 )
 
 oci_rootfs(
-    name = "datadog_ruby_rootfs",
-    image = "@datadog_ruby_linux_amd64",
-    single_payload = True,
-    tags = ["manual"],
-)
-
-corpus_service(
-    name = "datadog_stress_sink_service",
-    args = ["--port", "$${PORT}", "--output", "$${TMPDIR}/datadog-stress.json", "--stress-capture"],
-    autoassign_port = True,
-    exe = ":telemetry_sink",
-    http_health_check_address = "http://127.0.0.1:$${PORT}/healthz",
-    so_reuseport_aware = True,
-    shutdown_timeout = "2s",
-    tags = ["manual"],
-)
-
-oci_rootfs(
     name = "falcon_rootfs",
     image = "@falcon_realworld_linux_amd64",
     single_payload = True,
-    tags = ["manual"],
-)
-
-oci_rootfs(
-    name = "gin_datadog_rootfs",
-    image = "@gin_datadog_realworld_linux_amd64",
-    single_payload = True,
-    tags = ["manual"],
-)
-
-go_test(
-    name = "datadog_ruby_bootstrap_test",
-    srcs = ["ruby_bootstrap_test.go"],
-    embed = [":app_launcher_lib"],
-    data = [":rails_rootfs", ":datadog_ruby_rootfs"],
-    env = {"RAILS_ROOTFS": "$(rlocationpath :rails_rootfs)", "DATADOG_RUBY_ROOTFS": "$(rlocationpath :datadog_ruby_rootfs)"},
     tags = ["manual"],
 )

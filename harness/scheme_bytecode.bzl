@@ -1,5 +1,7 @@
 """Cached, parallel compilation of a probe's Scheme validation programs."""
 
+_COMPILER = Label("//harness:telemetry_sink")
+
 def scheme_bytecode_bundles(name, probe, libraries, shards = 8):
     """Compiles a probe's programs into bytecode bundles at build time.
 
@@ -30,9 +32,9 @@ def scheme_bytecode_bundles(name, probe, libraries, shards = 8):
                 "$(execpath {})".format(probe),
                 "--compile-to=$@",
                 "--compile-shard={}/{}".format(shard, shards),
-                "--compiler=$(execpath //harness:telemetry_sink)",
+                "--compiler=$(execpath {})".format(_COMPILER),
             ] + ["$(execpath {})".format(library) for library in libraries]),
-            tools = [probe, "//harness:telemetry_sink"],
+            tools = [probe, _COMPILER],
         )
         outputs.append(":" + output)
     native.filegroup(name = name, srcs = outputs)
