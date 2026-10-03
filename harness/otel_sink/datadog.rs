@@ -1,7 +1,7 @@
 //! Native Datadog intake. The v0.5 dictionary layout follows dd-apm-test-agent's
 //! https://github.com/DataDog/dd-apm-test-agent/blob/master/ddapm_test_agent/trace.py;
 //! IDs never pass through floating point.
-use crate::data::{Payload, Record};
+use crate::data::{DatadogPayload, DatadogWire, Payload, Record};
 use alloc::{
     collections::BTreeMap,
     format,
@@ -15,11 +15,86 @@ const MAX_NODES: usize = 65536;
 const MAX_DEPTH: usize = 32;
 const MAX_BYTES: usize = 1024 * 1024;
 
+// Keep only positional context and a borrowed immediate field name. Cloning
+// ancestor paths would amplify attacker-controlled map keys at every nesting.
+#[derive(Clone, Copy)]
+enum Context<'a> {
+    Root,
+    Trace(usize),
+    Span(usize, usize),
+    MetaStruct(usize, usize),
+    MetaStructEntry(usize, usize, &'a str),
+    WithinSpan(usize, usize),
+    Other,
+}
+impl Context<'_> {
+    fn array_child(self, index: usize) -> Self {
+        match self {
+            Self::Root => Self::Trace(index),
+            Self::Trace(chunk) => Self::Span(chunk, index),
+            Self::Span(chunk, span)
+            | Self::MetaStruct(chunk, span)
+            | Self::MetaStructEntry(chunk, span, _)
+            | Self::WithinSpan(chunk, span) => Self::WithinSpan(chunk, span),
+            Self::Other => Self::Other,
+        }
+    }
+    fn map_child<'a>(self, key: &'a str) -> Context<'a> {
+        match self {
+            Self::Span(chunk, span) if key == "meta_struct" => Context::MetaStruct(chunk, span),
+            Self::MetaStruct(chunk, span) => Context::MetaStructEntry(chunk, span, key),
+            Self::Span(chunk, span)
+            | Self::MetaStructEntry(chunk, span, _)
+            | Self::WithinSpan(chunk, span) => Context::WithinSpan(chunk, span),
+            _ => Context::Other,
+        }
+    }
+}
+
+fn charge_allocation(
+    remaining: &mut usize,
+    retained: &mut usize,
+    bytes: usize,
+) -> Result<(), String> {
+    *remaining = remaining
+        .checked_sub(bytes)
+        .ok_or("MessagePack binary allocation exceeds budget")?;
+    *retained = retained
+        .checked_add(bytes)
+        .ok_or("MessagePack binary allocation exceeds budget")?;
+    Ok(())
+}
+
+fn reserve_proof<T>(
+    values: &mut Vec<T>,
+    remaining: &mut usize,
+    retained: &mut usize,
+) -> Result<(), String> {
+    if values.len() == values.capacity() {
+        let capacity = values
+            .capacity()
+            .checked_mul(2)
+            .unwrap_or(usize::MAX)
+            .max(1);
+        let bytes = capacity
+            .checked_mul(core::mem::size_of::<T>())
+            .ok_or("MessagePack binary provenance exceeds budget")?;
+        // Charge every backing allocation, including previous capacities. This
+        // bounds growth before allocation and conservatively covers reallocation.
+        charge_allocation(remaining, retained, bytes)?;
+        values.reserve_exact(capacity - values.len());
+    }
+    Ok(())
+}
+
 struct Decoder<'a> {
     bytes: &'a [u8],
     pos: usize,
     remaining: usize,
     indexed_maps: bool,
+    binary_remaining: usize,
+    allocation_remaining: usize,
+    wire: DatadogWire,
 }
 impl<'a> Decoder<'a> {
     fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
@@ -47,23 +122,29 @@ impl<'a> Decoder<'a> {
                 .into(),
         ))
     }
-    fn array(&mut self, n: usize, depth: usize) -> Result<Value, String> {
+    fn array(&mut self, n: usize, depth: usize, context: Context<'_>) -> Result<Value, String> {
         if n > self.remaining || n > self.bytes.len().saturating_sub(self.pos) {
             return Err("MessagePack array exceeds budget".into());
         }
         let mut values = Vec::with_capacity(n);
-        for _ in 0..n {
-            values.push(self.value(depth + 1, false)?);
+        for index in 0..n {
+            values.push(self.value(depth + 1, false, context.array_child(index))?);
         }
         Ok(Value::Array(values))
     }
-    fn map(&mut self, n: usize, depth: usize, repeated_metadata: bool) -> Result<Value, String> {
+    fn map(
+        &mut self,
+        n: usize,
+        depth: usize,
+        repeated_metadata: bool,
+        context: Context<'_>,
+    ) -> Result<Value, String> {
         if n > self.remaining / 2 || n > self.bytes.len().saturating_sub(self.pos) / 2 {
             return Err("MessagePack map exceeds budget".into());
         }
         let mut values = Map::new();
         for _ in 0..n {
-            let key = match self.value(depth + 1, false)? {
+            let key = match self.value(depth + 1, false, Context::Other)? {
                 Value::String(s) if !self.indexed_maps => s,
                 Value::Number(n) if self.indexed_maps && n.as_u64().is_some() => {
                     format!("\u{0001}index:{n}")
@@ -71,7 +152,7 @@ impl<'a> Decoder<'a> {
                 _ => return Err("unsupported MessagePack map key".into()),
             };
             let metadata = !self.indexed_maps && depth == 2 && key == "meta";
-            let value = self.value(depth + 1, metadata)?;
+            let value = self.value(depth + 1, metadata, context.map_child(&key))?;
             if let Some(previous) = values.get(&key) {
                 // dd-trace-py v0.4 writes propagated metadata again when it
                 // adds chunk-root fields. Coalesce only identical string tags
@@ -85,7 +166,12 @@ impl<'a> Decoder<'a> {
         }
         Ok(Value::Object(values))
     }
-    fn value(&mut self, depth: usize, repeated_metadata: bool) -> Result<Value, String> {
+    fn value(
+        &mut self,
+        depth: usize,
+        repeated_metadata: bool,
+        context: Context<'_>,
+    ) -> Result<Value, String> {
         if depth > MAX_DEPTH || self.remaining == 0 {
             return Err("MessagePack nesting/node budget exceeded".into());
         }
@@ -120,23 +206,60 @@ impl<'a> Decoder<'a> {
                 let n = self.uint(1usize << (tag - 0xd9))? as usize;
                 self.text(n)?
             }
-            0x90..=0x9f => self.array((tag & 15) as usize, depth)?,
+            0x90..=0x9f => self.array((tag & 15) as usize, depth, context)?,
             0xdc | 0xdd => {
                 let n = self.uint(if tag == 0xdc { 2 } else { 4 })? as usize;
-                self.array(n, depth)?
+                self.array(n, depth, context)?
             }
-            0x80..=0x8f => self.map((tag & 15) as usize, depth, repeated_metadata)?,
+            0x80..=0x8f => self.map((tag & 15) as usize, depth, repeated_metadata, context)?,
             0xde | 0xdf => {
                 let n = self.uint(if tag == 0xde { 2 } else { 4 })? as usize;
-                self.map(n, depth, repeated_metadata)?
+                self.map(n, depth, repeated_metadata, context)?
             }
             0xc4..=0xc6 => {
                 let n = self.uint(1usize << (tag - 0xc4))? as usize;
-                if n > self.remaining {
-                    return Err("MessagePack binary exceeds budget".into());
+                self.binary_remaining = self
+                    .binary_remaining
+                    .checked_sub(n)
+                    .ok_or("MessagePack binary exceeds byte budget")?;
+                let bytes = self.take(n)?;
+                let allocation = n
+                    .checked_mul(core::mem::size_of::<Value>())
+                    .ok_or("MessagePack binary allocation exceeds budget")?;
+                charge_allocation(
+                    &mut self.allocation_remaining,
+                    &mut self.wire.allocation_bytes,
+                    allocation,
+                )?;
+                match context {
+                    Context::MetaStructEntry(chunk, span, key) => {
+                        reserve_proof(
+                            &mut self.wire.binary_fields,
+                            &mut self.allocation_remaining,
+                            &mut self.wire.allocation_bytes,
+                        )?;
+                        charge_allocation(
+                            &mut self.allocation_remaining,
+                            &mut self.wire.allocation_bytes,
+                            key.len(),
+                        )?;
+                        self.wire.binary_fields.push((chunk, span, key.to_string()));
+                    }
+                    Context::Span(chunk, span)
+                    | Context::MetaStruct(chunk, span)
+                    | Context::WithinSpan(chunk, span) => {
+                        reserve_proof(
+                            &mut self.wire.invalid_binary_spans,
+                            &mut self.allocation_remaining,
+                            &mut self.wire.allocation_bytes,
+                        )?;
+                        self.wire.invalid_binary_spans.push((chunk, span));
+                    }
+                    _ => self.wire.invalid_binary_container = true,
                 }
-                self.remaining -= n;
-                Value::Array(self.take(n)?.iter().map(|b| Value::from(*b)).collect())
+                let mut values = Vec::with_capacity(n);
+                values.extend(bytes.iter().map(|byte| Value::from(*byte)));
+                Value::Array(values)
             }
             _ => return Err(format!("unsupported MessagePack tag {tag:#x}")),
         })
@@ -148,10 +271,12 @@ pub(crate) fn decode(
     content_type: &str,
     bytes: &[u8],
     max_bytes: usize,
+    allocation_budget: usize,
 ) -> Result<Payload, String> {
     if bytes.len() > max_bytes {
         return Err("Datadog payload exceeds limit".into());
     }
+    let mut wire = DatadogWire::default();
     let value = if content_type == "application/json" {
         if path != "/v0.4/traces" {
             return Err("v0.5 requires MessagePack".into());
@@ -175,11 +300,25 @@ pub(crate) fn decode(
             pos: 0,
             remaining: MAX_NODES * (max_bytes / MAX_BYTES),
             indexed_maps: path == "/v0.5/traces",
+            binary_remaining: max_bytes,
+            allocation_remaining: allocation_budget,
+            wire: DatadogWire::default(),
         };
-        let value = decoder.value(0, false)?;
+        // The supported v0.5 layout has no binary fields. Do not allow a bin
+        // lowered to a JSON array to masquerade as any v0.5 array container.
+        let context = if decoder.indexed_maps {
+            Context::Other
+        } else {
+            Context::Root
+        };
+        let value = decoder.value(0, false, context)?;
         if decoder.pos != bytes.len() {
             return Err("trailing MessagePack bytes".into());
         }
+        wire = decoder.wire;
+        wire.binary_fields.sort_unstable();
+        wire.invalid_binary_spans.sort_unstable();
+        wire.invalid_binary_spans.dedup();
         value
     };
     let traces = if path == "/v0.5/traces" {
@@ -188,9 +327,23 @@ pub(crate) fn decode(
         value
     };
     // Structural violations with a decodable native representation are retained.
-    Ok(Payload::Json(
-        serde_json::json!({"wire_version": if path == "/v0.5/traces" {"v0.5"} else {"v0.4"}, "traces": traces}),
-    ))
+    let mut payload = Map::new();
+    payload.insert(
+        "wire_version".into(),
+        Value::String(
+            if path == "/v0.5/traces" {
+                "v0.5"
+            } else {
+                "v0.4"
+            }
+            .into(),
+        ),
+    );
+    payload.insert("traces".into(), traces);
+    Ok(Payload::Datadog(DatadogPayload {
+        value: Value::Object(payload),
+        wire,
+    }))
 }
 fn lookup(dictionary: &[Value], value: &Value, remaining: &mut usize) -> Result<Value, String> {
     let index = value
@@ -207,27 +360,33 @@ fn lookup(dictionary: &[Value], value: &Value, remaining: &mut usize) -> Result<
     Ok(value.clone())
 }
 
+fn into_array(value: Value, error: &str) -> Result<Vec<Value>, String> {
+    match value {
+        Value::Array(values) => Ok(values),
+        _ => Err(error.into()),
+    }
+}
+
 fn decode_v05(value: Value, max_bytes: usize) -> Result<Value, String> {
     let mut remaining = max_bytes;
-    let pair = value
-        .as_array()
-        .filter(|a| a.len() == 2)
-        .ok_or("v0.5 expected [dictionary,traces]")?;
-    let dictionary = pair[0]
-        .as_array()
-        .ok_or("v0.5 dictionary is not an array")?;
+    let pair = into_array(value, "v0.5 expected [dictionary,traces]")?;
+    if pair.len() != 2 {
+        return Err("v0.5 expected [dictionary,traces]".into());
+    }
+    let mut pair = pair.into_iter();
+    let dictionary = into_array(pair.next().unwrap(), "v0.5 dictionary is not an array")?;
     if dictionary.iter().any(|v| !v.is_string()) {
         return Err("v0.5 dictionary entries must be strings".into());
     }
-    let traces = pair[1].as_array().ok_or("v0.5 traces is not an array")?;
+    let traces = into_array(pair.next().unwrap(), "v0.5 traces is not an array")?;
     let mut decoded = Vec::new();
     for trace in traces {
         let mut spans = Vec::new();
-        for span in trace.as_array().ok_or("v0.5 chunk is not an array")? {
-            let fields = span
-                .as_array()
-                .filter(|s| s.len() == 12)
-                .ok_or("v0.5 span requires twelve fields")?;
+        for span in into_array(trace, "v0.5 chunk is not an array")? {
+            let fields = into_array(span, "v0.5 span requires twelve fields")?;
+            if fields.len() != 12 {
+                return Err("v0.5 span requires twelve fields".into());
+            }
             let names = [
                 "service",
                 "name",
@@ -243,28 +402,31 @@ fn decode_v05(value: Value, max_bytes: usize) -> Result<Value, String> {
                 "type",
             ];
             let mut native = Map::new();
-            for (index, name) in names.iter().enumerate() {
-                let field = &fields[index];
+            // Move non-dictionary values, including invalid native binaries,
+            // so normalization cannot clone their budgeted byte-array backing.
+            for (index, (name, field)) in names.iter().zip(fields).enumerate() {
                 let value = match index {
-                    0..=2 | 11 => lookup(dictionary, field, &mut remaining)?,
+                    0..=2 | 11 => lookup(&dictionary, &field, &mut remaining)?,
                     9 | 10 => {
+                        let Value::Object(fields) = field else {
+                            return Err("v0.5 meta/metrics must be maps".into());
+                        };
                         let mut entries = Map::new();
-                        for (key, value) in
-                            field.as_object().ok_or("v0.5 meta/metrics must be maps")?
-                        {
+                        for (key, value) in fields {
                             let index = key
                                 .strip_prefix('\u{0001}')
                                 .and_then(|s| s.strip_prefix("index:"))
                                 .and_then(|s| s.parse::<u64>().ok())
                                 .ok_or("v0.5 map keys must be dictionary indexes")?;
-                            let key = lookup(dictionary, &Value::from(index), &mut remaining)?
-                                .as_str()
-                                .unwrap()
-                                .to_string();
+                            let Value::String(key) =
+                                lookup(&dictionary, &Value::from(index), &mut remaining)?
+                            else {
+                                unreachable!();
+                            };
                             let value = if *name == "meta" {
-                                lookup(dictionary, value, &mut remaining)?
+                                lookup(&dictionary, &value, &mut remaining)?
                             } else {
-                                value.clone()
+                                value
                             };
                             if entries.insert(key, value).is_some() {
                                 return Err("duplicate decoded v0.5 dictionary key".into());
@@ -272,7 +434,7 @@ fn decode_v05(value: Value, max_bytes: usize) -> Result<Value, String> {
                         }
                         Value::Object(entries)
                     }
-                    _ => field.clone(),
+                    _ => field,
                 };
                 native.insert((*name).into(), value);
             }
@@ -285,7 +447,7 @@ fn decode_v05(value: Value, max_bytes: usize) -> Result<Value, String> {
 
 pub(crate) fn payload(record: &Record) -> &Value {
     match &record.payload {
-        Payload::Json(v) => v,
+        Payload::Datadog(payload) => &payload.value,
         _ => unreachable!(),
     }
 }
@@ -313,8 +475,19 @@ fn integer(v: Option<&Value>) -> String {
         .map(ToString::to_string)
         .unwrap_or_default()
 }
-fn valid_span(span: &Value) -> bool {
-    span.is_object()
+fn wire(record: &Record) -> &DatadogWire {
+    match &record.payload {
+        Payload::Datadog(payload) => &payload.wire,
+        _ => unreachable!(),
+    }
+}
+fn valid_span(span: &Value, wire: &DatadogWire, chunk: usize, span_index: usize) -> bool {
+    !wire.invalid_binary_container
+        && wire
+            .invalid_binary_spans
+            .binary_search(&(chunk, span_index))
+            .is_err()
+        && span.is_object()
         && span.as_object().is_some_and(|object| {
             object.keys().all(|key| {
                 matches!(
@@ -336,13 +509,22 @@ fn valid_span(span: &Value) -> bool {
                 )
             })
         })
-        && span
-            .get("meta_struct")
-            .is_none_or(|v| v.as_object().is_some_and(|m| {
-                m.values().all(|bytes| bytes.as_array().is_some_and(|bytes| {
-                    bytes.iter().all(|byte| byte.as_u64().is_some_and(|n| n <= 255))
-                }))
-            }))
+        && span.get("meta_struct").is_none_or(|v| {
+            v.as_object().is_some_and(|m| {
+                m.iter().all(|(key, bytes)| {
+                    wire.binary_fields
+                        .binary_search_by(|(i, j, field)| {
+                            (*i, *j, field.as_str()).cmp(&(chunk, span_index, key.as_str()))
+                        })
+                        .is_ok()
+                        && bytes.as_array().is_some_and(|bytes| {
+                            bytes
+                                .iter()
+                                .all(|byte| byte.as_u64().is_some_and(|n| n <= 255))
+                        })
+                })
+            })
+        })
         && span
             .get("span_links")
             .is_none_or(|v| v.as_array().is_some_and(|a| a.is_empty()))
@@ -377,11 +559,15 @@ fn valid_span(span: &Value) -> bool {
 }
 fn valid_record(record: &Record) -> bool {
     let traces = payload(record).get("traces");
-    traces.is_some_and(Value::is_array)
-        && array(traces).iter().all(|trace| {
+    !wire(record).invalid_binary_container
+        && traces.is_some_and(Value::is_array)
+        && array(traces).iter().enumerate().all(|(chunk, trace)| {
             trace.as_array().is_some_and(|spans| {
                 !spans.is_empty()
-                    && spans.iter().all(valid_span)
+                    && spans
+                        .iter()
+                        .enumerate()
+                        .all(|(span_index, span)| valid_span(span, wire(record), chunk, span_index))
                     && spans
                         .iter()
                         .all(|span| span.get("trace_id") == spans[0].get("trace_id"))
@@ -633,9 +819,15 @@ pub(crate) fn capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
     capture_to_scheme_for_scenario(records, false)
 }
 
-fn capture_to_scheme_for_scenario(records: &[Record], native_ruby_client: bool) -> Result<Vec<u8>, String> {
+fn capture_to_scheme_for_scenario(
+    records: &[Record],
+    native_ruby_client: bool,
+) -> Result<Vec<u8>, String> {
     let index = NativeIndex::new(records);
-    let trace_shapes = index.as_ref().map_err(|e| e.clone()).and_then(|index| shapes(index, native_ruby_client));
+    let trace_shapes = index
+        .as_ref()
+        .map_err(|e| e.clone())
+        .and_then(|index| shapes(index, native_ruby_client));
     let mut out = String::from("((protocol datadog)(family \"datadog\")");
     write!(
         out,
@@ -698,9 +890,9 @@ fn capture_to_scheme_for_scenario(records: &[Record], native_ruby_client: bool) 
     out.push_str("))(spans (");
     chunk_index = 0;
     for (request_index, record) in records.iter().enumerate() {
-        for trace in array(payload(record).get("traces")) {
+        for (local_chunk, trace) in array(payload(record).get("traces")).iter().enumerate() {
             let spans = array(Some(trace));
-            for span in spans {
+            for (span_index, span) in spans.iter().enumerate() {
                 out.push('(');
                 for name in ["name", "resource", "service", "type"] {
                     field(&mut out, name, text(span.get(name)));
@@ -731,7 +923,7 @@ fn capture_to_scheme_for_scenario(records: &[Record], native_ruby_client: bool) 
                         .map(|i| i.parent_kind(span))
                         .unwrap_or_else(|_| parent_kind(span, spans.iter())),
                 );
-                write!(out,"(error {})(request-index {request_index})(chunk-index {chunk_index})(semantic-valid {})(ids-valid {})(completed {})",integer(span.get("error")).parse::<i64>().unwrap_or(0),if valid_span(span){"#t"}else{"#f"},if ["trace_id","span_id"].iter().all(|k|uint(span.get(*k)).is_some_and(|v|v>0))&&parent_id(span).is_some(){"#t"}else{"#f"},if uint(span.get("start")).is_some_and(|v|v>0)&&uint(span.get("duration")).is_some_and(|v|v>0){"#t"}else{"#f"}).unwrap();
+                write!(out,"(error {})(request-index {request_index})(chunk-index {chunk_index})(semantic-valid {})(ids-valid {})(completed {})",integer(span.get("error")).parse::<i64>().unwrap_or(0),if valid_span(span, wire(record), local_chunk, span_index){"#t"}else{"#f"},if ["trace_id","span_id"].iter().all(|k|uint(span.get(*k)).is_some_and(|v|v>0))&&parent_id(span).is_some(){"#t"}else{"#f"},if uint(span.get("start")).is_some_and(|v|v>0)&&uint(span.get("duration")).is_some_and(|v|v>0){"#t"}else{"#f"}).unwrap();
                 for key in ["meta", "metrics"] {
                     write!(out, "({key} ").unwrap();
                     if let Some(v) = span.get(key) {
@@ -1208,7 +1400,10 @@ pub(crate) fn candidate(records: &[Record], app: &str, scenario: &str) -> Result
     }
     Ok(format!(
         "(define scenario-shape\n  '{})\n",
-        pretty_shape(&shapes(&NativeIndex::new(records)?, app == "rails" && scenario == "native_ruby_client")?)
+        pretty_shape(&shapes(
+            &NativeIndex::new(records)?,
+            app == "rails" && scenario == "native_ruby_client"
+        )?)
     )
     .into_bytes())
 }
