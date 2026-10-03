@@ -7,7 +7,6 @@ _LAUNCHER = Label("//harness:app_launcher")
 def corpus_service(
         name,
         rootfs = None,
-        ruby_rootfs = None,
         runtime = None,
         instance = None,
         command = None,
@@ -15,6 +14,7 @@ def corpus_service(
         injection = None,
         data = [],
         exe = None,
+        ruby_rootfs = None,
         **kwargs):
     """Launches an app as a rules_itest service within the Bazel test action.
 
@@ -25,8 +25,6 @@ def corpus_service(
     Args:
         name: Name of the itest_service target.
         rootfs: Materialized app directory label; mutually exclusive with exe.
-        ruby_rootfs: Optional separate Ruby runtime directory label, containing
-            usr/local and its loader/libraries; requires runtime = "ruby".
         runtime: "python", "ruby" or "native" for the bundled runtime adapter.
         instance: Lowercase letters, digits, hyphens and underscores; identifies
             writable state under TEST_TMPDIR/rules_stests/<instance>/state.
@@ -38,6 +36,8 @@ def corpus_service(
         data: Additional service runfiles.
         exe: Bazel executable label. Receives args, env and data directly,
             without rootfs/runtime setup or corpus-specific state preparation.
+        ruby_rootfs: Optional separate Ruby runtime directory label, containing
+            usr/local and its loader/libraries; requires runtime = "ruby".
         **kwargs: itest_service options, including env, deps, health checks,
             port assignment and shutdown timeout.
     """
