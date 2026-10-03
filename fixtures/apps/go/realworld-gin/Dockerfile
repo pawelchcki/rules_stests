@@ -30,16 +30,6 @@ RUN go build -ldflags "-s -w -buildid= -linkmode external -extldflags -static" \
     && otelc go build -ldflags "-s -w -buildid= -linkmode external -extldflags -static" \
         -o /rootfs/opt/app/bin/realworld-gin-otel .
 
-# A separately locked graph keeps Datadog and Orchestrion out of the plain
-# and OpenTelemetry binaries. Both the compiler tool and tracer are pinned.
-COPY datadog/go.mod datadog/go.sum ./
-COPY datadog/orchestrion.tool.go ./
-COPY datadog/probes.go ./probes_datadog.go
-RUN go mod download \
-    && go run github.com/DataDog/orchestrion go build -tags=datadog \
-        -ldflags "-s -w -buildid= -linkmode external -extldflags -static" \
-        -o /rootfs/opt/app/bin/realworld-gin-datadog .
-
 COPY LICENSE /rootfs/opt/app/licenses/application-LICENSE
 
 # The OpenTelemetry resource detectors look the running UID up in the password

@@ -3,12 +3,6 @@ package main
 // These experiments exercise SDKs through application HTTP and captured OTLP.
 // Each prerequisite is checked against the same workload without the setting:
 // absence alone is never evidence that a limit or disable switch worked.
-type experiment struct {
-	Name     string
-	Env      map[string]string
-	Features []string
-}
-
 var samplerArgumentControl = experiment{Name: "sampler-arg-control", Env: map[string]string{"OTEL_TRACES_SAMPLER": "traceidratio", "OTEL_TRACES_SAMPLER_ARG": "1"}}
 
 var experimentControls = map[string]experiment{

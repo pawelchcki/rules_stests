@@ -61,24 +61,6 @@ jobs:
           mkdir -p _site
           cp feature-parity-report.html _site/index.html
           cp feature-parity-report.html _site/feature-parity-report.html
-      - name: Verify and render Datadog tracing evidence
-        shell: bash
-        run: |
-          set -euo pipefail
-          images="$RUNNER_TEMP/datadog-images"
-          evidence="$RUNNER_TEMP/datadog-evidence"
-          mkdir -p "$images"
-          : > "$images/bazel.flags"
-          DATADOG_BAZEL_CONFIG=local tools/run_datadog_parity.sh \
-            "$images" "$(git rev-parse HEAD)" "$evidence"
-          cp "$evidence/datadog-report.html" _site/datadog-report.html
-      - name: Retain Datadog proof artifacts
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: datadog-evidence
-          path: ${{ runner.temp }}/datadog-evidence
-          if-no-files-found: ignore
       - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
       - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
         with:

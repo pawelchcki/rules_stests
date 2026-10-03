@@ -6,12 +6,12 @@ exports_files(["expected.json", "cases.go"])
 
 go_binary(
     name = "probe",
-    srcs = ["main.go", "capture.go", "cases.go", "datadog.go", "datadog_probes.go"],
+    srcs = ["main.go", "capture.go", "cases.go", "probe_runtime.go"],
 )
 
 go_test(
     name = "probe_test",
-    srcs = ["main.go", "capture.go", "cases.go", "datadog.go", "datadog_probes.go", "capture_test.go", "datadog_test.go", "datadog_probes_test.go"],
+    srcs = ["main.go", "capture.go", "cases.go", "probe_runtime.go", "capture_test.go"],
     args = ["$(rlocationpath //report:data/spec-compliance-matrix.md)"] + [
         "$(rlocationpath //corpus:otel/proofs/{}.scm)".format(name)
         for name in ["traces", "metrics", "logs", "resource", "exporters", "environment", "propagation"]
@@ -22,3 +22,6 @@ go_test(
     ],
     deps = ["//report:lib"],
 )
+
+# Reusable source runtime; downstream executables supply their protocol hooks.
+filegroup(name = "probe_runtime", srcs = ["probe_runtime.go"])
