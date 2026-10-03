@@ -482,11 +482,9 @@ fn wire(record: &Record) -> &DatadogWire {
     }
 }
 fn valid_span(span: &Value, wire: &DatadogWire, chunk: usize, span_index: usize) -> bool {
-    !wire.invalid_binary_container
-        && wire
-            .invalid_binary_spans
-            .binary_search(&(chunk, span_index))
-            .is_err()
+    wire.invalid_binary_spans
+        .binary_search(&(chunk, span_index))
+        .is_err()
         && span.is_object()
         && span.as_object().is_some_and(|object| {
             object.keys().all(|key| {

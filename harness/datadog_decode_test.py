@@ -182,6 +182,13 @@ class DecodeTests(unittest.TestCase):
             self.request("/v0.4/traces", b"\x91\x91" + span)
         self.assert_semantic_flags(["#t", "#f", "#t", "#f"])
 
+    def test_invalid_trace_container_does_not_invalidate_unrelated_spans(self):
+        for extra in ([], [("meta_struct", pairs([("iast", binary(b"\x01\x02"))]))]):
+            with self.subTest(extra=extra):
+                self.request("/reset?protocol=datadog", b"")
+                self.request("/v0.4/traces", b"\x92" + binary(b"") + b"\x91" + completed_span(extra))
+                self.assert_semantic_flags(["#f", "#t"])
+
     def test_binary_cannot_impersonate_an_empty_array(self):
         for path, body in [
             ("/v0.4/traces", binary(b"")),
