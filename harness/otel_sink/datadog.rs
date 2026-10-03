@@ -53,31 +53,39 @@ impl<'a> Decoder<'a> {
         }
         let mut values = Vec::with_capacity(n);
         for _ in 0..n {
-            values.push(self.value(depth + 1)?);
+            values.push(self.value(depth + 1, false)?);
         }
         Ok(Value::Array(values))
     }
-    fn map(&mut self, n: usize, depth: usize) -> Result<Value, String> {
+    fn map(&mut self, n: usize, depth: usize, repeated_metadata: bool) -> Result<Value, String> {
         if n > self.remaining / 2 || n > self.bytes.len().saturating_sub(self.pos) / 2 {
             return Err("MessagePack map exceeds budget".into());
         }
         let mut values = Map::new();
         for _ in 0..n {
-            let key = match self.value(depth + 1)? {
+            let key = match self.value(depth + 1, false)? {
                 Value::String(s) if !self.indexed_maps => s,
                 Value::Number(n) if self.indexed_maps && n.as_u64().is_some() => {
                     format!("\u{0001}index:{n}")
                 }
                 _ => return Err("unsupported MessagePack map key".into()),
             };
-            let value = self.value(depth + 1)?;
-            if values.insert(key, value).is_some() {
+            let metadata = !self.indexed_maps && depth == 2 && key == "meta";
+            let value = self.value(depth + 1, metadata)?;
+            if let Some(previous) = values.get(&key) {
+                // dd-trace-py v0.4 writes propagated metadata again when it
+                // adds chunk-root fields. Coalesce only identical string tags
+                // in span.meta; structural and conflicting duplicates fail.
+                if repeated_metadata && value.is_string() && previous == &value {
+                    continue;
+                }
                 return Err("duplicate MessagePack map key".into());
             }
+            values.insert(key, value);
         }
         Ok(Value::Object(values))
     }
-    fn value(&mut self, depth: usize) -> Result<Value, String> {
+    fn value(&mut self, depth: usize, repeated_metadata: bool) -> Result<Value, String> {
         if depth > MAX_DEPTH || self.remaining == 0 {
             return Err("MessagePack nesting/node budget exceeded".into());
         }
@@ -117,10 +125,10 @@ impl<'a> Decoder<'a> {
                 let n = self.uint(if tag == 0xdc { 2 } else { 4 })? as usize;
                 self.array(n, depth)?
             }
-            0x80..=0x8f => self.map((tag & 15) as usize, depth)?,
+            0x80..=0x8f => self.map((tag & 15) as usize, depth, repeated_metadata)?,
             0xde | 0xdf => {
                 let n = self.uint(if tag == 0xde { 2 } else { 4 })? as usize;
-                self.map(n, depth)?
+                self.map(n, depth, repeated_metadata)?
             }
             0xc4..=0xc6 => {
                 let n = self.uint(1usize << (tag - 0xc4))? as usize;
@@ -168,7 +176,7 @@ pub(crate) fn decode(
             remaining: MAX_NODES * (max_bytes / MAX_BYTES),
             indexed_maps: path == "/v0.5/traces",
         };
-        let value = decoder.value(0)?;
+        let value = decoder.value(0, false)?;
         if decoder.pos != bytes.len() {
             return Err("trailing MessagePack bytes".into());
         }
