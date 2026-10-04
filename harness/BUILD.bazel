@@ -1,3 +1,4 @@
+load("@rules_python//python:defs.bzl", "py_test")
 load("@crates//:defs.bzl", "aliases", "all_crate_deps")
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("@rules_itest//:itest.bzl", "service_test")
@@ -278,4 +279,13 @@ oci_rootfs(
     image = "@falcon_realworld_linux_amd64",
     single_payload = True,
     tags = ["manual"],
+)
+
+# Regression for native dd-trace-py v0.4 repeated propagation metadata.
+py_test(
+    name = "datadog_decode_test",
+    srcs = ["datadog_decode_test.py"],
+    main = "datadog_decode_test.py",
+    args = ["$(rootpath :telemetry_sink)"],
+    data = [":telemetry_sink"],
 )

@@ -55,9 +55,7 @@ impl CaptureCounters {
                         .flat_map(|resource| &resource.scope_spans)
                         .map(|scope| scope.spans.len())
                         .sum(),
-                    Payload::Json(payload) if payload.get("wire_version").is_some() => {
-                        crate::datadog::span_count(record)
-                    }
+                    Payload::Datadog(_) => crate::datadog::span_count(record),
                     Payload::Json(payload) => otlp::json_trace_span_count(payload),
                     _ => 0,
                 };

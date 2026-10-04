@@ -12,6 +12,12 @@ use serde_json::Value;
 pub fn capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
     if records
         .iter()
+        .any(|record| matches!(record.payload, Payload::Datadog(_)))
+    {
+        return Err("native Datadog payload requires Datadog validation".into());
+    }
+    if records
+        .iter()
         .all(|record| !matches!(record.payload, Payload::Json(_)))
     {
         typed_capture_to_scheme(records)
@@ -78,7 +84,7 @@ fn typed_capture_to_scheme(records: &[Record]) -> Result<Vec<u8>, String> {
                     );
                 }
             }
-            Payload::Json(_) => unreachable!(),
+            Payload::Json(_) | Payload::Datadog(_) => unreachable!(),
         }
     }
     output.push_str("))\n(scopes (\n");
