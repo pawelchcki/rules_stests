@@ -38,6 +38,15 @@ inputs.fetch("gems").each do |item|
   end
 end
 
+if inputs.key?("telemetry")
+  require "google/protobuf"
+  require "opentelemetry/sdk"
+  require "opentelemetry/exporter/otlp"
+  require "opentelemetry/instrumentation/rack"
+  require "opentelemetry/instrumentation/sinatra"
+  abort("wrong telemetry SDK") unless OpenTelemetry::SDK::VERSION == inputs.fetch("telemetry").fetch("sdkVersion")
+end
+
 ENV["DATABASE_PATH"] = File.join(app, "seed", "contract.sqlite3")
 load File.join(app, "src", "bin", "setup-database")
 load File.join(app, "src", "test", "contract.rb")

@@ -1,11 +1,15 @@
 """Declare every Ruby app from one matrix, with independently cached tests."""
 
-load("@ruby_matrix_config//:versions.bzl", "RUBY_GEM_SETS", "RUBY_RUNTIMES")
+load("@ruby_matrix_config//:versions.bzl", "RUBY_GEM_SETS", "RUBY_RUNTIMES", "RUBY_TELEMETRY")
 load("@rules_python//python:defs.bzl", "py_test")
 load("//corpus:registry.bzl", "REALWORLD_BASE_HURL_CASES")
 load("//fixtures:ruby_build.bzl", "ruby_app", "ruby_native_gem", "ruby_responses", "ruby_runtime", "ruby_sqlite")
 load("//rules:corpus_service.bzl", "corpus_service")
+load("//rules:realworld_app.bzl", "otlp_env")
 load("//rules:realworld_service_tests.bzl", "realworld_service_tests")
+
+RUBY_TELEMETRY_PROFILES = ["//corpus:" + declaration["profile"] for declaration in RUBY_TELEMETRY["runtimes"].values() if declaration["status"] == "supported"]
+RUBY_TELEMETRY_SUITES = [":ruby_" + series.replace(".", "_") + "_otel_hurl_test" for series, declaration in RUBY_TELEMETRY["runtimes"].items() if declaration["status"] == "supported"]
 
 def _report_plan_impl(ctx):
     output = ctx.actions.declare_file(ctx.label.name + ".json")
@@ -67,6 +71,52 @@ def ruby_app_matrix(name):
             tags = ["ruby-matrix", "manual"],
         )
         receipts.append(":" + name + "_responses")
+        telemetry = RUBY_TELEMETRY["runtimes"][runtime["series"]]
+        if telemetry["status"] == "supported":
+            otel_gems = RUBY_TELEMETRY["gemSets"][telemetry["gems"]]
+            protobuf = [gem for gem in otel_gems if gem["name"] == "google-protobuf"][0]
+            ruby_native_gem(
+                name = name + "_protobuf",
+                runtime = ":" + name + "_runtime",
+                abi = runtime["abi"],
+                srcs = [_gem_repo(protobuf) + "//:native_sources"],
+                hdrs = [_gem_repo(protobuf) + "//:native_headers"],
+                protobuf = True,
+            )
+            ruby_app(
+                name = name + "_otel_rootfs",
+                runtime = ":" + name + "_runtime",
+                manifest = json.encode({"runtime": runtime, "gems": gems + otel_gems, "telemetry": telemetry}),
+                srcs = ["//fixtures/apps/ruby/realworld-sinatra:sources"],
+                gems = [_gem_repo(gem) + "//:payload" for gem in gems + otel_gems],
+                bcrypt = ":" + name + "_bcrypt",
+                sqlite = ":" + name + "_sqlite3",
+                protobuf = ":" + name + "_protobuf",
+            )
+            corpus_service(
+                name = name + "_otel_service",
+                rootfs = ":" + name + "_otel_rootfs",
+                ruby_rootfs = ":" + name + "_runtime",
+                runtime = "ruby",
+                instance = name + "_otel",
+                command = "bin/server",
+                args = ["--host", "127.0.0.1", "--port", "$${PORT}"],
+                env = otlp_env(metrics = False, logs = False, extra = {
+                    "REALWORLD_OTEL": "1",
+                    "OTEL_SERVICE_NAME": name + "_otel",
+                    "OTEL_EXPORTER_OTLP_COMPRESSION": "none",
+                    "OTEL_SEMCONV_STABILITY_OPT_IN": "http",
+                    "LANG": "C.UTF-8",
+                }),
+                deps = ["//harness:otel_sink_service"],
+                autoassign_port = True,
+                so_reuseport_aware = False,
+                http_health_check_address = "http://127.0.0.1:$${PORT}/api/tags",
+                expected_start_duration = "5s",
+                hygienic = False,
+                shutdown_timeout = "10s",
+            )
+            realworld_service_tests(name = name + "_otel", service = ":" + name + "_otel_service", profile = "//corpus:" + telemetry["profile"])
         corpus_service(
             name = name + "_service",
             rootfs = ":" + name + "_rootfs",
@@ -93,7 +143,7 @@ def ruby_app_matrix(name):
         ]
     _report_plan(
         name = "ruby_matrix_report_plan",
-        content = json.encode({"runtimes": RUBY_RUNTIMES, "tests": report_tests, "parityTest": "//fixtures:ruby_matrix_parity_test"}),
+        content = json.encode({"runtimes": RUBY_RUNTIMES, "tests": report_tests, "parityTest": "//fixtures:ruby_matrix_parity_test", "telemetry": RUBY_TELEMETRY["runtimes"], "telemetryScenarios": REALWORLD_BASE_HURL_CASES}),
     )
     py_test(
         name = "ruby_matrix_parity_test",

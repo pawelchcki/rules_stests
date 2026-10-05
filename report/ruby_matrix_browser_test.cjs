@@ -26,6 +26,21 @@ const path = require('node:path');
         const row = page.locator('#ruby-matrix-table tbody tr').nth(index);
         assert.match(await row.locator('th').innerText(),new RegExp(entry.runtime.version.replaceAll('.','\\.')));
         assert.match(await row.locator('td').first().innerText(),new RegExp(entry.tests.length+' passed'));
+        if (entry.telemetry?.status === 'verified') {
+          assert.match(await row.locator('.ruby-telemetry').innerText(),new RegExp(entry.telemetry.scenarios.length+' scenarios passed'));
+          assert.ok(await page.locator('#left option').evaluateAll((options, profile)=>options.some(option=>option.value===profile),entry.telemetry.profile));
+          const href = await row.locator('.ruby-telemetry a').getAttribute('href');
+          await page.goto(url+href);
+          await page.waitForFunction(profile=>document.querySelector('#left').value===profile,entry.telemetry.profile);
+          assert.equal(await page.locator('#scenario').inputValue(),'articles');
+          assert.doesNotMatch(await page.locator('#compare-body').innerText(),/Capture unavailable|no accepted capture/);
+          assert.match(await page.locator('#compare-body').innerText(),/revision/);
+          await page.goto(url+'#ruby-matrix');
+        } else if (entry.telemetry?.status === 'unsupported') {
+          assert.match(await row.locator('.ruby-telemetry').innerText(),/Unsupported/);
+          assert.ok((await row.locator('.ruby-telemetry').innerText()).includes(entry.telemetry.reason));
+          assert.equal(await row.locator('.ruby-telemetry a').count(),0);
+        }
       }
       await page.locator('#ruby-matrix-table details > summary').first().click();
       assert.equal(await page.locator('#ruby-matrix-table details').first().locator('li').count(),matrix.versions[0].tests.length);

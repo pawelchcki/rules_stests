@@ -76,7 +76,9 @@ def _native_impl(ctx):
     headers = root.path + "/usr/local/include/ruby-" + ctx.attr.abi
     includes = [headers, headers + "/x86_64-linux", headers + "/x86_64-linux-gnu"] + [header.dirname for header in ctx.files.hdrs]
     defines = []
-    if ctx.attr.sqlite:
+    if ctx.attr.protobuf:
+        defines = ["NDEBUG"]
+    elif ctx.attr.sqlite:
         includes.extend([header.dirname for header in ctx.files.sqlite_headers])
         defines = [
             "HAVE_RUBY_ENCODING_H",
@@ -123,6 +125,7 @@ ruby_native_gem = rule(
         "srcs": attr.label_list(allow_files = True),
         "hdrs": attr.label_list(allow_files = True),
         "sqlite": attr.label(),
+        "protobuf": attr.bool(),
         "sqlite_headers": attr.label_list(allow_files = True),
     },
     toolchains = use_cc_toolchain(),
@@ -142,13 +145,15 @@ def _app_impl(ctx):
     args.add(ctx.file._build_script.path)
     args.add(ctx.file.bcrypt.path)
     args.add(ctx.file.sqlite.path)
+    if ctx.file.protobuf:
+        args.add("--protobuf=" + ctx.file.protobuf.path)
     args.add_all(ctx.files.srcs)
     args.add("--gems")
     args.add_all(ctx.files.gems)
     ctx.actions.run(
         executable = ctx.executable._builder,
         arguments = [args],
-        inputs = [runtime, manifest, ctx.file.bcrypt, ctx.file.sqlite, ctx.file._build_script] + ctx.files.srcs + ctx.files.gems,
+        inputs = [runtime, manifest, ctx.file.bcrypt, ctx.file.sqlite, ctx.file._build_script] + ([ctx.file.protobuf] if ctx.file.protobuf else []) + ctx.files.srcs + ctx.files.gems,
         tools = [ctx.executable._builder, ctx.executable._launcher],
         outputs = [output],
         mnemonic = "RubyAppBundle",
@@ -165,6 +170,7 @@ ruby_app = rule(
         "gems": attr.label_list(allow_files = True),
         "bcrypt": attr.label(allow_single_file = True),
         "sqlite": attr.label(allow_single_file = True),
+        "protobuf": attr.label(allow_single_file = True),
         "_builder": attr.label(default = Label("//tools:build_ruby_app"), executable = True, cfg = "exec"),
         "_launcher": attr.label(default = Label("//harness:app_launcher"), executable = True, cfg = "exec"),
         "_build_script": attr.label(default = Label("//fixtures/apps/ruby/realworld-sinatra:build.rb"), allow_single_file = True),

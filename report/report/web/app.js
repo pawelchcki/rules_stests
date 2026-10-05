@@ -783,12 +783,23 @@ function renderRubyMatrix() {
   $('ruby-matrix-lead').hidden = false;
   const versions = matrix.versions || [];
   const version = runtime => runtime.version + (runtime.patchlevel === undefined ? '' : '-p' + runtime.patchlevel);
-  const summary = versions.length + ' Ruby versions · ' + matrix.testCount + ' passing tests · identical data for ' + matrix.responseCount + ' HTTP requests per version';
+  const telemetryVersions = versions.filter(entry => entry.telemetry?.status === 'verified');
+  const summary = versions.length + ' Ruby versions · ' + matrix.testCount + ' passing API tests · identical data for ' + matrix.responseCount + ' HTTP requests per version' +
+    (telemetryVersions.length ? ' · ' + telemetryVersions.length + ' versions with verified RealWorld traces' : '');
   $('ruby-matrix-lead').innerHTML = '<a href="#ruby-matrix">' + esc(summary) + '</a>';
   $('ruby-matrix-summary').textContent = summary + '.';
-  $('ruby-matrix-table').innerHTML = '<thead><tr><th>Ruby version</th><th>API tests</th><th>Response parity</th><th>Runtime pin and test evidence</th></tr></thead><tbody>' + versions.map(entry => {
+  const hasTelemetry = versions.some(entry => entry.telemetry);
+  $('ruby-matrix-table').innerHTML = '<thead><tr><th>Ruby version</th><th>API tests</th><th>Response parity</th>' + (hasTelemetry ? '<th>RealWorld telemetry · traces</th>' : '') + '<th>Runtime pin and test evidence</th></tr></thead><tbody>' + versions.map(entry => {
     const cached = entry.tests.filter(test => test.cached).length;
-    return '<tr><th scope="row">' + esc(version(entry.runtime)) + '</th><td>' + entry.tests.length + ' passed' + (cached ? ' · ' + cached + ' cached' : '') + '</td><td>Identical · ' + matrix.responseCount + ' requests</td><td><details><summary>Runtime and ' + entry.tests.length + ' tests</summary><code>' + esc(entry.runtime.image) + '</code><ul>' + entry.tests.map(test => '<li><code>' + esc(test.label) + '</code> · passed' + (test.cached ? ' (cached)' : '') + '</li>').join('') + '</ul></details></td></tr>';
+    let telemetryCell = '';
+    if (hasTelemetry) {
+      const telemetry = entry.telemetry || {};
+      if (telemetry.status === 'verified') {
+        const params = new URLSearchParams({left:telemetry.profile,right:parityPeer(telemetry.profile,'articles'),scenario:'articles',source:'captured',view:'semantic'});
+        telemetryCell = '<td class="ruby-telemetry">✓ ' + telemetry.scenarios.length + ' scenarios passed · official SDK ' + esc(telemetry.sdkVersion) + '<br><a href="#parity?' + esc(params.toString()) + '">Compare captured traces</a></td>';
+      } else telemetryCell = '<td class="ruby-telemetry">Unsupported<br>' + esc(telemetry.reason || 'No accepted telemetry evidence.') + '</td>';
+    }
+    return '<tr><th scope="row">' + esc(version(entry.runtime)) + '</th><td>' + entry.tests.length + ' passed' + (cached ? ' · ' + cached + ' cached' : '') + '</td><td>Identical · ' + matrix.responseCount + ' requests</td>' + telemetryCell + '<td><details><summary>Runtime and ' + entry.tests.length + ' tests</summary><code>' + esc(entry.runtime.image) + '</code><ul>' + entry.tests.map(test => '<li><code>' + esc(test.label) + '</code> · passed' + (test.cached ? ' (cached)' : '') + '</li>').join('') + '</ul></details></td></tr>';
   }).join('') + '</tbody>';
   $('ruby-matrix-evidence').innerHTML = '<p><a href="' + esc(matrix.sourceUrl) + '">Pinned Ruby runtime matrix</a> · revision <code>' + esc(matrix.revision) + '</code></p><p>Response parity: passed' + (matrix.parityCached ? ' (cached)' : '') + ' · response transcript SHA-256 <code>' + esc(matrix.responseSha256) + '</code></p>';
 }

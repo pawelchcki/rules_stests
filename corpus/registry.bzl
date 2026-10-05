@@ -1,5 +1,7 @@
 """Single source of truth for the executable telemetry corpus."""
 
+load("@ruby_matrix_config//:versions.bzl", "RUBY_TELEMETRY")
+
 # Scenarios that come from the pinned upstream RealWorld API spec archive.
 REALWORLD_UPSTREAM_HURL_CASES = [
     "articles",
@@ -143,6 +145,17 @@ OTEL_PROFILES = {
     ),
 }
 
+OTEL_PROFILES.update({
+    declaration["profile"]: struct(
+        runtime = None,
+        implementations = ["otel/implementation/ruby-realworld-telemetry.scm"],
+        signals = ["traces"],
+        shape_root = None,
+    )
+    for declaration in RUBY_TELEMETRY["runtimes"].values()
+    if declaration["status"] == "supported"
+})
+
 def declare_otel_profiles(otel_realworld_profile):
     """Declares every registered profile and its normalized proof-plan view."""
     for profile_id, declaration in OTEL_PROFILES.items():
@@ -154,8 +167,8 @@ def declare_otel_profiles(otel_realworld_profile):
             name = profile_id,
             specification = "realworld/profile/{}.scm".format(profile_id),
             implementation_libraries = declaration.implementations,
-            runtime_libraries = [declaration.runtime] + parts,
-            shape_root = "realworld/shape/{}".format(profile_id),
+            runtime_libraries = ([declaration.runtime] if declaration.runtime else []) + parts,
+            shape_root = getattr(declaration, "shape_root", "realworld/shape/{}".format(profile_id)),
             signals = declaration.signals,
             scenarios = scenarios if scenarios else REALWORLD_BASE_HURL_CASES,
             standard_registry = ":otel_standard_registry",

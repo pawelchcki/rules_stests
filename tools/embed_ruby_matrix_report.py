@@ -82,7 +82,12 @@ def matrix_result(plan, events, revision, source_root):
                 result.get("cachedLocally", False) or result.get("executionInfo", {}).get("cachedRemotely", False)
                 for result in observed
             )})
-        versions.append({"runtime": runtime, "tests": tests})
+        entry = {"runtime": runtime, "tests": tests}
+        if "telemetry" in plan:
+            entry["telemetry"] = dict(plan["telemetry"][runtime["series"]])
+            if entry["telemetry"]["status"] == "supported":
+                entry["telemetry"]["scenarios"] = plan["telemetryScenarios"]
+        versions.append(entry)
     return {
         "revision": revision,
         "sourceUrl": source_root.rstrip("/") + "/fixtures/apps/ruby/realworld-sinatra/matrix.json",
@@ -101,6 +106,23 @@ def embed(html, result):
         raise ValueError("Expected one embedded report data payload")
     match = matches[0]
     model = json.loads(gzip.decompress(base64.b64decode(match[2])))
+    receipts = {(item["profile"], item["scenario"]): item for item in model.get("receipts", [])}
+    captures = {(item["profile"], item["scenario"]): item for item in model.get("captures", [])}
+    for version in result["versions"]:
+        telemetry = version.get("telemetry", {})
+        if telemetry.get("status") != "supported":
+            continue
+        if not telemetry.get("scenarios"):
+            raise ValueError("Ruby telemetry requires scenario evidence")
+        for scenario in telemetry["scenarios"]:
+            key = (telemetry["profile"], scenario)
+            receipt, capture = receipts.get(key, {}), captures.get(key, {})
+            if receipt.get("outcome") != "verified" or receipt.get("revision") != result["revision"]:
+                raise ValueError(f"Missing current-head Ruby telemetry proof: {key}")
+            if (capture.get("outcome") != "verified" or capture.get("revision") != result["revision"]
+                    or not capture.get("spans") or capture.get("diagnostics")):
+                raise ValueError(f"Missing usable Ruby telemetry capture: {key}")
+        telemetry["status"] = "verified"
     model["rubyMatrix"] = result
     payload = base64.b64encode(gzip.compress(json.dumps(model, ensure_ascii=False, separators=(",", ":")).encode(), mtime=0)).decode()
     return html[:match.start(2)] + payload + html[match.end(2):]
