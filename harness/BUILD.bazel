@@ -1,3 +1,4 @@
+load("@rules_python//python:defs.bzl", "py_test")
 load("@crates//:defs.bzl", "aliases", "all_crate_deps")
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("@rules_itest//:itest.bzl", "service_test")
@@ -90,7 +91,7 @@ go_library(
         ":otel_core_bundle",
         "testdata/synthetic_capture.scm",
     ],
-    deps = ["//report:lib"],
+    deps = [":schemebytecode", "//report:lib"],
     importpath = "github.com/pawelchcki/rules_stests/harness/otel_sink_probe",
     visibility = ["//visibility:private"],
 )
@@ -115,12 +116,20 @@ corpus_service(
     shutdown_timeout = "2s",
 )
 
+_SYNTHETIC_FAILURE_BYTECODE = scheme_bytecode_bundles(
+    name = "otel_sink_failure_bytecode",
+    probe = ":otel_sink_probe",
+    libraries = [],
+    shards = 16,
+)
+
 service_test(
     name = "otel_sink_test",
-    # Capture-shape coverage deliberately compiles and executes independent
-    # failing captures so each predicate family proves its HTTP 409 contract.
+    # Preserve every independent HTTP 409 assertion while compiling its
+    # synthetic failure program in cached, parallel build actions.
     timeout = "long",
-    args = ["--service-suffix=//harness:otel_sink_service"],
+    args = ["--service-suffix=//harness:otel_sink_service"] + _SYNTHETIC_FAILURE_BYTECODE.args,
+    data = _SYNTHETIC_FAILURE_BYTECODE.data,
     services = [":otel_sink_service"],
     test = ":otel_sink_probe",
 )
@@ -288,4 +297,13 @@ oci_rootfs(
     image = "@falcon_realworld_linux_amd64",
     single_payload = True,
     tags = ["manual"],
+)
+
+# Regression for native dd-trace-py v0.4 repeated propagation metadata.
+py_test(
+    name = "datadog_decode_test",
+    srcs = ["datadog_decode_test.py"],
+    main = "datadog_decode_test.py",
+    args = ["$(rootpath :telemetry_sink)"],
+    data = [":telemetry_sink"],
 )

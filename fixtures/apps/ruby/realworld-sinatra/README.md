@@ -14,9 +14,6 @@ Both selections retain normal action and test caching across iterations.
 # All 15 versions: smoke, hygiene, HTTP conformance and cross-version data parity.
 bazel test --config=ruby-matrix //fixtures:ruby_matrix_suite
 
-# The single-version PR selection, without cross-version parity dependencies.
-bazel test --config=ruby-matrix //fixtures:ruby_ci_suite
-
 # Select a series while developing.
 bazel test //fixtures:ruby_2_7_suite
 bazel build //fixtures:ruby_4_0_rootfs
@@ -37,86 +34,6 @@ load host libc plugins into a historical interpreter. Tests copy the seed into p
 state; the runtime and app trees remain immutable. No Docker daemon, host
 Ruby, system compiler, network access during build actions, or registry
 publication is needed.
-
-## Remote execution and parallelism
-
-RBE is enabled by default in `.bazelrc`. `--config=ruby-matrix` raises the
-client's action limit from 100 to 256 and requires remote test execution. The
-BuildBuddy PR workflow uses this config. For local execution, use only
-`--config=local`, with a job limit appropriate for the host.
-
-The full suite exposes 15 independent version branches, each with 15 Hurl
-scenario tests, one API smoke test and one service hygiene test. These 255
-tests can run independently as soon as their version's bundle is ready.
-Every test starts its own service with an assigned loopback port and private
-database state. Each Hurl scenario keeps its requests sequential because
-later requests depend on earlier writes; parallelism is across tests and
-versions.
-
-The 15 response-recording actions also run independently. Only the final
-parity comparator waits for all receipts; it compares small JSON files and
-does not start the servers in sequence. The shared SQLite compilation is
-cached once, while native gem source files compile independently per ABI.
-
-Ruby service tests request 0.5 CPU and 128 MB through `test.EstimatedCPU` and
-`test.EstimatedMemory`. A full remote run measured a maximum of 84 MB per
-test and typical CPU usage around 0.3 core across startup, HTTP requests and
-shutdown. The properties apply only to test actions, leaving runtime
-extraction and native compilation under the normal scheduler estimates.
-BuildBuddy documents these overrides in its
-[RBE platform resource allocation reference](https://www.buildbuddy.io/docs/rbe-platforms/#runner-resource-allocation).
-
-To measure a fresh test run while retaining cached build outputs:
-
-```bash
-bazel test --config=ruby-matrix //fixtures:ruby_matrix_suite \
-  --nocache_test_results \
-  --profile=/tmp/ruby-matrix.profile.gz \
-  --build_event_json_file=/tmp/ruby-matrix.bep.json \
-  --experimental_profile_additional_tasks=remote_queue \
-  --experimental_profile_additional_tasks=remote_setup \
-  --experimental_profile_additional_tasks=remote_process_time
-```
-
-The BEP `testResult.executionInfo` records the execution strategy and queue,
-setup and execution times. Compare warm runs and check queue time before
-raising the job limit further: submitting more actions does not add executor
-capacity. Avoid `--test_output=streamed`, which forces serial local tests.
-
-On 2026-10-04, fresh tests with warm build caches took 72.0 seconds at 100 jobs
-and 71.2 seconds at 256 jobs with the same resource estimates. All 256 tests
-passed remotely in both runs. Median execution time was under one second;
-median queue time increased from 10.7 to 15.4 seconds at the higher limit.
-These single-run measurements show no substantial throughput gain from more
-client slots on the current fleet. The 256-job config removes the client cap
-so additional executor capacity can serve the whole matrix.
-
-Those runs used 511 remote spawns: 256 test commands and 255 fallback
-`generate-xml.sh` commands. The root module now applies a
-[pinned patch to rules_itest 0.0.59](../../../../bazel/rules_itest_junit.patch)
-that emits JUnit XML from the service-test runner after test execution and
-service shutdown. Successful child reports are preserved; runner failures,
-including startup errors and shutdown timeouts, produce failing XML even
-when the child wrote a passing report. Interactive service runs do not emit
-one-shot test reports.
-
-A full remote run on 2026-10-05 confirmed 256 Ruby test spawns and zero
-fallback XML commands, eliminating all 255 second queue waits. The final
-fresh-test run with cached build outputs took 49.0 seconds, compared with the
-earlier 71.2-second measurement; these individual runs remain sensitive to
-fleet load. XML unit
-checks and real runner integration checks cover success, child failure,
-startup failure, graceful shutdown and a shutdown timeout after the child
-passed. Run them with:
-
-```bash
-bazel test //harness:svcinit_junit_test @rules_itest//cmd/svcinit:svcinit_test
-```
-
-The patch is applied by this repository's root `MODULE.bazel`; consumers
-using another root module must opt into it separately until it is available
-upstream. Bazel 9 removed the flag that disabled split XML generation; see
-its [release notes](https://github.com/bazelbuild/bazel/releases/tag/9.0.0).
 
 ## Pins and dependencies
 
@@ -151,8 +68,78 @@ downloaded once per version. SQLite 3.50.4 is a separately pinned amalgamation
 in `MODULE.bazel`, compiled once and linked into each SQLite Ruby extension.
 The compatibility shim supports the older images' libc symbol interface.
 
-These targets exercise the plain RealWorld API. Telemetry profiles retain
-framework- and agent-specific targets in `fixtures/BUILD.bazel`.
+## CI performance
+
+PRs run the latest pinned Ruby's plain API tests and official SDK trace suite.
+The full `main` run covers all 15 API runtimes and all nine supported telemetry
+runtimes. Standalone SDK labs and Django configuration variants also use one
+base configuration in PRs and all configurations on `main`.
+
+`--config=ruby-matrix` raises the remote action submission limit to 256; actual
+concurrency remains limited by executor resources. Use `--config=local` without
+that config for local execution. Ruby service tests request 0.5 CPU and 128 MB.
+
+The pinned `rules_itest` patch emits the final JUnit result after service
+shutdown, avoiding a separate remote fallback XML action. Successful child
+reports are preserved; startup, test and shutdown failures produce failing XML.
+Validate the patch with:
+
+```bash
+bazel test //harness:svcinit_junit_test @rules_itest//cmd/svcinit:svcinit_test
+```
+
+## Official OpenTelemetry coverage
+
+The same application also runs all 15 RealWorld scenarios with captured trace
+proofs on Ruby 2.5 through 4.0. Each supported runtime has its own profile in
+the report's comparison selectors and feature tables. The version table links
+directly to its captured `articles` traces. Telemetry receipts are collected
+fresh for the report; the plain API matrix retains its ordinary test cache.
+
+`telemetry.lock.json` pins compatible official SDK, OTLP exporter, Rack and
+Sinatra instrumentation gems, including every transitive dependency and source
+checksum. Google Protobuf's C extension is compiled against each Ruby ABI with
+the configured LLVM toolchain. App assembly verifies every gem's original Ruby
+and dependency requirements and loads the exact SDK/exporter before publishing
+the bundle.
+Ruby 2.6 and 2.7 pin Common 0.19.6: Common 0.19.7's Rack getter mutates a
+frozen interpolated string on those interpreters and loses incoming context.
+They use SDK 1.2.0 because SDK 1.2.1 calls a Common API absent from 0.19.6.
+The build also creates a span with extracted incoming context to reject such
+runtime API incompatibilities before server startup.
+
+| Ruby series | Official SDK | Telemetry status |
+| --- | --- | --- |
+| 1.9.3, 2.0, 2.1, 2.2, 2.3, 2.4 | — | Unsupported: official OTLP exporter and Sinatra/Rack instrumentation require Ruby 2.5 or later |
+| 2.5 | 1.0.3 | RealWorld traces |
+| 2.6, 2.7 | 1.2.0 | RealWorld traces |
+| 3.0 | 1.7.0 | RealWorld traces |
+| 3.1, 3.2 | 1.10.0 | RealWorld traces |
+| 3.3, 3.4, 4.0 | 1.13.1 | RealWorld traces |
+
+HTTP request spans come from official Sinatra/Rack instrumentation. Sequel
+has no official instrumentation gem; the application's SQL execution hook uses
+the official SDK to create child spans for real prepared statements, excluding
+bound values. The profiles verify runtime/SDK resource attributes, HTTP routes,
+SQL span contracts, OTLP binary protobuf export and incoming W3C propagation.
+This coverage is for traces; it makes no metrics or logs verification claim.
+Unsupported telemetry rows retain their passing RealWorld API results.
+The exporters selected for Ruby 2.5–3.0 predate OTLP's parent-remote flags.
+Their propagation scenario verifies external-parent HTTP spans, but the three
+feature proofs requiring those flags remain unclaimed. Ruby 3.1 and later
+verify those feature proofs from the captured flags and incoming trace IDs.
+
+The compatibility boundary is grounded in the published requirements of the
+[earliest official exporter](https://rubygems.org/gems/opentelemetry-exporter-otlp/versions/0.6.0)
+and [Sinatra instrumentation](https://rubygems.org/gems/opentelemetry-instrumentation-sinatra/versions/0.5.0).
+Older SDK releases alone do not provide a compatible full HTTP-to-OTLP stack.
+
+```bash
+bazel test //fixtures:ruby_2_5_otel_hurl_test
+bazel test //fixtures:ruby_4_0_otel_hurl_test
+# All instrumented profiles, including every supported Ruby version:
+bazel test //fixtures:otel_report_suite --nocache_test_results
+```
 
 ## Identical RealWorld data
 

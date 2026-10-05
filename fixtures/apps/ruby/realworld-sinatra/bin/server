@@ -14,7 +14,13 @@ end
 require "webrick"
 require "rack"
 require "rack/handler/webrick"
+if ENV["REALWORLD_OTEL"] == "1"
+  require "sinatra/base"
+  require_relative "../app/telemetry"
+  RealWorldTelemetry.configure
+end
 require_relative "../app/realworld"
+RealWorldTelemetry.instrument_database(RealWorld::DB) if ENV["REALWORLD_OTEL"] == "1"
 
 host, port = "127.0.0.1", 8000
 until ARGV.empty?

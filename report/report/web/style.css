@@ -178,6 +178,7 @@ tbody tr:hover { background: var(--surface-2); }
   #ruby-matrix-table tr { border-bottom: 1px solid var(--line); }
   #ruby-matrix-table td:nth-child(2)::before { content: "API tests: "; font-weight: 600; }
   #ruby-matrix-table td:nth-child(3)::before { content: "Response parity: "; font-weight: 600; }
+  #ruby-matrix-table .ruby-telemetry::before { content: "RealWorld telemetry: "; font-weight: 600; }
 }
 td.numeric, th.numeric { text-align: right; font-variant-numeric: tabular-nums; }
 

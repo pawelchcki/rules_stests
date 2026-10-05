@@ -4,14 +4,15 @@ load("@rules_oci//oci:pull.bzl", "oci_pull")
 
 _MATRIX = Label("//fixtures/apps/ruby/realworld-sinatra:matrix.json")
 _LOCK = Label("//fixtures/apps/ruby/realworld-sinatra:dependencies.lock.json")
+_OTEL_LOCK = Label("//fixtures/apps/ruby/realworld-sinatra:telemetry.lock.json")
 
 def _config_impl(ctx):
-    ctx.file("versions.bzl", "RUBY_RUNTIMES = " + repr(json.decode(ctx.read(ctx.attr.matrix))["runtimes"]) + "\nRUBY_GEM_SETS = " + repr(json.decode(ctx.read(ctx.attr.lock))["gemSets"]) + "\n")
+    ctx.file("versions.bzl", "RUBY_RUNTIMES = " + repr(json.decode(ctx.read(ctx.attr.matrix))["runtimes"]) + "\nRUBY_GEM_SETS = " + repr(json.decode(ctx.read(ctx.attr.lock))["gemSets"]) + "\nRUBY_TELEMETRY = " + repr(json.decode(ctx.read(ctx.attr.otel_lock))) + "\n")
     ctx.file("BUILD.bazel", 'exports_files(["versions.bzl"])\n')
 
 _config = repository_rule(
     implementation = _config_impl,
-    attrs = {"matrix": attr.label(allow_single_file = True), "lock": attr.label(allow_single_file = True)},
+    attrs = {"matrix": attr.label(allow_single_file = True), "lock": attr.label(allow_single_file = True), "otel_lock": attr.label(allow_single_file = True)},
 )
 
 def _gem_impl(ctx):
@@ -23,6 +24,8 @@ def _gem_impl(ctx):
         native = 'glob(["data/ext/mri/*.c", "data/ext/mri/*.S"], exclude = ["data/ext/mri/crypt.c"], allow_empty = True)'
     elif ctx.attr.gem == "bcrypt":
         native = 'glob(["data/ext/mri/*.c", "data/ext/mri/*.S"], allow_empty = True)'
+    elif ctx.attr.gem == "google-protobuf":
+        native = 'glob(["data/ext/google/protobuf_c/*.c", "data/ext/google/protobuf_c/third_party/utf8_range/*.c"], exclude = ["data/ext/google/protobuf_c/wrap_memcpy.c"], allow_empty = True)'
     else:
         native = 'glob(["data/ext/sqlite3/*.c"], allow_empty = True)'
     ctx.file("BUILD.bazel", """package(default_visibility = ["//visibility:public"])
@@ -61,7 +64,8 @@ _legacy = repository_rule(implementation = _legacy_impl, attrs = {"manifest": at
 def _matrix_impl(ctx):
     runtimes = json.decode(ctx.read(_MATRIX))["runtimes"]
     gem_sets = json.decode(ctx.read(_LOCK))["gemSets"]
-    _config(name = "ruby_matrix_config", matrix = _MATRIX, lock = _LOCK)
+    gem_sets.update(json.decode(ctx.read(_OTEL_LOCK))["gemSets"])
+    _config(name = "ruby_matrix_config", matrix = _MATRIX, lock = _LOCK, otel_lock = _OTEL_LOCK)
     repositories = ["ruby_matrix_config"]
     for runtime in runtimes:
         name = "ruby_runtime_" + runtime["series"].replace(".", "_")

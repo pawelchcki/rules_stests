@@ -1,5 +1,6 @@
 exports_files([
     "matrix.json",
+    "telemetry.lock.json",
     "parity/server.rb",
     "dependencies.lock.json",
     "build.rb",

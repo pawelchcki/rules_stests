@@ -74,6 +74,49 @@ class MatrixReportTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exactly one"):
             self.result(events)
 
+    def telemetry_fixture(self):
+        self.plan["telemetry"] = {"4.0": {"status": "supported", "profile": "ruby-4", "sdkVersion": "1.13.1"}}
+        self.plan["telemetryScenarios"] = ["articles", "propagation"]
+        model = {"receipts": [], "captures": []}
+        for scenario in self.plan["telemetryScenarios"]:
+            proof = {"profile": "ruby-4", "scenario": scenario, "revision": "a" * 40, "outcome": "verified"}
+            model["receipts"].append(proof)
+            model["captures"].append(dict(proof, spans=[{"name": "GET /api/articles"}]))
+        return model
+
+    def embed_model(self, model, result=None):
+        payload = base64.b64encode(gzip.compress(json.dumps(model).encode())).decode()
+        output = embed(f'<script id="report-data">{payload}</script>', self.result() if result is None else result)
+        return json.loads(gzip.decompress(base64.b64decode(output.split(">")[1].split("<")[0])))
+
+    def test_telemetry_requires_every_current_verified_scenario_and_readable_capture(self):
+        model = self.telemetry_fixture()
+        accepted = self.embed_model(model)
+        self.assertEqual(accepted["rubyMatrix"]["versions"][0]["telemetry"]["status"], "verified")
+        for collection, field, value in [
+            ("receipts", "revision", "b" * 40), ("receipts", "outcome", "xfail"),
+            ("captures", "revision", "b" * 40), ("captures", "outcome", "xfail"),
+            ("captures", "spans", []), ("captures", "diagnostics", ["invalid topology"]),
+        ]:
+            with self.subTest(collection=collection, field=field):
+                invalid = copy.deepcopy(model)
+                invalid[collection][-1][field] = value
+                with self.assertRaises(ValueError):
+                    self.embed_model(invalid)
+        for collection in ["receipts", "captures"]:
+            invalid = copy.deepcopy(model)
+            invalid[collection].pop()
+            with self.subTest(missing=collection), self.assertRaises(ValueError):
+                self.embed_model(invalid)
+        self.plan["telemetryScenarios"] = []
+        with self.assertRaisesRegex(ValueError, "scenario evidence"):
+            self.embed_model(model)
+
+    def test_unsupported_runtime_remains_visible_without_capture(self):
+        self.plan["telemetry"] = {"4.0": {"status": "unsupported", "reason": "No compatible official exporter"}}
+        data = self.embed_model({})
+        self.assertEqual(data["rubyMatrix"]["versions"][0]["telemetry"], self.plan["telemetry"]["4.0"])
+
 
 if __name__ == "__main__":
     unittest.main()

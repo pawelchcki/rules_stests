@@ -1,0 +1,67 @@
+(define-library (realworld profile ruby-sinatra-2-7-otel)
+  (export profile)
+  (import (scheme base) (otel profile) (otel declarations)
+          (otel standard traces) (otel standard resource)
+          (otel standard exporters) (otel standard environment-variables)
+          (otel standard context-propagation) (realworld route)
+          (otel implementation ruby-realworld-telemetry))
+  (begin
+(define (server-name method route) (string-append method " " (colon-route route)))
+(define (events scenario) (event-policy (mode 'empty) (occurrences 0)))
+(define profile
+  (realworld-profile
+    (id 'ruby-sinatra-2-7-otel)
+    (display-name "Ruby 2.7 Sinatra (SDK 1.2.0)")
+    (language 'ruby)
+    (framework "Ruby 2.7 Sinatra / Sequel / SQLite")
+    (implementation (compose ruby-sdk-v1.2.0 ruby-otlp-v0.24.2 ruby-rack-v0.22.1))
+    (service-name "ruby_2_7_otel")
+    (signals 'traces)
+    (capture-contract
+      (span-flags '(0)) (trace-state "") (resource-schema-url "")
+      (resource-attributes
+        '(("telemetry.sdk.language" (exact "ruby"))
+          ("telemetry.sdk.name" (exact "opentelemetry"))
+          ("telemetry.sdk.version" (exact "1.2.0"))
+          ("service.name" (exact "ruby_2_7_otel"))
+          ("process.runtime.name" (exact "ruby"))
+          ("process.runtime.version" (exact "2.7.8"))
+          ("process.runtime.description" (nonempty))
+          ("process.pid" (positive-integer))
+          ("process.command" (exact "realworld-sinatra"))))
+      (span-scopes
+        (span-scope (alias 'rack)
+          (instrumentation "OpenTelemetry::Instrumentation::Rack")
+          (version "0.22.1")
+          (required-keys "http.method" "http.status_code" "http.route")
+          (allowed-keys "http.method" "http.status_code" "http.route" "http.url"
+            "http.host" "http.scheme" "http.target" "http.user_agent"
+            "http.request.method" "http.response.status_code" "url.scheme"
+            "url.path" "url.query" "server.address" "server.port"
+            "client.address" "network.peer.address" "network.peer.port"
+            "network.protocol.name" "network.protocol.version" "user_agent.original"
+            "code.function" "code.namespace" "error.type")
+          (string-rules '("http.method" (one-of "DELETE" "GET" "POST" "PUT")))
+          (integer-keys "http.status_code") (schema-url ""))
+        (span-scope (alias 'sequel) (instrumentation "RealWorld::Sequel")
+          (version "1.0.0") (required-keys "db.system" "db.statement")
+          (allowed-keys "db.system" "db.statement")
+          (string-rules '("db.system" (exact "sqlite")) '("db.statement" (nonempty)))
+          (integer-keys) (schema-url "")))
+      (metric-scopes) (metric-descriptors) (metric-aggregation) (metric-point-schemas)
+      (log-scopes) (log-policy)
+      (event-policy events) (error-status-message 'any)
+      (server-scope 'rack) (server-span-name server-name))
+    (all (corroborated (sources ruby-tracer-provider-v1.2.0) tracer/get))
+    (all (observed span/create-root))
+    (all (observed span/end))
+    (all (observed span/string-attribute))
+    (all (observed span/int64-attribute))
+    (all (observed span/set-attribute))
+    (all (observed span-context/is-valid))
+    (all (observed span-context/w3c-conformant))
+    (all (observed exporter/otlp-http-binary-protobuf))
+    (all (observed environment-variables/otel-service-name))
+    (all (observed environment-variables/otel-exporter-otlp))
+))
+  ))

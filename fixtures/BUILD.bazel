@@ -9,7 +9,7 @@ load("//rules:otel_profile.bzl", "otel_report_manifest")
 load("@rules_itest//:itest.bzl", "service_test")
 load(":external_features.bzl", "external_feature_tests")
 load(":telemetry_lab.bzl", "python_telemetry_lab_variants")
-load("//fixtures:ruby_matrix.bzl", "ruby_app_matrix")
+load("//fixtures:ruby_matrix.bzl", "RUBY_TELEMETRY_CI_PROFILES", "RUBY_TELEMETRY_CI_SUITES", "RUBY_TELEMETRY_PROFILES", "RUBY_TELEMETRY_SUITES", "ruby_app_matrix")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -477,7 +477,7 @@ _REPORT_PROFILES = _BASE_REPORT_PROFILES + [
     "//corpus:python-django-auto-v0-65b0-propagators-b3",
     "//corpus:python-django-auto-v0-65b0-span-limits",
     "//corpus:python-django-auto-v0-65b0-temporality-delta",
-]
+] + RUBY_TELEMETRY_PROFILES
 
 _BASE_REPORT_TESTS = [
     ":aiohttp_otel_hurl_test",
@@ -487,7 +487,7 @@ _BASE_REPORT_TESTS = [
 
 test_suite(
     name = "otel_report_ci_suite",
-    tests = _BASE_REPORT_TESTS,
+    tests = _BASE_REPORT_TESTS + RUBY_TELEMETRY_CI_SUITES,
 )
 
 test_suite(
@@ -496,12 +496,12 @@ test_suite(
         ":django_propagators-b3_otel_hurl_test",
         ":django_span-limits_otel_hurl_test",
         ":django_temporality-delta_otel_hurl_test",
-    ],
+    ] + RUBY_TELEMETRY_SUITES,
 )
 
 otel_report_manifest(
     name = "otel_report_ci_manifest",
-    profiles = _BASE_REPORT_PROFILES,
+    profiles = _BASE_REPORT_PROFILES + RUBY_TELEMETRY_CI_PROFILES,
     lab_plans = [":go_telemetry_lab_plan", ":python_telemetry_lab_plan", ":ruby_telemetry_lab_plan"],
     lab_scenarios = {
         "go-telemetry-lab": ["base"],

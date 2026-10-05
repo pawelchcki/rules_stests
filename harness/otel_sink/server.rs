@@ -169,7 +169,7 @@ fn handle_connection(
     let output = if is_dd { dd_output.as_c_str() } else { output };
     request.path = path.to_string();
     if request.method == "GET" && path == "/info" {
-        respond(connection, 200, "application/json", b"{\"endpoints\":[\"/v0.4/traces\",\"/v0.5/traces\"],\"client_drop_p0s\":false,\"span_events\":false}\n");
+        respond(connection, 200, "application/json", b"{\"endpoints\":[\"/v0.4/traces\",\"/v0.5/traces\"],\"client_drop_p0s\":false,\"span_events\":false,\"span_meta_structs\":true}\n");
         return;
     }
     if request.method == "GET" && request.path == "/healthz" {
@@ -469,6 +469,7 @@ fn ingest(
             } else {
                 1024 * 1024
             },
+            capture_limit - counters.retained_bytes - request.body.len(),
         )
         .map(|p| {
             (
@@ -534,6 +535,7 @@ fn ingest(
         &content_type,
         &content_encoding,
         decoded_size,
+        payload.extra_retained_bytes(),
     ) {
         Some(size) => size,
         None => {
@@ -610,10 +612,12 @@ fn estimated_retained_bytes(
     content_type: &str,
     content_encoding: &str,
     decoded_size: usize,
+    extra_retained_bytes: usize,
 ) -> Option<usize> {
     // The decoded protobuf structs / JSON DOM retain allocations beyond their
-    // serialized bytes. A factor of two is a conservative bound for this sink,
-    // and the remaining terms account for every retained metadata string.
+    // serialized bytes. Binary JSON arrays can exceed that factor, so their
+    // checked backing allocations and wire provenance are charged separately.
+    // The remaining terms account for every retained metadata string.
     let payload = decoded_size.checked_mul(2)?;
     let headers = request.headers.iter().try_fold(0usize, |total, header| {
         total
@@ -622,6 +626,7 @@ fn estimated_retained_bytes(
     })?;
     [
         payload,
+        extra_retained_bytes,
         request.body.len(),
         headers,
         remote_address.len(),
