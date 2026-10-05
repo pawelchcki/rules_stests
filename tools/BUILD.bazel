@@ -8,6 +8,12 @@ sh_binary(
     srcs = ["assemble_otel_report.sh"],
 )
 
+py_test(
+    name = "ci_scripts_test",
+    srcs = ["ci_scripts_test.py"],
+    data = ["assemble_otel_report.sh", "run_ci.sh"],
+)
+
 py_binary(
     name = "build_ruby_app",
     srcs = ["build_ruby_app.py"],

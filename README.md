@@ -39,6 +39,12 @@ The `main` build runs all Ruby versions, cross-version response parity, and all
 Django and SDK configuration variants, then publishes the complete report.
 Telemetry workloads run once per build with fresh receipts; API and unit tests
 keep their normal cache. Tests tagged `ci-full` are reserved for the full CI run.
+Remote CI downloads retained test outputs for report assembly while leaving
+fixture executables and runtime runfiles on the executors. Report assembly
+builds all its inputs together and resolves their paths with one configured query.
+Ruby native extensions depend on a separate headers output from the pinned
+runtime extraction; interpreter libraries are excluded from C compilation inputs,
+and build-only headers are excluded from runtime runfiles.
 
 ## Plug in an implementation
 

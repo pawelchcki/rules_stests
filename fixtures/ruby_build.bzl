@@ -5,22 +5,30 @@ load("@rules_cc//cc:find_cc_toolchain.bzl", "find_cc_toolchain", "use_cc_toolcha
 load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 
 _RubyNativeObjectsInfo = provider("PIC objects shared between Ruby extension link actions.", fields = {"files": "Compiled PIC object files."})
+_RubyRuntimeInfo = provider("Separate execution and compilation inputs from one pinned image.", fields = {
+    "headers": "Build-only Ruby headers tree.",
+})
 
 def _runtime_impl(ctx):
     image = ctx.attr.image[DefaultInfo].files.to_list()
     if len(image) != 1:
         fail("expected one OCI layout")
     root = ctx.actions.declare_directory(ctx.label.name)
+    headers = ctx.actions.declare_directory(ctx.label.name + ".headers")
     zstd = ctx.toolchains["@aspect_bazel_lib//lib:zstd_toolchain_type"].zstdinfo.binary
     ctx.actions.run(
         executable = ctx.executable._extractor,
-        arguments = [image[0].path, root.path, "ruby-runtime", zstd.path],
+        arguments = [image[0].path, root.path, "ruby-runtime", zstd.path, headers.path],
         inputs = image,
         tools = [ctx.executable._extractor, zstd],
-        outputs = [root],
+        outputs = [root, headers],
         mnemonic = "RubyRuntime",
     )
-    return [DefaultInfo(files = depset([root]), runfiles = ctx.runfiles(files = [root]))]
+    return [
+        DefaultInfo(files = depset([root]), runfiles = ctx.runfiles(files = [root])),
+        _RubyRuntimeInfo(headers = headers),
+        OutputGroupInfo(headers = depset([headers])),
+    ]
 
 ruby_runtime = rule(
     implementation = _runtime_impl,
@@ -72,7 +80,9 @@ ruby_sqlite = rule(
 )
 
 def _native_impl(ctx):
-    root = ctx.attr.runtime[DefaultInfo].files.to_list()[0]
+    # Native compilation does not execute Ruby. Restrict its inputs to the
+    # headers so library and interpreter changes cannot invalidate C objects.
+    root = ctx.attr.runtime[_RubyRuntimeInfo].headers
     headers = root.path + "/usr/local/include/ruby-" + ctx.attr.abi
     includes = [headers, headers + "/x86_64-linux", headers + "/x86_64-linux-gnu"] + [header.dirname for header in ctx.files.hdrs]
     defines = []
@@ -120,7 +130,7 @@ def _native_impl(ctx):
 ruby_native_gem = rule(
     implementation = _native_impl,
     attrs = {
-        "runtime": attr.label(mandatory = True),
+        "runtime": attr.label(mandatory = True, providers = [_RubyRuntimeInfo]),
         "abi": attr.string(mandatory = True),
         "srcs": attr.label_list(allow_files = True),
         "hdrs": attr.label_list(allow_files = True),

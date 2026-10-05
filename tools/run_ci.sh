@@ -34,15 +34,17 @@ git checkout --detach "$REPORT_REVISION"
 
 # Unstamped API/unit results stay cacheable across commits. Telemetry tests
 # run only in the fresh invocation below, including the standalone labs.
+# Download retained test evidence, not the executables and large runtime
+# runfiles used exclusively on the remote executors.
 bazel test \
   --config=buildbuddy \
   --config=ruby-matrix \
-  --spawn_strategy=remote,local \
   --build_tests_only \
   --test_tag_filters="$test_filters" \
   --build_event_json_file=ruby-matrix.bep.json \
   --nobuild_event_json_file_path_conversion \
-  --remote_download_outputs=toplevel \
+  --remote_download_outputs=minimal \
+  --remote_download_regex='.*/test\.outputs(/.*)?' \
   //... \
   "$ruby_suite"
 
@@ -50,12 +52,12 @@ bazel test \
 # report claims that its telemetry receipts came from a fresh run.
 OTEL_TEST_REVISION="$REPORT_REVISION" bazel test \
   --config=buildbuddy \
-  --spawn_strategy=remote,local \
   --nocache_test_results \
   --test_env=OTEL_TEST_REVISION \
   --build_event_json_file=otel-profile.bep.json \
   --nobuild_event_json_file_path_conversion \
-  --remote_download_outputs=toplevel \
+  --remote_download_outputs=minimal \
+  --remote_download_regex='.*/test\.outputs(/.*)?' \
   "$report_suite" \
   "$lab_suite"
 
