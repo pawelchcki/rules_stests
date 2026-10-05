@@ -12,54 +12,24 @@ actions:
       cpu: 4
       memory: 8GB
     triggers:
-      push:
-        branches:
-          - main
       pull_request:
         branches:
           - "*"
     steps:
-      - run: |
-          set -euo pipefail
-          REPORT_REVISION="$(git rev-parse HEAD)"
-          # BuildBuddy checks pull requests out at a synthetic merge whose first parent is the PR head.
-          if [ "$(git show -s --format=%ce HEAD)" = "ci-runner@buildbuddy.io" ]; then
-            REPORT_REVISION="$(git rev-parse HEAD^1)"
-          fi
-          git checkout --detach "$REPORT_REVISION"
-          # No revision is stamped here, so these results stay cacheable across
-          # commits; only the report run below needs a revision in its receipts.
-          # The report suite is excluded rather than run twice.
-          bazel test \
-            --config=buildbuddy \
-            --spawn_strategy=remote,local \
-            --build_tests_only \
-            --test_tag_filters=-otel-report \
-            //... \
-            //fixtures:ruby_matrix_suite
-          # The report run stays uncached: report/cmd/main.go refuses to assemble
-          # from a build event file that does not prove --nocache_test_results,
-          # because the report claims its evidence came from a fresh run.
-          OTEL_TEST_REVISION="$REPORT_REVISION" bazel test \
-            --config=buildbuddy \
-            --spawn_strategy=remote,local \
-            --nocache_test_results \
-            --test_env=OTEL_TEST_REVISION \
-            --build_event_json_file=otel-profile.bep.json \
-            --nobuild_event_json_file_path_conversion \
-            --remote_download_outputs=toplevel \
-            //fixtures:otel_report_suite \
-            //fixtures:telemetry_lab_suite
-          REPORT_BAZEL_CONFIG=buildbuddy \
-            REPORT_REPOSITORY=pawelchcki/rules_stests \
-            REPORT_REVISION="$REPORT_REVISION" \
-            tools/assemble_otel_report.sh
-          (cd examples/plugin_agent && \
-            bazel test \
-              --config=buildbuddy \
-              --build_tests_only \
-              //...)
-          (cd examples/plugin_agent && \
-            bazel build --config=buildbuddy //:otel_report_manifest)
-          # Files written here are published as BuildBuddy workflow artifacts.
-          cp feature-parity-report.html "$BUILDBUDDY_ARTIFACTS_DIRECTORY/opentelemetry-proof-report.html"
+      - run: bash tools/run_ci.sh pr
+
+  - name: Full test suite (all variants)
+    visibility: PUBLIC
+    container_image: ubuntu-24.04
+    platform_properties:
+      remote-snapshot-save-policy: always
+      snapshot-read-policy: newest
+    resource_requests:
+      cpu: 4
+      memory: 8GB
+    triggers:
+      push:
+        branches:
+          - main
+    steps:
+      - run: bash tools/run_ci.sh full

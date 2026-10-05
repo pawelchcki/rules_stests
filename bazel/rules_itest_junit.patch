@@ -1,0 +1,330 @@
+diff --git a/cmd/svcinit/BUILD.bazel b/cmd/svcinit/BUILD.bazel
+--- a/cmd/svcinit/BUILD.bazel
++++ b/cmd/svcinit/BUILD.bazel
+@@ -3,6 +3,7 @@
+ go_library(
+     name = "svcinit_lib",
+     srcs = [
++        "junit.go",
+         "main.go",
+         "reserve_reusable_port_unix.go",
+         "reserve_reusable_port_windows.go",
+@@ -60,7 +61,10 @@
+ 
+ go_test(
+     name = "svcinit_test",
+-    srcs = ["reserve_reusable_port_test.go"],
++    srcs = [
++        "junit_test.go",
++        "reserve_reusable_port_test.go",
++    ],
+     embed = [":svcinit_lib"],
+ )
+ 
+diff --git a/cmd/svcinit/main.go b/cmd/svcinit/main.go
+--- a/cmd/svcinit/main.go
++++ b/cmd/svcinit/main.go
+@@ -49,6 +49,8 @@
+ 
+ func main() {
+ 	start := time.Now()
++	junit := newJUnitReporter(start)
++	defer junit.finishOnReturn()
+ 
+ 	log.SetFlags(log.Ltime | log.Lmicroseconds)
+ 
+@@ -161,7 +163,7 @@
+ 		defer listener.Close()
+ 		err := svcctl.Serve(ctx, listener, r, ports, servicesErrCh)
+ 		if err != nil {
+-			log.Fatalf("svcctl.Serve: %v", err)
++			junit.exitFailure(fmt.Sprintf("svcctl.Serve: %v", err))
+ 		}
+ 	}()
+ 
+@@ -176,7 +178,7 @@
+ 				count++
+ 			} else {
+ 				log.Println("Multiple Ctrl-C detected, force-exiting")
+-				os.Exit(1)
++				junit.exitFailure("Interrupted twice while shutting down")
+ 			}
+ 		}
+ 	}()
+@@ -292,11 +294,11 @@
+ 
+ 			testCancel()
+ 
+-		// This is a brittle way of draining a channel in a nonblocking way,
+-		// consider instead signalling cancellation of the services with a
+-		// context, letting them close the channel, and using a waitgroup to
+-		// wait for them to exit.
+-		// See: https://github.com/hermeticbuild/rules_itest/issues/72
++			// This is a brittle way of draining a channel in a nonblocking way,
++			// consider instead signalling cancellation of the services with a
++			// context, letting them close the channel, and using a waitgroup to
++			// wait for them to exit.
++			// See: https://github.com/hermeticbuild/rules_itest/issues/72
+ 		Drain:
+ 			for {
+ 				select {
+@@ -317,14 +319,14 @@
+ 				log.Printf("Encountered error during test run: %s\n", testErr)
+ 				if isOneShot {
+ 					mustStopAllForExit()
+-					os.Exit(1)
++					junit.exitFailure(fmt.Sprint(testErr))
+ 				}
+ 			}
+ 		case serviceErr := <-servicesErrCh:
+ 			log.Print(serviceErr)
+ 			if isOneShot {
+ 				mustStopAllForExit()
+-				log.Fatal("Service exited uncleanly, marking test as failed.\n\n")
++				junit.exitFailure("Service exited uncleanly, marking test as failed.")
+ 			}
+ 		}
+ 
+diff --git a/cmd/svcinit/junit.go b/cmd/svcinit/junit.go
+new file mode 100644
+--- /dev/null
++++ b/cmd/svcinit/junit.go
+@@ -0,0 +1,120 @@
++package main
++
++import (
++	"encoding/xml"
++	"fmt"
++	"log"
++	"os"
++	"path/filepath"
++	"sync"
++	"time"
++)
++
++// The service runner owns the final result, including startup and shutdown.
++// A child test's successful XML alone cannot attest that services stopped cleanly.
++type junitReporter struct {
++	path   string
++	target string
++	start  time.Time
++	once   sync.Once
++	err    error
++}
++
++func newJUnitReporter(start time.Time) *junitReporter {
++	path, target := os.Getenv("XML_OUTPUT_FILE"), os.Getenv("TEST_TARGET")
++	if path == "" || target == "" || os.Getenv("IBAZEL_NOTIFY_CHANGES") == "y" || shouldKeepServicesUp {
++		return nil
++	}
++	return &junitReporter{path: path, target: target, start: start}
++}
++
++// Defer this before service setup so it runs after cleanup on normal return or panic.
++func (r *junitReporter) finishOnReturn() {
++	if r == nil {
++		return
++	}
++	if value := recover(); value != nil {
++		if err := r.finish(2, fmt.Sprint(value)); err != nil {
++			log.Printf("Writing service-test XML: %v", err)
++		}
++		panic(value)
++	}
++	if err := r.finish(0, ""); err != nil {
++		log.Printf("Writing service-test XML: %v", err)
++		os.Exit(1)
++	}
++}
++
++func (r *junitReporter) exitFailure(message string) {
++	log.Print(message)
++	if err := r.finish(1, message); err != nil {
++		log.Printf("Writing service-test XML: %v", err)
++	}
++	os.Exit(1)
++}
++
++func (r *junitReporter) finish(exitCode int, message string) error {
++	if r == nil {
++		return nil
++	}
++	r.once.Do(func() {
++		r.err = writeJUnitReport(r.path, r.target, time.Since(r.start), exitCode, message)
++	})
++	return r.err
++}
++
++type junitSuite struct {
++	XMLName  xml.Name  `xml:"testsuite"`
++	Name     string    `xml:"name,attr"`
++	Tests    int       `xml:"tests,attr"`
++	Failures int       `xml:"failures,attr"`
++	Time     string    `xml:"time,attr"`
++	Case     junitCase `xml:"testcase"`
++}
++
++type junitCase struct {
++	Name    string        `xml:"name,attr"`
++	Time    string        `xml:"time,attr"`
++	Failure *junitFailure `xml:"failure,omitempty"`
++}
++
++type junitFailure struct {
++	Message string `xml:"message,attr"`
++	Text    string `xml:",chardata"`
++}
++
++func writeJUnitReport(path, target string, duration time.Duration, exitCode int, message string) error {
++	// Preserve detailed reports from successful child tests. A runner failure
++	// overrides child XML because it may have been written before shutdown.
++	if exitCode == 0 {
++		if _, err := os.Stat(path); err == nil {
++			return nil
++		} else if !os.IsNotExist(err) {
++			return err
++		}
++	}
++	elapsed := fmt.Sprintf("%.6f", duration.Seconds())
++	report := junitSuite{Name: target, Tests: 1, Time: elapsed, Case: junitCase{Name: target, Time: elapsed}}
++	if exitCode != 0 {
++		report.Failures = 1
++		report.Case.Failure = &junitFailure{Message: fmt.Sprintf("service-test runner exited with code %d", exitCode), Text: message}
++	}
++	output, err := os.CreateTemp(filepath.Dir(path), ".svcinit-junit-*")
++	if err != nil {
++		return err
++	}
++	defer os.Remove(output.Name())
++	defer output.Close()
++	if _, err := output.WriteString(xml.Header); err != nil {
++		return err
++	}
++	encoder := xml.NewEncoder(output)
++	encoder.Indent("", "  ")
++	if err := encoder.Encode(report); err != nil {
++		return err
++	}
++	if err := output.Close(); err != nil {
++		return err
++	}
++	return os.Rename(output.Name(), path)
++}
+diff --git a/cmd/svcinit/junit_test.go b/cmd/svcinit/junit_test.go
+new file mode 100644
+--- /dev/null
++++ b/cmd/svcinit/junit_test.go
+@@ -0,0 +1,113 @@
++package main
++
++import (
++	"encoding/xml"
++	"os"
++	"path/filepath"
++	"testing"
++	"time"
++)
++
++func readJUnit(t *testing.T, path string) junitSuite {
++	t.Helper()
++	data, err := os.ReadFile(path)
++	if err != nil {
++		t.Fatal(err)
++	}
++	var report junitSuite
++	if err := xml.Unmarshal(data, &report); err != nil {
++		t.Fatal(err)
++	}
++	return report
++}
++
++func TestJUnitFinalResult(t *testing.T) {
++	for _, exitCode := range []int{0, 1} {
++		t.Run(string(rune('0'+exitCode)), func(t *testing.T) {
++			path := filepath.Join(t.TempDir(), "test.xml")
++			target := "//service:unicode_日本_<&\""
++			message := "shutdown failed: <error> & \"details\""
++			if err := writeJUnitReport(path, target, 1250*time.Millisecond, exitCode, message); err != nil {
++				t.Fatal(err)
++			}
++			report := readJUnit(t, path)
++			if report.Name != target || report.Case.Name != target || report.Tests != 1 || report.Failures != exitCode || report.Time != "1.250000" {
++				t.Fatalf("incorrect final report: %+v", report)
++			}
++			if exitCode == 1 && (report.Case.Failure == nil || report.Case.Failure.Text != message) {
++				t.Fatalf("failure details did not round trip: %+v", report.Case.Failure)
++			}
++			if exitCode == 0 && report.Case.Failure != nil {
++				t.Fatal("success report contains a failure")
++			}
++		})
++	}
++}
++
++func TestJUnitPreservesChildReportUntilRunnerFails(t *testing.T) {
++	path := filepath.Join(t.TempDir(), "test.xml")
++	child := []byte("<testsuite tests=\"2\"><testcase name=\"child-a\"/><testcase name=\"child-b\"/></testsuite>")
++	if err := os.WriteFile(path, child, 0600); err != nil {
++		t.Fatal(err)
++	}
++	if err := writeJUnitReport(path, "//service:test", time.Second, 0, ""); err != nil {
++		t.Fatal(err)
++	}
++	got, err := os.ReadFile(path)
++	if err != nil || string(got) != string(child) {
++		t.Fatal("successful runner replaced the detailed child report")
++	}
++	if err := writeJUnitReport(path, "//service:test", time.Second, 1, "shutdown failed after child passed"); err != nil {
++		t.Fatal(err)
++	}
++	if report := readJUnit(t, path); report.Failures != 1 || report.Case.Failure == nil {
++		t.Fatalf("shutdown failure was masked by child XML: %+v", report)
++	}
++}
++
++func TestJUnitPanicWritesFailureAndPropagates(t *testing.T) {
++	path := filepath.Join(t.TempDir(), "test.xml")
++	reporter := &junitReporter{path: path, target: "//service:test", start: time.Now()}
++	func() {
++		defer func() {
++			if got := recover(); got != "startup or shutdown failed" {
++				t.Fatalf("runner panic was swallowed: %v", got)
++			}
++		}()
++		defer reporter.finishOnReturn()
++		panic("startup or shutdown failed")
++	}()
++	if report := readJUnit(t, path); report.Failures != 1 || report.Case.Failure.Text != "startup or shutdown failed" {
++		t.Fatalf("incorrect panic report: %+v", report)
++	}
++}
++
++func TestJUnitReporterIsOneShotOnly(t *testing.T) {
++	t.Setenv("TEST_TARGET", "//service:test")
++	t.Setenv("XML_OUTPUT_FILE", filepath.Join(t.TempDir(), "test.xml"))
++	t.Setenv("IBAZEL_NOTIFY_CHANGES", "")
++	if newJUnitReporter(time.Now()) == nil {
++		t.Fatal("one-shot service test needs XML")
++	}
++	t.Setenv("IBAZEL_NOTIFY_CHANGES", "y")
++	if newJUnitReporter(time.Now()) != nil {
++		t.Fatal("interactive reload should not emit one-shot XML")
++	}
++	t.Setenv("IBAZEL_NOTIFY_CHANGES", "")
++	t.Setenv("TEST_TARGET", "")
++	if newJUnitReporter(time.Now()) != nil {
++		t.Fatal("bazel run should not emit test XML")
++	}
++	t.Setenv("TEST_TARGET", "//service:test")
++	t.Setenv("XML_OUTPUT_FILE", "")
++	if newJUnitReporter(time.Now()) != nil {
++		t.Fatal("missing XML_OUTPUT_FILE should disable reporting")
++	}
++}
++
++func TestJUnitWriteErrorIsReturned(t *testing.T) {
++	path := filepath.Join(t.TempDir(), "missing", "test.xml")
++	if err := writeJUnitReport(path, "//service:test", time.Second, 0, ""); err == nil {
++		t.Fatal("XML write failure was ignored")
++	}
++}

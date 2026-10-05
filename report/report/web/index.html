@@ -13,6 +13,7 @@ __STYLE__
   <ul>
     <li><a href="#health">Capabilities</a></li>
     <li><a href="#parity">RealWorld parity</a></li>
+    <li><a href="#ruby-matrix">Ruby versions</a></li>
     <li><a href="#receipts">Evidence</a></li>
     <li><a href="#glossary">Glossary</a></li>
   </ul>
@@ -44,9 +45,8 @@ __STYLE__
 
   <section class="panel" id="compare" hidden>
     <h2 tabindex="-1">RealWorld parity</h2>
+    <p id="ruby-matrix-lead" hidden></p>
     <p>Same RealWorld application and scenarios across tested implementation configurations.</p>
-    <div class="scroll"><table id="parity-overview"></table></div>
-    <p class="section-note">Structural correspondence pairs root structure, span kind, normalized name and child structure. Scope never determines pairing. Differences are neutral and do not change implementation health.</p>
     <div class="filters">
       <label>Comparison source<select id="comparison-source"><option value="captured">Captured telemetry</option><option value="saved">Saved expectations</option></select></label>
       <label>Field view<select id="field-view"><option value="semantic">Semantic differences</option><option value="raw">Raw fields and timing</option></select></label>
@@ -58,9 +58,20 @@ __STYLE__
       <label class="toggle"><input type="checkbox" id="hide-scope"> Hide scope differences</label>
     </div>
     <div id="parity-scenarios"></div>
+    <p class="section-note">Structural correspondence pairs root structure, span kind, normalized name and child structure. Scope never determines pairing. Differences are neutral and do not change implementation health.</p>
     <p id="comparison-context"></p>
     <div class="compare-summary" id="compare-summary"></div>
     <div id="compare-body"></div>
+    <div id="ruby-matrix" hidden>
+      <h3>Ruby version compatibility</h3>
+      <p id="ruby-matrix-summary"></p>
+      <p class="section-note">The same Sinatra/SQLite RealWorld app runs on each pinned interpreter. These results cover API behavior and response data. Cached results are identified per test.</p>
+      <div class="scroll"><table id="ruby-matrix-table"></table></div>
+      <details><summary>Response parity evidence</summary><div id="ruby-matrix-evidence"></div></details>
+    </div>
+    <details><summary>Captured telemetry availability across scenarios and implementations</summary>
+      <div class="scroll"><table id="parity-overview"></table></div>
+    </details>
     <details><summary>Scenario across all implementations</summary>
     <div class="scroll"><table id="scenario-overview"></table></div></details>
   <details id="coverage"><summary>Scenario and check coverage</summary>

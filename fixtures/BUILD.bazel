@@ -139,7 +139,15 @@ service_test(
     test = "//harness:telemetry_lab_probe",
     data = ["//fixtures/apps/go/telemetry-lab:main.go", "//fixtures/apps/go/telemetry-lab:metrics.go", "//fixtures/apps/go/telemetry-lab:sdk_trace.go", ":go_telemetry_lab_plan"],
     args = ["--app-suffix=//fixtures:go_telemetry_lab_service", "--sink-suffix=//harness:otel_sink_service", "--language=go", "--scenario=otlp-retry-after", "--source=$(rlocationpath //fixtures/apps/go/telemetry-lab:main.go)", "--source-extra=$(rlocationpath //fixtures/apps/go/telemetry-lab:metrics.go)", "--source-extra2=$(rlocationpath //fixtures/apps/go/telemetry-lab:sdk_trace.go)", "--proof-plan=$(rlocationpath :go_telemetry_lab_plan)"],
-    tags = ["telemetry"],
+    tags = ["telemetry", "ci-full"],
+)
+
+test_suite(
+    name = "telemetry_lab_ci_suite",
+    tests = [
+        ":go_telemetry_lab_test",
+        ":python_telemetry_lab_test",
+    ] + ([":ruby_telemetry_lab_test"] if RUBY_IMAGES_PUBLISHED else []),
 )
 
 test_suite(
@@ -282,6 +290,7 @@ realworld_service_tests(
     service = ":django_propagators-b3_otel_service",
     profile = "//corpus:python-django-auto-v0-65b0-propagators-b3",
     scenarios = ["propagation_b3"],
+    tags = ["ci-full"],
 )
 
 corpus_service(
@@ -307,6 +316,7 @@ realworld_service_tests(
     service = ":django_span-limits_otel_service",
     profile = "//corpus:python-django-auto-v0-65b0-span-limits",
     scenarios = ["tags"],
+    tags = ["ci-full"],
 )
 
 corpus_service(
@@ -332,6 +342,7 @@ realworld_service_tests(
     service = ":django_temporality-delta_otel_service",
     profile = "//corpus:python-django-auto-v0-65b0-temporality-delta",
     scenarios = ["tags"],
+    tags = ["ci-full"],
 )
 
 corpus_service(
@@ -455,26 +466,50 @@ realworld_service_tests(
 # whose images are unpublished is declared unavailable, so report assembly
 # accepts its lack of receipts while keeping its checked-in shapes and upstream
 # claims visible. No feature of an unavailable profile can reach verified.
-_REPORT_PROFILES = [
+_BASE_REPORT_PROFILES = [
     "//corpus:go-gin-otelbuild-v1-1-0",
     "//corpus:python-aiohttp-auto-v0-65b0",
     "//corpus:python-django-auto-v0-65b0",
-    "//corpus:python-django-auto-v0-65b0-propagators-b3",
-    "//corpus:python-django-auto-v0-65b0-span-limits",
-    "//corpus:python-django-auto-v0-65b0-temporality-delta",
     "//corpus:ruby-rails-auto-v0-1-0",
 ]
 
+_REPORT_PROFILES = _BASE_REPORT_PROFILES + [
+    "//corpus:python-django-auto-v0-65b0-propagators-b3",
+    "//corpus:python-django-auto-v0-65b0-span-limits",
+    "//corpus:python-django-auto-v0-65b0-temporality-delta",
+]
+
+_BASE_REPORT_TESTS = [
+    ":aiohttp_otel_hurl_test",
+    ":django_otel_hurl_test",
+    ":gin_otel_hurl_test",
+] + ([":rails_otel_hurl_test"] if RUBY_IMAGES_PUBLISHED else [])
+
+test_suite(
+    name = "otel_report_ci_suite",
+    tests = _BASE_REPORT_TESTS,
+)
+
 test_suite(
     name = "otel_report_suite",
-    tests = [
-        ":aiohttp_otel_hurl_test",
-        ":django_otel_hurl_test",
+    tests = _BASE_REPORT_TESTS + [
         ":django_propagators-b3_otel_hurl_test",
         ":django_span-limits_otel_hurl_test",
         ":django_temporality-delta_otel_hurl_test",
-        ":gin_otel_hurl_test",
-    ] + ([":rails_otel_hurl_test"] if RUBY_IMAGES_PUBLISHED else []),
+    ],
+)
+
+otel_report_manifest(
+    name = "otel_report_ci_manifest",
+    profiles = _BASE_REPORT_PROFILES,
+    lab_plans = [":go_telemetry_lab_plan", ":python_telemetry_lab_plan", ":ruby_telemetry_lab_plan"],
+    lab_scenarios = {
+        "go-telemetry-lab": ["base"],
+        "ruby-telemetry-lab": ["base"],
+        "python-telemetry-lab": ["base"],
+    },
+    unavailable_labs = ["ruby-telemetry-lab"] if not RUBY_IMAGES_PUBLISHED else [],
+    unavailable_profiles = ["//corpus:ruby-rails-auto-v0-1-0"] if not RUBY_IMAGES_PUBLISHED else [],
 )
 
 otel_report_manifest(

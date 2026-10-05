@@ -15,12 +15,25 @@ from Ruby 1.9.3-p551 through 4.0.7. Pinned runtimes, source gems, native
 extensions and small application bundles have separate cache boundaries.
 A cross-version gate compares full RealWorld response data for an identical
 HTTP workload, including Unicode, IDs, slugs, timestamps and tokens.
+The published report's **Ruby versions** link lists every pinned interpreter,
+its API test results, and the cross-version response-parity evidence. Full
+BuildBuddy runs on `main` and GitHub Pages include this matrix; cached API
+results are labeled separately from the report's fresh telemetry assertions.
 
 ```bash
-bazel test //fixtures:ruby_matrix_suite
+bazel test --config=ruby-matrix //fixtures:ruby_matrix_suite
 # Or select one series:
 bazel test //fixtures:ruby_2_7_suite
 ```
+
+Pull-request CI runs every Ruby API scenario on the newest pinned interpreter
+(`//fixtures:ruby_ci_suite`), one base telemetry configuration per reference app,
+and one base SDK workload per language. Its report uses
+`//fixtures:otel_report_ci_manifest` and includes only that telemetry evidence.
+The `main` build runs all Ruby versions, cross-version response parity, and all
+Django and SDK configuration variants, then publishes the complete report.
+Telemetry workloads run once per build with fresh receipts; API and unit tests
+keep their normal cache. Tests tagged `ci-full` are reserved for the full CI run.
 
 ## Plug in an implementation
 

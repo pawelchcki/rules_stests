@@ -63,5 +63,5 @@ def python_telemetry_lab_variants():
                 "--source=$(rlocationpath {})".format(_PYTHON_APP),
                 "--proof-plan=$(rlocationpath //fixtures:python_telemetry_lab_plan)",
             ],
-            tags = ["telemetry"],
+            tags = ["telemetry", "ci-full"],
         )

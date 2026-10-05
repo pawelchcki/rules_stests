@@ -83,3 +83,18 @@ metadata_path="$(resolve_bazel_path "${metadata_files[0]}")"
   --execution-root="$execution_root" \
   "${source_root_args[@]}" \
   --source-root="https://github.com/${REPORT_REPOSITORY}/blob/${REPORT_REVISION}"
+
+# Ruby API conformance keeps its normal test cache and has separate evidence
+# from the fresh telemetry assertions. Consumer reports can omit this matrix.
+if [[ -n "${RUBY_MATRIX_BEP:-}" ]]; then
+  bazel build "${bazel_flags[@]}" --remote_download_outputs=toplevel \
+    //fixtures:ruby_matrix_report_plan //tools:embed_ruby_matrix_report
+  mapfile -t ruby_plan_files < <(bazel cquery "${bazel_flags[@]}" --output=files //fixtures:ruby_matrix_report_plan)
+  mapfile -t ruby_embed_files < <(bazel cquery "${bazel_flags[@]}" --output=files //tools:embed_ruby_matrix_report)
+  "$(resolve_bazel_path "${ruby_embed_files[0]}")" \
+    --plan="$(resolve_bazel_path "${ruby_plan_files[0]}")" \
+    --bep="$RUBY_MATRIX_BEP" \
+    --report=feature-parity-report.html \
+    --revision="$REPORT_REVISION" \
+    --source-root="https://github.com/${REPORT_REPOSITORY}/blob/${REPORT_REVISION}"
+fi

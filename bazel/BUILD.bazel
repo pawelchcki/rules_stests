@@ -5,4 +5,5 @@ exports_files([
     "ruby_legacy/1.9.3.json",
     "ruby_legacy/2.0.0.json",
     "rules_rs_launchpad_zlib.patch",
+    "rules_itest_junit.patch",
 ])

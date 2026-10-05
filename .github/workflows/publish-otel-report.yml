@@ -30,12 +30,7 @@ jobs:
       - name: Check report renderer
         run: |
           node --check report/report/web/app.js
-          bazel test --config=local //report:report_test //report:assemble_test
-      - name: Verify standalone telemetry labs
-        run: |
-          bazel test --config=local --nocache_test_results \
-            //harness:telemetry_lab_claims_test \
-            //fixtures:telemetry_lab_suite
+          bazel test --config=local //report:report_test //report:assemble_test //harness:telemetry_lab_claims_test
       - name: Run fresh receipt-producing tests
         shell: bash
         run: |
@@ -50,11 +45,19 @@ jobs:
             --remote_download_outputs=toplevel \
             //fixtures:otel_report_suite \
             //fixtures:telemetry_lab_suite
+      - name: Verify all Ruby versions
+        run: |
+          bazel test --config=local --jobs=8 \
+            --build_event_json_file=ruby-matrix.bep.json \
+            --nobuild_event_json_file_path_conversion \
+            --remote_download_outputs=toplevel \
+            //fixtures:ruby_matrix_suite
       - name: Assemble the report from accepted receipts
         shell: bash
         run: |
           set -euo pipefail
           REPORT_BAZEL_CONFIG=local \
+            RUBY_MATRIX_BEP=ruby-matrix.bep.json \
             REPORT_REPOSITORY="${GITHUB_REPOSITORY}" \
             REPORT_REVISION="$(git rev-parse HEAD)" \
             tools/assemble_otel_report.sh

@@ -23,6 +23,7 @@ def realworld_service_tests(
         otel_xfails = {},
         flaky = False,
         tags = [],
+        exec_properties = {},
         **kwargs):
     """Creates hygiene, API smoke and Hurl tests without creating a service.
 
@@ -45,6 +46,7 @@ def realworld_service_tests(
         otel_xfails: Expected Scheme contract rejections by scenario.
         flaky: Retry hygiene, API smoke and eligible scenario tests.
         tags: Tags applied to the tests.
+        exec_properties: Execution properties applied to hygiene, smoke and Hurl tests.
         **kwargs: Additional options for realworld_hurl_test_suite.
     """
     neutral_profile = telemetry_profile != None
@@ -64,6 +66,7 @@ def realworld_service_tests(
             sink = otel_sink,
             cases = scenarios,
             tags = tags,
+            exec_properties = exec_properties,
         )
     label = native.package_relative_label(service)
     service_test(
@@ -71,6 +74,7 @@ def realworld_service_tests(
         services = [service],
         flaky = flaky,
         tags = tags,
+        exec_properties = exec_properties,
         test = _EXIT0,
     )
     service_test(
@@ -80,6 +84,7 @@ def realworld_service_tests(
         services = [service],
         flaky = flaky,
         tags = tags,
+        exec_properties = exec_properties,
         test = _PROBE,
     )
     realworld_hurl_test_suite(
@@ -96,5 +101,6 @@ def realworld_service_tests(
         flaky = flaky,
         # Report assembly reads these instrumented scenario receipts.
         tags = tags + (["telemetry"] if neutral_profile else (["otel-report"] if profile else [])),
+        exec_properties = exec_properties,
         **kwargs
     )

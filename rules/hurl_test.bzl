@@ -142,7 +142,7 @@ def realworld_hurl_test_suite(name, service, telemetry_sink = None, telemetry_pr
             tags = tags + ["manual"],
         )
 
-def realworld_parallel_hurl_test(name, service, profile, sink, cases, tags = []):
+def realworld_parallel_hurl_test(name, service, profile, sink, cases, tags = [], exec_properties = {}):
     specs = [_LOCAL_CASES.get(case) or _SPEC_ANCHOR.same_package_label("hurl/{}.hurl".format(case)) for case in cases]
     _profile_data(name = name + "_profile_data", profile = profile)
     service_test(
@@ -159,4 +159,5 @@ def realworld_parallel_hurl_test(name, service, profile, sink, cases, tags = [])
             "--telemetry-sink-suffix=" + str(native.package_relative_label(sink)),
         ] + [_rootpath(spec) for spec in specs],
         tags = tags + ["manual", "datadog-parallel"],
+        exec_properties = exec_properties,
     )

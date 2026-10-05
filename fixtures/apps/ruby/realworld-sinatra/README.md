@@ -5,12 +5,17 @@ series from 1.9.3 onward, with one pinned latest patch per series. Releases
 were checked against the [official Ruby release history](https://www.ruby-lang.org/en/downloads/releases/)
 on 2026-10-03. The targets currently support Linux x86_64. Matrix tests carry the `manual`
 tag so wildcard test runs do not start all versions; select a suite explicitly.
-The BuildBuddy PR workflow explicitly selects the full matrix suite, retaining
-its normal action and test caching across iterations.
+The BuildBuddy PR workflow selects `//fixtures:ruby_ci_suite`: all 17 smoke,
+hygiene and Hurl tests on the newest pinned interpreter. Builds on `main` select
+the full matrix and cross-version response parity, and publish their results.
+Both selections retain normal action and test caching across iterations.
 
 ```bash
 # All 15 versions: smoke, hygiene, HTTP conformance and cross-version data parity.
-bazel test //fixtures:ruby_matrix_suite
+bazel test --config=ruby-matrix //fixtures:ruby_matrix_suite
+
+# The single-version PR selection, without cross-version parity dependencies.
+bazel test --config=ruby-matrix //fixtures:ruby_ci_suite
 
 # Select a series while developing.
 bazel test //fixtures:ruby_2_7_suite
@@ -32,6 +37,86 @@ load host libc plugins into a historical interpreter. Tests copy the seed into p
 state; the runtime and app trees remain immutable. No Docker daemon, host
 Ruby, system compiler, network access during build actions, or registry
 publication is needed.
+
+## Remote execution and parallelism
+
+RBE is enabled by default in `.bazelrc`. `--config=ruby-matrix` raises the
+client's action limit from 100 to 256 and requires remote test execution. The
+BuildBuddy PR workflow uses this config. For local execution, use only
+`--config=local`, with a job limit appropriate for the host.
+
+The full suite exposes 15 independent version branches, each with 15 Hurl
+scenario tests, one API smoke test and one service hygiene test. These 255
+tests can run independently as soon as their version's bundle is ready.
+Every test starts its own service with an assigned loopback port and private
+database state. Each Hurl scenario keeps its requests sequential because
+later requests depend on earlier writes; parallelism is across tests and
+versions.
+
+The 15 response-recording actions also run independently. Only the final
+parity comparator waits for all receipts; it compares small JSON files and
+does not start the servers in sequence. The shared SQLite compilation is
+cached once, while native gem source files compile independently per ABI.
+
+Ruby service tests request 0.5 CPU and 128 MB through `test.EstimatedCPU` and
+`test.EstimatedMemory`. A full remote run measured a maximum of 84 MB per
+test and typical CPU usage around 0.3 core across startup, HTTP requests and
+shutdown. The properties apply only to test actions, leaving runtime
+extraction and native compilation under the normal scheduler estimates.
+BuildBuddy documents these overrides in its
+[RBE platform resource allocation reference](https://www.buildbuddy.io/docs/rbe-platforms/#runner-resource-allocation).
+
+To measure a fresh test run while retaining cached build outputs:
+
+```bash
+bazel test --config=ruby-matrix //fixtures:ruby_matrix_suite \
+  --nocache_test_results \
+  --profile=/tmp/ruby-matrix.profile.gz \
+  --build_event_json_file=/tmp/ruby-matrix.bep.json \
+  --experimental_profile_additional_tasks=remote_queue \
+  --experimental_profile_additional_tasks=remote_setup \
+  --experimental_profile_additional_tasks=remote_process_time
+```
+
+The BEP `testResult.executionInfo` records the execution strategy and queue,
+setup and execution times. Compare warm runs and check queue time before
+raising the job limit further: submitting more actions does not add executor
+capacity. Avoid `--test_output=streamed`, which forces serial local tests.
+
+On 2026-10-04, fresh tests with warm build caches took 72.0 seconds at 100 jobs
+and 71.2 seconds at 256 jobs with the same resource estimates. All 256 tests
+passed remotely in both runs. Median execution time was under one second;
+median queue time increased from 10.7 to 15.4 seconds at the higher limit.
+These single-run measurements show no substantial throughput gain from more
+client slots on the current fleet. The 256-job config removes the client cap
+so additional executor capacity can serve the whole matrix.
+
+Those runs used 511 remote spawns: 256 test commands and 255 fallback
+`generate-xml.sh` commands. The root module now applies a
+[pinned patch to rules_itest 0.0.59](../../../../bazel/rules_itest_junit.patch)
+that emits JUnit XML from the service-test runner after test execution and
+service shutdown. Successful child reports are preserved; runner failures,
+including startup errors and shutdown timeouts, produce failing XML even
+when the child wrote a passing report. Interactive service runs do not emit
+one-shot test reports.
+
+A full remote run on 2026-10-05 confirmed 256 Ruby test spawns and zero
+fallback XML commands, eliminating all 255 second queue waits. The final
+fresh-test run with cached build outputs took 49.0 seconds, compared with the
+earlier 71.2-second measurement; these individual runs remain sensitive to
+fleet load. XML unit
+checks and real runner integration checks cover success, child failure,
+startup failure, graceful shutdown and a shutdown timeout after the child
+passed. Run them with:
+
+```bash
+bazel test //harness:svcinit_junit_test @rules_itest//cmd/svcinit:svcinit_test
+```
+
+The patch is applied by this repository's root `MODULE.bazel`; consumers
+using another root module must opt into it separately until it is available
+upstream. Bazel 9 removed the flag that disabled split XML generation; see
+its [release notes](https://github.com/bazelbuild/bazel/releases/tag/9.0.0).
 
 ## Pins and dependencies
 
