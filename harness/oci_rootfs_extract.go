@@ -40,10 +40,13 @@ func main() {
 }
 
 func run(args []string) error {
-	if (len(args) != 3 && len(args) != 4) || (args[2] != "single" && args[2] != "multi" && args[2] != "ruby-runtime") {
-		return errors.New("usage: oci_rootfs_extract <oci-layout> <rootfs> <single|multi|ruby-runtime> [zstd-tool]")
+	if (len(args) != 3 && len(args) != 4 && len(args) != 5) || (args[2] != "single" && args[2] != "multi" && args[2] != "ruby-runtime") || (len(args) == 5 && args[2] != "ruby-runtime") {
+		return errors.New("usage: oci_rootfs_extract <oci-layout> <rootfs> <single|multi|ruby-runtime> [zstd-tool [ruby-headers-output]]")
 	}
 	if args[2] == "ruby-runtime" {
+		if len(args) == 5 {
+			return extractRubyRuntimeOutputs(args[0], args[1], args[4], args[3])
+		}
 		return extractRubyRuntime(args[0], args[1], args[3:]...)
 	}
 	return extractOCI(args[0], args[1], args[2] == "single", args[3:]...)

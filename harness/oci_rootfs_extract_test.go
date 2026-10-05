@@ -386,8 +386,9 @@ func TestZstdLayerExtractionAndCorruption(t *testing.T) {
 	}
 }
 
-func TestRubyRuntimeTrimmingKeepsSymlinksAndRemovesBuildPayloads(t *testing.T) {
-	staging, output := t.TempDir(), filepath.Join(t.TempDir(), "runtime")
+func rubyRuntimeFixture(t *testing.T) string {
+	t.Helper()
+	staging := t.TempDir()
 	// Minimal inspectable ELF with no dynamic dependencies. This exercises
 	// tree trimming without requiring executor-specific binaries or libc.
 	contents := make([]byte, 64)
@@ -420,6 +421,11 @@ func TestRubyRuntimeTrimmingKeepsSymlinksAndRemovesBuildPayloads(t *testing.T) {
 	if err := os.Symlink("libruby.so.4.0.7", filepath.Join(staging, "usr/local/lib/libruby.so")); err != nil {
 		t.Fatal(err)
 	}
+	return staging
+}
+
+func TestRubyRuntimeTrimmingKeepsSymlinksAndRemovesBuildPayloads(t *testing.T) {
+	staging, output := rubyRuntimeFixture(t), filepath.Join(t.TempDir(), "runtime")
 	if err := trimRubyRuntime(staging, output); err != nil {
 		t.Fatal(err)
 	}
@@ -439,5 +445,51 @@ func TestRubyRuntimeTrimmingKeepsSymlinksAndRemovesBuildPayloads(t *testing.T) {
 	}
 	if !fileExists(filepath.Join(output, "usr/local/lib/libruby.so")) {
 		t.Fatal("shared-library alias has a missing target")
+	}
+}
+
+func TestRubyHeadersAreSeparateAndIndependentOfRuntimePayload(t *testing.T) {
+	staging := rubyRuntimeFixture(t)
+	output, headers := filepath.Join(t.TempDir(), "runtime"), filepath.Join(t.TempDir(), "headers")
+	if err := trimRubyRuntime(staging, output, headers); err != nil {
+		t.Fatal(err)
+	}
+	header := "usr/local/include/ruby-4.0.0/ruby.h"
+	data, err := os.ReadFile(filepath.Join(headers, header))
+	if err != nil || string(data) != "header" {
+		t.Fatalf("missing pinned Ruby header: %q, %v", data, err)
+	}
+	if fileExists(filepath.Join(output, "usr/local/include")) {
+		t.Fatal("build-only headers entered the execution runtime")
+	}
+	if err := filepath.WalkDir(headers, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(headers, path)
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() && !strings.HasPrefix(filepath.ToSlash(relative), "usr/local/include/") {
+			t.Errorf("runtime payload entered compiler inputs: %s", relative)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Changing interpreter libraries or image metadata must not change the
+	// header tree digest, which determines native compilation's cache key.
+	for _, path := range []string{"usr/local/lib/ruby/4.0.0/json.rb", ".rules-stests-manifest"} {
+		if err := os.WriteFile(filepath.Join(staging, path), []byte("changed"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	otherOutput, otherHeaders := filepath.Join(t.TempDir(), "runtime"), filepath.Join(t.TempDir(), "headers")
+	if err := trimRubyRuntime(staging, otherOutput, otherHeaders); err != nil {
+		t.Fatal(err)
+	}
+	other, err := os.ReadFile(filepath.Join(otherHeaders, header))
+	if err != nil || !bytes.Equal(data, other) {
+		t.Fatalf("runtime-only change altered compiler inputs: %q, %v", other, err)
 	}
 }

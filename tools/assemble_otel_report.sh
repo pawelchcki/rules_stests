@@ -33,14 +33,49 @@ if [[ -n "$report_ruleset" && ! "$report_ruleset_source_root" =~ /blob/[0-9a-f]{
   exit 1
 fi
 
-bazel build "${bazel_flags[@]}" --remote_download_outputs=toplevel \
-  "$report_manifest" \
-  "$assemble_label"
+report_targets=("$report_manifest" "$assemble_label")
+if [[ -n "${RUBY_MATRIX_BEP:-}" ]]; then
+  report_targets+=(//fixtures:ruby_matrix_report_plan //tools:embed_ruby_matrix_report)
+fi
 
-mapfile -t assemble_files < <(bazel cquery "${bazel_flags[@]}" --output=files "$assemble_label")
-mapfile -t manifest_files < <(bazel cquery "${bazel_flags[@]}" --output=files --output_groups=report_manifest "$report_manifest")
-mapfile -t matrix_files < <(bazel cquery "${bazel_flags[@]}" --output=files --output_groups=report_matrix "$report_manifest")
-mapfile -t metadata_files < <(bazel cquery "${bazel_flags[@]}" --output=files --output_groups=report_metadata "$report_manifest")
+# Build and resolve every report input together. Repeated cqueries each incur
+# Bazel command setup and analysis, particularly on cold CI runners.
+bazel build "${bazel_flags[@]}" --remote_download_outputs=toplevel "${report_targets[@]}"
+query_targets="$(IFS=' '; printf '%s' "${report_targets[*]}")"
+query_format='(
+  "\n".join([
+    group + "\t" + f.path
+    for group in ["report_manifest", "report_matrix", "report_metadata"]
+    for f in getattr(providers(target)["OutputGroupInfo"], group).to_list()
+  ]) if hasattr(target.output_groups, "report_manifest") else
+  target.label.name + "\t" + (
+    providers(target)["DefaultInfo"].files_to_run.executable.path
+    if providers(target)["DefaultInfo"].files_to_run.executable else
+    target.files.to_list()[0].path
+  )
+)'
+report_files="$(bazel cquery "${bazel_flags[@]}" "config(set($query_targets), target)" \
+  --output=starlark \
+  --starlark:expr="$query_format")"
+
+declare -A report_paths=()
+while IFS=$'\t' read -r kind path; do
+  if [[ -z "$kind" || -z "$path" || -n "${report_paths[$kind]:-}" ]]; then
+    echo "invalid or duplicate report output: $kind $path" >&2
+    exit 1
+  fi
+  report_paths[$kind]="$path"
+done <<< "$report_files"
+required_outputs=(assemble report_manifest report_matrix report_metadata)
+if [[ -n "${RUBY_MATRIX_BEP:-}" ]]; then
+  required_outputs+=(ruby_matrix_report_plan embed_ruby_matrix_report)
+fi
+for kind in "${required_outputs[@]}"; do
+  if [[ -z "${report_paths[$kind]:-}" ]]; then
+    echo "could not resolve $kind output for report assembly" >&2
+    exit 1
+  fi
+done
 
 execution_root="$(bazel info "${bazel_flags[@]}" execution_root)"
 resolve_bazel_path() {
@@ -52,26 +87,16 @@ resolve_bazel_path() {
   fi
 }
 
-assemble_path="$(resolve_bazel_path "${assemble_files[0]}")"
-manifest_path=""
-for path in "${manifest_files[@]}"; do
-  if [[ "$path" == *".json" && "$path" != *"proof-plan.json" ]]; then
-    manifest_path="$(resolve_bazel_path "$path")"
-    break
-  fi
-done
-if [[ -z "$manifest_path" ]]; then
-  echo "could not resolve report manifest output for $report_manifest" >&2
-  exit 1
-fi
+assemble_path="$(resolve_bazel_path "${report_paths[assemble]}")"
+manifest_path="$(resolve_bazel_path "${report_paths[report_manifest]}")"
 
 source_root_args=()
 if [[ -n "$report_ruleset_source_root" ]]; then
   source_root_args+=("--corpus-source-root=$report_ruleset_source_root")
 fi
 
-matrix_path="$(resolve_bazel_path "${matrix_files[0]}")"
-metadata_path="$(resolve_bazel_path "${metadata_files[0]}")"
+matrix_path="$(resolve_bazel_path "${report_paths[report_matrix]}")"
+metadata_path="$(resolve_bazel_path "${report_paths[report_metadata]}")"
 
 "$assemble_path" \
   --matrix="$matrix_path" \
@@ -87,12 +112,8 @@ metadata_path="$(resolve_bazel_path "${metadata_files[0]}")"
 # Ruby API conformance keeps its normal test cache and has separate evidence
 # from the fresh telemetry assertions. Consumer reports can omit this matrix.
 if [[ -n "${RUBY_MATRIX_BEP:-}" ]]; then
-  bazel build "${bazel_flags[@]}" --remote_download_outputs=toplevel \
-    //fixtures:ruby_matrix_report_plan //tools:embed_ruby_matrix_report
-  mapfile -t ruby_plan_files < <(bazel cquery "${bazel_flags[@]}" --output=files //fixtures:ruby_matrix_report_plan)
-  mapfile -t ruby_embed_files < <(bazel cquery "${bazel_flags[@]}" --output=files //tools:embed_ruby_matrix_report)
-  "$(resolve_bazel_path "${ruby_embed_files[0]}")" \
-    --plan="$(resolve_bazel_path "${ruby_plan_files[0]}")" \
+  "$(resolve_bazel_path "${report_paths[embed_ruby_matrix_report]}")" \
+    --plan="$(resolve_bazel_path "${report_paths[ruby_matrix_report_plan]}")" \
     --bep="$RUBY_MATRIX_BEP" \
     --report=feature-parity-report.html \
     --revision="$REPORT_REVISION" \

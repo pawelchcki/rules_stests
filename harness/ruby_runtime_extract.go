@@ -15,6 +15,10 @@ import (
 // closure. Compiler binaries, static libraries and package caches never enter
 // the remote action's output tree.
 func extractRubyRuntime(layout, output string, zstdTool ...string) error {
+	return extractRubyRuntimeOutputs(layout, output, "", zstdTool...)
+}
+
+func extractRubyRuntimeOutputs(layout, output, headers string, zstdTool ...string) error {
 	staging, err := os.MkdirTemp("", "ruby-runtime-")
 	if err != nil {
 		return err
@@ -23,10 +27,10 @@ func extractRubyRuntime(layout, output string, zstdTool ...string) error {
 	if err := extractOCI(layout, staging, false, zstdTool...); err != nil {
 		return err
 	}
-	return trimRubyRuntime(staging, output)
+	return trimRubyRuntime(staging, output, headers)
 }
 
-func trimRubyRuntime(staging, output string) error {
+func trimRubyRuntime(staging, output string, headersOutput ...string) error {
 	if err := os.MkdirAll(output, 0o755); err != nil {
 		return err
 	}
@@ -56,6 +60,10 @@ func trimRubyRuntime(staging, output string) error {
 		return closeErr
 	}
 	for _, prefix := range []string{"usr/local/bin/ruby", "usr/local/include", "usr/local/lib"} {
+		destinationRoot := output
+		if prefix == "usr/local/include" && len(headersOutput) > 0 && headersOutput[0] != "" {
+			destinationRoot = headersOutput[0]
+		}
 		err := filepath.WalkDir(filepath.Join(staging, prefix), func(path string, entry fs.DirEntry, err error) error {
 			if err != nil {
 				return err
@@ -87,7 +95,7 @@ func trimRubyRuntime(staging, output string) error {
 				}
 				target := filepath.Clean(filepath.Join(filepath.Dir(relative), link))
 				if strings.HasPrefix(target, "usr/local/") {
-					destination := filepath.Join(output, relative)
+					destination := filepath.Join(destinationRoot, relative)
 					if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
 						return err
 					}
@@ -97,7 +105,7 @@ func trimRubyRuntime(staging, output string) error {
 			if strings.Contains(entry.Name(), ".so") || prefix == "usr/local/bin/ruby" {
 				binaries = append(binaries, path)
 			}
-			return copyFile(path, filepath.Join(output, relative))
+			return copyFile(path, filepath.Join(destinationRoot, relative))
 		})
 		if err != nil {
 			return err
