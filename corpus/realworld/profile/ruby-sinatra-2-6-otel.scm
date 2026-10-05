@@ -11,10 +11,10 @@
 (define profile
   (realworld-profile
     (id 'ruby-sinatra-2-6-otel)
-    (display-name "Ruby 2.6 Sinatra (SDK 1.2.1)")
+    (display-name "Ruby 2.6 Sinatra (SDK 1.2.0)")
     (language 'ruby)
     (framework "Ruby 2.6 Sinatra / Sequel / SQLite")
-    (implementation (compose ruby-sdk-v1.2.1 ruby-otlp-v0.24.2 ruby-rack-v0.22.1))
+    (implementation (compose ruby-sdk-v1.2.0 ruby-otlp-v0.24.2 ruby-rack-v0.22.1))
     (service-name "ruby_2_6_otel")
     (signals 'traces)
     (capture-contract
@@ -22,7 +22,7 @@
       (resource-attributes
         '(("telemetry.sdk.language" (exact "ruby"))
           ("telemetry.sdk.name" (exact "opentelemetry"))
-          ("telemetry.sdk.version" (exact "1.2.1"))
+          ("telemetry.sdk.version" (exact "1.2.0"))
           ("service.name" (exact "ruby_2_6_otel"))
           ("process.runtime.name" (exact "ruby"))
           ("process.runtime.version" (exact "2.6.10"))
@@ -52,7 +52,7 @@
       (log-scopes) (log-policy)
       (event-policy events) (error-status-message 'any)
       (server-scope 'rack) (server-span-name server-name))
-    (all (corroborated (sources ruby-tracer-provider-v1.2.1) tracer/get))
+    (all (corroborated (sources ruby-tracer-provider-v1.2.0) tracer/get))
     (all (observed span/create-root))
     (all (observed span/end))
     (all (observed span/string-attribute))

@@ -323,7 +323,7 @@ use_repo(
     "ruby_gem_opentelemetry_sdk_1_0_3",
     "ruby_gem_opentelemetry_sdk_1_10_0",
     "ruby_gem_opentelemetry_sdk_1_13_1",
-    "ruby_gem_opentelemetry_sdk_1_2_1",
+    "ruby_gem_opentelemetry_sdk_1_2_0",
     "ruby_gem_opentelemetry_sdk_1_7_0",
     "ruby_gem_opentelemetry_semantic_conventions_1_10_0",
     "ruby_gem_opentelemetry_semantic_conventions_1_10_1",

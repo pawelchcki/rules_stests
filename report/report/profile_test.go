@@ -149,8 +149,8 @@ func TestCheckedInProfilePlanSnapshotsAndDescriptorOwnership(t *testing.T) {
 	}
 	for _, ruby := range []struct{ series, sdk, exporter, scope, instrumentation string }{
 		{"2-5", "1.0.3", "0.21.2", "sinatra", "0.19.4"},
-		{"2-6", "1.2.1", "0.24.2", "rack", "0.22.1"},
-		{"2-7", "1.2.1", "0.24.2", "rack", "0.22.1"},
+		{"2-6", "1.2.0", "0.24.2", "rack", "0.22.1"},
+		{"2-7", "1.2.0", "0.24.2", "rack", "0.22.1"},
 		{"3-0", "1.7.0", "0.29.1", "rack", "0.25.0"},
 		{"3-1", "1.10.0", "0.32.0", "rack", "0.28.2"},
 		{"3-2", "1.10.0", "0.32.0", "rack", "0.30.0"},

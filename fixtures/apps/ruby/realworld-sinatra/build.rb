@@ -45,6 +45,17 @@ if inputs.key?("telemetry")
   require "opentelemetry/instrumentation/rack"
   require "opentelemetry/instrumentation/sinatra"
   abort("wrong telemetry SDK") unless OpenTelemetry::SDK::VERSION == inputs.fetch("telemetry").fetch("sdkVersion")
+  # Published requirements can admit combinations that load but fail when a
+  # request actually starts a span or extracts a Rack traceparent.
+  trace_id = "4bf92f3577b34da6a3ce929d0e0e4736"
+  context = OpenTelemetry::Trace::Propagation::TraceContext.text_map_propagator.extract(
+    {"HTTP_TRACEPARENT" => "00-#{trace_id}-00f067aa0ba902b7-01"},
+    getter: OpenTelemetry::Common::Propagation.rack_env_getter)
+  provider = OpenTelemetry::SDK::Trace::TracerProvider.new
+  span = provider.tracer("RealWorld build contract", "1.0.0").start_span("SDK compatibility", with_parent: context)
+  abort("telemetry stack lost incoming trace context") unless span.context.hex_trace_id == trace_id
+  span.finish
+  provider.shutdown
 end
 
 ENV["DATABASE_PATH"] = File.join(app, "seed", "contract.sqlite3")

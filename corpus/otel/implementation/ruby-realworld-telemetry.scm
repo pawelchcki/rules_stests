@@ -3,10 +3,10 @@
           ruby-otlp-v0.21.2
           ruby-sinatra-v0.19.4
           ruby-tracer-provider-v1.0.3
-          ruby-sdk-v1.2.1
+          ruby-sdk-v1.2.0
           ruby-otlp-v0.24.2
           ruby-rack-v0.22.1
-          ruby-tracer-provider-v1.2.1
+          ruby-tracer-provider-v1.2.0
           ruby-sdk-v1.7.0
           ruby-otlp-v0.29.1
           ruby-rack-v0.25.0
@@ -26,10 +26,10 @@
 (define ruby-otlp-v0.21.2 '(ruby-otlp "0.21.2"))
 (define ruby-sinatra-v0.19.4 '(ruby-sinatra "0.19.4"))
 (define ruby-tracer-provider-v1.0.3 "https://github.com/open-telemetry/opentelemetry-ruby/blob/edaa9dfd0dc50315951f739865266b9a8dcb824a/sdk/lib/opentelemetry/sdk/trace/tracer_provider.rb")
-(define ruby-sdk-v1.2.1 '(ruby-sdk "1.2.1"))
+(define ruby-sdk-v1.2.0 '(ruby-sdk "1.2.0"))
 (define ruby-otlp-v0.24.2 '(ruby-otlp "0.24.2"))
 (define ruby-rack-v0.22.1 '(ruby-rack "0.22.1"))
-(define ruby-tracer-provider-v1.2.1 "https://github.com/open-telemetry/opentelemetry-ruby/blob/886cb599944f063577395acf0830622e8ddbe3b5/sdk/lib/opentelemetry/sdk/trace/tracer_provider.rb")
+(define ruby-tracer-provider-v1.2.0 "https://github.com/open-telemetry/opentelemetry-ruby/blob/ad7c3b9c4fcdf2f74705a9ac08310b7067e97162/sdk/lib/opentelemetry/sdk/trace/tracer_provider.rb")
 (define ruby-sdk-v1.7.0 '(ruby-sdk "1.7.0"))
 (define ruby-otlp-v0.29.1 '(ruby-otlp "0.29.1"))
 (define ruby-rack-v0.25.0 '(ruby-rack "0.25.0"))

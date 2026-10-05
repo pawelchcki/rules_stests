@@ -35,13 +35,13 @@
       "status": "supported",
       "gems": "ruby_2_6",
       "profile": "ruby-sinatra-2-6-otel",
-      "sdkVersion": "1.2.1"
+      "sdkVersion": "1.2.0"
     },
     "2.7": {
       "status": "supported",
       "gems": "ruby_2_6",
       "profile": "ruby-sinatra-2-7-otel",
-      "sdkVersion": "1.2.1"
+      "sdkVersion": "1.2.0"
     },
     "3.0": {
       "status": "supported",
@@ -378,8 +378,8 @@
       },
       {
         "name": "opentelemetry-sdk",
-        "version": "1.2.1",
-        "sha256": "11feff8600f43699cd4376c81764ac18d0bfaf0533c01e0c0b0638b20a9113af",
+        "version": "1.2.0",
+        "sha256": "ba2b1f903305b358d5e02b027bb7f417dded06768ef75e5a36c0f150dcc8560f",
         "rubyRequirement": ">= 2.6.0",
         "dependencies": [
           {

@@ -82,12 +82,15 @@ and dependency requirements and loads the exact SDK/exporter before publishing
 the bundle.
 Ruby 2.6 and 2.7 pin Common 0.19.6: Common 0.19.7's Rack getter mutates a
 frozen interpolated string on those interpreters and loses incoming context.
+They use SDK 1.2.0 because SDK 1.2.1 calls a Common API absent from 0.19.6.
+The build also creates a span with extracted incoming context to reject such
+runtime API incompatibilities before server startup.
 
 | Ruby series | Official SDK | Telemetry status |
 | --- | --- | --- |
 | 1.9.3, 2.0, 2.1, 2.2, 2.3, 2.4 | — | Unsupported: official OTLP exporter and Sinatra/Rack instrumentation require Ruby 2.5 or later |
 | 2.5 | 1.0.3 | RealWorld traces |
-| 2.6, 2.7 | 1.2.1 | RealWorld traces |
+| 2.6, 2.7 | 1.2.0 | RealWorld traces |
 | 3.0 | 1.7.0 | RealWorld traces |
 | 3.1, 3.2 | 1.10.0 | RealWorld traces |
 | 3.3, 3.4, 4.0 | 1.13.1 | RealWorld traces |
