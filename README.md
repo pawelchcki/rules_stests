@@ -2,12 +2,10 @@
 
 Portable RealWorld conformance suites for telemetry implementations, built on
 [`rules_itest`](https://github.com/hermeticbuild/rules_itest). The repository
-ships independent OpenTelemetry and Datadog proof corpora, a test harness, and reference
+ships the OpenTelemetry proof corpus, shared test infrastructure, and reference
 applications for Python, Ruby, and Go.
 
 [Latest OpenTelemetry capability report](https://pawelchcki.github.io/rules_stests/) (published from `main`).
-
-[Latest Datadog tracing evidence](https://pawelchcki.github.io/rules_stests/datadog-report.html) (published from `main` after two fresh gated executions).
 
 ## Plug in an implementation
 
@@ -110,119 +108,18 @@ bazel run @rules_stests//tools:assemble_otel_report
 `REPORT_RULESET_SOURCE_ROOT` must name the immutable dependency commit selected
 by the consumer. See [`examples/plugin_agent`](examples/plugin_agent).
 
-## Datadog tracing
+## Datadog assertions
 
-The Python fixtures inject dd-trace-py 4.14.0 from the digest-pinned Datadog
-package using `PYTHONPATH`. Bazel materializes the package; application processes
-receive the injection and exporter environment. Both Python fixtures run all 16
-scenarios on v0.4 and v0.5 MessagePack. Rails uses a separate Ruby 2.42.0
-tracer payload, with the application Bundler setup loaded first and frozen
-Gemfiles. The same payload traces an async Ruby application: Sinatra and
-Sequel served by Falcon, with several Async reactor threads and a fiber per
-request (`fixtures/apps/ruby/realworld-falcon`). Gin has a separate binary built
-with Orchestrion 1.13.0 and dd-trace-go 2.10.1. Rails, Falcon, and Gin run all
-16 scenarios on v0.4: 112 combinations.
-Each profile declares its expected intake language and tracer version; the
-shared decoder checks header uniqueness and counts, and the profile enforces
-those declared values.
+Datadog's corpus, reviewed shapes, profiles, SDK experiments, evidence tools and
+CI are owned by the independent [rules_datadog_stests](https://github.com/pawelchcki/rules_datadog_stests) repository. It imports
+`rules_stests` for the telemetry sink, native launchers, Scheme compiler and
+service-test rules. Shared Gin application sources are exported through
+`@rules_stests//fixtures/apps/go/realworld-gin:sources`; the Falcon application
+and rootfs also remain here. `rules_stests` has no dependency on the assertion repository.
 
-```bash
-# Ruby, Falcon, and Gin use anonymously readable, digest-pinned GHCR images.
-bazel test --config=local //fixtures:datadog_suite
-```
-
-For a custom service, use `datadog_python_injection(aiohttp = True)` for aiohttp (the default for Django is
-`datadog_python_injection()`) and
-`datadog_env(service = "aiohttp-datadog")`, declare a dependency on
-`@rules_stests//harness:telemetry_sink_service`, and attach tests with:
-
-```starlark
-realworld_service_tests(
-    name = "my_datadog",
-    service = ":my_datadog_service",
-    telemetry_profile = "@rules_stests//corpus:python-aiohttp-datadog-v4-14-0-v05",
-    telemetry_sink = "@rules_stests//harness:telemetry_sink_service",
-    scenarios = REALWORLD_BASE_HURL_CASES + ["propagation_datadog"],
-)
-```
-
-Load `REALWORLD_BASE_HURL_CASES` from `@rules_stests//rules:hurl_test.bzl`.
-The exporter and driver must select the same sink service. Both sink service
-targets run `telemetry_sink` and accept both protocols. Existing
-`otel_sink_service`, OTel flags, and `{otel_rootfs}` remain supported;
-`instrumentation_injection` uses `{instrumentation_rootfs}` without OTel defaults.
-
-Datadog dump, stats, reset, validation, and candidate operations use
-`?protocol=datadog`; unqualified operations retain OTLP behavior. The Datadog
-corpus checks features in nine themes: intake, trace structure, service
-identity, sampling, propagation, HTTP, database, errors, and evidence
-coverage. It also checks exact parent/child trees, written with per-integration
-builders. [`corpus/datadog/README.md`](corpus/datadog/README.md) explains how to
-read the contract. Shapes retain all native span
-fields, complete metadata and metrics, and field presence. This includes HTTP
-URLs and user agents, Django metadata, `sql.db`, `db.row_count`, service and
-sampling tags, and SQLite commit spans without a `sql` type. SQL resources and
-URL path/query content remain exact. Only loopback endpoint ports, generated
-workload suffixes, fixture database roots, validated runtime/process IDs, trace
-high bits, Rails request IDs and runtime measurements, and structurally
-validated Python, Ruby, and Go exception stacks use explicit policies.
-
-Datadog validators compile into Bazel-cached bounded-VM bytecode. Manifests
-and receipts bind the selected source, compiler, and bytecode hashes. Source
-validation remains available for diagnostics. Captures retain their full
-128-bit identity across intake chunks. See [coverage and verification](docs/datadog-coverage.md)
-for the pinned upstream references, retained evidence, and capability limits.
-
-`//fixtures:datadog_external_features_suite` runs differential native tracer
-checks using opt-in shared probe routes. `//fixtures:datadog_parallel_suite` is
-a manual shared-process isolation suite: 32 workers and three repetitions of
-every scenario by default. CI uses `--test_arg=--scenario-concurrency=4` and
-`--test_arg=--scenario-repetitions=1`. The proxy ledger, independent SQL markers
-and execution counts, native capture, overlap, and graph assertions are retained
-as separate stress evidence. Application probes and SQL hooks activate only
-when their fixture configuration enables them. Custom suites can opt in with
-`parallel_scenarios = True` and supply a suitably configured `parallel_service`.
-
-A consumer-owned profile can set `reference_profile` to a published Datadog
-profile. Reference mode inherits its complete scenario set, proof contract,
-application, wire version, and reviewed exact shapes; supplying replacement
-scenarios or shapes is rejected. The candidate specification and implementation
-remain separate, and receipts bind their digest, the reference proof-plan
-digest, and the validation-policy digest.
-
-Set `TELEMETRY_TEST_REVISION` to the current 40-character commit to emit Datadog
-schema-v2 receipts under test outputs `datadog/receipts`. Shape candidates are
-under `datadog/shape`; candidate suites have the `_shape_candidates` suffix and
-are manual targets. `bazel run //tools:datadog_shapes` renders candidates in the
-readable shape vocabulary for review. OTel receipts retain schema v1 and accept
-`OTEL_TEST_REVISION` as a fallback. Datadog evidence stays outside the OTel HTML
-report. The separate Datadog HTML report shows each profile's verified scenarios,
-features, span counts, field-policy counts, and per-scenario proof assertions.
-It rechecks retained captures and compiled validators with the coverage gate
-before rendering. BuildBuddy publishes it alongside the complete evidence archive;
-the Pages workflow publishes it after two fresh independent executions.
-Each verified receipt also contains machine-readable application/scenario,
-integration-span, and exact/normalized/runtime field-policy counts. Candidates,
-contract-only runs, xfails, missing scenarios, or nonzero unclassified fields
-cannot serve as complete parity evidence.
-CI can enforce this trust boundary with `//tools/datadog_coverage:datadog_coverage`,
-passing the current revision plus each profile manifest and emitted receipt.
-
-For a local report, retain two independent executions as described in
-[`docs/datadog-verification.md`](docs/datadog-verification.md), then run:
-
-```sh
-python3 tools/datadog_report.py --revision "$(git rev-parse HEAD)" \
-  --execution /tmp/datadog-reproduction/execution-1 \
-  --execution /tmp/datadog-reproduction/execution-2 \
-  --gate bazel-bin/tools/datadog_coverage/datadog_coverage_/datadog_coverage \
-  --output datadog-report.html
-```
-
-Maintainers rebuild reviewed payloads with `tools/build_datadog_fixtures.sh` and
-publish them with `tools/publish_datadog_fixtures.sh` after registry login. The
-publication workflow checks the payload digests, verifies anonymous pulls, and
-proposes updated locks when their source trees change.
+The shared sink supports Datadog intake and OTLP. Protocol transport and process
+mechanics live here; tracer claims, verification policy and report publication
+belong to their respective assertion suites.
 
 ## Public API
 
@@ -230,8 +127,8 @@ proposes updated locks when their source trees change.
 `otel_injection`, `python_auto_injection`, `ruby_auto_injection`, `otlp_env`,
 `realworld_service_tests`, `realworld_app_suite`, `realworld_hurl_test_suite`,
 `otel_realworld_profile`, `otel_standard_registry`, and
-`otel_report_manifest`. Datadog adds `datadog_python_injection`, `datadog_ruby_injection`, `datadog_env`,
-`datadog_realworld_profile`, `instrumentation_injection`, and `TelemetryProfileInfo`.
+`otel_report_manifest`. Shared telemetry APIs include `instrumentation_injection`
+and `TelemetryProfileInfo`; Datadog-specific macros belong to `rules_datadog_stests`.
 
 `corpus_service` is independent of RealWorld. A service built by Bazel can use
 `corpus_service(name = "queue", exe = "//queue:server", args = [...])` without

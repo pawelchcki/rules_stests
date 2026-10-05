@@ -1,12 +1,9 @@
-load("@rules_go//go:def.bzl", "go_binary")
-load("@rules_itest//:itest.bzl", "service_test")
-load("//corpus:registry.bzl", "DATADOG_CORE_LIBRARIES", "datadog_library_args", "datadog_library_labels", "declare_datadog_profiles", "OTEL_CORE_LIBRARIES", "declare_otel_profiles")
-load("//harness:scheme_bytecode.bzl", "scheme_bytecode_bundles")
-load("//rules:otel_profile.bzl", "datadog_realworld_profile", "telemetry_feature_registry", "otel_realworld_profile", "otel_standard_registry")
+load("//corpus:registry.bzl", "OTEL_CORE_LIBRARIES", "declare_otel_profiles")
+load("//rules:otel_profile.bzl", "otel_realworld_profile", "otel_standard_registry")
 
 package(default_visibility = ["//visibility:public"])
 
-exports_files(glob(["**/*.scm", "**/*.hurl", "**/*.json"]))
+exports_files(glob(["**/*.scm", "**/*.hurl"]))
 
 filegroup(
     name = "core_libraries",
@@ -26,38 +23,3 @@ filegroup(
 )
 
 declare_otel_profiles(otel_realworld_profile)
-
-filegroup(name = "datadog_core_libraries", srcs = DATADOG_CORE_LIBRARIES)
-filegroup(name = "datadog_reviewed_shapes", srcs = glob(["datadog/realworld/shape/*/*.scm"]))
-telemetry_feature_registry(
-    name = "datadog_feature_registry",
-    scheme = "datadog/catalog.scm",
-    catalog = "datadog/features.json",
-)
-declare_datadog_profiles(datadog_realworld_profile)
-
-go_binary(
-    name = "datadog_conformance_probe",
-    srcs = ["datadog/tests/conformance.go"],
-    deps = ["//harness:schemebytecode"],
-)
-
-_CONFORMANCE_LIBRARIES = ["datadog/catalog.scm"] + DATADOG_CORE_LIBRARIES
-
-# Every conformance case is compiled at build time; the test runs bytecode.
-_CONFORMANCE_BYTECODE = scheme_bytecode_bundles(
-    name = "datadog_conformance_bytecode",
-    libraries = datadog_library_labels(_CONFORMANCE_LIBRARIES),
-    probe = ":datadog_conformance_probe",
-    shards = 16,
-)
-
-service_test(
-    name = "datadog_conformance_test",
-    timeout = "long",
-    # The ordered Scheme bundle: the feature catalog, then the core libraries.
-    args = _CONFORMANCE_BYTECODE.args + datadog_library_args(_CONFORMANCE_LIBRARIES),
-    data = _CONFORMANCE_BYTECODE.data + datadog_library_labels(_CONFORMANCE_LIBRARIES),
-    services = ["//harness:telemetry_sink_service"],
-    test = ":datadog_conformance_probe",
-)

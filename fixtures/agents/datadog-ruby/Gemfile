@@ -1,3 +1,0 @@
-source "https://rubygems.org"
-ruby "3.3.12"
-gem "datadog", "2.42.0"

@@ -59,7 +59,7 @@ if args.rootfs_digest:
         )
 index["manifests"] = manifests
 (args.directory / "index.json").write_text(json.dumps(index))
-(args.directory / "MODULE.bazel").write_text('module(name = "local_datadog_image")\n')
+(args.directory / "MODULE.bazel").write_text('module(name = "local_oci_image")\n')
 (args.directory / "BUILD.bazel").write_text(
     'load(":layout.bzl", "layout")\n'
     f'layout(name = {json.dumps(args.repository)}, srcs = glob(["blobs/**", "index.json", "oci-layout"]), visibility = ["//visibility:public"])\n'
