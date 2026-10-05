@@ -72,6 +72,9 @@ pub(crate) fn from_records(records: &[Record]) -> Result<Forest, String> {
     let mut spans = Vec::new();
     for record in records {
         match &record.payload {
+            Payload::Datadog(_) => {
+                return Err("native Datadog payload requires Datadog validation".into())
+            }
             Payload::Traces(payload) => collect_typed(payload, &mut spans)?,
             Payload::Json(payload) if record.signal == "traces" => {
                 collect_json(payload, &mut spans)?

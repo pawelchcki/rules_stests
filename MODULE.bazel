@@ -4,6 +4,7 @@ module(
 )
 
 bazel_dep(name = "rules_go", version = "0.63.0")
+bazel_dep(name = "rules_cc", version = "0.2.22")
 bazel_dep(name = "gazelle", version = "0.51.3")
 bazel_dep(name = "rules_itest", version = "0.0.59")
 bazel_dep(name = "rules_oci", version = "2.3.0")
@@ -254,3 +255,56 @@ compression_toolchains = use_extension("@aspect_bazel_lib//lib:extensions.bzl", 
 use_repo(compression_toolchains, "zstd_toolchains")
 
 register_toolchains("@zstd_toolchains//:all")
+
+ruby_apps = use_extension("//bazel:ruby_matrix.bzl", "ruby_matrix")
+use_repo(
+    ruby_apps,
+    "ruby_gem_bcrypt_3_1_11",
+    "ruby_gem_bcrypt_3_1_22",
+    "ruby_gem_jwt_1_5_6",
+    "ruby_gem_mini_portile2_2_8_9",
+    "ruby_gem_mustermann_2_0_2",
+    "ruby_gem_rack_1_6_13",
+    "ruby_gem_rack_2_2_21",
+    "ruby_gem_rack_protection_1_5_5",
+    "ruby_gem_rack_protection_2_2_4",
+    "ruby_gem_ruby2_keywords_0_0_5",
+    "ruby_gem_sequel_4_49_0",
+    "ruby_gem_sequel_5_63_0",
+    "ruby_gem_sinatra_1_4_8",
+    "ruby_gem_sinatra_2_2_4",
+    "ruby_gem_sqlite3_1_3_13",
+    "ruby_gem_sqlite3_1_4_4",
+    "ruby_gem_sqlite3_2_8_1",
+    "ruby_gem_tilt_2_0_11",
+    "ruby_gem_unicode_utils_1_4_0",
+    "ruby_gem_webrick_1_8_2",
+    "ruby_matrix_config",
+    "ruby_runtime_1_9_3_linux_amd64",
+    "ruby_runtime_2_0_linux_amd64",
+    "ruby_runtime_2_1_linux_amd64",
+    "ruby_runtime_2_2_linux_amd64",
+    "ruby_runtime_2_3_linux_amd64",
+    "ruby_runtime_2_4_linux_amd64",
+    "ruby_runtime_2_5_linux_amd64",
+    "ruby_runtime_2_6_linux_amd64",
+    "ruby_runtime_2_7_linux_amd64",
+    "ruby_runtime_3_0_linux_amd64",
+    "ruby_runtime_3_1_linux_amd64",
+    "ruby_runtime_3_2_linux_amd64",
+    "ruby_runtime_3_3_linux_amd64",
+    "ruby_runtime_3_4_linux_amd64",
+    "ruby_runtime_4_0_linux_amd64",
+)
+
+http_archive(
+    name = "ruby_matrix_sqlite",
+    build_file_content = """
+package(default_visibility = ["//visibility:public"])
+filegroup(name = "source", srcs = ["sqlite3.c"])
+filegroup(name = "headers", srcs = ["sqlite3.h"])
+""",
+    sha256 = "1d3049dd0f830a025a53105fc79fd2ab9431aea99e137809d064d8ee8356b032",
+    strip_prefix = "sqlite-amalgamation-3500400",
+    urls = ["https://www.sqlite.org/2025/sqlite-amalgamation-3500400.zip"],
+)

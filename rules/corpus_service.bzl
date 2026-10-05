@@ -14,6 +14,7 @@ def corpus_service(
         injection = None,
         data = [],
         exe = None,
+        ruby_rootfs = None,
         **kwargs):
     """Launches an app as a rules_itest service within the Bazel test action.
 
@@ -35,12 +36,14 @@ def corpus_service(
         data: Additional service runfiles.
         exe: Bazel executable label. Receives args, env and data directly,
             without rootfs/runtime setup or corpus-specific state preparation.
+        ruby_rootfs: Optional separate Ruby runtime directory label, containing
+            usr/local and its loader/libraries; requires runtime = "ruby".
         **kwargs: itest_service options, including env, deps, health checks,
             port assignment and shutdown timeout.
     """
     if exe != None:
-        if rootfs != None or runtime != None or instance != None or command != None or injection != None:
-            fail("exe cannot be combined with rootfs, runtime, instance, command or injection")
+        if rootfs != None or ruby_rootfs != None or runtime != None or instance != None or command != None or injection != None:
+            fail("exe cannot be combined with rootfs, ruby_rootfs, runtime, instance, command or injection")
         itest_service(name = name, exe = exe, args = args, data = data, **kwargs)
         return
     if rootfs == None:
@@ -57,6 +60,11 @@ def corpus_service(
         "--rootfs=$(rlocationpath {})".format(rootfs),
     ]
     launcher_data = data + [rootfs]
+    if ruby_rootfs:
+        if runtime != "ruby":
+            fail("ruby_rootfs requires runtime = ruby")
+        launcher_args.append("--ruby-rootfs=$(rlocationpath {})".format(ruby_rootfs))
+        launcher_data.append(ruby_rootfs)
     if injection:
         launcher_args.extend(injection.flags)
         launcher_data.append(injection.rootfs)

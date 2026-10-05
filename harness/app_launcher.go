@@ -71,6 +71,7 @@ type launchConfig struct {
 	runtime               string
 	instance              string
 	rootfs                string
+	rubyRootfs            string
 	otelRootfs            string
 	instrumentationRootfs string
 	command               string
@@ -92,6 +93,7 @@ func parseLaunchArgs(args []string) (launchConfig, error) {
 	flags.StringVar(&config.runtime, "runtime", "", "python, ruby or native")
 	flags.StringVar(&config.instance, "instance", "", "service instance name")
 	flags.StringVar(&config.rootfs, "rootfs", "", "materialized application directory")
+	flags.StringVar(&config.rubyRootfs, "ruby-rootfs", "", "separate pinned Ruby runtime directory")
 	flags.Func("otel-rootfs", "optional instrumentation directory", func(value string) error {
 		if value == "" || config.otelRootfs != "" {
 			return errors.New("--otel-rootfs requires a non-empty value and may be specified only once")
@@ -118,6 +120,9 @@ func parseLaunchArgs(args []string) (launchConfig, error) {
 	}
 	if config.runtime != "python" && config.runtime != "ruby" && config.runtime != "native" {
 		return config, fmt.Errorf("unsupported runtime %q: expected python, ruby or native", config.runtime)
+	}
+	if config.rubyRootfs != "" && config.runtime != "ruby" {
+		return config, errors.New("--ruby-rootfs requires --runtime=ruby")
 	}
 	if !validInstance(config.instance) {
 		return config, fmt.Errorf("unsafe instance name %q", config.instance)
@@ -150,7 +155,7 @@ func run(args []string) error {
 	case "python":
 		return runApp(config.injection, config.instance, config.rootfs, config.command, config.args)
 	case "ruby":
-		return runRubyApp(config.injection, config.instance, config.rootfs, config.command, config.args)
+		return runRubyAppWithRuntime(config.injection, config.instance, config.rootfs, config.rubyRootfs, config.command, config.args)
 	default:
 		return runAppExec(config.injection, config.instance, config.rootfs, config.command, config.args)
 	}
@@ -268,6 +273,10 @@ func resolveInjection(value injection) (injection, string, error) {
 }
 
 func runRubyApp(injection injection, instance, rootArg, command string, args []string) error {
+	return runRubyAppWithRuntime(injection, instance, rootArg, "", command, args)
+}
+
+func runRubyAppWithRuntime(injection injection, instance, rootArg, rubyRootArg, command string, args []string) error {
 	if !validInstance(instance) {
 		return fmt.Errorf("unsafe instance name %q", instance)
 	}
@@ -282,7 +291,24 @@ func runRubyApp(injection injection, instance, rootArg, command string, args []s
 	if err != nil {
 		return err
 	}
-	return execRubyApp(root, injection, otelRoot, instance, command, args)
+	rubyRoot := ""
+	if rubyRootArg != "" {
+		rubyRoot, err = resolveDirectory(rubyRootArg)
+		if err != nil {
+			return err
+		}
+	}
+	execution, err := rubyAppExecutionWithRuntime(root, rubyRoot, injection, otelRoot, instance, command, args, os.Environ())
+	if err != nil {
+		return err
+	}
+	if otelRoot != "" {
+		fmt.Fprintf(os.Stderr, "app_launcher: activating instrumentation for %s from %s\n", instance, otelRoot)
+	}
+	if err := syscall.Exec(execution.loader, execution.arguments, execution.environment); err != nil {
+		return fmt.Errorf("execute Ruby app with bundled Ruby: %w", err)
+	}
+	return nil
 }
 
 func stringSliceContainsAny(values []string, wanted ...string) bool {
@@ -303,12 +329,65 @@ type rubyExecution struct {
 	environment []string
 }
 
+// Ruby's library ABI does not always match its release number (1.9.3 uses
+// 1.9.1, for example). Discover it from the runtime that was built into the
+// application instead of assuming the host or a particular Ruby series.
+func rubyLibraryPaths(prefix string) (string, []string, error) {
+	candidates, err := filepath.Glob(filepath.Join(prefix, "lib", "ruby", "[0-9]*"))
+	if err != nil {
+		return "", nil, err
+	}
+	var libraries []string
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			libraries = append(libraries, candidate)
+		}
+	}
+	if len(libraries) != 1 {
+		return "", nil, fmt.Errorf("bundled Ruby must contain exactly one library ABI directory, got %d", len(libraries))
+	}
+	architectures, err := filepath.Glob(filepath.Join(libraries[0], "*linux*"))
+	if err != nil {
+		return "", nil, err
+	}
+	if len(architectures) != 1 {
+		return "", nil, fmt.Errorf("bundled Ruby must contain exactly one Linux architecture library directory, got %d", len(architectures))
+	}
+	return filepath.Base(libraries[0]), append(libraries, architectures...), nil
+}
+
 // Rails applications run `bin/rails <command>`. Other Ruby applications name
 // their entry script relative to the application source, such as bin/server.
 func rubyAppExecution(root string, injection injection, otelRoot, instance, command string, args []string, inherited []string) (rubyExecution, error) {
+	return rubyAppExecutionWithRuntime(root, "", injection, otelRoot, instance, command, args, inherited)
+}
+
+func rubyAppExecutionWithRuntime(root, runtimeRoot string, injection injection, otelRoot, instance, command string, args []string, inherited []string) (rubyExecution, error) {
+	// Ruby resolves its executable to a real path. Match that path in Gem and
+	// library variables so runfile symlinks cannot load the same library twice.
+	var err error
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return rubyExecution{}, err
+	}
+	if runtimeRoot != "" {
+		runtimeRoot, err = filepath.EvalSymlinks(runtimeRoot)
+		if err != nil {
+			return rubyExecution{}, err
+		}
+	}
 	appRoot := filepath.Join(root, "opt", "app")
+	rubyPrefix := filepath.Join(appRoot, "ruby")
+	if runtimeRoot != "" {
+		root = runtimeRoot
+		rubyPrefix = filepath.Join(runtimeRoot, "usr", "local")
+	}
 	loader := filepath.Join(root, "lib64", "ld-linux-x86-64.so.2")
-	ruby := filepath.Join(appRoot, "ruby", "bin", "ruby")
+	ruby := filepath.Join(rubyPrefix, "bin", "ruby")
+	abi, rubyLibrary, err := rubyLibraryPaths(rubyPrefix)
+	if err != nil {
+		return rubyExecution{}, err
+	}
 	rails := filepath.Join(appRoot, "src", "bin", "rails")
 	_, railsErr := os.Stat(rails)
 	isRails := railsErr == nil
@@ -332,11 +411,11 @@ func rubyAppExecution(root string, injection injection, otelRoot, instance, comm
 	}
 	// Rails needs its bundled Prism ahead of the Ruby default gem; other
 	// applications may not bundle Prism at all.
-	prismLibraries, err := filepath.Glob(filepath.Join(appRoot, "bundle", "ruby", "3.3.0", "gems", "prism-*", "lib"))
+	prismLibraries, err := filepath.Glob(filepath.Join(appRoot, "bundle", "ruby", abi, "gems", "prism-*", "lib"))
 	if err != nil || len(prismLibraries) > 1 || (isRails && len(prismLibraries) != 1) {
 		return rubyExecution{}, fmt.Errorf("Ruby rootfs must contain at most one bundled Prism library (exactly one for Rails), got %d", len(prismLibraries))
 	}
-	rubyLibrary := append(prismLibraries, filepath.Join(appRoot, "ruby", "lib", "ruby", "3.3.0"), filepath.Join(appRoot, "ruby", "lib", "ruby", "3.3.0", "x86_64-linux"))
+	rubyLibrary = append(prismLibraries, rubyLibrary...)
 
 	blocked := map[string]bool{
 		"BUNDLE_GEMFILE": true, "BUNDLE_PATH": true, "DATABASE_PATH": true, "GEM_HOME": true, "GEM_PATH": true,
@@ -362,19 +441,25 @@ func rubyAppExecution(root string, injection injection, otelRoot, instance, comm
 	if state == "" {
 		return rubyExecution{}, errors.New("APP_STATE_DIR is required after state preparation")
 	}
+	gemHome := filepath.Join(rubyPrefix, "lib", "ruby", "gems", abi)
+	gemPath := gemHome
+	if runtimeRoot != "" {
+		gemHome = filepath.Join(appRoot, "bundle", "ruby", abi)
+		gemPath = gemHome + ":" + gemPath
+	}
 	environment = append(environment,
 		"BUNDLE_GEMFILE="+filepath.Join(appRoot, "src", "Gemfile"),
 		"BUNDLE_PATH="+filepath.Join(appRoot, "bundle"),
 		"DATABASE_PATH="+filepath.Join(state, "realworld.sqlite3"),
-		"GEM_HOME="+filepath.Join(appRoot, "ruby", "lib", "ruby", "gems", "3.3.0"),
-		"GEM_PATH="+filepath.Join(appRoot, "ruby", "lib", "ruby", "gems", "3.3.0"),
+		"GEM_HOME="+gemHome,
+		"GEM_PATH="+gemPath,
 		"REALWORLD_BUNDLE_ROOT="+appRoot,
 		"RUBYLIB="+strings.Join(rubyLibrary, ":"),
 	)
 	libraryPath := strings.Join([]string{
 		filepath.Join(root, "lib", "x86_64-linux-gnu"),
 		filepath.Join(root, "usr", "lib", "x86_64-linux-gnu"),
-		filepath.Join(appRoot, "ruby", "lib"),
+		filepath.Join(rubyPrefix, "lib"),
 	}, ":")
 	environment = append(environment, "LD_LIBRARY_PATH="+libraryPath)
 	environment, err = applyInjection(environment, injection, otelRoot, instance, false)
@@ -400,20 +485,6 @@ func rubyAppExecution(root string, injection injection, otelRoot, instance, comm
 		arguments = append(arguments, "--pid", filepath.Join(state, "server.pid"))
 	}
 	return rubyExecution{loader: loader, arguments: arguments, environment: environment}, nil
-}
-
-func execRubyApp(root string, injection injection, otelRoot, instance, command string, args []string) error {
-	execution, err := rubyAppExecution(root, injection, otelRoot, instance, command, args, os.Environ())
-	if err != nil {
-		return err
-	}
-	if otelRoot != "" {
-		fmt.Fprintf(os.Stderr, "app_launcher: activating instrumentation for %s from %s\n", instance, otelRoot)
-	}
-	if err := syscall.Exec(execution.loader, execution.arguments, execution.environment); err != nil {
-		return fmt.Errorf("execute Ruby app with bundled Ruby: %w", err)
-	}
-	return nil
 }
 
 func runApp(injection injection, instance, rootArg, command string, args []string) error {
