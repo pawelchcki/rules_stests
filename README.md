@@ -20,15 +20,25 @@ its API test results, and the cross-version response-parity evidence. Nine
 versions, Ruby 2.5 through 4.0, also have official SDK trace captures for all
 15 RealWorld scenarios, selectable in the parity comparison and feature tables.
 Ruby 1.9.3 through 2.4 have explicit unsupported telemetry rows because the
-official HTTP instrumentation and OTLP exporter require Ruby 2.5 or later. BuildBuddy
-and GitHub Pages include this matrix; cached API results are labeled separately
+official HTTP instrumentation and OTLP exporter require Ruby 2.5 or later. Full BuildBuddy
+runs on `main` and GitHub Pages include this matrix; cached API results are labeled separately
 from the report's fresh telemetry assertions.
 
 ```bash
-bazel test //fixtures:ruby_matrix_suite
+bazel test --config=ruby-matrix //fixtures:ruby_matrix_suite
 # Or select one series:
 bazel test //fixtures:ruby_2_7_suite
 ```
+
+Pull-request CI runs every Ruby API scenario and the official SDK trace suite on
+the newest pinned interpreter (`//fixtures:ruby_ci_suite` and
+`//fixtures:otel_report_ci_suite`), one base configuration per reference app,
+and one base SDK workload per language. Its report uses
+`//fixtures:otel_report_ci_manifest` and includes only that telemetry evidence.
+The `main` build runs all Ruby versions, cross-version response parity, and all
+Django and SDK configuration variants, then publishes the complete report.
+Telemetry workloads run once per build with fresh receipts; API and unit tests
+keep their normal cache. Tests tagged `ci-full` are reserved for the full CI run.
 
 ## Plug in an implementation
 

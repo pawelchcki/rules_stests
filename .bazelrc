@@ -24,6 +24,11 @@ common --host_platform=//bazel/platforms:rbe_linux_amd64
 
 test --test_output=errors
 
+# Submit every Ruby matrix test without the default 100-action client cap.
+# The executor scheduler still limits actual concurrency to fleet resources.
+build:ruby-matrix --jobs=256
+test:ruby-matrix --strategy=TestRunner=remote
+
 # Escape hatch: fully local, sandboxed, offline-capable builds.
 common:local --remote_executor= --remote_cache= --bes_backend=
 common:local --spawn_strategy=sandboxed,local

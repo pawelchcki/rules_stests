@@ -11,6 +11,16 @@ load("//rules:realworld_service_tests.bzl", "realworld_service_tests")
 RUBY_TELEMETRY_PROFILES = ["//corpus:" + declaration["profile"] for declaration in RUBY_TELEMETRY["runtimes"].values() if declaration["status"] == "supported"]
 RUBY_TELEMETRY_SUITES = [":ruby_" + series.replace(".", "_") + "_otel_hurl_test" for series, declaration in RUBY_TELEMETRY["runtimes"].items() if declaration["status"] == "supported"]
 
+_CI_SERIES = RUBY_RUNTIMES[-1]["series"]
+RUBY_TELEMETRY_CI_PROFILES = ["//corpus:" + RUBY_TELEMETRY["runtimes"][_CI_SERIES]["profile"]] if RUBY_TELEMETRY["runtimes"][_CI_SERIES]["status"] == "supported" else []
+RUBY_TELEMETRY_CI_SUITES = [":ruby_" + _CI_SERIES.replace(".", "_") + "_otel_hurl_test"] if RUBY_TELEMETRY_CI_PROFILES else []
+
+# Measured service tests peak at 84 MB and typically use under half a CPU.
+_TEST_EXEC_PROPERTIES = {
+    "test.EstimatedCPU": "0.5",
+    "test.EstimatedMemory": "128MB",
+}
+
 def _report_plan_impl(ctx):
     output = ctx.actions.declare_file(ctx.label.name + ".json")
     ctx.actions.write(output, ctx.attr.content)
@@ -30,6 +40,7 @@ def ruby_app_matrix(name):
     suite_name = name
     ruby_sqlite(name = "ruby_matrix_sqlite", srcs = ["@ruby_matrix_sqlite//:source", "//fixtures/apps/ruby/realworld-sinatra:sqlite_compat.c"], hdrs = ["@ruby_matrix_sqlite//:headers"])
     tests = []
+    ci_tests = []
     receipts = []
     report_tests = {}
     for runtime in RUBY_RUNTIMES:
@@ -116,7 +127,13 @@ def ruby_app_matrix(name):
                 hygienic = False,
                 shutdown_timeout = "10s",
             )
-            realworld_service_tests(name = name + "_otel", service = ":" + name + "_otel_service", profile = "//corpus:" + telemetry["profile"])
+            realworld_service_tests(
+                name = name + "_otel",
+                service = ":" + name + "_otel_service",
+                profile = "//corpus:" + telemetry["profile"],
+                tags = [] if runtime["series"] == _CI_SERIES else ["ci-full"],
+                exec_properties = _TEST_EXEC_PROPERTIES,
+            )
         corpus_service(
             name = name + "_service",
             rootfs = ":" + name + "_rootfs",
@@ -133,9 +150,16 @@ def ruby_app_matrix(name):
             hygienic = False,
             shutdown_timeout = "10s",
         )
-        realworld_service_tests(name = name, service = ":" + name + "_service", tags = ["ruby-matrix", "manual"])
+        realworld_service_tests(
+            name = name,
+            service = ":" + name + "_service",
+            tags = ["ruby-matrix", "manual"],
+            exec_properties = _TEST_EXEC_PROPERTIES,
+        )
         version_tests = [":" + name + "_test", ":" + name + "_service_hygiene_test", ":" + name + "_hurl_test"]
         native.test_suite(name = name + "_suite", tests = version_tests, tags = ["ruby-matrix", "manual"])
+        if runtime["series"] == _CI_SERIES:
+            ci_tests = version_tests
         tests.extend(version_tests)
         report_tests[runtime["series"]] = ["//fixtures:" + name + "_test", "//fixtures:" + name + "_service_hygiene_test"] + [
             "//fixtures:" + name + "_hurl_test_" + case
@@ -155,3 +179,5 @@ def ruby_app_matrix(name):
     )
     tests.append(":ruby_matrix_parity_test")
     native.test_suite(name = suite_name, tests = tests, tags = ["ruby-matrix", "manual"])
+    # Parity depends on every runtime and belongs only in the full suite.
+    native.test_suite(name = "ruby_ci_suite", tests = ci_tests, tags = ["ruby-matrix", "manual"])

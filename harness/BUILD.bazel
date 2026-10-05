@@ -11,6 +11,15 @@ load("//harness:scheme_bytecode.bzl", "scheme_bytecode_bundles")
 
 package(default_visibility = ["//visibility:public"])
 
+go_test(
+    name = "svcinit_junit_test",
+    srcs = ["svcinit_junit_test.go"],
+    args = ["--svcinit=$(rlocationpath @rules_itest//cmd/svcinit)"],
+    data = ["@rules_itest//cmd/svcinit"],
+    deps = ["@rules_go//go/runfiles"],
+    target_compatible_with = ["@platforms//os:linux"],
+)
+
 rust_binary(
     name = "telemetry_sink",
     srcs = [

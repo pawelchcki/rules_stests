@@ -5,12 +5,14 @@ series from 1.9.3 onward, with one pinned latest patch per series. Releases
 were checked against the [official Ruby release history](https://www.ruby-lang.org/en/downloads/releases/)
 on 2026-10-03. The targets currently support Linux x86_64. Matrix tests carry the `manual`
 tag so wildcard test runs do not start all versions; select a suite explicitly.
-The BuildBuddy PR workflow explicitly selects the full matrix suite, retaining
-its normal action and test caching across iterations.
+The BuildBuddy PR workflow selects `//fixtures:ruby_ci_suite`: all 17 smoke,
+hygiene and Hurl tests on the newest pinned interpreter. Builds on `main` select
+the full matrix and cross-version response parity, and publish their results.
+Both selections retain normal action and test caching across iterations.
 
 ```bash
 # All 15 versions: smoke, hygiene, HTTP conformance and cross-version data parity.
-bazel test //fixtures:ruby_matrix_suite
+bazel test --config=ruby-matrix //fixtures:ruby_matrix_suite
 
 # Select a series while developing.
 bazel test //fixtures:ruby_2_7_suite
@@ -65,6 +67,26 @@ Current uses sqlite3 2.8 and WEBrick. Dependencies shared between groups are
 downloaded once per version. SQLite 3.50.4 is a separately pinned amalgamation
 in `MODULE.bazel`, compiled once and linked into each SQLite Ruby extension.
 The compatibility shim supports the older images' libc symbol interface.
+
+## CI performance
+
+PRs run the latest pinned Ruby's plain API tests and official SDK trace suite.
+The full `main` run covers all 15 API runtimes and all nine supported telemetry
+runtimes. Standalone SDK labs and Django configuration variants also use one
+base configuration in PRs and all configurations on `main`.
+
+`--config=ruby-matrix` raises the remote action submission limit to 256; actual
+concurrency remains limited by executor resources. Use `--config=local` without
+that config for local execution. Ruby service tests request 0.5 CPU and 128 MB.
+
+The pinned `rules_itest` patch emits the final JUnit result after service
+shutdown, avoiding a separate remote fallback XML action. Successful child
+reports are preserved; startup, test and shutdown failures produce failing XML.
+Validate the patch with:
+
+```bash
+bazel test //harness:svcinit_junit_test @rules_itest//cmd/svcinit:svcinit_test
+```
 
 ## Official OpenTelemetry coverage
 

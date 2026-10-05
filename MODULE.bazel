@@ -16,6 +16,15 @@ bazel_dep(name = "aspect_bazel_lib", version = "2.21.1")
 bazel_dep(name = "package_metadata", version = "0.0.7")
 bazel_dep(name = "platforms", version = "1.1.0")
 
+# Emit the final service-test result after shutdown, avoiding a second remote
+# action for fallback XML. Keep this patch pinned until rules_itest ships it.
+single_version_override(
+    module_name = "rules_itest",
+    patch_strip = 1,
+    patches = ["//bazel:rules_itest_junit.patch"],
+    version = "0.0.59",
+)
+
 # No `name =` here: rules_go rejects a named SDK in a non-root module, which
 # would break importing this module as a dependency.
 go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")

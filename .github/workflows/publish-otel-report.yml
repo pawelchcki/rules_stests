@@ -30,12 +30,7 @@ jobs:
       - name: Check report renderer
         run: |
           node --check report/report/web/app.js
-          bazel test --config=local //report:report_test //report:assemble_test
-      - name: Verify standalone telemetry labs
-        run: |
-          bazel test --config=local --nocache_test_results \
-            //harness:telemetry_lab_claims_test \
-            //fixtures:telemetry_lab_suite
+          bazel test --config=local //report:report_test //report:assemble_test //harness:telemetry_lab_claims_test
       - name: Run fresh receipt-producing tests
         shell: bash
         run: |
