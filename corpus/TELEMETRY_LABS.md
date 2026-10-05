@@ -20,10 +20,11 @@ REPORT_REVISION="$revision" REPORT_REPOSITORY=owner/repository \
   REPORT_BAZEL_CONFIG=local tools/assemble_otel_report.sh
 ```
 
-The lab suite has **141 distinct catalog IDs with passing receipt-producing
-tests**. Seven overlap earlier Scheme proof-rule definitions: two previously lacked
+The lab suite has **148 distinct catalog IDs with passing receipt-producing
+tests**. Fourteen overlap earlier Scheme proof-rule definitions: two previously lacked
 accepted receipts, four now have shared lab coverage across Go, Python, and
-Ruby, and one adds a Ruby Unicode attribute proof. All 22 IDs from the earlier
+Ruby, one adds a Ruby Unicode attribute proof, and seven have shared trace SDK
+boundary checks. All 22 IDs from the earlier
 supplemental configuration experiments now have standalone lab proofs, leaving
 **112 IDs new across all three suites**.
 The catalog test checks those counts
@@ -33,9 +34,9 @@ receipts for the current revision.
 
 | Application | Evidence exercised |
 | --- | --- |
-| Python | span lifecycle and explicit roots, links and limits, context and baggage including Jaeger and OpenTracing headers, log SDK and schema URLs, Prometheus metric mapping, SDK environment settings |
-| Ruby | span attributes, events, exceptions, status, links and timestamps; context attach and detach, active-span lifecycle, baggage |
-| Go | span concurrency and SDK processing, resources, meter views and cardinality, metric exporter flush outcomes and exemplars, OTLP HTTP retry, gzip, concurrent export, and partial-success handling |
+| Python | shared trace SDK contracts, span lifecycle and explicit roots, links and limits, context and baggage including Jaeger and OpenTracing headers, log SDK and schema URLs, Prometheus metric mapping, SDK environment settings |
+| Ruby | shared trace SDK contracts, span attributes, events, exceptions, status, links and timestamps; context attach and detach, active-span lifecycle, baggage |
+| Go | span concurrency and SDK processing, SpanContext validity and remote parents, custom ID generation, span limits, resources, meter views and cardinality, metric exporter flush outcomes and exemplars, OTLP HTTP retry, gzip, concurrent export, and partial-success handling |
 
 The HTTP probe calls each endpoint and checks both endpoint results and decoded
 OTLP collected by the sink. Go's manual readers and Python's Prometheus reader
@@ -64,6 +65,60 @@ pass, and receipt generation rejects any planned ID whose check did not run or
 whose plan binding differs. Receipt assertions include both the check name and
 catalog ID so a report cell can be traced back to the exercised behavior. The
 `*.proofs.json` artifact records the completed checks and the exact proofs.
+
+## Trace SDK boundary checks
+
+All base labs implement `/v1/trace-context` and `/v1/trace-limits` in their existing
+applications. `labSharedChecks` declares the endpoints, feature bindings, and
+receipt scenarios once for every language. The same validators and runner apply
+to Go, Python, and Ruby, with no language parameter. A new language implements
+the endpoint contract in its lab application. New shared coverage belongs in this
+registry rather than a language-specific probe branch or duplicated feature map.
+
+The base tests execute every shared scenario twice and require stable normalized
+results. Providers and exporters are local to each request, so repeated requests
+cannot inherit span buffers, ID counters, or SDK configuration from earlier calls.
+The endpoints use isolated providers and in-memory exporters, with their checked
+results included in each accepted capture's `labResponses`. Each language writes
+separate `trace-context`, `trace-invalid-headers`, and `trace-limits` receipts,
+keeping a defect in one contract independent of the other passing proofs.
+
+The context check exercises `IsValid` with both IDs populated and with each
+zero-ID combination. It rejects six malformed `traceparent` headers, checks
+that an extracted parent is remote and its exported child is local, and verifies
+that reinjection preserves the trace ID, sampled flag, and `tracestate` while
+using the child's new span ID. A custom ID generator supplies deterministic IDs
+to an explicit root, its child, and the remote-parent child; both the generator
+call counts and the exported identities and parent relationships are checked.
+These checks follow the [SpanContext API contract](https://opentelemetry.io/docs/specs/otel/trace/api/#spancontext).
+
+The limits check sets small explicit limits and exceeds them at span creation
+and after creation. It verifies dropped span attributes, Unicode string and
+string-array truncation, retained event and link order, per-event and per-link
+attribute limits, and span/event/link dropped counts. String limits use 32
+characters, which all three SDKs accept. The common assertion bounds Unicode
+character length and checks the retained prefix, including an optional ellipsis;
+short values remain unchanged. Ordered retained subsets are accepted without
+requiring SDKs to discard the same attribute key or link. The seven added lab IDs
+corroborate existing Scheme definitions with direct SDK behavior; they do
+not increase the union of catalog IDs across all suites or establish complete
+W3C conformance.
+
+The [attribute-limit contract](https://opentelemetry.io/docs/specs/otel/common/#attribute-limits)
+sets a maximum length, not an exact truncation length. The
+[span-limit contract](https://opentelemetry.io/docs/specs/otel/trace/sdk/#span-limits)
+does not prescribe which events or links to discard or require a contiguous
+retained subset. Regression cases preserve both freedoms in the shared checker.
+
+The Ruby lab documents a pinned SDK defect in its `expected_failures` response:
+the W3C propagator accepts uppercase hexadecimal trace IDs. The
+[W3C header grammar](https://www.w3.org/TR/trace-context/#traceparent-header-field-values)
+requires lowercase hex. The shared validator still rejects the header exactly as
+it does for Go and Python. Only the documented, precisely matching failure yields
+an `xfail` receipt; a different error or an unexpected pass fails the test.
+That receipt contains no passing proof. Ruby's identity and limit contracts
+still produce independent verified receipts. No language-specific assertion,
+skip, or replacement expected value is added to the probe.
 
 ## Reproduced Python SDK log limit defect
 
