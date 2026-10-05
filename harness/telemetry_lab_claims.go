@@ -5,7 +5,32 @@ import "sort"
 // Each catalog ID is bound to the behavioral check that must finish before a
 // passing receipt can name it. The mapping declares what to test; it never
 // declares the result.
-var labClaimsByCheck = map[string]map[string][]string{
+type labSharedCheck struct {
+	Name     string
+	Path     string
+	Scenario string
+	Features []string
+}
+
+// Shared contracts apply to every lab language. Adding a language requires
+// implementing these endpoints in its application, not copying assertions.
+var labSharedChecks = []labSharedCheck{
+	{Name: "response/trace-context", Path: "/v1/trace-context", Scenario: "trace-context", Features: []string{
+		"traces.spancontext.isvalid",
+		"traces.spancontext.isremote",
+		"traces.sampling.idgenerators",
+	}},
+	{Name: "response/trace-invalid-headers", Path: "/v1/trace-context", Scenario: "trace-invalid-headers", Features: []string{
+		"traces.spancontext.conforms-to-the-w3c-tracecontext-spec",
+	}},
+	{Name: "response/trace-limits", Path: "/v1/trace-limits", Scenario: "trace-limits", Features: []string{
+		"traces.sampling.spanlimits",
+		"traces.sampling.attribute-limits",
+		"traces.span.attribute-collection-size-limit",
+	}},
+}
+
+var labLanguageClaimsByCheck = map[string]map[string][]string{
 	"go": {
 		"response/otlp-partial": {
 			"exporters.otlp.partial-success-messages-are-handled-and-logged-for-otlp-http",
@@ -272,6 +297,23 @@ var labClaimsByCheck = map[string]map[string][]string{
 	},
 }
 
+var labClaimsByCheck = func() map[string]map[string][]string {
+	result := map[string]map[string][]string{}
+	for language, groups := range labLanguageClaimsByCheck {
+		result[language] = map[string][]string{}
+		for name, features := range groups {
+			result[language][name] = features
+		}
+		for _, check := range labSharedChecks {
+			if _, exists := result[language][check.Name]; exists {
+				panic("duplicate shared lab check: " + check.Name)
+			}
+			result[language][check.Name] = check.Features
+		}
+	}
+	return result
+}()
+
 var labClaims = func() map[string][]string {
 	result := make(map[string][]string, len(labClaimsByCheck))
 	for language, groups := range labClaimsByCheck {
@@ -288,6 +330,16 @@ var labClaims = func() map[string][]string {
 }()
 
 func labCheckFor(language, scenario, featureID string) string {
+	for _, check := range labSharedChecks {
+		if scenario == check.Scenario {
+			for _, id := range check.Features {
+				if id == featureID {
+					return check.Name
+				}
+			}
+			return ""
+		}
+	}
 	if scenario != "base" {
 		for _, id := range labVariantClaims[scenario] {
 			if id == featureID {
@@ -296,7 +348,7 @@ func labCheckFor(language, scenario, featureID string) string {
 		}
 		return ""
 	}
-	for check, ids := range labClaimsByCheck[language] {
+	for check, ids := range labLanguageClaimsByCheck[language] {
 		for _, id := range ids {
 			if id == featureID {
 				return check
@@ -304,6 +356,23 @@ func labCheckFor(language, scenario, featureID string) string {
 		}
 	}
 	return ""
+}
+
+func labScenarioClaims(language, scenario string) []string {
+	for _, check := range labSharedChecks {
+		if scenario == check.Scenario {
+			return check.Features
+		}
+	}
+	if scenario != "base" {
+		return labVariantClaims[scenario]
+	}
+	claims := []string{}
+	for _, ids := range labLanguageClaimsByCheck[language] {
+		claims = append(claims, ids...)
+	}
+	sort.Strings(claims)
+	return claims
 }
 
 var labVariantClaims = map[string][]string{

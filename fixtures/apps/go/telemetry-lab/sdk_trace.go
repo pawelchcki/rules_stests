@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/baggage"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/instrumentation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -23,6 +25,135 @@ import (
 )
 
 type traceProbeKey struct{}
+
+// IDs are deterministic only in this isolated provider, so the probe can prove
+// that SDK creation calls the supplied generator for roots and children.
+type traceProbeIDGenerator struct {
+	roots int
+	spans byte
+}
+
+func (g *traceProbeIDGenerator) NewIDs(ctx context.Context) (trace.TraceID, trace.SpanID) {
+	g.roots++
+	return trace.TraceID{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}, g.NewSpanID(ctx, trace.TraceID{})
+}
+
+func (g *traceProbeIDGenerator) NewSpanID(context.Context, trace.TraceID) trace.SpanID {
+	g.spans++
+	return trace.SpanID{0, 0, 0, 0, 0, 0, 0, g.spans}
+}
+
+func inspectTraceContext(ctx context.Context) (any, error) {
+	wire := propagation.TraceContext{}
+	carrier := propagation.MapCarrier{
+		"traceparent": "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+		"tracestate":  "lab=upstream",
+	}
+	parentCtx := wire.Extract(ctx, carrier)
+	parent := trace.SpanContextFromContext(parentCtx)
+	invalid := map[string]bool{}
+	for name, header := range map[string]string{
+		"zero-trace": "00-00000000000000000000000000000000-0123456789abcdef-01",
+		"zero-span":  "00-0123456789abcdef0123456789abcdef-0000000000000000-01",
+		"short":      "00-0123456789abcdef-0123456789abcdef-01",
+		"non-hex":    "00-zz23456789abcdef0123456789abcdef-0123456789abcdef-01",
+		"uppercase":  "00-0123456789ABCDEF0123456789abcdef-0123456789abcdef-01",
+		"version-ff": "ff-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+	} {
+		invalid[name] = trace.SpanContextFromContext(wire.Extract(ctx, propagation.MapCarrier{"traceparent": header})).IsValid()
+	}
+	validity := map[string]bool{}
+	for name, config := range map[string]trace.SpanContextConfig{
+		"valid":      {TraceID: parent.TraceID(), SpanID: parent.SpanID()},
+		"zero-trace": {SpanID: parent.SpanID()},
+		"zero-span":  {TraceID: parent.TraceID()},
+		"zero-both":  {},
+	} {
+		validity[name] = trace.NewSpanContext(config).IsValid()
+	}
+	generator := &traceProbeIDGenerator{}
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithIDGenerator(generator), sdktrace.WithSyncer(exporter))
+	defer provider.Shutdown(ctx)
+	tracer := provider.Tracer("lab.context")
+	rootCtx, root := tracer.Start(ctx, "lab.generated.root", trace.WithNewRoot())
+	_, child := tracer.Start(rootCtx, "lab.generated.child")
+	child.End()
+	root.End()
+	remoteCtx, remoteChild := tracer.Start(parentCtx, "lab.remote.child")
+	outgoing := propagation.MapCarrier{}
+	wire.Inject(remoteCtx, outgoing)
+	remoteChild.End()
+	spans := []map[string]any{}
+	for _, span := range exporter.GetSpans() {
+		spans = append(spans, map[string]any{
+			"name": span.Name, "trace_id": span.SpanContext.TraceID().String(),
+			"span_id": span.SpanContext.SpanID().String(), "remote": span.SpanContext.IsRemote(),
+			"parent_id": span.Parent.SpanID().String(), "parent_remote": span.Parent.IsRemote(),
+		})
+	}
+	return map[string]any{
+		"validity": validity, "invalid_headers": invalid, "parent_remote": parent.IsRemote(),
+		"parent_valid": parent.IsValid(), "outgoing": outgoing, "spans": spans,
+		"generated_roots": generator.roots, "generated_spans": generator.spans,
+	}, nil
+}
+
+func inspectTraceLimits(ctx context.Context) (any, error) {
+	limits := sdktrace.NewSpanLimits()
+	limits.AttributeCountLimit = 2
+	limits.AttributeValueLengthLimit = 32
+	limits.EventCountLimit = 2
+	limits.LinkCountLimit = 2
+	limits.AttributePerEventCountLimit = 1
+	limits.AttributePerLinkCountLimit = 1
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithRawSpanLimits(limits), sdktrace.WithSyncer(exporter))
+	defer provider.Shutdown(ctx)
+	tracer := provider.Tracer("lab.limits")
+	_, values := tracer.Start(ctx, "lab.values", trace.WithNewRoot(), trace.WithAttributes(
+		attribute.String("lab.text", strings.Repeat("κόσμος", 6)),
+		attribute.StringSlice("lab.array", []string{strings.Repeat("abcdefghijklmnopqrstuvwxyz", 2), strings.Repeat("κόσμος", 6), "short"}),
+	))
+	values.End()
+	_, span := tracer.Start(ctx, "lab.limits", trace.WithNewRoot(), trace.WithAttributes(
+		attribute.Int("lab.first", 1), attribute.Int("lab.second", 2), attribute.Int("lab.third", 3),
+	))
+	span.SetAttributes(attribute.Int("lab.fourth", 4))
+	for index := range 3 {
+		span.AddEvent(fmt.Sprintf("event.%d", index), trace.WithAttributes(attribute.Int("lab.first", index), attribute.Int("lab.second", index)))
+		span.AddLink(trace.Link{SpanContext: trace.NewSpanContext(trace.SpanContextConfig{
+			TraceID: trace.TraceID{1}, SpanID: trace.SpanID{byte(index + 1)},
+		}), Attributes: []attribute.KeyValue{attribute.Int("lab.first", index), attribute.Int("lab.second", index)}})
+	}
+	span.End()
+	exported := exporter.GetSpans()
+	if len(exported) != 2 {
+		return nil, fmt.Errorf("limits exporter got %d spans", len(exported))
+	}
+	snapshot := exported[1]
+	attributeValues := func(attrs []attribute.KeyValue) map[string]any {
+		result := map[string]any{}
+		for _, attr := range attrs {
+			result[string(attr.Key)] = attr.Value.AsInterface()
+		}
+		return result
+	}
+	events := []map[string]any{}
+	for _, event := range snapshot.Events {
+		var index int
+		if _, err := fmt.Sscanf(event.Name, "event.%d", &index); err != nil {
+			return nil, err
+		}
+		events = append(events, map[string]any{"name": event.Name, "attributes": attributeValues(event.Attributes), "index": index})
+	}
+	links := []map[string]any{}
+	for _, link := range snapshot.Links {
+		links = append(links, map[string]any{"span_id": link.SpanContext.SpanID().String(), "attributes": attributeValues(link.Attributes), "index": int(link.SpanContext.SpanID()[0]) - 1})
+	}
+	return map[string]any{"value_attributes": attributeValues(exported[0].Attributes), "attribute_count": len(snapshot.Attributes), "events": events, "links": links,
+		"dropped_attributes": snapshot.DroppedAttributes, "dropped_events": snapshot.DroppedEvents, "dropped_links": snapshot.DroppedLinks}, nil
+}
 
 type labErrorRecorder struct {
 	mu       sync.Mutex

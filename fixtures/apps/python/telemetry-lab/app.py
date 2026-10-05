@@ -18,7 +18,10 @@ from opentelemetry.exporter.prometheus import PrometheusMetricReader
 from opentelemetry.sdk.metrics import MeterProvider as SDKMeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider
+from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider, SpanLimits
+from opentelemetry.sdk.trace.id_generator import IdGenerator
+from opentelemetry.sdk.trace.sampling import ALWAYS_ON
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from opentelemetry.sdk.trace.export import ConsoleSpanExporter, SpanExporter, SpanExportResult, SimpleSpanProcessor
 from prometheus_client import CollectorRegistry, generate_latest
 from prometheus_client.openmetrics.exposition import generate_latest as generate_openmetrics
@@ -33,6 +36,103 @@ HISTOGRAM = METER.create_histogram("lab.duration", unit="ms", description="Synth
 
 async def health(request):
     return web.json_response({"ready": True})
+
+
+class LabIdGenerator(IdGenerator):
+    def __init__(self):
+        self.roots = 0
+        self.spans = 0
+
+    def generate_trace_id(self):
+        self.roots += 1
+        return 0x0102030405060708090A0B0C0D0E0F10
+
+    def generate_span_id(self):
+        self.spans += 1
+        return self.spans
+
+
+async def trace_context(request):
+    wire = TraceContextTextMapPropagator()
+    empty = context.Context()
+    parent_context = wire.extract({
+        "traceparent": "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+        "tracestate": "lab=upstream",
+    }, context=empty)
+    parent = trace.get_current_span(parent_context).get_span_context()
+    invalid_headers = {
+        "zero-trace": "00-00000000000000000000000000000000-0123456789abcdef-01",
+        "zero-span": "00-0123456789abcdef0123456789abcdef-0000000000000000-01",
+        "short": "00-0123456789abcdef-0123456789abcdef-01",
+        "non-hex": "00-zz23456789abcdef0123456789abcdef-0123456789abcdef-01",
+        "uppercase": "00-0123456789ABCDEF0123456789abcdef-0123456789abcdef-01",
+        "version-ff": "ff-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+    }
+    invalid = {name: trace.get_current_span(wire.extract({"traceparent": header}, context=empty)).get_span_context().is_valid
+               for name, header in invalid_headers.items()}
+    validity = {name: SpanContext(trace_id, span_id, is_remote=False).is_valid
+                for name, trace_id, span_id in (
+                    ("valid", parent.trace_id, parent.span_id),
+                    ("zero-trace", 0, parent.span_id), ("zero-span", parent.trace_id, 0),
+                    ("zero-both", 0, 0))}
+    generator = LabIdGenerator()
+    exporter = LabSpanExporter()
+    provider = SDKTracerProvider(id_generator=generator, sampler=ALWAYS_ON, shutdown_on_exit=False)
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    try:
+        tracer = provider.get_tracer("lab.context")
+        root = tracer.start_span("lab.generated.root", context=empty)
+        child = tracer.start_span("lab.generated.child", context=trace.set_span_in_context(root, empty))
+        child.end()
+        root.end()
+        remote_child = tracer.start_span("lab.remote.child", context=parent_context)
+        outgoing = {}
+        wire.inject(outgoing, context=trace.set_span_in_context(remote_child, parent_context))
+        remote_child.end()
+        spans = [{"name": span.name, "trace_id": format(span.context.trace_id, "032x"),
+                  "span_id": format(span.context.span_id, "016x"), "remote": span.context.is_remote,
+                  "parent_id": format(span.parent.span_id if span.parent else 0, "016x"),
+                  "parent_remote": span.parent.is_remote if span.parent else False}
+                 for span in exporter.spans]
+        return web.json_response({"validity": validity, "invalid_headers": invalid,
+                                  "parent_remote": parent.is_remote, "parent_valid": parent.is_valid,
+                                  "outgoing": outgoing, "spans": spans,
+                                  "generated_roots": generator.roots, "generated_spans": generator.spans})
+    finally:
+        provider.shutdown()
+
+
+async def trace_limits(request):
+    limits = SpanLimits(max_attributes=2, max_attribute_length=32, max_span_attribute_length=32,
+                        max_events=2, max_links=2, max_event_attributes=1, max_link_attributes=1)
+    exporter = LabSpanExporter()
+    provider = SDKTracerProvider(span_limits=limits, sampler=ALWAYS_ON, shutdown_on_exit=False)
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    try:
+        tracer = provider.get_tracer("lab.limits")
+        values = tracer.start_span("lab.values", context=context.Context(), attributes={
+            "lab.text": "κόσμος" * 6, "lab.array": ["abcdefghijklmnopqrstuvwxyz" * 2, "κόσμος" * 6, "short"]})
+        values.end()
+        span = tracer.start_span("lab.limits", context=context.Context(), attributes={
+            "lab.first": 1, "lab.second": 2, "lab.third": 3})
+        span.set_attribute("lab.fourth", 4)
+        for index in range(3):
+            attrs = {"lab.first": index, "lab.second": index}
+            span.add_event("event." + str(index), attrs)
+            span.add_link(SpanContext(trace_id=1 << 120, span_id=(index + 1) << 56, is_remote=False), attrs)
+        span.end()
+        snapshot = exporter.spans[1]
+        return web.json_response({"value_attributes": dict(exporter.spans[0].attributes),
+                                  "attribute_count": len(snapshot.attributes),
+                                  "dropped_attributes": snapshot.dropped_attributes,
+                                  "dropped_events": snapshot.dropped_events, "dropped_links": snapshot.dropped_links,
+                                  "events": [{"name": event.name, "index": int(event.name.split(".")[1]),
+                                              "attributes": dict(event.attributes)} for event in snapshot.events],
+                                  "links": [{"span_id": format(link.context.span_id, "016x"),
+                                             "index": (link.context.span_id >> 56) - 1,
+                                             "attributes": dict(link.attributes)} for link in snapshot.links]})
+    finally:
+        provider.shutdown()
 
 
 async def spans(request):
@@ -389,6 +489,8 @@ def main():
     args = parser.parse_args()
     app = web.Application()
     app.router.add_get("/healthz", health)
+    app.router.add_get("/v1/trace-context", trace_context)
+    app.router.add_get("/v1/trace-limits", trace_limits)
     app.router.add_get("/v1/spans", spans)
     app.router.add_get("/v1/exceptions", exception)
     app.router.add_get("/v1/explicit-root", explicit_root)

@@ -14,7 +14,8 @@ func main() {
 	language := flag.String("language", "", "lab language")
 	output := flag.String("out", "", "plan output path")
 	flag.Parse()
-	claims, ok := labClaims[*language]
+	_, ok := labClaims[*language]
+	claims := labScenarioClaims(*language, "base")
 	if !ok || *output == "" {
 		fmt.Fprintln(os.Stderr, "known --language and --out are required")
 		os.Exit(2)
@@ -55,6 +56,9 @@ func main() {
 		}
 	}
 	appendProofs("base", claims)
+	for _, check := range labSharedChecks {
+		appendProofs(check.Scenario, check.Features)
+	}
 	if *language == "python" {
 		scenarios := make([]string, 0, len(labVariantClaims))
 		for scenario := range labVariantClaims {

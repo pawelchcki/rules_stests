@@ -151,6 +151,19 @@ func main() {
 		}
 		respond(w, result)
 	})
+	for path, inspect := range map[string]func(context.Context) (any, error){
+		"/v1/trace-context": inspectTraceContext,
+		"/v1/trace-limits":  inspectTraceLimits,
+	} {
+		mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
+			result, err := inspect(r.Context())
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			respond(w, result)
+		})
+	}
 	mux.HandleFunc("GET /v1/otlp-http", func(w http.ResponseWriter, r *http.Request) {
 		result, err := inspectOTLPHTTP(r.Context())
 		if err != nil {

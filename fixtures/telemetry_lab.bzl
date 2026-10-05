@@ -6,6 +6,9 @@ load("//rules:realworld_app.bzl", "otlp_env", "python_auto_injection")
 
 _PYTHON_APP = "//fixtures/apps/python/telemetry-lab:app.py"
 
+# Every base lab implements the same portable trace SDK contracts.
+TELEMETRY_LAB_BASE_SCENARIOS = ["base", "trace-context", "trace-invalid-headers", "trace-limits"]
+
 def python_telemetry_lab_variants():
     for variant, config in {
         "links_count": struct(scenario = "links-count", env = {"OTEL_SPAN_LINK_COUNT_LIMIT": "2"}),

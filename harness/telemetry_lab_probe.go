@@ -10,11 +10,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/pawelchcki/rules_stests/report"
 )
@@ -45,10 +47,7 @@ func labPlanProofs(data []byte, language, scenario string, observed map[string]b
 	if plan.SchemaVersion != 1 || plan.Profile != language+"-telemetry-lab" || plan.Language != language {
 		return nil, fmt.Errorf("lab plan identity mismatch for %s", language)
 	}
-	claims := labClaims[language]
-	if scenario != "base" {
-		claims = labVariantClaims[scenario]
-	}
+	claims := labScenarioClaims(language, scenario)
 	wanted := make(map[string]bool, len(claims))
 	for _, id := range claims {
 		wanted[id] = true
@@ -107,7 +106,12 @@ func labAcceptedCapture(capture, responses []byte, scenario string) ([]byte, err
 	return append(encoded, '\n'), nil
 }
 
-func labWriteReceipt(root, language, scenario string, plan, capture, responses []byte, proofs []report.ReceiptProof) error {
+type labReceiptOutcome struct {
+	Outcome string
+	Reason  string
+}
+
+func labWriteReceipt(root, language, scenario string, plan, capture, responses []byte, proofs []report.ReceiptProof, outcomes ...labReceiptOutcome) error {
 	revision := os.Getenv("OTEL_TEST_REVISION")
 	if revision == "" {
 		return nil
@@ -138,6 +142,10 @@ func labWriteReceipt(root, language, scenario string, plan, capture, responses [
 	if scenario == "otlp-retry-after" {
 		receipt.Outcome = "xfail"
 		receipt.XFailReason = "Go OTLP HTTP exporter 1.44.0 treats Retry-After seconds as nanoseconds"
+	}
+	if len(outcomes) == 1 {
+		receipt.Outcome = outcomes[0].Outcome
+		receipt.XFailReason = outcomes[0].Reason
 	}
 	encoded, err := json.MarshalIndent(receipt, "", "  ")
 	if err != nil {
@@ -882,6 +890,167 @@ func labVerifySDKTrace(response labObject) error {
 	return nil
 }
 
+func labVerifyTraceContext(response labObject) error {
+	validity, _ := labField(response, "validity").(map[string]any)
+	if len(validity) != 4 || validity["valid"] != true || validity["zero-trace"] != false || validity["zero-span"] != false || validity["zero-both"] != false {
+		return fmt.Errorf("SpanContext validity did not reject zero IDs: %v", validity)
+	}
+	if labField(response, "parent_remote") != true || labField(response, "parent_valid") != true ||
+		labField(response, "generated_roots") != float64(1) || labField(response, "generated_spans") != float64(3) {
+		return fmt.Errorf("remote extraction or custom ID generator call counts are wrong")
+	}
+	spans := labObjects(response, "spans")
+	if len(spans) != 3 {
+		return fmt.Errorf("custom ID generator exported %d spans, want 3", len(spans))
+	}
+	for _, expected := range []struct {
+		name, traceID, spanID, parentID string
+		parentRemote                    bool
+	}{
+		{"lab.generated.root", "0102030405060708090a0b0c0d0e0f10", "0000000000000001", "0000000000000000", false},
+		{"lab.generated.child", "0102030405060708090a0b0c0d0e0f10", "0000000000000002", "0000000000000001", false},
+		{"lab.remote.child", "0123456789abcdef0123456789abcdef", "0000000000000003", "0123456789abcdef", true},
+	} {
+		span := labNamed(spans, expected.name)
+		if span == nil || span["trace_id"] != expected.traceID || span["span_id"] != expected.spanID || span["parent_id"] != expected.parentID || span["parent_remote"] != expected.parentRemote || span["remote"] != false {
+			return fmt.Errorf("generated span %s lost its IDs or parent locality: %v", expected.name, span)
+		}
+	}
+	outgoing, _ := labField(response, "outgoing").(map[string]any)
+	if outgoing["traceparent"] != "00-0123456789abcdef0123456789abcdef-0000000000000003-01" || outgoing["tracestate"] != "lab=upstream" {
+		return fmt.Errorf("W3C propagation lost trace ID, child ID, flags, or tracestate: %v", outgoing)
+	}
+	return nil
+}
+
+func labVerifyTraceInvalidHeaders(response labObject) error {
+	invalid, _ := labField(response, "invalid_headers").(map[string]any)
+	if len(invalid) != 6 {
+		return fmt.Errorf("missing invalid traceparent controls: %v", invalid)
+	}
+	var failures []string
+	for _, name := range []string{"zero-trace", "zero-span", "short", "non-hex", "uppercase", "version-ff"} {
+		if invalid[name] != false {
+			failures = append(failures, fmt.Sprintf("invalid %s traceparent was accepted", name))
+		}
+	}
+	if len(failures) != 0 {
+		return fmt.Errorf("%s", strings.Join(failures, "; "))
+	}
+	return nil
+}
+
+func labVerifyTraceLimits(response labObject) error {
+	attributes, _ := labField(response, "value_attributes").(map[string]any)
+	array, _ := attributes["lab.array"].([]any)
+	truncated := func(value any, original string) bool {
+		text, ok := value.(string)
+		// The specification bounds character length; an SDK may add an ellipsis.
+		prefix := strings.TrimSuffix(text, "...")
+		return ok && prefix != "" && utf8.ValidString(text) && utf8.RuneCountInString(text) <= 32 && strings.HasPrefix(original, prefix)
+	}
+	if len(attributes) != 2 || !truncated(attributes["lab.text"], strings.Repeat("κόσμος", 6)) || len(array) != 3 || !truncated(array[0], strings.Repeat("abcdefghijklmnopqrstuvwxyz", 2)) || !truncated(array[1], strings.Repeat("κόσμος", 6)) || array[2] != "short" || labField(response, "attribute_count") != float64(2) || labField(response, "dropped_attributes") != float64(2) {
+		return fmt.Errorf("span attribute count or Unicode/array value limits are wrong: %v", response)
+	}
+	for _, kind := range []string{"events", "links"} {
+		items := labObjects(response, kind)
+		if len(items) != 2 || labField(response, "dropped_"+kind) != float64(1) {
+			return fmt.Errorf("span %s limit or dropped count is wrong: %v", kind, response)
+		}
+		previous := -1
+		for _, item := range items {
+			attributes, _ := item["attributes"].(map[string]any)
+			index, ok := item["index"].(float64)
+			if !ok || index != float64(int(index)) || index < 0 || index > 2 || int(index) <= previous || len(attributes) != 1 {
+				return fmt.Errorf("span %s ordering or per-item attribute limit is wrong: %v", kind, item)
+			}
+			for key, value := range attributes {
+				if (key != "lab.first" && key != "lab.second") || value != index {
+					return fmt.Errorf("span %s attribute changed: %v", kind, item)
+				}
+			}
+			if kind == "events" && item["name"] != fmt.Sprintf("event.%d", int(index)) ||
+				kind == "links" && item["span_id"] != fmt.Sprintf("%02x00000000000000", int(index)+1) {
+				return fmt.Errorf("span %s retained the wrong item: %v", kind, item)
+			}
+			previous = int(index)
+		}
+	}
+	return nil
+}
+
+var labSharedVerifiers = map[string]func(labObject) error{
+	"response/trace-context":         labVerifyTraceContext,
+	"response/trace-invalid-headers": labVerifyTraceInvalidHeaders,
+	"response/trace-limits":          labVerifyTraceLimits,
+}
+
+type labSharedResult struct {
+	Check    labSharedCheck
+	Response labObject
+	Outcome  labReceiptOutcome
+}
+
+// A lab may document a known SDK defect in its response. The same assertion
+// still runs; only that exact reproduced failure yields an xfail receipt.
+func labSharedOutcome(check labSharedCheck, response labObject) (labReceiptOutcome, error) {
+	verify := labSharedVerifiers[check.Name]
+	if verify == nil {
+		return labReceiptOutcome{}, fmt.Errorf("shared check %s has no verifier", check.Name)
+	}
+	defects, _ := response["expected_failures"].(map[string]any)
+	expected, exists := defects[check.Scenario]
+	err := verify(response)
+	if !exists {
+		if err != nil {
+			return labReceiptOutcome{}, err
+		}
+		return labReceiptOutcome{Outcome: "verified"}, nil
+	}
+	defect, ok := expected.(map[string]any)
+	message, _ := defect["error"].(string)
+	reason, _ := defect["reason"].(string)
+	if !ok || message == "" || strings.TrimSpace(reason) == "" {
+		return labReceiptOutcome{}, fmt.Errorf("invalid expected failure for %s", check.Scenario)
+	}
+	if err == nil {
+		return labReceiptOutcome{}, fmt.Errorf("%s unexpectedly passed: review the recorded SDK defect", check.Name)
+	}
+	if err.Error() != message {
+		return labReceiptOutcome{}, fmt.Errorf("%s expected %q, got: %w", check.Name, message, err)
+	}
+	return labReceiptOutcome{Outcome: "xfail", Reason: reason}, nil
+}
+
+func labRunSharedChecks(client *http.Client, app string) ([]labSharedResult, error) {
+	results := []labSharedResult{}
+	for _, check := range labSharedChecks {
+		var first labObject
+		var outcome labReceiptOutcome
+		for attempt := range 2 {
+			body, err := labRequest(client, "GET", app+check.Path)
+			if err != nil {
+				return nil, err
+			}
+			var response labObject
+			if err := json.Unmarshal(body, &response); err != nil {
+				return nil, err
+			}
+			outcome, err = labSharedOutcome(check, response)
+			if err != nil {
+				return nil, fmt.Errorf("%s attempt %d: %w", check.Name, attempt+1, err)
+			}
+			if attempt == 0 {
+				first = response
+			} else if !reflect.DeepEqual(first, response) {
+				return nil, fmt.Errorf("%s changed on repeated execution", check.Name)
+			}
+		}
+		results = append(results, labSharedResult{Check: check, Response: first, Outcome: outcome})
+	}
+	return results, nil
+}
+
 func labVerifyOTLPHTTP(response labObject, scenario string) error {
 	concurrent, _ := labField(response, "concurrent").(map[string]any)
 	maximum, _ := labField(concurrent, "maximum").(float64)
@@ -1142,6 +1311,13 @@ func main() {
 			observed["response/baggage"] = true
 		}
 	}
+	var sharedResults []labSharedResult
+	if *scenario == "base" {
+		sharedResults, err = labRunSharedChecks(client, app)
+		if err != nil {
+			panic(err)
+		}
+	}
 	var capture []byte
 	if *scenario == "disabled" {
 		time.Sleep(2 * time.Second)
@@ -1218,6 +1394,23 @@ func main() {
 	}
 	if err := labWriteReceipt(os.Getenv("TEST_UNDECLARED_OUTPUTS_DIR"), *language, *scenario, planBytes, capture, responseBytes, plannedProofs); err != nil {
 		panic(err)
+	}
+	for _, result := range sharedResults {
+		var proofs []report.ReceiptProof
+		if result.Outcome.Outcome == "verified" {
+			proofs, err = labPlanProofs(planBytes, *language, result.Check.Scenario, map[string]bool{result.Check.Name: true})
+			if err != nil {
+				panic(err)
+			}
+		}
+		checkedResponse, err := json.Marshal(map[string]labObject{result.Check.Path: result.Response})
+		if err != nil {
+			panic(err)
+		}
+		if err := labWriteReceipt(os.Getenv("TEST_UNDECLARED_OUTPUTS_DIR"), *language, result.Check.Scenario, planBytes, capture, checkedResponse, proofs, result.Outcome); err != nil {
+			panic(err)
+		}
+		fmt.Printf("%s shared check %s: %s %s\n", *language, result.Check.Name, result.Outcome.Outcome, result.Outcome.Reason)
 	}
 	fmt.Printf("%s telemetry lab capture verified, sha256=%x\n", *language, sha256.Sum256(bytes.TrimSpace(capture)))
 }

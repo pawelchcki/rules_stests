@@ -4,6 +4,22 @@ The harness launches extracted OCI filesystems, drives RealWorld Hurl cases,
 and validates captured OTLP and native Datadog traces without requiring a container runtime or host
 language installation.
 
+## Portable lab checks
+
+SDK coverage uses a shared endpoint contract and assertion for every language.
+Add common endpoint/feature/scenario bindings to `labSharedChecks`; implement
+the SDK calls and normalize their results in each existing lab application.
+Keep language decisions in those applications rather than adding language
+branches to a shared checker. The runner exercises each shared contract twice
+with fresh providers and exporters, then writes a separate receipt for its result.
+Only an exactly reproduced, documented SDK defect can become an expected failure;
+it retains the common assertion and contributes no passing feature proof.
+
+The earlier feature experiments retain their existing language-specific
+adapters. New portable lab coverage follows this contract model. See
+[`corpus/TELEMETRY_LABS.md`](../corpus/TELEMETRY_LABS.md) for the endpoint behavior
+and receipt scenarios.
+
 ## Launcher
 
 Extraction and launching are separate tools. `oci_rootfs_extract <layout>
