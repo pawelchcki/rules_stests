@@ -29,3 +29,17 @@ py_test(
     srcs = ["ruby_realworld_parity_test.py"],
     deps = [":ruby_realworld_parity_lib"],
 )
+
+py_binary(
+    name = "embed_ruby_matrix_report",
+    srcs = ["embed_ruby_matrix_report.py"],
+)
+
+py_test(
+    name = "embed_ruby_matrix_report_test",
+    srcs = [
+        "embed_ruby_matrix_report.py",
+        "embed_ruby_matrix_report_test.py",
+    ],
+    imports = ["."],
+)

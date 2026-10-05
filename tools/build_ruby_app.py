@@ -9,6 +9,9 @@ import sys
 
 def main(arguments):
     output, runtime, launcher, manifest_path, build_script, bcrypt, sqlite, *files = arguments
+    protobuf = None
+    if files and files[0].startswith("--protobuf="):
+        protobuf = files.pop(0).split("=", 1)[1]
     output = Path(output).resolve()
     runtime = Path(runtime).resolve()
     manifest = json.loads(Path(manifest_path).read_text())
@@ -38,9 +41,9 @@ def main(arguments):
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(path, target)
     for name, gem in gems.items():
-        if gem["name"] in ("bcrypt", "sqlite3"):
-            native = Path(bcrypt if gem["name"] == "bcrypt" else sqlite)
-            relative = "bcrypt_ext.so" if gem["name"] == "bcrypt" else "sqlite3/sqlite3_native.so"
+        if gem["name"] in ("bcrypt", "sqlite3", "google-protobuf"):
+            native = Path({"bcrypt": bcrypt, "sqlite3": sqlite, "google-protobuf": protobuf}[gem["name"]])
+            relative = {"bcrypt": "bcrypt_ext.so", "sqlite3": "sqlite3/sqlite3_native.so", "google-protobuf": "google/protobuf_c.so"}[gem["name"]]
             target = gem_root / "gems" / name / "lib" / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(native, target)

@@ -66,8 +66,58 @@ downloaded once per version. SQLite 3.50.4 is a separately pinned amalgamation
 in `MODULE.bazel`, compiled once and linked into each SQLite Ruby extension.
 The compatibility shim supports the older images' libc symbol interface.
 
-These targets exercise the plain RealWorld API. Telemetry profiles retain
-framework- and agent-specific targets in `fixtures/BUILD.bazel`.
+## Official OpenTelemetry coverage
+
+The same application also runs all 15 RealWorld scenarios with captured trace
+proofs on Ruby 2.5 through 4.0. Each supported runtime has its own profile in
+the report's comparison selectors and feature tables. The version table links
+directly to its captured `articles` traces. Telemetry receipts are collected
+fresh for the report; the plain API matrix retains its ordinary test cache.
+
+`telemetry.lock.json` pins compatible official SDK, OTLP exporter, Rack and
+Sinatra instrumentation gems, including every transitive dependency and source
+checksum. Google Protobuf's C extension is compiled against each Ruby ABI with
+the configured LLVM toolchain. App assembly verifies every gem's original Ruby
+and dependency requirements and loads the exact SDK/exporter before publishing
+the bundle.
+Ruby 2.6 and 2.7 pin Common 0.19.6: Common 0.19.7's Rack getter mutates a
+frozen interpolated string on those interpreters and loses incoming context.
+They use SDK 1.2.0 because SDK 1.2.1 calls a Common API absent from 0.19.6.
+The build also creates a span with extracted incoming context to reject such
+runtime API incompatibilities before server startup.
+
+| Ruby series | Official SDK | Telemetry status |
+| --- | --- | --- |
+| 1.9.3, 2.0, 2.1, 2.2, 2.3, 2.4 | — | Unsupported: official OTLP exporter and Sinatra/Rack instrumentation require Ruby 2.5 or later |
+| 2.5 | 1.0.3 | RealWorld traces |
+| 2.6, 2.7 | 1.2.0 | RealWorld traces |
+| 3.0 | 1.7.0 | RealWorld traces |
+| 3.1, 3.2 | 1.10.0 | RealWorld traces |
+| 3.3, 3.4, 4.0 | 1.13.1 | RealWorld traces |
+
+HTTP request spans come from official Sinatra/Rack instrumentation. Sequel
+has no official instrumentation gem; the application's SQL execution hook uses
+the official SDK to create child spans for real prepared statements, excluding
+bound values. The profiles verify runtime/SDK resource attributes, HTTP routes,
+SQL span contracts, OTLP binary protobuf export and incoming W3C propagation.
+This coverage is for traces; it makes no metrics or logs verification claim.
+Unsupported telemetry rows retain their passing RealWorld API results.
+The exporters selected for Ruby 2.5–3.0 predate OTLP's parent-remote flags.
+Their propagation scenario verifies external-parent HTTP spans, but the three
+feature proofs requiring those flags remain unclaimed. Ruby 3.1 and later
+verify those feature proofs from the captured flags and incoming trace IDs.
+
+The compatibility boundary is grounded in the published requirements of the
+[earliest official exporter](https://rubygems.org/gems/opentelemetry-exporter-otlp/versions/0.6.0)
+and [Sinatra instrumentation](https://rubygems.org/gems/opentelemetry-instrumentation-sinatra/versions/0.5.0).
+Older SDK releases alone do not provide a compatible full HTTP-to-OTLP stack.
+
+```bash
+bazel test //fixtures:ruby_2_5_otel_hurl_test
+bazel test //fixtures:ruby_4_0_otel_hurl_test
+# All instrumented profiles, including every supported Ruby version:
+bazel test //fixtures:otel_report_suite --nocache_test_results
+```
 
 ## Identical RealWorld data
 

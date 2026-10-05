@@ -35,6 +35,9 @@ actions:
             --spawn_strategy=remote,local \
             --build_tests_only \
             --test_tag_filters=-otel-report \
+            --build_event_json_file=ruby-matrix.bep.json \
+            --nobuild_event_json_file_path_conversion \
+            --remote_download_outputs=toplevel \
             //... \
             //fixtures:ruby_matrix_suite
           # The report run stays uncached: report/cmd/main.go refuses to assemble
@@ -51,6 +54,7 @@ actions:
             //fixtures:otel_report_suite \
             //fixtures:telemetry_lab_suite
           REPORT_BAZEL_CONFIG=buildbuddy \
+            RUBY_MATRIX_BEP=ruby-matrix.bep.json \
             REPORT_REPOSITORY=pawelchcki/rules_stests \
             REPORT_REVISION="$REPORT_REVISION" \
             tools/assemble_otel_report.sh

@@ -147,6 +147,24 @@ func TestCheckedInProfilePlanSnapshotsAndDescriptorOwnership(t *testing.T) {
 		"ruby-rails-auto-v0-1-0": {33, 17, []string{"ruby-sdk-v1.11", "ruby-auto-v0.1", "rules-stests-ruby-auto-patch-v1", "rails-v0.40", "rack-v0.30", "active-record-v0.13"},
 			"corpus/realworld/profile/ruby-rails-auto-v0-1-0.scm"},
 	}
+	for _, ruby := range []struct{ series, sdk, exporter, scope, instrumentation string }{
+		{"2-5", "1.0.3", "0.21.2", "sinatra", "0.19.4"},
+		{"2-6", "1.2.0", "0.24.2", "rack", "0.22.1"},
+		{"2-7", "1.2.0", "0.24.2", "rack", "0.22.1"},
+		{"3-0", "1.7.0", "0.29.1", "rack", "0.25.0"},
+		{"3-1", "1.10.0", "0.32.0", "rack", "0.28.2"},
+		{"3-2", "1.10.0", "0.32.0", "rack", "0.30.0"},
+		{"3-3", "1.13.1", "0.37.0", "rack", "0.31.2"},
+		{"3-4", "1.13.1", "0.37.0", "rack", "0.31.2"},
+		{"4-0", "1.13.1", "0.37.0", "rack", "0.31.2"},
+	} {
+		proofs, observed := 14, 13
+		if ruby.series == "2-5" || ruby.series == "2-6" || ruby.series == "2-7" || ruby.series == "3-0" {
+			proofs, observed = 11, 10
+		}
+		expectations["ruby-sinatra-"+ruby.series+"-otel"] = expectation{proofs, observed,
+			[]string{"ruby-sdk-v" + ruby.sdk, "ruby-otlp-v" + ruby.exporter, "ruby-" + ruby.scope + "-v" + ruby.instrumentation}, ""}
+	}
 	// Bazel passes the plans, then the specifications, then the neutral
 	// contract, then the parts libraries, all in sorted profile order. Index the
 	// plans by the profile each one names rather than by position, so adding a
@@ -203,13 +221,15 @@ func TestCheckedInProfilePlanSnapshotsAndDescriptorOwnership(t *testing.T) {
 	if len(seen) != planCount {
 		t.Fatalf("saw %d plans, want %d", len(seen), planCount)
 	}
-	if totalProofs != 403 || totalObserved != 182 || scopedExceptions != 2 {
+	if totalProofs != 517 || totalObserved != 287 || scopedExceptions != 2 {
 		t.Fatalf("claim snapshot changed: proofs=%d observed=%d scoped-exceptions=%d", totalProofs, totalObserved, scopedExceptions)
 	}
 
 	owners := map[string]bool{}
 	for _, expected := range expectations {
-		owners[expected.descriptorSource] = true
+		if expected.descriptorSource != "" {
+			owners[expected.descriptorSource] = true
+		}
 	}
 	for path := range owners {
 		source, err := os.ReadFile(runfile(path))
