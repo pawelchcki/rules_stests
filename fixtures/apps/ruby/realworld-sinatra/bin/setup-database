@@ -1,0 +1,3 @@
+require_relative "../app/database"
+RealWorld::SCHEMA.call(RealWorld::DB)
+RealWorld::DB.run("VACUUM")

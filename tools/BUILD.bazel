@@ -1,3 +1,4 @@
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 
 package(default_visibility = ["//visibility:public"])
@@ -5,4 +6,26 @@ package(default_visibility = ["//visibility:public"])
 sh_binary(
     name = "assemble_otel_report",
     srcs = ["assemble_otel_report.sh"],
+)
+
+py_binary(
+    name = "build_ruby_app",
+    srcs = ["build_ruby_app.py"],
+)
+
+py_binary(
+    name = "record_ruby_realworld",
+    srcs = ["record_ruby_realworld.py"],
+)
+
+py_library(
+    name = "ruby_realworld_parity_lib",
+    srcs = ["ruby_realworld_parity.py"],
+    imports = ["."],
+)
+
+py_test(
+    name = "ruby_realworld_parity_test",
+    srcs = ["ruby_realworld_parity_test.py"],
+    deps = [":ruby_realworld_parity_lib"],
 )

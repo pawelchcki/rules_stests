@@ -7,7 +7,7 @@ language installation.
 ## Launcher
 
 Extraction and launching are separate tools. `oci_rootfs_extract <layout>
-<rootfs> <single|multi> [zstd-tool]` verifies and overlays an OCI layout as a Bazel build
+<rootfs> <single|multi|ruby-runtime> [zstd-tool]` verifies and overlays an OCI layout as a Bazel build
 action. `app_launcher --runtime=<python|ruby|native> --instance=<name>
 --rootfs=<directory> [injection options] -- <command> [arguments...]` consumes
 an already-materialized directory and executes the application directly.
@@ -31,7 +31,12 @@ corpus_service(
 `python` and `ruby` use the existing bundled runtime layouts. `python` takes
 an entrypoint; `ruby` takes a Rails command when the rootfs bundles Rails and
 otherwise an entry script relative to the application source (for example
-`bin/server`). `native` takes a rootfs-relative executable path.
+`bin/server`). An optional `ruby_rootfs` label (launcher flag
+`--ruby-rootfs=DIR`) supplies a separate pinned interpreter under `usr/local`;
+source, gems and seed data stay in the app rootfs under `opt/app`. The launcher
+discovers the interpreter's library ABI and keeps its libraries separate from
+the app bundle and private database state. `native` takes a rootfs-relative
+executable path.
 The optional `injection` accepts the existing `otel_injection`,
 `python_auto_injection`, and `ruby_auto_injection` configurations, plus neutral
 `instrumentation_injection`. Datadog presets are supplied by `rules_datadog_stests`. The macro
@@ -49,6 +54,7 @@ their own tests; `corpus_service` imposes no RealWorld API contract.
 
 | Option | Meaning |
 | --- | --- |
+| `--ruby-rootfs=DIR` | Separate interpreter tree for Ruby apps |
 | `--instrumentation-rootfs=DIR` | Resolve agent data and `{instrumentation_rootfs}` without OTel defaults |
 | `--otel-rootfs=DIR` | Resolve agent data; enable the placeholder and OTel defaults |
 | `--env=KEY=VALUE` | Set an environment variable after runtime isolation |
@@ -61,6 +67,10 @@ owns its Gem, library, database, loader, and bundle variables. Injection path
 edits apply after those values, followed by explicit environment overrides.
 When an OTel rootfs is present, missing service/exporter defaults are filled
 in; inherited or explicit values win.
+
+The `ruby-runtime` extraction mode retains Ruby, its headers, standard
+libraries and recursively required ELF shared libraries, omitting compilers,
+static archives, documentation and caches.
 
 Rootfs extraction is a cacheable Bazel action. It verifies manifest and layer
 digests, rejects paths escaping the output tree, applies OCI whiteouts, and

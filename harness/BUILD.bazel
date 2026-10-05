@@ -122,6 +122,7 @@ go_library(
     srcs = [
         "bundle_paths.go",
         "oci_rootfs_extract.go",
+        "ruby_runtime_extract.go",
     ],
     importpath = "github.com/pawelchcki/rules_stests/harness/oci_rootfs_extract",
     visibility = ["//visibility:private"],

@@ -1,5 +1,8 @@
 exports_files([
     "oci_deps.bzl",
     "oci_images.lock.bzl",
+    "ruby_matrix.bzl",
+    "ruby_legacy/1.9.3.json",
+    "ruby_legacy/2.0.0.json",
     "rules_rs_launchpad_zlib.patch",
 ])

@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -382,5 +383,61 @@ func TestZstdLayerExtractionAndCorruption(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestRubyRuntimeTrimmingKeepsSymlinksAndRemovesBuildPayloads(t *testing.T) {
+	staging, output := t.TempDir(), filepath.Join(t.TempDir(), "runtime")
+	// Minimal inspectable ELF with no dynamic dependencies. This exercises
+	// tree trimming without requiring executor-specific binaries or libc.
+	contents := make([]byte, 64)
+	copy(contents, []byte("\x7fELF\x02\x01\x01"))
+	binary.LittleEndian.PutUint16(contents[16:], 2)  // ET_EXEC
+	binary.LittleEndian.PutUint16(contents[18:], 62) // EM_X86_64
+	binary.LittleEndian.PutUint32(contents[20:], 1)  // EV_CURRENT
+	binary.LittleEndian.PutUint16(contents[52:], 64) // ELF header size
+	files := map[string][]byte{
+		"usr/local/bin/ruby":                             contents,
+		"usr/local/lib/libruby.so.4.0.7":                 contents,
+		"usr/local/include/ruby-4.0.0/ruby.h":            []byte("header"),
+		"usr/local/lib/ruby/4.0.0/json.rb":               []byte("library"),
+		"usr/local/lib/libruby-static.a":                 []byte("archive"),
+		"usr/local/lib/ruby/gems/4.0.0/cache/bcrypt.gem": []byte("gem cache"),
+		"usr/local/lib/ruby/gems/4.0.0/doc/manual":       []byte("documentation"),
+		"usr/bin/gcc":                []byte("compiler"),
+		"lib64/ld-linux-x86-64.so.2": []byte("loader"),
+		".rules-stests-manifest":     []byte("pinned manifest\n"),
+	}
+	for name, data := range files {
+		path := filepath.Join(staging, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink("libruby.so.4.0.7", filepath.Join(staging, "usr/local/lib/libruby.so")); err != nil {
+		t.Fatal(err)
+	}
+	if err := trimRubyRuntime(staging, output); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"usr/local/bin/ruby", "usr/local/include/ruby-4.0.0/ruby.h", "usr/local/lib/ruby/4.0.0/json.rb", "lib64/ld-linux-x86-64.so.2", ".rules-stests-manifest"} {
+		if !fileExists(filepath.Join(output, name)) {
+			t.Errorf("missing runtime file %s", name)
+		}
+	}
+	for _, name := range []string{"usr/bin/gcc", "usr/local/lib/libruby-static.a", "usr/local/lib/ruby/gems/4.0.0/cache", "usr/local/lib/ruby/gems/4.0.0/doc"} {
+		if fileExists(filepath.Join(output, name)) {
+			t.Errorf("build payload %s entered the runtime output", name)
+		}
+	}
+	link, err := os.Readlink(filepath.Join(output, "usr/local/lib/libruby.so"))
+	if err != nil || link != "libruby.so.4.0.7" {
+		t.Fatalf("shared-library alias was duplicated instead of preserved: %q, %v", link, err)
+	}
+	if !fileExists(filepath.Join(output, "usr/local/lib/libruby.so")) {
+		t.Fatal("shared-library alias has a missing target")
 	}
 }
