@@ -57,6 +57,9 @@ func main() {
 	}
 	appendProofs("base", claims)
 	for _, check := range labSharedChecks {
+		if !check.appliesTo(*language) {
+			continue
+		}
 		appendProofs(check.Scenario, check.Features)
 	}
 	if *language == "python" {

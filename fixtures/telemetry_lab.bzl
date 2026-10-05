@@ -1,4 +1,4 @@
-"""Configuration variants for the standalone Python SDK workload."""
+"""Independent shared contracts and configuration variants for SDK labs."""
 
 load("@rules_itest//:itest.bzl", "service_test")
 load("//rules:corpus_service.bzl", "corpus_service")
@@ -6,8 +6,45 @@ load("//rules:realworld_app.bzl", "otlp_env", "python_auto_injection")
 
 _PYTHON_APP = "//fixtures/apps/python/telemetry-lab:app.py"
 
-# Every base lab implements the same portable trace SDK contracts.
-TELEMETRY_LAB_BASE_SCENARIOS = ["base", "trace-context", "trace-invalid-headers", "trace-limits"]
+# Every adapter implements the common contracts; only Python and Ruby expose ambient context.
+TELEMETRY_LAB_SHARED_SCENARIOS = ["trace-context", "trace-invalid-headers", "trace-limits", "trace-lifecycle", "resources", "baggage"]
+TELEMETRY_LAB_BASE_SCENARIOS = {
+    language: ["base"] + TELEMETRY_LAB_SHARED_SCENARIOS + (["context"] if language != "go" else [])
+    for language in ["go", "python", "ruby"]
+}
+
+def shared_telemetry_lab_tests(language, sources, tags = []):
+    """One test/receipt per portable contract, independent of base OTLP checks."""
+    plan = ":" + language + "_telemetry_lab_plan"
+    service = ":" + language + "_telemetry_lab_service"
+    for scenario in TELEMETRY_LAB_BASE_SCENARIOS[language][1:]:
+        source_args = ["--source=$(rlocationpath {})".format(sources[0])]
+        source_args += [
+            "--source-extra{}=$(rlocationpath {})".format("" if index == 0 else index + 1, source)
+            for index, source in enumerate(sources[1:])
+        ]
+        service_test(
+            name = "{}_telemetry_lab_{}_test".format(language, scenario.replace("-", "_")),
+            services = [service],
+            test = "//harness:telemetry_lab_probe",
+            data = sources + [plan],
+            args = [
+                "--app-suffix=//fixtures:" + language + "_telemetry_lab_service",
+                "--sink-suffix=//harness:otel_sink_service",
+                "--language=" + language,
+                "--scenario=" + scenario,
+                "--proof-plan=$(rlocationpath {})".format(plan),
+            ] + source_args,
+            tags = ["telemetry"] + tags,
+        )
+    native.test_suite(
+        name = language + "_telemetry_lab_shared_suite",
+        tests = [
+            ":{}_telemetry_lab_{}_test".format(language, scenario.replace("-", "_"))
+            for scenario in TELEMETRY_LAB_BASE_SCENARIOS[language][1:]
+        ],
+        tags = tags,
+    )
 
 def python_telemetry_lab_variants():
     for variant, config in {

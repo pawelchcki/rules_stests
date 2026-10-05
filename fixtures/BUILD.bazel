@@ -8,7 +8,7 @@ load("//rules:realworld_service_tests.bzl", "realworld_service_tests")
 load("//rules:otel_profile.bzl", "otel_report_manifest")
 load("@rules_itest//:itest.bzl", "service_test")
 load(":external_features.bzl", "external_feature_tests")
-load(":telemetry_lab.bzl", "TELEMETRY_LAB_BASE_SCENARIOS", "python_telemetry_lab_variants")
+load(":telemetry_lab.bzl", "TELEMETRY_LAB_BASE_SCENARIOS", "python_telemetry_lab_variants", "shared_telemetry_lab_tests")
 load("//fixtures:ruby_matrix.bzl", "RUBY_TELEMETRY_CI_PROFILES", "RUBY_TELEMETRY_CI_SUITES", "RUBY_TELEMETRY_PROFILES", "RUBY_TELEMETRY_SUITES", "ruby_app_matrix")
 
 package(default_visibility = ["//visibility:public"])
@@ -142,20 +142,31 @@ service_test(
     tags = ["telemetry", "ci-full"],
 )
 
+shared_telemetry_lab_tests(
+    language = "go",
+    sources = ["//fixtures/apps/go/telemetry-lab:main.go", "//fixtures/apps/go/telemetry-lab:metrics.go", "//fixtures/apps/go/telemetry-lab:sdk_trace.go"],
+)
+shared_telemetry_lab_tests(language = "python", sources = ["//fixtures/apps/python/telemetry-lab:app.py"])
+shared_telemetry_lab_tests(language = "ruby", sources = ["//fixtures/apps/ruby/telemetry-lab:app.rb"], tags = _RAILS_TAGS)
+
 test_suite(
     name = "telemetry_lab_ci_suite",
     tests = [
         ":go_telemetry_lab_test",
+        ":go_telemetry_lab_shared_suite",
         ":python_telemetry_lab_test",
-    ] + ([":ruby_telemetry_lab_test"] if RUBY_IMAGES_PUBLISHED else []),
+        ":python_telemetry_lab_shared_suite",
+    ] + ([":ruby_telemetry_lab_test", ":ruby_telemetry_lab_shared_suite"] if RUBY_IMAGES_PUBLISHED else []),
 )
 
 test_suite(
     name = "telemetry_lab_suite",
     tests = [
         ":go_telemetry_lab_test",
+        ":go_telemetry_lab_shared_suite",
         ":go_telemetry_lab_retry_after_test",
         ":python_telemetry_lab_test",
+        ":python_telemetry_lab_shared_suite",
         ":python_telemetry_lab_links_count_test",
         ":python_telemetry_lab_link_attributes_test",
         ":python_telemetry_lab_span_events_test",
@@ -175,7 +186,7 @@ test_suite(
         ":python_telemetry_lab_ot_baggage_hyphen_test",
         ":python_telemetry_lab_exemplars_off_test",
         ":python_telemetry_lab_histogram_exponential_test",
-    ] + ([":ruby_telemetry_lab_test"] if RUBY_IMAGES_PUBLISHED else []),
+    ] + ([":ruby_telemetry_lab_test", ":ruby_telemetry_lab_shared_suite"] if RUBY_IMAGES_PUBLISHED else []),
 )
 
 corpus_service(
@@ -504,9 +515,9 @@ otel_report_manifest(
     profiles = _BASE_REPORT_PROFILES + RUBY_TELEMETRY_CI_PROFILES,
     lab_plans = [":go_telemetry_lab_plan", ":python_telemetry_lab_plan", ":ruby_telemetry_lab_plan"],
     lab_scenarios = {
-        "go-telemetry-lab": TELEMETRY_LAB_BASE_SCENARIOS,
-        "ruby-telemetry-lab": TELEMETRY_LAB_BASE_SCENARIOS,
-        "python-telemetry-lab": TELEMETRY_LAB_BASE_SCENARIOS,
+        "go-telemetry-lab": TELEMETRY_LAB_BASE_SCENARIOS["go"],
+        "ruby-telemetry-lab": TELEMETRY_LAB_BASE_SCENARIOS["ruby"],
+        "python-telemetry-lab": TELEMETRY_LAB_BASE_SCENARIOS["python"],
     },
     unavailable_labs = ["ruby-telemetry-lab"] if not RUBY_IMAGES_PUBLISHED else [],
     unavailable_profiles = ["//corpus:ruby-rails-auto-v0-1-0"] if not RUBY_IMAGES_PUBLISHED else [],
@@ -517,9 +528,9 @@ otel_report_manifest(
     profiles = _REPORT_PROFILES,
     lab_plans = [":go_telemetry_lab_plan", ":python_telemetry_lab_plan", ":ruby_telemetry_lab_plan"],
     lab_scenarios = {
-        "go-telemetry-lab": TELEMETRY_LAB_BASE_SCENARIOS + ["otlp-retry-after"],
-        "ruby-telemetry-lab": TELEMETRY_LAB_BASE_SCENARIOS,
-        "python-telemetry-lab": TELEMETRY_LAB_BASE_SCENARIOS + ["links-count", "link-attributes", "span-events", "event-attributes", "attribute-count", "span-value-length", "attribute-value-length", "resource-attributes", "default-service", "disabled", "sampler-off", "sampler-arg-zero", "sampler-arg-one", "log-count", "log-length", "log-length-edge", "ot-baggage-hyphen", "exemplars-off", "histogram-exponential"],
+        "go-telemetry-lab": TELEMETRY_LAB_BASE_SCENARIOS["go"] + ["otlp-retry-after"],
+        "ruby-telemetry-lab": TELEMETRY_LAB_BASE_SCENARIOS["ruby"],
+        "python-telemetry-lab": TELEMETRY_LAB_BASE_SCENARIOS["python"] + ["links-count", "link-attributes", "span-events", "event-attributes", "attribute-count", "span-value-length", "attribute-value-length", "resource-attributes", "default-service", "disabled", "sampler-off", "sampler-arg-zero", "sampler-arg-one", "log-count", "log-length", "log-length-edge", "ot-baggage-hyphen", "exemplars-off", "histogram-exponential"],
     },
     unavailable_labs = ["ruby-telemetry-lab"] if not RUBY_IMAGES_PUBLISHED else [],
     # This is an explicit owner declaration, not an inference from missing

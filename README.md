@@ -33,7 +33,7 @@ bazel test //fixtures:ruby_2_7_suite
 Pull-request CI runs every Ruby API scenario and the official SDK trace suite on
 the newest pinned interpreter (`//fixtures:ruby_ci_suite` and
 `//fixtures:otel_report_ci_suite`), one base configuration per reference app,
-and one base SDK workload per language. Its report uses
+and the base SDK workload plus independent shared contracts per language. Its report uses
 `//fixtures:otel_report_ci_manifest` and includes only that telemetry evidence.
 The `main` build runs all Ruby versions, cross-version response parity, and all
 Django and SDK configuration variants, then publishes the complete report.
@@ -327,11 +327,12 @@ discrepancies. Its 22 feature IDs are also covered by the standalone lab; see
 `//fixtures:telemetry_lab_suite` runs standalone Python, Ruby, and Go API
 workloads and produces accepted report receipts for 148 feature IDs, including
 all 22 from the external suite. Fourteen corroborate Scheme proof-rule definitions,
-including seven shared trace SDK checks for SpanContext, ID generation, and
-span limits. Go, Python, and Ruby implement the same lab endpoints; one shared
-registry and checker generate their proof plans and receipts. Each shared endpoint
-is exercised twice to check repeatability. This adds 112 distinct IDs beyond the Scheme
-and external suites; see
+including shared contracts for SpanContext, ID generation, span limits and
+lifecycle, resource merging, and W3C baggage. Python and Ruby also share ambient
+context checks. One registry and language-neutral validators generate the proof
+plans and receipts. Each contract has an independent service test and receipt,
+and exercises its endpoint twice to check repeatability. This adds 112 distinct
+IDs beyond the Scheme and external suites; see
 [the lab evidence and reproduction command](corpus/TELEMETRY_LABS.md).
 The Python lab also preserves an expected failure for byte and object-valued
 log attributes that exceed the configured value-length limit.

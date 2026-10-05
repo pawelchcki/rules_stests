@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -414,4 +415,92 @@ func inspectTraceSDK(ctx context.Context) (any, error) {
 		"exported": len(exported), "nonrecording_id": droppedID,
 		"nonrecording_valid": droppedValid, "nonrecording_recording": droppedRecording,
 	}, nil
+}
+
+func inspectTraceLifecycle(context.Context) (any, error) {
+	ctx := context.Background()
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithIDGenerator(&traceProbeIDGenerator{}),
+		sdktrace.WithSampler(sdktrace.AlwaysSample()), sdktrace.WithSyncer(exporter))
+	defer provider.Shutdown(ctx)
+	tracer := provider.Tracer("lab.lifecycle")
+	currentBefore := trace.SpanFromContext(ctx)
+	bound, parent := tracer.Start(ctx, "lab.lifecycle", trace.WithNewRoot(),
+		trace.WithTimestamp(time.Unix(1_700_000_000, 123_000_000)))
+	recordingBefore := parent.IsRecording()
+	activeMatches := trace.SpanFromContext(bound) == parent
+	childContext, child := tracer.Start(bound, "lab.lifecycle.child")
+	childActiveMatches := trace.SpanFromContext(childContext) == child
+	child.End()
+	restored := trace.SpanFromContext(ctx) == currentBefore && trace.SpanFromContext(bound) == parent
+	parent.End(trace.WithTimestamp(time.Unix(1_700_000_000, 173_000_000)))
+	recordingAfter := parent.IsRecording()
+	parent.SetName("lab.changed-after-end")
+	parent.SetAttributes(attribute.Bool("lab.after-end", true))
+	parent.AddEvent("lab.after-end")
+	parent.End(trace.WithTimestamp(time.Unix(1_700_000_000, 223_000_000)))
+	spans := []map[string]any{}
+	afterEndUnchanged := false
+	for _, span := range exporter.GetSpans() {
+		result := map[string]any{"name": span.Name, "trace_id": span.SpanContext.TraceID().String(),
+			"span_id": span.SpanContext.SpanID().String(), "parent_id": span.Parent.SpanID().String()}
+		if span.SpanContext.SpanID() == parent.SpanContext().SpanID() {
+			result["start"] = fmt.Sprint(span.StartTime.UnixNano())
+			result["end"] = fmt.Sprint(span.EndTime.UnixNano())
+			afterEndUnchanged = span.Name == "lab.lifecycle" && len(span.Attributes) == 0 && len(span.Events) == 0
+		}
+		spans = append(spans, result)
+	}
+	return map[string]any{"recording_before": recordingBefore, "recording_after": recordingAfter,
+		"active_matches": activeMatches, "child_active_matches": childActiveMatches,
+		"restored": restored, "spans": spans, "after_end_unchanged": afterEndUnchanged}, nil
+}
+
+func inspectResources(context.Context) (any, error) {
+	left := resource.NewWithAttributes("", attribute.String("lab.left", "one"), attribute.String("lab.shared", "left"), attribute.Int("lab.integer", 42))
+	right := resource.NewWithAttributes("", attribute.String("lab.right", "two"), attribute.String("lab.shared", "right"), attribute.Bool("lab.boolean", true))
+	merged, err := resource.Merge(left, right)
+	if err != nil {
+		return nil, err
+	}
+	values := func(r *resource.Resource) map[string]any {
+		result := map[string]any{}
+		for _, attr := range r.Attributes() {
+			result[string(attr.Key)] = attr.Value.AsInterface()
+		}
+		return result
+	}
+	return map[string]any{"empty": len(resource.Empty().Attributes()), "merged": values(merged),
+		"originals": map[string]any{"left": values(left), "right": values(right)}}, nil
+}
+
+func inspectBaggage(context.Context) (any, error) {
+	empty := context.Background()
+	wire := propagation.Baggage{}
+	original := wire.Extract(empty, propagation.MapCarrier{"baggage": "incoming=value,lab.other=two"})
+	member, err := baggage.NewMember("lab-key", "lab-value")
+	if err != nil {
+		return nil, err
+	}
+	bag, err := baggage.FromContext(original).SetMember(member)
+	if err != nil {
+		return nil, err
+	}
+	bag = bag.DeleteMember("lab.other")
+	updated := baggage.ContextWithBaggage(original, bag)
+	outgoing := propagation.MapCarrier{}
+	wire.Inject(updated, outgoing)
+	// Normalize unordered W3C members without altering the SDK header or values.
+	members := strings.Split(outgoing["baggage"], ",")
+	sort.Strings(members)
+	outgoing["baggage"] = strings.Join(members, ",")
+	extracted := wire.Extract(empty, outgoing)
+	var removed any
+	if value := baggage.FromContext(updated).Member("lab.other").Value(); value != "" {
+		removed = value
+	}
+	return map[string]any{"value": baggage.FromContext(updated).Member("lab-key").Value(), "outgoing": outgoing,
+		"extracted": baggage.FromContext(extracted).Member("lab-key").Value(),
+		"incoming":  baggage.FromContext(extracted).Member("incoming").Value(), "removed": removed,
+		"original": baggage.FromContext(original).Member("lab.other").Value()}, nil
 }

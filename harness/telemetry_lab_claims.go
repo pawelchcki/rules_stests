@@ -6,14 +6,15 @@ import "sort"
 // passing receipt can name it. The mapping declares what to test; it never
 // declares the result.
 type labSharedCheck struct {
-	Name     string
-	Path     string
-	Scenario string
-	Features []string
+	Name      string
+	Path      string
+	Scenario  string
+	Features  []string
+	Languages []string // Empty means every lab; ambient context APIs exclude Go.
 }
 
-// Shared contracts apply to every lab language. Adding a language requires
-// implementing these endpoints in its application, not copying assertions.
+// Shared contracts apply to every adapter that provides the SDK API. Adding a
+// language requires implementing endpoints, not copying assertions.
 var labSharedChecks = []labSharedCheck{
 	{Name: "response/trace-context", Path: "/v1/trace-context", Scenario: "trace-context", Features: []string{
 		"traces.spancontext.isvalid",
@@ -28,6 +29,55 @@ var labSharedChecks = []labSharedCheck{
 		"traces.sampling.attribute-limits",
 		"traces.span.attribute-collection-size-limit",
 	}},
+	{Name: "response/trace-lifecycle", Path: "/v1/trace-lifecycle", Scenario: "trace-lifecycle", Features: []string{
+		"traces.span.isrecording",
+		"traces.span.isrecording-becomes-false-after-end",
+		"traces.trace-context-interaction.get-active-span",
+		"traces.trace-context-interaction.set-active-span",
+		"traces.span.user-defined-start-timestamp",
+		"traces.span.end-with-timestamp",
+		"traces.span.no-explicit-parent-span-spancontext-allowed",
+	}},
+	{Name: "response/resources", Path: "/v1/resources", Scenario: "resources", Features: []string{
+		"resource.create-empty",
+		"resource.merge-v2",
+	}},
+	{Name: "response/baggage", Path: "/v1/baggage", Scenario: "baggage", Features: []string{
+		"baggage.basic-support",
+		"baggage.use-official-header-name-baggage",
+	}},
+	// Go passes context explicitly and has no ambient attach/detach API.
+	{Name: "response/context", Path: "/v1/context", Scenario: "context", Languages: []string{"python", "ruby"}, Features: []string{
+		"context-propagation.create-context-key",
+		"context-propagation.get-value-from-context",
+		"context-propagation.set-value-for-context",
+		"context-propagation.attach-context",
+		"context-propagation.detach-context",
+		"context-propagation.get-current-context",
+		"traces.tracer.get-active-span",
+		"traces.tracer.mark-span-active",
+	}},
+}
+
+func (check labSharedCheck) appliesTo(language string) bool {
+	if len(check.Languages) == 0 {
+		return true
+	}
+	for _, supported := range check.Languages {
+		if supported == language {
+			return true
+		}
+	}
+	return false
+}
+
+func labSharedScenario(language, scenario string) (labSharedCheck, bool) {
+	for _, check := range labSharedChecks {
+		if check.Scenario == scenario && check.appliesTo(language) {
+			return check, true
+		}
+	}
+	return labSharedCheck{}, false
 }
 
 var labLanguageClaimsByCheck = map[string]map[string][]string{
@@ -86,19 +136,11 @@ var labLanguageClaimsByCheck = map[string]map[string][]string{
 		"capture/span-status": {
 			"traces.span.set-status-with-statuscode-unset-ok-error",
 		},
-		"response/propagation": {
-			"baggage.basic-support",
-			"baggage.use-official-header-name-baggage",
-		},
 		"capture/concurrency": {
 			"traces.tracerprovider.safe-for-concurrent-calls",
 			"traces.tracer.safe-for-concurrent-calls",
 			"traces.span.safe-for-concurrent-calls",
 			"traces.span-events.safe-for-concurrent-calls",
-		},
-		"response/resources": {
-			"resource.create-empty",
-			"resource.merge-v2",
 		},
 		"response/metric-views": {
 			"metrics.the-api-provides-a-way-to-set-and-get-a-global-default-meterprovider",
@@ -141,24 +183,6 @@ var labLanguageClaimsByCheck = map[string]map[string][]string{
 		},
 	},
 	"ruby": {
-		"response/lifecycle": {
-			"traces.span.isrecording",
-			"traces.span.isrecording-becomes-false-after-end",
-			"traces.trace-context-interaction.get-active-span",
-			"traces.trace-context-interaction.set-active-span",
-			"traces.tracer.get-active-span",
-			"traces.tracer.mark-span-active",
-			"context-propagation.create-context-key",
-			"context-propagation.get-value-from-context",
-			"context-propagation.set-value-for-context",
-			"context-propagation.attach-context",
-			"context-propagation.detach-context",
-			"context-propagation.get-current-context",
-		},
-		"capture/lifecycle": {
-			"traces.span.user-defined-start-timestamp",
-			"traces.span.end-with-timestamp",
-		},
 		"capture/links": {
 			"traces.span-linking.links-can-be-recorded-on-span-creation",
 			"traces.span-linking.links-can-be-recorded-after-span-creation",
@@ -189,9 +213,6 @@ var labLanguageClaimsByCheck = map[string]map[string][]string{
 		"capture/span-unicode": {
 			"traces.span-attributes.unicode-support-for-keys-and-string-values",
 		},
-		"response/baggage": {
-			"baggage.basic-support",
-		},
 	},
 	"python": {
 		"response/metric-scope": {
@@ -199,9 +220,6 @@ var labLanguageClaimsByCheck = map[string]map[string][]string{
 		},
 		"capture/schema": {
 			"exporters.otlp.schemaurl-in-resourcelogs-and-scopelogs",
-		},
-		"capture/root": {
-			"traces.span.no-explicit-parent-span-spancontext-allowed",
 		},
 		"response/legacy-propagators": {
 			"context-propagation.jaeger-propagator",
@@ -269,28 +287,6 @@ var labLanguageClaimsByCheck = map[string]map[string][]string{
 			"traces.span-linking.links-can-be-recorded-after-span-creation",
 			"traces.span-linking.links-order-is-preserved",
 		},
-		"capture/lifecycle": {
-			"traces.span.user-defined-start-timestamp",
-			"traces.span.end-with-timestamp",
-		},
-		"response/lifecycle": {
-			"traces.span.isrecording",
-			"traces.span.isrecording-becomes-false-after-end",
-			"traces.trace-context-interaction.get-active-span",
-			"traces.trace-context-interaction.set-active-span",
-			"traces.tracer.get-active-span",
-			"traces.tracer.mark-span-active",
-			"context-propagation.create-context-key",
-			"context-propagation.get-value-from-context",
-			"context-propagation.set-value-for-context",
-			"context-propagation.attach-context",
-			"context-propagation.detach-context",
-			"context-propagation.get-current-context",
-		},
-		"response/propagation": {
-			"baggage.basic-support",
-			"baggage.use-official-header-name-baggage",
-		},
 		"capture/log-correlation": {
 			"logs.trace-context-injection",
 		},
@@ -305,6 +301,9 @@ var labClaimsByCheck = func() map[string]map[string][]string {
 			result[language][name] = features
 		}
 		for _, check := range labSharedChecks {
+			if !check.appliesTo(language) {
+				continue
+			}
 			if _, exists := result[language][check.Name]; exists {
 				panic("duplicate shared lab check: " + check.Name)
 			}
@@ -331,7 +330,7 @@ var labClaims = func() map[string][]string {
 
 func labCheckFor(language, scenario, featureID string) string {
 	for _, check := range labSharedChecks {
-		if scenario == check.Scenario {
+		if scenario == check.Scenario && check.appliesTo(language) {
 			for _, id := range check.Features {
 				if id == featureID {
 					return check.Name
@@ -360,7 +359,7 @@ func labCheckFor(language, scenario, featureID string) string {
 
 func labScenarioClaims(language, scenario string) []string {
 	for _, check := range labSharedChecks {
-		if scenario == check.Scenario {
+		if scenario == check.Scenario && check.appliesTo(language) {
 			return check.Features
 		}
 	}

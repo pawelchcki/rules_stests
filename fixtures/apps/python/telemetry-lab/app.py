@@ -4,7 +4,6 @@ import argparse
 import io
 import logging
 import os
-import time
 from aiohttp import web
 from opentelemetry import baggage, context, propagate, trace, metrics
 from opentelemetry.trace import Link, SpanContext, TraceFlags, TraceState, Status, StatusCode
@@ -22,6 +21,7 @@ from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider, SpanLim
 from opentelemetry.sdk.trace.id_generator import IdGenerator
 from opentelemetry.sdk.trace.sampling import ALWAYS_ON
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+from opentelemetry.baggage.propagation import W3CBaggagePropagator
 from opentelemetry.sdk.trace.export import ConsoleSpanExporter, SpanExporter, SpanExportResult, SimpleSpanProcessor
 from prometheus_client import CollectorRegistry, generate_latest
 from prometheus_client.openmetrics.exposition import generate_latest as generate_openmetrics
@@ -158,20 +158,12 @@ async def spans(request):
             "lab.double": 3.5, "lab.array": ["red", "blue"],
         },
     ) as parent:
-        assert trace.get_current_span() is parent
         parent.add_event("lab.first", {"lab.order": 1, "lab.event.extra": "kept-or-dropped"})
         parent.add_link(link_context, {"lab.link": "after-start", "lab.extra": "three"})
         with TRACER.start_as_current_span("lab.child") as child:
             child.set_attribute("lab.updated", "after-start")
             child.update_name("lab.child.renamed")
             child.set_status(Status(StatusCode.OK))
-        manual = TRACER.start_span("lab.manually-active")
-        manual_token = context.attach(trace.set_span_in_context(manual))
-        try:
-            assert trace.get_current_span() is manual
-        finally:
-            context.detach(manual_token)
-            manual.end()
         parent.add_event("lab.second", {"lab.order": 2})
         COUNTER.add(1, {"lab.route": "spans"})
         HISTOGRAM.record(12.5, {"lab.route": "spans"})
@@ -191,29 +183,108 @@ async def exception(request):
     return web.json_response({"handled": True})
 
 
-async def explicit_root(request):
-    with TRACER.start_as_current_span("lab.explicit-root", context=context.Context()) as span:
-        return web.json_response({"recording": span.is_recording(),
-                                  "parent_absent": span.parent is None})
-
-
-async def span_lifecycle(request):
-    start = time.time_ns() - 100_000_000
-    end = start + 50_000_000
-    span = TRACER.start_span("lab.lifecycle", start_time=start)
-    before = span.is_recording()
-    span.end(end_time=end)
-    after = span.is_recording()
-    key = context.create_key("telemetry-lab-key")
-    updated = context.set_value(key, "attached-value")
-    token = context.attach(updated)
+async def trace_lifecycle(request):
+    empty = context.Context()
+    exporter = LabSpanExporter()
+    provider = SDKTracerProvider(id_generator=LabIdGenerator(), sampler=ALWAYS_ON, shutdown_on_exit=False)
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
     try:
-        attached = context.get_value(key, context.get_current())
+        tracer = provider.get_tracer("lab.lifecycle")
+        parent = tracer.start_span("lab.lifecycle", context=empty, start_time=1_700_000_000_123_000_000)
+        recording_before = parent.is_recording()
+        current_before = trace.get_current_span()
+        active_matches = child_active_matches = False
+        token = context.attach(trace.set_span_in_context(parent, empty))
+        try:
+            active_matches = trace.get_current_span() is parent
+            with tracer.start_as_current_span("lab.lifecycle.child") as child:
+                child_active_matches = trace.get_current_span() is child
+        finally:
+            context.detach(token)
+        restored = trace.get_current_span() is current_before
+        parent.end(end_time=1_700_000_000_173_000_000)
+        recording_after = parent.is_recording()
+        parent.update_name("lab.changed-after-end")
+        parent.set_attribute("lab.after-end", True)
+        parent.add_event("lab.after-end")
+        parent.end(end_time=1_700_000_000_223_000_000)
+        snapshot = next(span for span in exporter.spans if span.context.span_id == 1)
+        spans = [{"name": span.name, "trace_id": format(span.context.trace_id, "032x"),
+                  "span_id": format(span.context.span_id, "016x"),
+                  "parent_id": format(span.parent.span_id if span.parent else 0, "016x"),
+                  "start": str(span.start_time), "end": str(span.end_time)} for span in exporter.spans]
+        # The child timestamps are not part of the contract and use the SDK clock.
+        for span in spans:
+            if span["name"] == "lab.lifecycle.child":
+                span.pop("start")
+                span.pop("end")
+        return web.json_response({"recording_before": recording_before, "recording_after": recording_after,
+                                  "active_matches": active_matches, "child_active_matches": child_active_matches,
+                                  "restored": restored, "spans": spans,
+                                  "after_end_unchanged": snapshot.name == "lab.lifecycle" and
+                                  "lab.after-end" not in snapshot.attributes and not snapshot.events})
     finally:
-        context.detach(token)
-    detached = context.get_value(key)
-    return web.json_response({"before": before, "after": after, "start": start,
-                              "end": end, "attached": attached, "detached": detached})
+        provider.shutdown()
+
+
+async def ambient_context(request):
+    key = context.create_key("telemetry-lab-key")
+    other = context.create_key("telemetry-lab-key")
+    original = context.get_current()
+    outer = context.set_value(key, "one", original)
+    inner = context.set_value(key, "two", outer)
+    states = [context.get_value(key)]
+    outer_token = context.attach(outer)
+    try:
+        states.append(context.get_value(key))
+        inner_token = context.attach(inner)
+        try:
+            states.append(context.get_value(key))
+        finally:
+            context.detach(inner_token)
+        states.append(context.get_value(key))
+    finally:
+        context.detach(outer_token)
+    states.append(context.get_value(key))
+    provider = SDKTracerProvider(sampler=ALWAYS_ON, shutdown_on_exit=False)
+    try:
+        tracer = provider.get_tracer("lab.ambient")
+        before = trace.get_current_span()
+        parent = tracer.start_span("lab.ambient", context=context.Context())
+        with trace.use_span(parent, end_on_exit=True):
+            active_matches = trace.get_current_span() is parent
+            with tracer.start_as_current_span("lab.ambient.child") as child:
+                child_active_matches = trace.get_current_span() is child
+        return web.json_response({"states": states, "distinct_keys": key != other and context.get_value(other, outer) is None,
+                                  "original_unchanged": context.get_value(key, original) is None,
+                                  "active_matches": active_matches, "child_active_matches": child_active_matches,
+                                  "restored": trace.get_current_span() is before})
+    finally:
+        provider.shutdown()
+
+
+async def resources(request):
+    left = Resource({"lab.left": "one", "lab.shared": "left", "lab.integer": 42})
+    right = Resource({"lab.right": "two", "lab.shared": "right", "lab.boolean": True})
+    merged = left.merge(right)
+    return web.json_response({"empty": len(Resource.get_empty().attributes), "merged": dict(merged.attributes),
+                              "originals": {"left": dict(left.attributes), "right": dict(right.attributes)}})
+
+
+async def baggage_contract(request):
+    empty = context.Context()
+    wire = W3CBaggagePropagator()
+    original = wire.extract({"baggage": "incoming=value,lab.other=two"}, context=empty)
+    updated = baggage.set_baggage("lab-key", "lab-value", context=original)
+    updated = baggage.remove_baggage("lab.other", context=updated)
+    outgoing = {}
+    wire.inject(outgoing, context=updated)
+    extracted = wire.extract(outgoing, context=empty)
+    return web.json_response({"value": baggage.get_baggage("lab-key", context=updated), "outgoing": outgoing,
+                              "extracted": baggage.get_baggage("lab-key", context=extracted),
+                              "incoming": baggage.get_baggage("incoming", context=extracted),
+                              "removed": baggage.get_baggage("lab.other", context=updated),
+                              "original": baggage.get_baggage("lab.other", context=original)})
 
 
 async def measurements(request):
@@ -254,23 +325,6 @@ async def log_object(request):
                                  "lab_bytes": b"abcdefghijklmnop"}
     )
     return web.json_response({"emitted": True})
-
-
-async def propagation(request):
-    extracted = propagate.extract(request.headers)
-    remote_parent = trace.get_current_span(extracted).get_span_context().is_remote
-    token = context.attach(baggage.set_baggage("lab-key", "lab-value", extracted))
-    try:
-        with TRACER.start_as_current_span("lab.propagated") as span:
-            carrier = {}
-            propagate.inject(carrier)
-            return web.json_response({
-                "remote_parent": remote_parent,
-                "baggage": baggage.get_baggage("lab-key"),
-                "carrier": carrier,
-            })
-    finally:
-        context.detach(token)
 
 
 async def propagation_formats(request):
@@ -493,12 +547,13 @@ def main():
     app.router.add_get("/v1/trace-limits", trace_limits)
     app.router.add_get("/v1/spans", spans)
     app.router.add_get("/v1/exceptions", exception)
-    app.router.add_get("/v1/explicit-root", explicit_root)
-    app.router.add_get("/v1/lifecycle", span_lifecycle)
+    app.router.add_get("/v1/trace-lifecycle", trace_lifecycle)
+    app.router.add_get("/v1/context", ambient_context)
+    app.router.add_get("/v1/resources", resources)
+    app.router.add_get("/v1/baggage", baggage_contract)
     app.router.add_get("/v1/metrics", measurements)
     app.router.add_get("/v1/metric-scope", metric_scope)
     app.router.add_get("/v1/log-object", log_object)
-    app.router.add_get("/v1/propagation", propagation)
     app.router.add_get("/v1/propagation-formats", propagation_formats)
     app.router.add_get("/v1/propagation-custom", propagation_custom)
     app.router.add_get("/v1/log-sdk", log_sdk)
