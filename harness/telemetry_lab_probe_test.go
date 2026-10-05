@@ -212,6 +212,21 @@ func TestTraceLimitsProofRejectsIncorrectSDKResults(t *testing.T) {
 	if err := labVerifyTraceLimits(ellipsis); err != nil {
 		t.Fatal(err)
 	}
+	// The common specification requires at most the configured character limit,
+	// so a shorter prefix of an oversized value is also conforming.
+	shorter := decode(t)
+	shorter["value_attributes"].(map[string]any)["lab.text"] = "κ"
+	shorter["value_attributes"].(map[string]any)["lab.array"] = []any{"a", "κ", "short"}
+	if err := labVerifyTraceLimits(shorter); err != nil {
+		t.Fatalf("permitted shorter truncation rejected: %v", err)
+	}
+	// The span limit contract does not require a contiguous retained subset.
+	gapped := decode(t)
+	gapped["events"].([]any)[0] = labObject{"name": "event.0", "attributes": labObject{"lab.first": float64(0)}, "index": float64(0)}
+	gapped["links"].([]any)[0] = labObject{"span_id": "0100000000000000", "attributes": labObject{"lab.first": float64(0)}, "index": float64(0)}
+	if err := labVerifyTraceLimits(gapped); err != nil {
+		t.Fatalf("permitted noncontiguous retention rejected: %v", err)
+	}
 	for name, mutate := range map[string]func(labObject){
 		"extra span attribute": func(r labObject) { r["attribute_count"] = float64(3) },
 		"untruncated Unicode": func(r labObject) {

@@ -945,7 +945,8 @@ func labVerifyTraceLimits(response labObject) error {
 	array, _ := attributes["lab.array"].([]any)
 	truncated := func(value any, original string) bool {
 		text, ok := value.(string)
-		// The specification bounds character length; an SDK may add an ellipsis.
+		// AttributeValueLengthLimit is a maximum, not an exact truncation length.
+		// An SDK may add an ellipsis, which counts towards that same bound.
 		prefix := strings.TrimSuffix(text, "...")
 		return ok && prefix != "" && utf8.ValidString(text) && utf8.RuneCountInString(text) <= 32 && strings.HasPrefix(original, prefix)
 	}
@@ -957,6 +958,8 @@ func labVerifyTraceLimits(response labObject) error {
 		if len(items) != 2 || labField(response, "dropped_"+kind) != float64(1) {
 			return fmt.Errorf("span %s limit or dropped count is wrong: %v", kind, response)
 		}
+		// SpanLimits does not prescribe which entries to discard. Check the
+		// retained identities and order without imposing an eviction algorithm.
 		previous := -1
 		for _, item := range items {
 			attributes, _ := item["attributes"].(map[string]any)

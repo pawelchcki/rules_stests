@@ -94,7 +94,7 @@ These checks follow the [SpanContext API contract](https://opentelemetry.io/docs
 
 The limits check sets small explicit limits and exceeds them at span creation
 and after creation. It verifies dropped span attributes, Unicode string and
-string-array truncation, event and link eviction order, per-event and per-link
+string-array truncation, retained event and link order, per-event and per-link
 attribute limits, and span/event/link dropped counts. String limits use 32
 characters, which all three SDKs accept. The common assertion bounds Unicode
 character length and checks the retained prefix, including an optional ellipsis;
@@ -103,6 +103,12 @@ requiring SDKs to discard the same attribute key or link. The seven added lab ID
 corroborate existing Scheme definitions with direct SDK behavior; they do
 not increase the union of catalog IDs across all suites or establish complete
 W3C conformance.
+
+The [attribute-limit contract](https://opentelemetry.io/docs/specs/otel/common/#attribute-limits)
+sets a maximum length, not an exact truncation length. The
+[span-limit contract](https://opentelemetry.io/docs/specs/otel/trace/sdk/#span-limits)
+does not prescribe which events or links to discard or require a contiguous
+retained subset. Regression cases preserve both freedoms in the shared checker.
 
 The Ruby lab documents a pinned SDK defect in its `expected_failures` response:
 the W3C propagator accepts uppercase hexadecimal trace IDs. The
