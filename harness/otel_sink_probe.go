@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pawelchcki/rules_stests/harness/schemebytecode"
 	"github.com/pawelchcki/rules_stests/report"
 )
 
@@ -27,6 +28,7 @@ var otelCoreLibrary []byte
 var syntheticFeatureCaptureBytes []byte
 
 var syntheticFeatureCapture = string(syntheticFeatureCaptureBytes)
+var syntheticBytecode *schemebytecode.Bundle
 
 // Mutation anchors that span more than one line of the fixture.
 const (
@@ -54,7 +56,31 @@ type sinkHeader struct {
 
 func main() {
 	serviceSuffix := flag.String("service-suffix", "", "suffix of the OTLP sink service label")
+	compileTo := flag.String("compile-to", "", "output bundle of synthetic failure programs")
+	compiler := flag.String("compiler", "", "telemetry sink compiler executable")
+	compileShard := flag.String("compile-shard", "", "program shard k/n")
+	var bytecodePaths schemebytecode.Paths
+	flag.Var(&bytecodePaths, "bytecode", "precompiled synthetic failure bundle (repeatable)")
 	flag.Parse()
+	if *compileTo != "" {
+		programs, err := syntheticFailurePrograms()
+		if err != nil {
+			fatal(err)
+		}
+		programs, err = schemebytecode.Shard(programs, *compileShard)
+		if err != nil {
+			fatal(err)
+		}
+		if err := schemebytecode.WriteBundle(*compileTo, *compiler, programs); err != nil {
+			fatal(err)
+		}
+		return
+	}
+	bundle, err := schemebytecode.ReadBundles(bytecodePaths)
+	if err != nil {
+		fatal(err)
+	}
+	syntheticBytecode = bundle
 	if *serviceSuffix == "" {
 		fatal(errors.New("--service-suffix is required"))
 	}
@@ -625,96 +651,7 @@ func main() {
 		fatal(fmt.Errorf("valid Scheme rule returned HTTP %d: %s", status, output))
 	}
 	assertSyntheticShapesPass(endpoint, syntheticFeatureIDs, syntheticShapeByFeature, syntheticFeatureCapture)
-	featureFailures := []struct {
-		featureID string
-		capture   string
-	}{
-		{"traces.tracerprovider.get-a-tracer", strings.Replace(syntheticFeatureCapture, `((name "trace.scope")`, `((name "missing.scope")`, 1)},
-		{"traces.tracerprovider.get-a-tracer-with-schema-url", strings.Replace(syntheticFeatureCapture, `(schema-url "https://opentelemetry.io/schemas/1.11.0")`, `(schema-url "")`, 1)},
-		{"traces.tracer.create-a-new-span", strings.Replace(syntheticFeatureCapture, `(spans (`, `(spans ()) (unused-spans (`, 1)},
-		{"traces.span.create-root-span", strings.ReplaceAll(syntheticFeatureCapture, `(parent-class root)`, `(parent-class external)`)},
-		{"traces.span.create-with-parent-from-context", strings.Replace(syntheticFeatureCapture, `(parent-class external)`, `(parent-class child)`, 1)},
-		{"traces.span.create-with-default-parent-active-span", strings.NewReplacer(
-			`(parent-class child)`, `(parent-class root)`,
-			`(parent-class external)`, `(parent-class root)`,
-		).Replace(syntheticFeatureCapture)},
-		{"traces.span.end", strings.Replace(syntheticFeatureCapture, `(start 1) (end 4)`, `(start 1) (end 0)`, 1)},
-		{"traces.span-attributes.string-type", strings.NewReplacer(
-			`("string.key" (string `, `("string.key" (bytes `,
-			`("unicode.key" (string `, `("unicode.key" (bytes `,
-			`("capped.key" (string `, `("capped.key" (bytes `,
-			`("capped.other" (string `, `("capped.other" (bytes `,
-			`("capped.third" (string `, `("capped.third" (bytes `,
-		).Replace(syntheticFeatureCapture)},
-		{"traces.span-attributes.signed-int64-type", strings.ReplaceAll(syntheticFeatureCapture, `("integer.key" (integer `, `("integer.key" (double `)},
-		{"traces.span-exceptions.recordexception", strings.Replace(syntheticFeatureCapture, `(name "exception")`, `(name "not-exception")`, 1)},
-		{"metrics.meterprovider-provides-a-way-to-get-a-meter", strings.ReplaceAll(syntheticFeatureCapture, `(scope "meter.scope")`, `(scope "")`)},
-		{"metrics.get-meter-accepts-name-version-and-schema-url", strings.ReplaceAll(syntheticFeatureCapture, `(scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0")`, `(scope-version "1.2.3") (schema-url "")`)},
-		{"metrics.counter-instrument-is-supported", strings.Replace(syntheticFeatureCapture, `(data-type sum) (aggregation-temporality delta)`, `(data-type summary) (aggregation-temporality delta)`, 1)},
-		{"metrics.updowncounter-instrument-is-supported", strings.Replace(syntheticFeatureCapture, `(data-type sum) (aggregation-temporality cumulative)`, `(data-type summary) (aggregation-temporality cumulative)`, 1)},
-		{"metrics.histogram-instrument-is-supported", strings.Replace(syntheticFeatureCapture, `(data-type histogram)`, `(data-type summary)`, 1)},
-		{"metrics.asynchronousgauge-instrument-is-supported", strings.Replace(syntheticFeatureCapture, `(data-type gauge)`, `(data-type summary)`, 1)},
-		{"metrics.instruments-have-name", strings.Replace(syntheticFeatureCapture, `(name "counter")`, `(name "")`, 1)},
-		{"metrics.instruments-have-kind", strings.Replace(syntheticFeatureCapture, `(data-type sum)`, `(data-type 7)`, 1)},
-		{"metrics.instruments-have-an-optional-unit-of-measure", strings.Replace(syntheticFeatureCapture, `(unit "{item}")`, `(unit 7)`, 1)},
-		{"metrics.instruments-have-an-optional-description", strings.Replace(syntheticFeatureCapture, `(description "counter description")`, `(description 7)`, 1)},
-		{"metrics.a-specified-resource-can-be-associated-with-all-the-produced-metrics-from-any-meter-from-the-meterprovider", strings.Replace(syntheticFeatureCapture, `((signal metrics) (attributes`, `((signal traces) (attributes`, 1)},
-		{"metrics.the-sum-aggregation-is-available", strings.ReplaceAll(syntheticFeatureCapture, `(data-type sum)`, `(data-type summary)`)},
-		{"metrics.the-lastvalue-aggregation-is-available", strings.Replace(syntheticFeatureCapture, `(data-type gauge)`, `(data-type summary)`, 1)},
-		{"metrics.the-explicitbuckethistogram-aggregation-is-available", strings.Replace(syntheticFeatureCapture, `(data-type histogram)`, `(data-type summary)`, 1)},
-		{"logs.loggerprovider-get-logger", strings.Replace(syntheticFeatureCapture, syntheticLogsBlock, " (logs ()))", 1)},
-		{"logs.logger-emit-logrecord", strings.Replace(syntheticFeatureCapture, syntheticLogsBlock, " (logs ()))", 1)},
-		{"logs.otlp-http-exporter", strings.Replace(syntheticFeatureCapture, `(path "/v1/logs")`, `(path "/v1/logs/")`, 1)},
-		{"resource.create-from-attributes", strings.Replace(syntheticFeatureCapture, `(attributes (("process.runtime.name" (string "go")) ("service.name" (string "synthetic-service"))))`, `(attributes ())`, 1)},
-		{"resource.resource-detector-interface-mechanism", strings.Replace(syntheticFeatureCapture, `(string "go")`, `(string "rust")`, 1)},
-		{"resource.resource-detectors-populate-schema-url", strings.Replace(syntheticFeatureCapture, `(schema-url "https://opentelemetry.io/schemas/1.43.0")`, `(schema-url "")`, 1)},
-		{"exporters.otlp.otlp-http-binary-protobuf-exporter", strings.Replace(syntheticFeatureCapture, `(content-type "application/x-protobuf")`, `(content-type "application/json")`, 1)},
-		{"traces.tracerprovider.create-tracerprovider", strings.Replace(syntheticFeatureCapture, `(spans (`, `(spans ()) (unused-spans (`, 1)},
-		{"traces.span-attributes.setattribute", strings.NewReplacer(
-			`(attributes (("string.key" (string "value")) ("integer.key" (integer 7)) ("unicode.key" (string "ünïcødé"))))`, `(attributes ())`,
-			`(attributes (("string.key" (string "child")) ("integer.key" (integer 8))))`, `(attributes ())`,
-			`(attributes (("capped.key" (string "kept")) ("capped.other" (string "kept")) ("capped.third" (string "kept"))))`, `(attributes ())`,
-		).Replace(syntheticFeatureCapture)},
-		{"traces.spancontext.isvalid", strings.Replace(syntheticFeatureCapture, `(span-id "222222222222222a")`, `(span-id "0000000000000000")`, 1)},
-		{"traces.spancontext.conforms-to-the-w3c-tracecontext-spec", strings.Replace(syntheticFeatureCapture, `(trace-state "")`, `(trace-state "bad key=1")`, 1)},
-		{"traces.span.updatename", strings.Replace(syntheticFeatureCapture, `(name "GET /api/articles/:slug")`, `(name "HTTP GET")`, 1)},
-		{"traces.span.set-status-with-statuscode-unset-ok-error", strings.Replace(syntheticFeatureCapture, `(status-code 2)`, `(status-code 0)`, 1)},
-		{"traces.spancontext.isremote", strings.Replace(syntheticFeatureCapture, `(parent-class external)`, `(parent-class child)`, 1)},
-		// Keeping the propagated parent while starting a trace of the server's
-		// own is not the incoming trace being continued.
-		{"traces.spancontext.isremote", strings.Replace(syntheticFeatureCapture, `(trace-id "4bf92f3577b34da6a3ce929d0e0e4736")`, `(trace-id "5555555555555555555555555555555a")`, 1)},
-		{"traces.span-attributes.unicode-support-for-keys-and-string-values", strings.Replace(syntheticFeatureCapture, `("unicode.key" (string "ünïcødé"))`, `("unicode.key" (string "ascii"))`, 1)},
-		{"environment-variables.otel-span-attribute-count-limit", strings.Replace(syntheticFeatureCapture, `(dropped-attributes 4)`, `(dropped-attributes 0)`, 1)},
-		{"traces.span-events.addevent", strings.Replace(syntheticFeatureCapture, `(events (`, `(events ()) (unused-events (`, 1)},
-		{"resource.retrieve-attributes", strings.Replace(syntheticFeatureCapture, `(attributes (("process.runtime.name" (string "go")) ("service.name" (string "synthetic-service"))))`, `(attributes ())`, 1)},
-		{"environment-variables.otel-service-name", strings.Replace(syntheticFeatureCapture, `("service.name" (string "synthetic-service"))`, `("service.name" (string "unknown_service:python"))`, 1)},
-		{"environment-variables.otel-traces-exporter", strings.Replace(syntheticFeatureCapture, `((signal traces) (received-unix-nano 1)`, `((signal metrics) (received-unix-nano 1)`, 1)},
-		{"environment-variables.otel-metrics-exporter", strings.ReplaceAll(syntheticFeatureCapture, `((signal metrics) (received-unix-nano`, `((signal traces) (received-unix-nano`)},
-		{"environment-variables.otel-logs-exporter", strings.Replace(syntheticFeatureCapture, `((signal logs) (received-unix-nano 4)`, `((signal traces) (received-unix-nano 4)`, 1)},
-		{"environment-variables.otel-metric-export-interval", strings.Replace(syntheticFeatureCapture, `((signal metrics) (received-unix-nano 3)`, `((signal traces) (received-unix-nano 3)`, 1)},
-		{"metrics.instrument-names-conform-to-the-specified-syntax", strings.Replace(syntheticFeatureCapture, `(name "counter")`, `(name "9counter")`, 1)},
-		{"metrics.instrument-units-conform-to-the-specified-syntax", strings.Replace(syntheticFeatureCapture, `(unit "ms")`, `(unit "µs")`, 1)},
-		{"metrics.instrument-descriptions-conform-to-the-specified-syntax", strings.Replace(syntheticFeatureCapture, `(description "gauge description")`, `(description 7)`, 1)},
-		{"environment-variables.otel-exporter-otlp-metrics-temporality-preference", strings.ReplaceAll(syntheticFeatureCapture, `(aggregation-temporality delta)`, `(aggregation-temporality cumulative)`)},
-		{"metrics.the-metrics-sdk-samples-exemplars-from-measurements", strings.NewReplacer(`(exemplars 2)`, `(exemplars 0)`, `(exemplars 1)`, `(exemplars 0)`).Replace(syntheticFeatureCapture)},
-		{"metrics.exemplars-contain-the-associated-trace-id-and-span-id-of-the-active-span-in-the-context-when-the-measurement-was-taken", strings.Replace(syntheticFeatureCapture, `(exemplars-with-trace-context 2)`, `(exemplars-with-trace-context 1)`, 1)},
-		{"metrics.exemplars-contain-the-timestamp-when-the-measurement-was-taken", strings.Replace(syntheticFeatureCapture, `(exemplars-with-time 2)`, `(exemplars-with-time 1)`, 1)},
-		// The cumulative series is the one the rule is about, so the mutation
-		// takes the start away from it rather than from the delta counter.
-		{"metrics.metric-sdk-supports-per-timeseries-cumulative-start-timestamps", strings.Replace(syntheticFeatureCapture, `(aggregation-temporality cumulative) (data-points 1) (exemplars 0) (exemplars-with-trace-context 0) (exemplars-with-time 0) (points-with-start 1) (points-start-le-time 1)`, `(aggregation-temporality cumulative) (data-points 1) (exemplars 0) (exemplars-with-trace-context 0) (exemplars-with-time 0) (points-with-start 0) (points-start-le-time 0)`, 1)},
-		{"metrics.the-default-aggregation-is-available", strings.Replace(syntheticFeatureCapture, `(data-type histogram)`, `(data-type summary)`, 1)},
-		{"exporters.otlp.honors-the-user-agent-spec", strings.Replace(syntheticFeatureCapture, `("user-agent" "OTel-OTLP-Exporter-Python/1.44.0")`, `("user-agent" "curl/8.0.0")`, 1)},
-		// The specified identifier carries a language and a version, so an
-		// exporter that stops at the fixed prefix stays unproven.
-		{"exporters.otlp.honors-the-user-agent-spec", strings.Replace(syntheticFeatureCapture, `("user-agent" "OTel-OTLP-Exporter-Python/1.44.0")`, `("user-agent" "OTel-OTLP-Exporter-")`, 1)},
-		{"exporters.otlp.honors-the-user-agent-spec", strings.Replace(syntheticFeatureCapture, `("user-agent" "OTel-OTLP-Exporter-Python/1.44.0")`, `("user-agent" "OTel-OTLP-Exporter-Python")`, 1)},
-		{"exporters.otlp.schemaurl-in-resourcespans-and-scopespans", strings.Replace(syntheticFeatureCapture, `(schema-url "https://opentelemetry.io/schemas/1.11.0")`, `(schema-url "")`, 1)},
-		{"exporters.otlp.schemaurl-in-resourcemetrics-and-scopemetrics", strings.NewReplacer(
-			`(schema-url "https://opentelemetry.io/schemas/1.43.0")`, `(schema-url "")`,
-			`(scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0")`, `(scope-version "1.2.3") (schema-url "")`,
-		).Replace(syntheticFeatureCapture)},
-		{"exporters.otlp.schemaurl-in-resourcelogs-and-scopelogs", strings.Replace(syntheticFeatureCapture, syntheticLogsBlock, syntheticLogsBlockWithoutSchemaURL, 1)},
-	}
+	featureFailures := syntheticFeatureFailures()
 	// Every capture shape a proof rule asserts must also have a negative
 	// mutation, or a shape that is trivially true would still read as proof.
 	mutatedShapes := map[string]bool{}
@@ -1286,14 +1223,53 @@ func validateShape(endpoint, expected string) ([]byte, int, error) {
 	return validateScheme(endpoint, source)
 }
 
-func validateSyntheticShape(endpoint, featureID, shape, capture string) ([]byte, int, error) {
+func syntheticShapeSource(featureID, shape, capture string) []byte {
 	source := make([]byte, 0, len(otelCoreLibrary)+len(capture)+len(featureID)+len(shape)+180)
 	source = append(source, otelCoreLibrary...)
 	source = append(source, []byte("\n(import (scheme base) (otel capture shapes))\n(define probe-capture '")...)
 	source = append(source, capture...)
 	source = append(source, []byte(")\n(assert-capture-shape ")...)
 	source = append(source, []byte(fmt.Sprintf("%q '%s probe-capture)\n", featureID, shape))...)
-	return validateScheme(endpoint, source)
+	return source
+}
+
+func validateSyntheticShape(endpoint, featureID, shape, capture string) ([]byte, int, error) {
+	source := syntheticShapeSource(featureID, shape, capture)
+	if syntheticBytecode == nil {
+		return validateScheme(endpoint, source)
+	}
+	bytecode, err := syntheticBytecode.Bytecode(schemebytecode.Digest(source), source)
+	if err != nil {
+		return nil, 0, err
+	}
+	response, err := http.Post(endpoint+"/validate-bytecode", "application/octet-stream", bytes.NewReader(bytecode))
+	if err != nil {
+		return nil, 0, err
+	}
+	defer response.Body.Close()
+	output, err := io.ReadAll(response.Body)
+	return output, response.StatusCode, err
+}
+
+func syntheticFailurePrograms() ([]schemebytecode.Program, error) {
+	shapes, err := report.ParseProofRuleAssertions(otelCoreLibrary)
+	if err != nil {
+		return nil, err
+	}
+	failures := append(syntheticFeatureFailures(), syntheticFailure{"unknown.feature", syntheticFeatureCapture})
+	programs := make([]schemebytecode.Program, 0, len(failures))
+	for _, failure := range failures {
+		shape := shapes[failure.featureID]
+		if failure.featureID == "unknown.feature" {
+			shape = "unknown/shape"
+		}
+		if shape == "" {
+			return nil, fmt.Errorf("no shape for synthetic failure %s", failure.featureID)
+		}
+		source := syntheticShapeSource(failure.featureID, shape, failure.capture)
+		programs = append(programs, schemebytecode.Program{Name: schemebytecode.Digest(source), Source: source})
+	}
+	return programs, nil
 }
 
 // Every rule's shape is asserted by one program rather than one program each:
@@ -1379,4 +1355,99 @@ func fatal(err error) {
 	fmt.Fprintln(os.Stderr, "otel_sink_probe:", err)
 	time.Sleep(10 * time.Millisecond)
 	os.Exit(1)
+}
+
+type syntheticFailure struct {
+	featureID string
+	capture   string
+}
+
+func syntheticFeatureFailures() []syntheticFailure {
+	return []syntheticFailure{
+		{"traces.tracerprovider.get-a-tracer", strings.Replace(syntheticFeatureCapture, `((name "trace.scope")`, `((name "missing.scope")`, 1)},
+		{"traces.tracerprovider.get-a-tracer-with-schema-url", strings.Replace(syntheticFeatureCapture, `(schema-url "https://opentelemetry.io/schemas/1.11.0")`, `(schema-url "")`, 1)},
+		{"traces.tracer.create-a-new-span", strings.Replace(syntheticFeatureCapture, `(spans (`, `(spans ()) (unused-spans (`, 1)},
+		{"traces.span.create-root-span", strings.ReplaceAll(syntheticFeatureCapture, `(parent-class root)`, `(parent-class external)`)},
+		{"traces.span.create-with-parent-from-context", strings.Replace(syntheticFeatureCapture, `(parent-class external)`, `(parent-class child)`, 1)},
+		{"traces.span.create-with-default-parent-active-span", strings.NewReplacer(
+			`(parent-class child)`, `(parent-class root)`,
+			`(parent-class external)`, `(parent-class root)`,
+		).Replace(syntheticFeatureCapture)},
+		{"traces.span.end", strings.Replace(syntheticFeatureCapture, `(start 1) (end 4)`, `(start 1) (end 0)`, 1)},
+		{"traces.span-attributes.string-type", strings.NewReplacer(
+			`("string.key" (string `, `("string.key" (bytes `,
+			`("unicode.key" (string `, `("unicode.key" (bytes `,
+			`("capped.key" (string `, `("capped.key" (bytes `,
+			`("capped.other" (string `, `("capped.other" (bytes `,
+			`("capped.third" (string `, `("capped.third" (bytes `,
+		).Replace(syntheticFeatureCapture)},
+		{"traces.span-attributes.signed-int64-type", strings.ReplaceAll(syntheticFeatureCapture, `("integer.key" (integer `, `("integer.key" (double `)},
+		{"traces.span-exceptions.recordexception", strings.Replace(syntheticFeatureCapture, `(name "exception")`, `(name "not-exception")`, 1)},
+		{"metrics.meterprovider-provides-a-way-to-get-a-meter", strings.ReplaceAll(syntheticFeatureCapture, `(scope "meter.scope")`, `(scope "")`)},
+		{"metrics.get-meter-accepts-name-version-and-schema-url", strings.ReplaceAll(syntheticFeatureCapture, `(scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0")`, `(scope-version "1.2.3") (schema-url "")`)},
+		{"metrics.counter-instrument-is-supported", strings.Replace(syntheticFeatureCapture, `(data-type sum) (aggregation-temporality delta)`, `(data-type summary) (aggregation-temporality delta)`, 1)},
+		{"metrics.updowncounter-instrument-is-supported", strings.Replace(syntheticFeatureCapture, `(data-type sum) (aggregation-temporality cumulative)`, `(data-type summary) (aggregation-temporality cumulative)`, 1)},
+		{"metrics.histogram-instrument-is-supported", strings.Replace(syntheticFeatureCapture, `(data-type histogram)`, `(data-type summary)`, 1)},
+		{"metrics.asynchronousgauge-instrument-is-supported", strings.Replace(syntheticFeatureCapture, `(data-type gauge)`, `(data-type summary)`, 1)},
+		{"metrics.instruments-have-name", strings.Replace(syntheticFeatureCapture, `(name "counter")`, `(name "")`, 1)},
+		{"metrics.instruments-have-kind", strings.Replace(syntheticFeatureCapture, `(data-type sum)`, `(data-type 7)`, 1)},
+		{"metrics.instruments-have-an-optional-unit-of-measure", strings.Replace(syntheticFeatureCapture, `(unit "{item}")`, `(unit 7)`, 1)},
+		{"metrics.instruments-have-an-optional-description", strings.Replace(syntheticFeatureCapture, `(description "counter description")`, `(description 7)`, 1)},
+		{"metrics.a-specified-resource-can-be-associated-with-all-the-produced-metrics-from-any-meter-from-the-meterprovider", strings.Replace(syntheticFeatureCapture, `((signal metrics) (attributes`, `((signal traces) (attributes`, 1)},
+		{"metrics.the-sum-aggregation-is-available", strings.ReplaceAll(syntheticFeatureCapture, `(data-type sum)`, `(data-type summary)`)},
+		{"metrics.the-lastvalue-aggregation-is-available", strings.Replace(syntheticFeatureCapture, `(data-type gauge)`, `(data-type summary)`, 1)},
+		{"metrics.the-explicitbuckethistogram-aggregation-is-available", strings.Replace(syntheticFeatureCapture, `(data-type histogram)`, `(data-type summary)`, 1)},
+		{"logs.loggerprovider-get-logger", strings.Replace(syntheticFeatureCapture, syntheticLogsBlock, " (logs ()))", 1)},
+		{"logs.logger-emit-logrecord", strings.Replace(syntheticFeatureCapture, syntheticLogsBlock, " (logs ()))", 1)},
+		{"logs.otlp-http-exporter", strings.Replace(syntheticFeatureCapture, `(path "/v1/logs")`, `(path "/v1/logs/")`, 1)},
+		{"resource.create-from-attributes", strings.Replace(syntheticFeatureCapture, `(attributes (("process.runtime.name" (string "go")) ("service.name" (string "synthetic-service"))))`, `(attributes ())`, 1)},
+		{"resource.resource-detector-interface-mechanism", strings.Replace(syntheticFeatureCapture, `(string "go")`, `(string "rust")`, 1)},
+		{"resource.resource-detectors-populate-schema-url", strings.Replace(syntheticFeatureCapture, `(schema-url "https://opentelemetry.io/schemas/1.43.0")`, `(schema-url "")`, 1)},
+		{"exporters.otlp.otlp-http-binary-protobuf-exporter", strings.Replace(syntheticFeatureCapture, `(content-type "application/x-protobuf")`, `(content-type "application/json")`, 1)},
+		{"traces.tracerprovider.create-tracerprovider", strings.Replace(syntheticFeatureCapture, `(spans (`, `(spans ()) (unused-spans (`, 1)},
+		{"traces.span-attributes.setattribute", strings.NewReplacer(
+			`(attributes (("string.key" (string "value")) ("integer.key" (integer 7)) ("unicode.key" (string "ünïcødé"))))`, `(attributes ())`,
+			`(attributes (("string.key" (string "child")) ("integer.key" (integer 8))))`, `(attributes ())`,
+			`(attributes (("capped.key" (string "kept")) ("capped.other" (string "kept")) ("capped.third" (string "kept"))))`, `(attributes ())`,
+		).Replace(syntheticFeatureCapture)},
+		{"traces.spancontext.isvalid", strings.Replace(syntheticFeatureCapture, `(span-id "222222222222222a")`, `(span-id "0000000000000000")`, 1)},
+		{"traces.spancontext.conforms-to-the-w3c-tracecontext-spec", strings.Replace(syntheticFeatureCapture, `(trace-state "")`, `(trace-state "bad key=1")`, 1)},
+		{"traces.span.updatename", strings.Replace(syntheticFeatureCapture, `(name "GET /api/articles/:slug")`, `(name "HTTP GET")`, 1)},
+		{"traces.span.set-status-with-statuscode-unset-ok-error", strings.Replace(syntheticFeatureCapture, `(status-code 2)`, `(status-code 0)`, 1)},
+		{"traces.spancontext.isremote", strings.Replace(syntheticFeatureCapture, `(parent-class external)`, `(parent-class child)`, 1)},
+		// Keeping the propagated parent while starting a trace of the server's
+		// own is not the incoming trace being continued.
+		{"traces.spancontext.isremote", strings.Replace(syntheticFeatureCapture, `(trace-id "4bf92f3577b34da6a3ce929d0e0e4736")`, `(trace-id "5555555555555555555555555555555a")`, 1)},
+		{"traces.span-attributes.unicode-support-for-keys-and-string-values", strings.Replace(syntheticFeatureCapture, `("unicode.key" (string "ünïcødé"))`, `("unicode.key" (string "ascii"))`, 1)},
+		{"environment-variables.otel-span-attribute-count-limit", strings.Replace(syntheticFeatureCapture, `(dropped-attributes 4)`, `(dropped-attributes 0)`, 1)},
+		{"traces.span-events.addevent", strings.Replace(syntheticFeatureCapture, `(events (`, `(events ()) (unused-events (`, 1)},
+		{"resource.retrieve-attributes", strings.Replace(syntheticFeatureCapture, `(attributes (("process.runtime.name" (string "go")) ("service.name" (string "synthetic-service"))))`, `(attributes ())`, 1)},
+		{"environment-variables.otel-service-name", strings.Replace(syntheticFeatureCapture, `("service.name" (string "synthetic-service"))`, `("service.name" (string "unknown_service:python"))`, 1)},
+		{"environment-variables.otel-traces-exporter", strings.Replace(syntheticFeatureCapture, `((signal traces) (received-unix-nano 1)`, `((signal metrics) (received-unix-nano 1)`, 1)},
+		{"environment-variables.otel-metrics-exporter", strings.ReplaceAll(syntheticFeatureCapture, `((signal metrics) (received-unix-nano`, `((signal traces) (received-unix-nano`)},
+		{"environment-variables.otel-logs-exporter", strings.Replace(syntheticFeatureCapture, `((signal logs) (received-unix-nano 4)`, `((signal traces) (received-unix-nano 4)`, 1)},
+		{"environment-variables.otel-metric-export-interval", strings.Replace(syntheticFeatureCapture, `((signal metrics) (received-unix-nano 3)`, `((signal traces) (received-unix-nano 3)`, 1)},
+		{"metrics.instrument-names-conform-to-the-specified-syntax", strings.Replace(syntheticFeatureCapture, `(name "counter")`, `(name "9counter")`, 1)},
+		{"metrics.instrument-units-conform-to-the-specified-syntax", strings.Replace(syntheticFeatureCapture, `(unit "ms")`, `(unit "µs")`, 1)},
+		{"metrics.instrument-descriptions-conform-to-the-specified-syntax", strings.Replace(syntheticFeatureCapture, `(description "gauge description")`, `(description 7)`, 1)},
+		{"environment-variables.otel-exporter-otlp-metrics-temporality-preference", strings.ReplaceAll(syntheticFeatureCapture, `(aggregation-temporality delta)`, `(aggregation-temporality cumulative)`)},
+		{"metrics.the-metrics-sdk-samples-exemplars-from-measurements", strings.NewReplacer(`(exemplars 2)`, `(exemplars 0)`, `(exemplars 1)`, `(exemplars 0)`).Replace(syntheticFeatureCapture)},
+		{"metrics.exemplars-contain-the-associated-trace-id-and-span-id-of-the-active-span-in-the-context-when-the-measurement-was-taken", strings.Replace(syntheticFeatureCapture, `(exemplars-with-trace-context 2)`, `(exemplars-with-trace-context 1)`, 1)},
+		{"metrics.exemplars-contain-the-timestamp-when-the-measurement-was-taken", strings.Replace(syntheticFeatureCapture, `(exemplars-with-time 2)`, `(exemplars-with-time 1)`, 1)},
+		// The cumulative series is the one the rule is about, so the mutation
+		// takes the start away from it rather than from the delta counter.
+		{"metrics.metric-sdk-supports-per-timeseries-cumulative-start-timestamps", strings.Replace(syntheticFeatureCapture, `(aggregation-temporality cumulative) (data-points 1) (exemplars 0) (exemplars-with-trace-context 0) (exemplars-with-time 0) (points-with-start 1) (points-start-le-time 1)`, `(aggregation-temporality cumulative) (data-points 1) (exemplars 0) (exemplars-with-trace-context 0) (exemplars-with-time 0) (points-with-start 0) (points-start-le-time 0)`, 1)},
+		{"metrics.the-default-aggregation-is-available", strings.Replace(syntheticFeatureCapture, `(data-type histogram)`, `(data-type summary)`, 1)},
+		{"exporters.otlp.honors-the-user-agent-spec", strings.Replace(syntheticFeatureCapture, `("user-agent" "OTel-OTLP-Exporter-Python/1.44.0")`, `("user-agent" "curl/8.0.0")`, 1)},
+		// The specified identifier carries a language and a version, so an
+		// exporter that stops at the fixed prefix stays unproven.
+		{"exporters.otlp.honors-the-user-agent-spec", strings.Replace(syntheticFeatureCapture, `("user-agent" "OTel-OTLP-Exporter-Python/1.44.0")`, `("user-agent" "OTel-OTLP-Exporter-")`, 1)},
+		{"exporters.otlp.honors-the-user-agent-spec", strings.Replace(syntheticFeatureCapture, `("user-agent" "OTel-OTLP-Exporter-Python/1.44.0")`, `("user-agent" "OTel-OTLP-Exporter-Python")`, 1)},
+		{"exporters.otlp.schemaurl-in-resourcespans-and-scopespans", strings.Replace(syntheticFeatureCapture, `(schema-url "https://opentelemetry.io/schemas/1.11.0")`, `(schema-url "")`, 1)},
+		{"exporters.otlp.schemaurl-in-resourcemetrics-and-scopemetrics", strings.NewReplacer(
+			`(schema-url "https://opentelemetry.io/schemas/1.43.0")`, `(schema-url "")`,
+			`(scope-version "1.2.3") (schema-url "https://opentelemetry.io/schemas/1.11.0")`, `(scope-version "1.2.3") (schema-url "")`,
+		).Replace(syntheticFeatureCapture)},
+		{"exporters.otlp.schemaurl-in-resourcelogs-and-scopelogs", strings.Replace(syntheticFeatureCapture, syntheticLogsBlock, syntheticLogsBlockWithoutSchemaURL, 1)},
+	}
 }
