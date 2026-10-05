@@ -15,6 +15,10 @@ from Ruby 1.9.3-p551 through 4.0.7. Pinned runtimes, source gems, native
 extensions and small application bundles have separate cache boundaries.
 A cross-version gate compares full RealWorld response data for an identical
 HTTP workload, including Unicode, IDs, slugs, timestamps and tokens.
+The published report's **Ruby versions** link lists every pinned interpreter,
+its API test results, and the cross-version response-parity evidence. BuildBuddy
+and GitHub Pages include this matrix; cached API results are labeled separately
+from the report's fresh telemetry assertions.
 
 ```bash
 bazel test //fixtures:ruby_matrix_suite

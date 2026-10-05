@@ -2,9 +2,17 @@
 
 load("@ruby_matrix_config//:versions.bzl", "RUBY_GEM_SETS", "RUBY_RUNTIMES")
 load("@rules_python//python:defs.bzl", "py_test")
+load("//corpus:registry.bzl", "REALWORLD_BASE_HURL_CASES")
 load("//fixtures:ruby_build.bzl", "ruby_app", "ruby_native_gem", "ruby_responses", "ruby_runtime", "ruby_sqlite")
 load("//rules:corpus_service.bzl", "corpus_service")
 load("//rules:realworld_service_tests.bzl", "realworld_service_tests")
+
+def _report_plan_impl(ctx):
+    output = ctx.actions.declare_file(ctx.label.name + ".json")
+    ctx.actions.write(output, ctx.attr.content)
+    return [DefaultInfo(files = depset([output]))]
+
+_report_plan = rule(implementation = _report_plan_impl, attrs = {"content": attr.string(mandatory = True)})
 
 def _gem_repo(gem):
     return "@ruby_gem_" + gem["name"].replace("-", "_") + "_" + gem["version"].replace(".", "_")
@@ -19,6 +27,7 @@ def ruby_app_matrix(name):
     ruby_sqlite(name = "ruby_matrix_sqlite", srcs = ["@ruby_matrix_sqlite//:source", "//fixtures/apps/ruby/realworld-sinatra:sqlite_compat.c"], hdrs = ["@ruby_matrix_sqlite//:headers"])
     tests = []
     receipts = []
+    report_tests = {}
     for runtime in RUBY_RUNTIMES:
         suffix = runtime["series"].replace(".", "_")
         name = "ruby_" + suffix
@@ -78,6 +87,14 @@ def ruby_app_matrix(name):
         version_tests = [":" + name + "_test", ":" + name + "_service_hygiene_test", ":" + name + "_hurl_test"]
         native.test_suite(name = name + "_suite", tests = version_tests, tags = ["ruby-matrix", "manual"])
         tests.extend(version_tests)
+        report_tests[runtime["series"]] = ["//fixtures:" + name + "_test", "//fixtures:" + name + "_service_hygiene_test"] + [
+            "//fixtures:" + name + "_hurl_test_" + case
+            for case in REALWORLD_BASE_HURL_CASES
+        ]
+    _report_plan(
+        name = "ruby_matrix_report_plan",
+        content = json.encode({"runtimes": RUBY_RUNTIMES, "tests": report_tests, "parityTest": "//fixtures:ruby_matrix_parity_test"}),
+    )
     py_test(
         name = "ruby_matrix_parity_test",
         srcs = ["//tools:ruby_realworld_parity.py"],

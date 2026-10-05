@@ -3,6 +3,8 @@
 import argparse
 import difflib
 import json
+import hashlib
+import os
 from pathlib import Path
 
 
@@ -45,6 +47,15 @@ def main():
     matrix = json.loads(args.matrix.read_text())
     receipts = [json.loads(path.read_text()) for path in args.receipts]
     versions, responses = compare(matrix, receipts)
+    directory = os.environ.get("TEST_UNDECLARED_OUTPUTS_DIR")
+    if directory:
+        summary = {
+            "schemaVersion": 1,
+            "runtimes": matrix["runtimes"],
+            "responseCount": responses,
+            "responseSha256": hashlib.sha256(json.dumps(receipts[0]["responses"], ensure_ascii=False, sort_keys=True).encode()).hexdigest(),
+        }
+        Path(directory, "ruby-matrix-parity.json").write_text(json.dumps(summary, sort_keys=True) + "\n")
     print(f"All {versions} Ruby versions returned identical data for {responses} RealWorld HTTP requests.")
 
 

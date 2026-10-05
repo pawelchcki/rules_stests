@@ -10,6 +10,25 @@ const path = require('node:path');
   const errors=[]; page.on('pageerror',e=>{errors.push(e.message);console.error('Browser error:',e.message);});
   const url=pathToFileURL(path.resolve(process.argv[2])).href;
   const route=async hash=>{await page.goto(url+hash);await page.waitForTimeout(100);};
+  await route('#parity');
+  const defaultComparison=await page.evaluate(()=>{
+    const standalone={...data.manifests[0],profile:'standalone'};
+    data.manifests.splice(1,0,standalone);manifestByProfile.set('standalone',standalone);
+    for (const id of ['left','right']) {
+      const option=document.createElement('option');option.value='standalone';option.textContent='Standalone';$(id).append(option);
+    }
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
+    return {left:$('left').value,right:$('right').value};
+  });
+  assert.deepEqual(defaultComparison,{left:'go',right:'python'},'default comparison must skip profiles without a shared capture');
+  assert.equal(await page.locator('#parity-overview').isVisible(),false,'availability table must not bury the comparison');
+  assert.equal(await page.locator('#left').evaluate(el=>el.getBoundingClientRect().bottom < innerHeight),true,'comparison controls must be visible on entry');
+  await route('#parity?left=go&right=standalone&scenario=case');
+  assert.equal(await page.inputValue('#right'),'standalone','explicit missing-capture selections must remain inspectable');
+  await page.evaluate(()=>{
+    data.manifests.splice(data.manifests.findIndex(m=>m.profile==='standalone'),1);manifestByProfile.delete('standalone');
+    for (const id of ['left','right']) $(id).querySelector('option[value="standalone"]').remove();
+  });
   await route('#parity?left=go&right=python&scenario=case');
   assert.equal(await page.locator('#parity-scenarios li').count(),0,'collapsed scenarios must stay lazy');
   await page.click('#parity-scenarios summary');await page.waitForSelector('#parity-scenarios li');
@@ -31,7 +50,7 @@ const path = require('node:path');
   await page.evaluate(()=>{const trace=data.captureComparisons[0].traces[0];trace.left.card='';trace.right.card='';renderCompare();});
   assert.match(await page.locator('.capture-trace > summary').innerText(),/×1 \/ ×1/);
   await page.evaluate(()=>{data.scenarios.push('undeclared');renderParityOverview();});
-  const excludedCell=await page.locator('#parity-overview tbody tr').last().locator('td').first().innerText();
+  const excludedCell=await page.locator('#parity-overview tbody tr').last().locator('td').first().textContent();
   assert.match(excludedCell,/Not in this test suite/);assert.doesNotMatch(excludedCell,/No result for this build/);
   await page.goto('about:blank');
   await route('#health?profile=python');

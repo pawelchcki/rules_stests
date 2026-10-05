@@ -149,9 +149,10 @@ let selectedProfile = defaultProfile;
 const destinationState = {health: '', parity: ''};
 function updateNavigation(section) {
   const destination = section === 'features' ? 'health' : section === 'compare' ? 'parity' : section;
+  const activeDestination = readHash().section === 'ruby-matrix' ? 'ruby-matrix' : destination;
   for (const link of document.querySelectorAll('nav.top a')) {
     const name = link.hash.split('?')[0].slice(1);
-    if (name === destination) link.setAttribute('aria-current','page'); else link.removeAttribute('aria-current');
+    if (name === activeDestination) link.setAttribute('aria-current','page'); else link.removeAttribute('aria-current');
     if (Object.hasOwn(destinationState,name)) link.hash=name+(destinationState[name]?'?'+destinationState[name]:'');
   }
 }
@@ -774,6 +775,24 @@ function renderGlossary() {
   $('glossary-body').innerHTML = sections + trust;
 }
 
+function renderRubyMatrix() {
+  const matrix = data.rubyMatrix;
+  const link = document.querySelector('nav a[href="#ruby-matrix"]');
+  if (!matrix) { if (link) link.parentElement.hidden = true; return; }
+  $('ruby-matrix').hidden = false;
+  $('ruby-matrix-lead').hidden = false;
+  const versions = matrix.versions || [];
+  const version = runtime => runtime.version + (runtime.patchlevel === undefined ? '' : '-p' + runtime.patchlevel);
+  const summary = versions.length + ' Ruby versions · ' + matrix.testCount + ' passing tests · identical data for ' + matrix.responseCount + ' HTTP requests per version';
+  $('ruby-matrix-lead').innerHTML = '<a href="#ruby-matrix">' + esc(summary) + '</a>';
+  $('ruby-matrix-summary').textContent = summary + '.';
+  $('ruby-matrix-table').innerHTML = '<thead><tr><th>Ruby version</th><th>API tests</th><th>Response parity</th><th>Runtime pin and test evidence</th></tr></thead><tbody>' + versions.map(entry => {
+    const cached = entry.tests.filter(test => test.cached).length;
+    return '<tr><th scope="row">' + esc(version(entry.runtime)) + '</th><td>' + entry.tests.length + ' passed' + (cached ? ' · ' + cached + ' cached' : '') + '</td><td>Identical · ' + matrix.responseCount + ' requests</td><td><details><summary>Runtime and ' + entry.tests.length + ' tests</summary><code>' + esc(entry.runtime.image) + '</code><ul>' + entry.tests.map(test => '<li><code>' + esc(test.label) + '</code> · passed' + (test.cached ? ' (cached)' : '') + '</li>').join('') + '</ul></details></td></tr>';
+  }).join('') + '</tbody>';
+  $('ruby-matrix-evidence').innerHTML = '<p><a href="' + esc(matrix.sourceUrl) + '">Pinned Ruby runtime matrix</a> · revision <code>' + esc(matrix.revision) + '</code></p><p>Response parity: passed' + (matrix.parityCached ? ' (cached)' : '') + ' · response transcript SHA-256 <code>' + esc(matrix.responseSha256) + '</code></p>';
+}
+
 // ---------------------------------------------------------------- routing
 const VIEWS = ['overview', 'languages', 'coverage', 'compare', 'features', 'receipts', 'glossary'];
 function syncControlsFromHash() {
@@ -795,9 +814,20 @@ function syncControlsFromHash() {
     $('comparison-source').value = params.get('source') || (['compare','compare-body','compare-summary','scenario-overview'].includes(state.section) ? 'saved' : 'captured');
     destinationState.parity = new URLSearchParams({...Object.fromEntries(params), source:$('comparison-source').value}).toString();
     $('field-view').value = params.get('view') === 'raw' ? 'raw' : 'semantic';
-    $('left').value = manifestByProfile.has(params.get('left')) ? params.get('left') : (data.manifests[0] || {}).profile || '';
-    $('right').value = manifestByProfile.has(params.get('right')) ? params.get('right') : (data.manifests[1] || data.manifests[0] || {}).profile || '';
-    $('scenario').value = data.scenarios.includes(params.get('scenario')) ? params.get('scenario') : data.scenarios[0] || '';
+    const available = (profile, scenario) => $('comparison-source').value === 'captured'
+      ? usableCapture(profile, scenario) : shapeByKey.has(profile + ' ' + scenario);
+    const profiles = data.manifests.map(m => m.profile);
+    const requestedLeft = manifestByProfile.has(params.get('left')) ? params.get('left') : '';
+    const requestedRight = manifestByProfile.has(params.get('right')) ? params.get('right') : '';
+    const sharedScenario = data.scenarios.find(s => {
+      const candidates = profiles.filter(p => available(p, s));
+      return candidates.length > 1 && (!requestedLeft || candidates.includes(requestedLeft)) &&
+        (!requestedRight || candidates.includes(requestedRight));
+    });
+    const scenario = data.scenarios.includes(params.get('scenario')) ? params.get('scenario') : sharedScenario || data.scenarios[0] || '';
+    $('scenario').value = scenario;
+    $('left').value = requestedLeft || profiles.find(p => p !== requestedRight && available(p, scenario)) || profiles[0] || '';
+    $('right').value = requestedRight || profiles.find(p => p !== $('left').value && available(p, scenario)) || profiles.find(p => p !== $('left').value) || profiles[0] || '';
     $('differences-only').checked = params.get('differencesOnly') === '1';
     $('hide-scope').checked = params.get('hideScope') === '1';
   } else if (section === 'features') {
@@ -904,6 +934,7 @@ function setup() {
       return '<tr><th scope="row">' + esc(language) + '</th><td>' + esc(m.traces) + '</td><td>' + esc(m.metrics) + '</td><td>' + esc(m.logs) + '</td></tr>';
     }).join('') + '</tbody>';
   renderGlossary();
+  renderRubyMatrix();
   renderReceipts();
   applyHash(false);
 }
