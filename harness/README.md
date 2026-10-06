@@ -7,16 +7,19 @@ language installation.
 ## Portable lab checks
 
 SDK coverage uses a shared endpoint contract and assertion for every language.
-Add common endpoint/feature/scenario bindings to `labSharedChecks`; implement
+Add endpoint/feature/scenario and applicability bindings to `labSharedChecks`; implement
 the SDK calls and normalize their results in each existing lab application.
 Keep language decisions in those applications rather than adding language
-branches to a shared checker. The runner exercises each shared contract twice
-with fresh providers and exporters, then writes a separate receipt for its result.
+branches to a shared checker. Each shared contract runs in its own service test, exercises its endpoint twice
+with fresh providers and exporters, and writes a receipt containing the checked
+SDK response. Shared receipts are independent of the base OTLP capture. Ambient
+context checks apply only to Python and Ruby; Go uses explicit context passing.
 Only an exactly reproduced, documented SDK defect can become an expected failure;
 it retains the common assertion and contributes no passing feature proof.
 
-The earlier feature experiments retain their existing language-specific
-adapters. New portable lab coverage follows this contract model. See
+Lifecycle, resource, and baggage coverage replaces the earlier language-specific
+lab validators. Remaining framework/configuration experiments retain their
+adapters; new portable lab coverage follows this contract model. See
 [`corpus/TELEMETRY_LABS.md`](../corpus/TELEMETRY_LABS.md) for the endpoint behavior
 and receipt scenarios.
 

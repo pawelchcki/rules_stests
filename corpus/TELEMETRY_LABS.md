@@ -68,20 +68,37 @@ catalog ID so a report cell can be traced back to the exercised behavior. The
 
 ## Trace SDK boundary checks
 
-All base labs implement `/v1/trace-context` and `/v1/trace-limits` in their existing
-applications. `labSharedChecks` declares the endpoints, feature bindings, and
-receipt scenarios once for every language. The same validators and runner apply
-to Go, Python, and Ruby, with no language parameter. A new language implements
-the endpoint contract in its lab application. New shared coverage belongs in this
-registry rather than a language-specific probe branch or duplicated feature map.
+The labs implement `/v1/trace-context`, `/v1/trace-limits`,
+`/v1/trace-lifecycle`, `/v1/resources`, and `/v1/baggage` through the same
+JSON contracts. Python and Ruby additionally implement `/v1/context` for
+ambient context operations. Go passes context explicitly and has no ambient
+attach/detach API; its plan contains no `context` scenario or those feature claims.
+`labSharedChecks` declares endpoint, feature, scenario, and applicability bindings.
+All validators accept only the response, with no language parameter.
 
-The base tests execute every shared scenario twice and require stable normalized
-results. Providers and exporters are local to each request, so repeated requests
-cannot inherit span buffers, ID counters, or SDK configuration from earlier calls.
-The endpoints use isolated providers and in-memory exporters, with their checked
-results included in each accepted capture's `labResponses`. Each language writes
-separate `trace-context`, `trace-invalid-headers`, and `trace-limits` receipts,
-keeping a defect in one contract independent of the other passing proofs.
+Each shared scenario is a separate Bazel service test with its own receipt.
+The test executes its endpoint twice and requires stable normalized results.
+Providers, exporters, contexts, and propagators are local to each request.
+SDK observations are included in `labResponses` within a `lab-control` capture;
+these receipts do not depend on base OTLP exports or base-test success. The
+`trace-context` and `trace-invalid-headers` tests intentionally share an endpoint
+but independently verify and report their contracts. CI and full report manifests
+list exactly the applicable scenarios for each language.
+
+The lifecycle contract verifies recording before and after end, the explicit root
+and active child's exported identities, fixed start/end timestamps, active-span
+restoration, and ignored mutations and repeated end after the span finishes.
+Nanosecond timestamps are decimal strings, preserving exact values through JSON.
+The ambient context contract checks distinct same-named keys, immutable contexts,
+nested attachment restoring the outer value before the original context, and
+active-span restoration. These replace the old lifecycle/root probes and Python's
+app-side active-span assertions.
+
+The resource contract checks an empty resource and merge precedence while
+preserving integer and boolean values and leaving the inputs unchanged. The
+baggage contract extracts incoming members, sets and removes members without
+mutating the original context, and reinjects exactly the W3C `baggage` header.
+The old language-specific resource and propagation validators have been removed.
 
 The context check exercises `IsValid` with both IDs populated and with each
 zero-ID combination. It rejects six malformed `traceparent` headers, checks

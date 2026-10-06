@@ -119,6 +119,75 @@ def lab_trace_limits
   end
 end
 
+def lab_trace_lifecycle
+  exporter = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
+  provider = OpenTelemetry::SDK::Trace::TracerProvider.new(id_generator: LabIdGenerator.new,
+    sampler: OpenTelemetry::SDK::Trace::Samplers::ALWAYS_ON)
+  provider.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(exporter))
+  begin
+    tracer = provider.tracer("lab.lifecycle")
+    parent = tracer.start_span("lab.lifecycle", with_parent: OpenTelemetry::Context.empty,
+      start_timestamp: Time.at(1_700_000_000, 123_000, :microsecond))
+    recording_before = parent.recording?
+    current_before = OpenTelemetry::Trace.current_span
+    active_matches = child_active_matches = false
+    OpenTelemetry::Trace.with_span(parent) do
+      active_matches = OpenTelemetry::Trace.current_span.equal?(parent)
+      tracer.in_span("lab.lifecycle.child") do |child|
+        child_active_matches = OpenTelemetry::Trace.current_span.equal?(child)
+      end
+    end
+    restored = OpenTelemetry::Trace.current_span.equal?(current_before)
+    parent.finish(end_timestamp: Time.at(1_700_000_000, 173_000, :microsecond))
+    recording_after = parent.recording?
+    parent.name = "lab.changed-after-end"
+    parent.set_attribute("lab.after-end", true)
+    parent.add_event("lab.after-end")
+    parent.finish(end_timestamp: Time.at(1_700_000_000, 223_000, :microsecond))
+    snapshot = exporter.finished_spans.find { |span| span.hex_span_id == "0000000000000001" }
+    spans = exporter.finished_spans.map do |span|
+      result = { name: span.name, trace_id: span.hex_trace_id, span_id: span.hex_span_id,
+        parent_id: span.hex_parent_span_id }
+      if span.hex_span_id == "0000000000000001"
+        result[:start] = span.start_timestamp.to_s
+        result[:end] = span.end_timestamp.to_s
+      end
+      result
+    end
+    { recording_before: recording_before, recording_after: recording_after, active_matches: active_matches,
+      child_active_matches: child_active_matches, restored: restored, spans: spans,
+      after_end_unchanged: snapshot.name == "lab.lifecycle" &&
+        !(snapshot.attributes || {}).key?("lab.after-end") && (snapshot.events || []).empty? }
+  ensure
+    provider.shutdown
+  end
+end
+
+def lab_resources
+  left = OpenTelemetry::SDK::Resources::Resource.create({ "lab.left" => "one", "lab.shared" => "left", "lab.integer" => 42 })
+  right = OpenTelemetry::SDK::Resources::Resource.create({ "lab.right" => "two", "lab.shared" => "right", "lab.boolean" => true })
+  merged = left.merge(right)
+  { empty: OpenTelemetry::SDK::Resources::Resource.create({}).attribute_enumerator.to_h.size,
+    merged: merged.attribute_enumerator.to_h,
+    originals: { left: left.attribute_enumerator.to_h, right: right.attribute_enumerator.to_h } }
+end
+
+def lab_baggage
+  empty = OpenTelemetry::Context.empty
+  wire = OpenTelemetry::Baggage::Propagation::TextMapPropagator.new
+  original = wire.extract({ "baggage" => "incoming=value,lab.other=two" }, context: empty)
+  updated = OpenTelemetry::Baggage.set_value("lab-key", "lab-value", context: original)
+  updated = OpenTelemetry::Baggage.remove_value("lab.other", context: updated)
+  outgoing = {}
+  wire.inject(outgoing, context: updated)
+  extracted = wire.extract(outgoing, context: empty)
+  { value: OpenTelemetry::Baggage.value("lab-key", context: updated), outgoing: outgoing,
+    extracted: OpenTelemetry::Baggage.value("lab-key", context: extracted),
+    incoming: OpenTelemetry::Baggage.value("incoming", context: extracted),
+    removed: OpenTelemetry::Baggage.value("lab.other", context: updated),
+    original: OpenTelemetry::Baggage.value("lab.other", context: original) }
+end
+
 tracer = OpenTelemetry.tracer_provider.tracer("telemetry-lab.ruby", "1.0.0")
 app = proc do |environment|
   path = environment.fetch("PATH_INFO")
@@ -162,39 +231,52 @@ app = proc do |environment|
       end
     end
     { handled: true }
+  when "/v1/trace-lifecycle"
+    lab_trace_lifecycle
+  when "/v1/resources"
+    lab_resources
   when "/v1/baggage"
-    context = OpenTelemetry::Baggage.set_value("lab-key", "lab-value")
-    { baggage: OpenTelemetry::Baggage.value("lab-key", context: context) }
-  when "/v1/lifecycle"
-    key = OpenTelemetry::Context.create_key("lab-lifecycle")
-    before = OpenTelemetry::Context.value(key)
-    context = OpenTelemetry::Context.current.set_value(key, "attached-value")
-    token = OpenTelemetry::Context.attach(context)
-    attached = OpenTelemetry::Context.current.value(key)
-    OpenTelemetry::Context.detach(token)
-    detached = OpenTelemetry::Context.value(key)
-
-    start_time = Time.at(1_700_000_000, 123_000, :microsecond)
-    end_time = start_time + 0.05
-    span = tracer.start_span("lab.lifecycle", start_timestamp: start_time)
-    recording_before = span.recording?
-    current_before = OpenTelemetry::Trace.current_span.context.span_id
-    active = nil
-    tracer_span = nil
-    OpenTelemetry::Trace.with_span(span) do
-      active = OpenTelemetry::Trace.current_span.context.span_id
-      tracer.in_span("lab.lifecycle.child") do
-        tracer_span = OpenTelemetry::Trace.current_span.context.span_id
+    lab_baggage
+  when "/v1/context"
+    key = OpenTelemetry::Context.create_key("lab-context")
+    other = OpenTelemetry::Context.create_key("lab-context")
+    original = OpenTelemetry::Context.current
+    outer = original.set_value(key, "one")
+    inner = outer.set_value(key, "two")
+    states = [OpenTelemetry::Context.value(key)]
+    outer_token = OpenTelemetry::Context.attach(outer)
+    begin
+      states << OpenTelemetry::Context.value(key)
+      inner_token = OpenTelemetry::Context.attach(inner)
+      begin
+        states << OpenTelemetry::Context.value(key)
+      ensure
+        OpenTelemetry::Context.detach(inner_token)
       end
+      states << OpenTelemetry::Context.value(key)
+    ensure
+      OpenTelemetry::Context.detach(outer_token)
     end
-    current_after = OpenTelemetry::Trace.current_span.context.span_id
-    span.finish(end_timestamp: end_time)
-    {
-      context_before: before, context_attached: attached, context_detached: detached,
-      recording_before: recording_before, recording_after: span.recording?,
-      active: active.unpack1("H*"), tracer_span: tracer_span.unpack1("H*"),
-      restored: current_after == current_before
-    }
+    states << OpenTelemetry::Context.value(key)
+    provider = OpenTelemetry::SDK::Trace::TracerProvider.new(sampler: OpenTelemetry::SDK::Trace::Samplers::ALWAYS_ON)
+    begin
+      local_tracer = provider.tracer("lab.ambient")
+      before = OpenTelemetry::Trace.current_span
+      parent = local_tracer.start_span("lab.ambient", with_parent: OpenTelemetry::Context.empty)
+      active_matches = child_active_matches = false
+      OpenTelemetry::Trace.with_span(parent) do
+        active_matches = OpenTelemetry::Trace.current_span.equal?(parent)
+        local_tracer.in_span("lab.ambient.child") do |child|
+          child_active_matches = OpenTelemetry::Trace.current_span.equal?(child)
+        end
+      end
+      parent.finish
+      { states: states, distinct_keys: key != other && outer.value(other).nil?,
+        original_unchanged: original.value(key).nil?, active_matches: active_matches,
+        child_active_matches: child_active_matches, restored: OpenTelemetry::Trace.current_span.equal?(before) }
+    ensure
+      provider.shutdown
+    end
   else
     nil
   end

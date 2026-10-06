@@ -79,11 +79,11 @@ func labAcceptedCapture(capture, responses []byte, scenario string) ([]byte, err
 		return nil, err
 	}
 	if len(records) == 0 {
-		if scenario != "disabled" {
+		if scenario != "disabled" && !labIsSharedScenario(scenario) {
 			return nil, fmt.Errorf("lab receipt needs captured telemetry")
 		}
-		// A disabled SDK has no OTLP record to bind the observed HTTP result to.
-		// The probe verifies the empty sink before recording this control result.
+		// Isolated SDK contracts carry their exporter observations in labResponses.
+		// Disabled SDK controls likewise have no OTLP record.
 		records = append(records, json.RawMessage(`{"signal":"lab-control"}`))
 	}
 	var first map[string]json.RawMessage
@@ -109,6 +109,49 @@ func labAcceptedCapture(capture, responses []byte, scenario string) ([]byte, err
 type labReceiptOutcome struct {
 	Outcome string
 	Reason  string
+}
+
+func labWriteEvidence(output, language, scenario string, capture, responses, source []byte, proofs []report.ReceiptProof, observed map[string]bool) error {
+	if output != "" {
+		artifact := language + "-telemetry-lab"
+		if scenario != "base" {
+			artifact += "-" + scenario
+		}
+		if err := os.WriteFile(filepath.Join(output, artifact+".capture.json"), capture, 0o644); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(output, artifact+".responses.json"), responses, 0o644); err != nil {
+			return err
+		}
+		claims := make([]string, 0, len(proofs))
+		for _, proof := range proofs {
+			claims = append(claims, proof.FeatureID)
+		}
+		checks := make([]string, 0, len(observed))
+		for check := range observed {
+			checks = append(checks, check)
+		}
+		sort.Strings(checks)
+		evidence := labProofEvidence{
+			SchemaVersion:  1,
+			Language:       language,
+			Scenario:       scenario,
+			CaptureSHA256:  fmt.Sprintf("%x", sha256.Sum256(capture)),
+			SourceSHA256:   fmt.Sprintf("%x", sha256.Sum256(source)),
+			ResponseSHA256: fmt.Sprintf("%x", sha256.Sum256(responses)),
+			FeatureIDs:     claims,
+			Checks:         checks,
+			Proofs:         proofs,
+		}
+		encoded, err := json.MarshalIndent(evidence, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(output, artifact+".proofs.json"), append(encoded, '\n'), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func labWriteReceipt(root, language, scenario string, plan, capture, responses []byte, proofs []report.ReceiptProof, outcomes ...labReceiptOutcome) error {
@@ -245,10 +288,6 @@ func labRequest(client *http.Client, method, endpoint string) ([]byte, error) {
 	request, err := http.NewRequest(method, endpoint, nil)
 	if err != nil {
 		return nil, err
-	}
-	if strings.HasSuffix(endpoint, "/v1/propagation") {
-		request.Header.Set("traceparent", "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01")
-		request.Header.Set("baggage", "incoming=value")
 	}
 	response, err := client.Do(request)
 	if err != nil {
@@ -474,24 +513,8 @@ func labVerify(data []byte, language, scenario string, observed map[string]bool)
 			}
 		}
 		observed["capture/links"] = true
-		lifecycle := labNamed(spans, "lab.lifecycle")
-		child := labNamed(spans, "lab.lifecycle.child")
-		if lifecycle == nil || child == nil || labField(child, "parent_span_id") != labField(lifecycle, "span_id") {
-			return fmt.Errorf("Ruby lifecycle span or active child was not exported")
-		}
-		start, startOK := labUint(labField(lifecycle, "start_time_unix_nano"))
-		end, endOK := labUint(labField(lifecycle, "end_time_unix_nano"))
-		if !startOK || !endOK || start != 1_700_000_000_123_000_000 || end-start != 50_000_000 {
-			return fmt.Errorf("Ruby explicit span timestamps not preserved: %d %d", start, end)
-		}
-		observed["capture/lifecycle"] = true
 	}
 	if language == "python" {
-		root := labNamed(spans, "lab.explicit-root")
-		if root == nil || labField(root, "parent_span_id") != "" || labField(root, "trace_id") == "" {
-			return fmt.Errorf("explicit Python root span has a parent or was not exported")
-		}
-		observed["capture/root"] = true
 		schemaLog := false
 		for _, resourceLogs := range labObjects(records, "resource_logs") {
 			if labField(resourceLogs, "schema_url") != "https://example.test/schema/resource" {
@@ -555,10 +578,6 @@ func labVerify(data []byte, language, scenario string, observed map[string]bool)
 				return fmt.Errorf("Python span attribute limit was not applied: %d attributes, %d dropped", len(attrs), dropped)
 			}
 		}
-		manual := labNamed(spans, "lab.manually-active")
-		if manual == nil || labField(manual, "parent_span_id") != labField(parent, "span_id") {
-			return fmt.Errorf("explicitly activated Python span did not inherit the current span")
-		}
 		links, _ := labField(parent, "links").([]any)
 		wantedLinks := 3
 		wantedIDs := []string{"123456789abcdef0", "123456789abcdef1", "123456789abcdef0"}
@@ -590,16 +609,6 @@ func labVerify(data []byte, language, scenario string, observed map[string]bool)
 		if scenario == "base" {
 			observed["capture/links"] = true
 		}
-		lifecycle := labNamed(spans, "lab.lifecycle")
-		if lifecycle == nil {
-			return fmt.Errorf("Python lifecycle span is absent")
-		}
-		start, startOK := labUint(labField(lifecycle, "start_time_unix_nano"))
-		end, endOK := labUint(labField(lifecycle, "end_time_unix_nano"))
-		if !startOK || !endOK || end-start != 50_000_000 {
-			return fmt.Errorf("explicit Python span timestamps not preserved: %d %d", start, end)
-		}
-		observed["capture/lifecycle"] = true
 		metrics := labObjects(records, "metrics")
 		for _, name := range []string{"lab.requests", "lab.active", "lab.duration"} {
 			if labNamed(metrics, name) == nil {
@@ -982,10 +991,95 @@ func labVerifyTraceLimits(response labObject) error {
 	return nil
 }
 
+// Ambient context APIs are implemented only by adapters that expose them.
+// The assertion itself has no SDK or language branches.
+func labVerifyAmbientContext(response labObject) error {
+	for _, key := range []string{"distinct_keys", "original_unchanged", "active_matches", "child_active_matches", "restored"} {
+		if response[key] != true {
+			return fmt.Errorf("ambient context %s failed", key)
+		}
+	}
+	if !reflect.DeepEqual(response["states"], []any{nil, "one", "two", "one", nil}) {
+		return fmt.Errorf("nested context attachment did not restore the outer and original values")
+	}
+	return nil
+}
+
+func labVerifyTraceLifecycle(response labObject) error {
+	for _, key := range []string{"recording_before", "active_matches", "child_active_matches", "restored", "after_end_unchanged"} {
+		if response[key] != true {
+			return fmt.Errorf("span lifecycle %s failed", key)
+		}
+	}
+	if response["recording_after"] != false {
+		return fmt.Errorf("ended span is still recording")
+	}
+	spans := labObjects(response, "spans")
+	parent := labNamed(spans, "lab.lifecycle")
+	child := labNamed(spans, "lab.lifecycle.child")
+	if len(spans) != 2 || parent == nil || child == nil {
+		return fmt.Errorf("lifecycle exporter must contain the parent and active child once")
+	}
+	if parent["trace_id"] != "0102030405060708090a0b0c0d0e0f10" || parent["span_id"] != "0000000000000001" ||
+		parent["parent_id"] != "0000000000000000" || child["trace_id"] != parent["trace_id"] ||
+		child["span_id"] != "0000000000000002" || child["parent_id"] != parent["span_id"] {
+		return fmt.Errorf("explicit root or active child identity is wrong")
+	}
+	if parent["start"] != "1700000000123000000" || parent["end"] != "1700000000173000000" {
+		return fmt.Errorf("explicit lifecycle timestamps were not preserved")
+	}
+	return nil
+}
+
+func labVerifyResources(response labObject) error {
+	empty, ok := labUint(response["empty"])
+	if !ok || empty != 0 {
+		return fmt.Errorf("empty resource contains attributes")
+	}
+	merged, _ := response["merged"].(map[string]any)
+	originals, _ := response["originals"].(map[string]any)
+	left, _ := originals["left"].(map[string]any)
+	right, _ := originals["right"].(map[string]any)
+	if !reflect.DeepEqual(merged, labObject{"lab.left": "one", "lab.right": "two", "lab.shared": "right", "lab.integer": float64(42), "lab.boolean": true}) ||
+		!reflect.DeepEqual(left, labObject{"lab.left": "one", "lab.shared": "left", "lab.integer": float64(42)}) ||
+		!reflect.DeepEqual(right, labObject{"lab.right": "two", "lab.shared": "right", "lab.boolean": true}) {
+		return fmt.Errorf("resource merge lost attributes, precedence, or input immutability")
+	}
+	return nil
+}
+
+func labVerifyBaggage(response labObject) error {
+	if response["value"] != "lab-value" || response["extracted"] != "lab-value" || response["incoming"] != "value" {
+		return fmt.Errorf("baggage value did not survive extraction and propagation")
+	}
+	removed, present := response["removed"]
+	if response["original"] != "two" || !present || removed != nil {
+		return fmt.Errorf("baggage removal or original context immutability failed")
+	}
+	outgoing, _ := response["outgoing"].(map[string]any)
+	header, ok := outgoing["baggage"].(string)
+	if !ok || len(outgoing) != 1 {
+		return fmt.Errorf("baggage did not use exactly the W3C header")
+	}
+	members := strings.Split(header, ",")
+	for index := range members {
+		members[index] = strings.TrimSpace(members[index])
+	}
+	sort.Strings(members)
+	if !reflect.DeepEqual(members, []string{"incoming=value", "lab-key=lab-value"}) {
+		return fmt.Errorf("baggage propagation lost or added members")
+	}
+	return nil
+}
+
 var labSharedVerifiers = map[string]func(labObject) error{
 	"response/trace-context":         labVerifyTraceContext,
 	"response/trace-invalid-headers": labVerifyTraceInvalidHeaders,
 	"response/trace-limits":          labVerifyTraceLimits,
+	"response/trace-lifecycle":       labVerifyTraceLifecycle,
+	"response/resources":             labVerifyResources,
+	"response/baggage":               labVerifyBaggage,
+	"response/context":               labVerifyAmbientContext,
 }
 
 type labSharedResult struct {
@@ -1025,33 +1119,38 @@ func labSharedOutcome(check labSharedCheck, response labObject) (labReceiptOutco
 	return labReceiptOutcome{Outcome: "xfail", Reason: reason}, nil
 }
 
-func labRunSharedChecks(client *http.Client, app string) ([]labSharedResult, error) {
-	results := []labSharedResult{}
+func labIsSharedScenario(scenario string) bool {
 	for _, check := range labSharedChecks {
-		var first labObject
-		var outcome labReceiptOutcome
-		for attempt := range 2 {
-			body, err := labRequest(client, "GET", app+check.Path)
-			if err != nil {
-				return nil, err
-			}
-			var response labObject
-			if err := json.Unmarshal(body, &response); err != nil {
-				return nil, err
-			}
-			outcome, err = labSharedOutcome(check, response)
-			if err != nil {
-				return nil, fmt.Errorf("%s attempt %d: %w", check.Name, attempt+1, err)
-			}
-			if attempt == 0 {
-				first = response
-			} else if !reflect.DeepEqual(first, response) {
-				return nil, fmt.Errorf("%s changed on repeated execution", check.Name)
-			}
+		if check.Scenario == scenario {
+			return true
 		}
-		results = append(results, labSharedResult{Check: check, Response: first, Outcome: outcome})
 	}
-	return results, nil
+	return false
+}
+
+func labRunSharedCheck(client *http.Client, app string, check labSharedCheck) (labSharedResult, error) {
+	var first labObject
+	var outcome labReceiptOutcome
+	for attempt := range 2 {
+		body, err := labRequest(client, "GET", app+check.Path)
+		if err != nil {
+			return labSharedResult{}, err
+		}
+		var response labObject
+		if err := json.Unmarshal(body, &response); err != nil {
+			return labSharedResult{}, err
+		}
+		outcome, err = labSharedOutcome(check, response)
+		if err != nil {
+			return labSharedResult{}, fmt.Errorf("%s attempt %d: %w", check.Name, attempt+1, err)
+		}
+		if attempt == 0 {
+			first = response
+		} else if !reflect.DeepEqual(first, response) {
+			return labSharedResult{}, fmt.Errorf("%s changed on repeated execution", check.Name)
+		}
+	}
+	return labSharedResult{Check: check, Response: first, Outcome: outcome}, nil
 }
 
 func labVerifyOTLPHTTP(response labObject, scenario string) error {
@@ -1102,7 +1201,7 @@ func main() {
 	appSuffix := flag.String("app-suffix", "", "application service label suffix")
 	sinkSuffix := flag.String("sink-suffix", "", "sink service label suffix")
 	language := flag.String("language", "", "python, ruby, or go")
-	scenario := flag.String("scenario", "base", "base, links-count, or link-attributes")
+	scenario := flag.String("scenario", "base", "base, a shared contract, or a registered configuration variant")
 	sourcePath := flag.String("source", "", "standalone application source runfile")
 	sourceExtraPath := flag.String("source-extra", "", "additional application source runfile")
 	sourceExtra2Path := flag.String("source-extra2", "", "second additional application source runfile")
@@ -1112,7 +1211,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, "app-suffix, sink-suffix, source, proof-plan, and python/ruby/go language are required")
 		os.Exit(2)
 	}
-	if *scenario != "base" && (labVariantClaims[*scenario] == nil || (*language != "python" && !(*language == "go" && *scenario == "otlp-retry-after"))) {
+	sharedCheck, shared := labSharedScenario(*language, *scenario)
+	if *scenario != "base" && !shared && (labVariantClaims[*scenario] == nil || (*language != "python" && !(*language == "go" && *scenario == "otlp-retry-after"))) {
 		fmt.Fprintln(os.Stderr, "non-base scenario must be a registered lab variant")
 		os.Exit(2)
 	}
@@ -1142,28 +1242,63 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	app := fmt.Sprintf("http://127.0.0.1:%d", appPort)
+	client := &http.Client{Timeout: 5 * time.Second}
+	if shared {
+		result, err := labRunSharedCheck(client, app, sharedCheck)
+		if err != nil {
+			panic(err)
+		}
+		var proofs []report.ReceiptProof
+		if result.Outcome.Outcome == "verified" {
+			proofs, err = labPlanProofs(planBytes, *language, *scenario, map[string]bool{sharedCheck.Name: true})
+			if err != nil {
+				panic(err)
+			}
+		}
+		responses, err := json.Marshal(map[string]labObject{sharedCheck.Path: result.Response})
+		if err != nil {
+			panic(err)
+		}
+		capture, err := labAcceptedCapture([]byte("[]"), responses, *scenario)
+		if err != nil {
+			panic(err)
+		}
+		observed := map[string]bool{}
+		if result.Outcome.Outcome == "verified" {
+			observed[sharedCheck.Name] = true
+		}
+		if err := labWriteEvidence(os.Getenv("TEST_UNDECLARED_OUTPUTS_DIR"), *language, *scenario,
+			capture, responses, source, proofs, observed); err != nil {
+			panic(err)
+		}
+		if err := labWriteReceipt(os.Getenv("TEST_UNDECLARED_OUTPUTS_DIR"), *language, *scenario,
+			planBytes, []byte("[]"), responses, proofs, result.Outcome); err != nil {
+			panic(err)
+		}
+		fmt.Printf("%s shared check %s: %s %s\n", *language, sharedCheck.Name, result.Outcome.Outcome, result.Outcome.Reason)
+		return
+	}
 	sinkPort, err := labPort(*sinkSuffix)
 	if err != nil {
 		panic(err)
 	}
-	app := fmt.Sprintf("http://127.0.0.1:%d", appPort)
 	sink := fmt.Sprintf("http://127.0.0.1:%d", sinkPort)
-	client := &http.Client{Timeout: 5 * time.Second}
 	if _, err := labRequest(client, "POST", sink+"/reset"); err != nil {
 		panic(err)
 	}
-	paths := []string{"/v1/spans", "/v1/exceptions", "/v1/baggage", "/v1/lifecycle"}
+	paths := []string{"/v1/spans", "/v1/exceptions"}
 	if *language == "python" || *language == "go" {
-		paths = []string{"/v1/spans", "/v1/exceptions", "/v1/metrics", "/v1/propagation"}
+		paths = []string{"/v1/spans", "/v1/exceptions", "/v1/metrics"}
 	}
 	if *language == "python" {
-		paths = append(paths, "/v1/lifecycle", "/v1/explicit-root", "/v1/log-sdk", "/v1/log-schema", "/v1/trace-exporter", "/v1/console-exporter", "/v1/propagation-custom", "/v1/propagation-formats", "/v1/prometheus", "/v1/metric-scope")
+		paths = append(paths, "/v1/log-sdk", "/v1/log-schema", "/v1/trace-exporter", "/v1/console-exporter", "/v1/propagation-custom", "/v1/propagation-formats", "/v1/prometheus", "/v1/metric-scope")
 		if *scenario == "log-length-edge" {
 			paths = append(paths, "/v1/log-object")
 		}
 	}
 	if *language == "go" {
-		paths = []string{"/v1/spans", "/v1/exceptions", "/v1/propagation", "/v1/concurrency", "/v1/resources", "/v1/metric-views", "/v1/metric-advanced", "/v1/metric-exporter", "/v1/metric-exemplars", "/v1/sdk-trace", "/v1/otlp-http", "/v1/otlp-partial"}
+		paths = []string{"/v1/spans", "/v1/exceptions", "/v1/concurrency", "/v1/metric-views", "/v1/metric-advanced", "/v1/metric-exporter", "/v1/metric-exemplars", "/v1/sdk-trace", "/v1/otlp-http", "/v1/otlp-partial"}
 	}
 	negative := *language == "python" && (*scenario == "disabled" || *scenario == "sampler-off" || *scenario == "sampler-arg-zero")
 	if negative {
@@ -1198,10 +1333,6 @@ func main() {
 				panic(err)
 			}
 			observed["response/otlp-http"] = true
-		case "/v1/explicit-root":
-			if labField(response, "recording") != true || labField(response, "parent_absent") != true {
-				panic(fmt.Errorf("explicit Python root span response: %s", body))
-			}
 		case "/v1/log-schema":
 			if labField(response, "flushed") != true {
 				panic(fmt.Errorf("Python schema log was not flushed: %s", body))
@@ -1241,29 +1372,10 @@ func main() {
 				panic(err)
 			}
 			observed["response/metric-exemplars"] = true
-		case "/v1/resources":
-			merged, _ := labField(response, "merged").(map[string]any)
-			if labField(response, "empty") != float64(0) || labField(merged, "lab.left") != "one" || labField(merged, "lab.right") != "two" {
-				panic(fmt.Errorf("Go empty or merged resource result is wrong: %s", body))
-			}
-			observed["response/resources"] = true
 		case "/v1/concurrency":
 			if labField(response, "workers") != float64(32) {
 				panic(fmt.Errorf("Go concurrent request did not complete: %s", body))
 			}
-		case "/v1/lifecycle":
-			if *language == "ruby" {
-				active, _ := labField(response, "active").(string)
-				child, _ := labField(response, "tracer_span").(string)
-				if labField(response, "context_before") != nil || labField(response, "context_attached") != "attached-value" || labField(response, "context_detached") != nil ||
-					labField(response, "recording_before") != true || labField(response, "recording_after") != false ||
-					len(active) != 16 || len(child) != 16 || active == child || labField(response, "restored") != true {
-					panic(fmt.Errorf("Ruby context and span lifecycle response: %s", body))
-				}
-			} else if labField(response, "before") != true || labField(response, "after") != false || labField(response, "attached") != "attached-value" || labField(response, "detached") != nil {
-				panic(fmt.Errorf("Python context and span lifecycle response: %s", body))
-			}
-			observed["response/lifecycle"] = true
 		case "/v1/log-sdk":
 			if labField(response, "count") != float64(1) || labField(response, "scope_name") != "lab.custom.log" || labField(response, "scope_attribute") != "logged" || labField(response, "body") != "lab direct log" || labField(response, "processor_emitted") != float64(1) || labField(response, "processor_flushed") != true || labField(response, "processor_shutdown") != true || labField(response, "exporter_shutdown") != true || labField(response, "exporter_flushed") != true || labField(response, "provider_flushed") != true {
 				panic(fmt.Errorf("Python direct log SDK response: %s", body))
@@ -1298,27 +1410,6 @@ func main() {
 				panic(fmt.Errorf("Python custom propagation carrier response: %s", body))
 			}
 			observed["response/propagation-custom"] = true
-		case "/v1/propagation":
-			if labField(response, "remote_parent") != true || labField(response, "baggage") != "lab-value" {
-				panic(fmt.Errorf("context extraction or baggage failed: %s", body))
-			}
-			carrier, _ := labField(response, "carrier").(map[string]any)
-			if !strings.Contains(fmt.Sprint(labField(carrier, "baggage")), "lab-key=lab-value") || labField(carrier, "traceparent") == nil {
-				panic(fmt.Errorf("context injection failed: %s", body))
-			}
-			observed["response/propagation"] = true
-		case "/v1/baggage":
-			if labField(response, "baggage") != "lab-value" {
-				panic(fmt.Errorf("Ruby baggage API failed: %s", body))
-			}
-			observed["response/baggage"] = true
-		}
-	}
-	var sharedResults []labSharedResult
-	if *scenario == "base" {
-		sharedResults, err = labRunSharedChecks(client, app)
-		if err != nil {
-			panic(err)
 		}
 	}
 	var capture []byte
@@ -1356,64 +1447,12 @@ func main() {
 		panic(err)
 	}
 	responseBytes = append(responseBytes, '\n')
-	if output := os.Getenv("TEST_UNDECLARED_OUTPUTS_DIR"); output != "" {
-		artifact := *language + "-telemetry-lab"
-		if *scenario != "base" {
-			artifact += "-" + *scenario
-		}
-		if err := os.WriteFile(filepath.Join(output, artifact+".capture.json"), capture, 0o644); err != nil {
-			panic(err)
-		}
-		if err := os.WriteFile(filepath.Join(output, artifact+".responses.json"), responseBytes, 0o644); err != nil {
-			panic(err)
-		}
-		claims := make([]string, 0, len(plannedProofs))
-		for _, proof := range plannedProofs {
-			claims = append(claims, proof.FeatureID)
-		}
-		checks := make([]string, 0, len(observed))
-		for check := range observed {
-			checks = append(checks, check)
-		}
-		sort.Strings(checks)
-		evidence := labProofEvidence{
-			SchemaVersion:  1,
-			Language:       *language,
-			Scenario:       *scenario,
-			CaptureSHA256:  fmt.Sprintf("%x", sha256.Sum256(capture)),
-			SourceSHA256:   fmt.Sprintf("%x", sha256.Sum256(source)),
-			ResponseSHA256: fmt.Sprintf("%x", sha256.Sum256(responseBytes)),
-			FeatureIDs:     claims,
-			Checks:         checks,
-			Proofs:         plannedProofs,
-		}
-		encoded, err := json.MarshalIndent(evidence, "", "  ")
-		if err != nil {
-			panic(err)
-		}
-		if err := os.WriteFile(filepath.Join(output, artifact+".proofs.json"), append(encoded, '\n'), 0o644); err != nil {
-			panic(err)
-		}
+	if err := labWriteEvidence(os.Getenv("TEST_UNDECLARED_OUTPUTS_DIR"), *language, *scenario,
+		capture, responseBytes, source, plannedProofs, observed); err != nil {
+		panic(err)
 	}
 	if err := labWriteReceipt(os.Getenv("TEST_UNDECLARED_OUTPUTS_DIR"), *language, *scenario, planBytes, capture, responseBytes, plannedProofs); err != nil {
 		panic(err)
-	}
-	for _, result := range sharedResults {
-		var proofs []report.ReceiptProof
-		if result.Outcome.Outcome == "verified" {
-			proofs, err = labPlanProofs(planBytes, *language, result.Check.Scenario, map[string]bool{result.Check.Name: true})
-			if err != nil {
-				panic(err)
-			}
-		}
-		checkedResponse, err := json.Marshal(map[string]labObject{result.Check.Path: result.Response})
-		if err != nil {
-			panic(err)
-		}
-		if err := labWriteReceipt(os.Getenv("TEST_UNDECLARED_OUTPUTS_DIR"), *language, result.Check.Scenario, planBytes, capture, checkedResponse, proofs, result.Outcome); err != nil {
-			panic(err)
-		}
-		fmt.Printf("%s shared check %s: %s %s\n", *language, result.Check.Name, result.Outcome.Outcome, result.Outcome.Reason)
 	}
 	fmt.Printf("%s telemetry lab capture verified, sha256=%x\n", *language, sha256.Sum256(bytes.TrimSpace(capture)))
 }
