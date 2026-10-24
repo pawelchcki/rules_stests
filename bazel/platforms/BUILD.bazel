@@ -1,10 +1,7 @@
 package(default_visibility = ["//visibility:public"])
 
-# Execution platform for the self-hosted BuildBuddy executor fleet. The workers
-# register with `default_isolation_type: none`, so no container-image is set:
-# actions run bare on the host. Every test in this repo launches its apps as
-# plain processes from extracted OCI rootfs runfiles, so bare isolation is
-# enough and nothing needs docker on the executor.
+# Public repositories use BuildBuddy-managed executors. Tests launch apps as
+# plain processes from extracted OCI rootfs runfiles and need no host services.
 platform(
     name = "rbe_linux_amd64",
     constraint_values = [
@@ -14,7 +11,7 @@ platform(
     exec_properties = {
         "Arch": "amd64",
         "OSFamily": "Linux",
-        "Pool": "linux-amd64-kvm",
-        "use-self-hosted-executors": "true",
+        "container-image": "docker://docker.io/library/ubuntu@sha256:019e8eb29a85e74d64925745884f2ec79aa27e3feab36353d24656f4d6b89467",
+        "use-self-hosted-executors": "false",
     },
 )

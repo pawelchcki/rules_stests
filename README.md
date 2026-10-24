@@ -279,11 +279,11 @@ existing Chromium installation.
 
 ## Remote execution
 
-Every Bazel action, tests included, runs by default on a self-hosted BuildBuddy
-executor fleet in the `linux-amd64-kvm` pool. Tests qualify because they never
+Every Bazel action, tests included, runs by default on BuildBuddy-managed
+executors using a digest-pinned Ubuntu 24.04 image. Tests qualify because they never
 start a container: apps launch as plain processes from OCI rootfs runfiles, the
 OTLP collector is the in-tree Rust sink, and SQLite state is copied into
-`$TEST_TMPDIR`. The executors therefore run bare isolation and need no Docker.
+`$TEST_TMPDIR`. The executors need no Docker or private host services.
 
 An API key is required and never lives in this repository. Put it in
 `~/.bazelrc`:
@@ -293,7 +293,9 @@ common --remote_header=x-buildbuddy-api-key=<key>
 ```
 
 In CI the BuildBuddy Workflow injects the same credential, so local and CI runs
-share one cache and one executor fleet.
+share one cache and the managed executor fleet. The execution platform explicitly
+sets `use-self-hosted-executors=false`; private runner pools are reserved for
+private repositories.
 
 To build offline or debug a test in isolation, opt out:
 
@@ -303,13 +305,6 @@ bazel test --config=local //harness/...
 
 That drops the executor, the cache and the build event stream, and falls back to
 local sandboxed execution.
-
-Executor health is checked on the Bazzite host with
-`systemctl status buildbuddy-executor@ccd0.service` (and `@ccd1`). A third
-worker, `fedora-silverblue`, stays registered in `linux-amd64-bare` for another
-project; BuildBuddy schedules by exact pool, so it takes no work from here. It
-could be re-registered under `linux-amd64-kvm` for more capacity if that project
-agrees.
 
 ## Test tiers
 

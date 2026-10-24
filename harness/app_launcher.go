@@ -468,6 +468,12 @@ func rubyAppExecutionWithRuntime(root, runtimeRoot string, injection injection, 
 	}
 	arguments := []string{loader, "--library-path", libraryPath, ruby, entry}
 	if isRails {
+		// TZInfo searches absolute host directories by default. The fixture
+		// already contains pinned zoneinfo data; select it before Rails boots
+		// so minimal managed executor images need no host tzdata package.
+		zoneinfo := filepath.Join(filepath.Dir(filepath.Dir(appRoot)), "usr", "share", "zoneinfo")
+		bootstrap := `require "bundler/setup"; require "tzinfo"; TZInfo::DataSource.set(:zoneinfo, ARGV.shift); $0 = ARGV.shift; load $0`
+		arguments = []string{loader, "--library-path", libraryPath, ruby, "-e", bootstrap, zoneinfo, entry}
 		arguments = append(arguments, command)
 	}
 	if strings.HasSuffix(command, ".rb") {
