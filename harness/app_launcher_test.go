@@ -318,6 +318,9 @@ func TestRubyExecutionIsolatesApplicationAndAgentEnvironment(t *testing.T) {
 	// The rootfs is read-only, so the server pidfile must land in the state
 	// directory rather than the application root's tmp/pids.
 	plainArgs := strings.Join(plain.arguments, " ")
+	if !strings.Contains(plainArgs, filepath.Join(root, "usr", "share", "zoneinfo")) {
+		t.Fatalf("Rails did not select its bundled timezone data: %v", plain.arguments)
+	}
 	if !strings.Contains(plainArgs, "--pid "+filepath.Join(state, "server.pid")) {
 		t.Fatalf("server invocation did not redirect its pidfile: %s", plainArgs)
 	}
