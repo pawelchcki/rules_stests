@@ -1,5 +1,6 @@
 actions:
   - name: Full test suite
+    self_hosted: false
     visibility: PUBLIC
     container_image: ubuntu-24.04
     # Keep runner caches and installed tools across PR iterations.
@@ -7,7 +8,7 @@ actions:
       remote-snapshot-save-policy: always
       snapshot-read-policy: newest
     resource_requests:
-      # Bazel actions execute on the self-hosted RBE fleet. Fixtures are
+      # Bazel actions execute on BuildBuddy-managed RBE. Fixtures are
       # anonymously pulled from the digest-locked published packages.
       cpu: 4
       memory: 8GB
@@ -19,6 +20,7 @@ actions:
       - run: bash tools/run_ci.sh pr
 
   - name: Full test suite (all variants)
+    self_hosted: false
     visibility: PUBLIC
     container_image: ubuntu-24.04
     platform_properties:

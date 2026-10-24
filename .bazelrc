@@ -5,7 +5,7 @@ common --enable_bzlmod
 common --@@rules_python+//python/config_settings:bootstrap_impl=script
 
 # Remote execution is on by default: every action, tests included, runs on the
-# self-hosted BuildBuddy executor fleet (pool linux-amd64-kvm). The API key is
+# BuildBuddy-managed executor fleet. The API key is
 # never stored in this repo — locally it comes from ~/.bazelrc
 # (`common --remote_header=x-buildbuddy-api-key=...`) and in CI the BuildBuddy
 # Workflow injects it. Use --config=local to opt out entirely.
