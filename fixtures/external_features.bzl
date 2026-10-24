@@ -37,6 +37,12 @@ def external_feature_tests():
         service_test(
             name = name,
             timeout = "long",
+            # Each experiment runs the probe, application and collector at once.
+            # Reserve their capacity explicitly on shared managed executors.
+            exec_properties = {
+                "test.EstimatedCPU": "2",
+                "test.EstimatedMemory": "1GB",
+            },
             services = ["//harness:otel_sink_service"],
             test = "//harness/external_features:probe",
             data = data,
